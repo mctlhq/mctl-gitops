@@ -28,16 +28,21 @@
 ## AMEND 2026-11-09 (b) — owner decision A
 
 - [ ] A9. Move every object into the Postgres schema `glovo` (schema-qualified DDL in
-  `ApplySchema`), add the role table grants of design Amendment (b), and require
+  `ApplySchema`, and `glovo.`-qualified DML everywhere), add the #959 grants of
+  mctl-api#957 design §6d.1 to the named runtime role, and require
   `GLOVO_DB_URL` explicitly with no `AUDIT_DB_URL` fallback (depends on A5) — DoD: T16.
 - [ ] A10. `LockOwnerShared` and `LiveConnectionTx` on a caller `pgx.Tx`, sharing the
   `withLocks` key encoding (depends on 4, 6) — DoD: neither begins or commits (pgx
-  tracer test).
-- [ ] A11. `RevocationHook`, `WithRevocationHook`, reason `membership_removed`,
-  `RevokeForMembership`; every revoker calls the hook after L1/L2 and the row updates,
-  in the same transaction (depends on 5, 6, A7) — DoD: T17, T18.
-- [ ] A12. `Ready`: explicit URL, schema version, owners, enabled triggers, hook
-  present (depends on A9, A11).
+  tracer test); both work as the runtime role with its default `search_path`;
+  `LiveConnectionTx` answers `connection_expired` once `expires_at` has passed.
+- [ ] A11. `RevocationHook`, `WithRevocationHook`, `WithMembershipRevoker`,
+  `MembershipRevocationWired`, reason `membership_removed`, `RevokeForMembership`;
+  every path through `endConnection` (including `Reconnect`/`superseded`) calls the
+  hook after L1/L2 and the row updates, in the same transaction (depends on 5, 6, A7)
+  — DoD: T17, T18 with a fake hook. No dependency on #985 (amended (c)).
+- [ ] A12. `Ready`: explicit URL (input from the wiring slice), schema version, the
+  #959 grants of #957 §6d.1, no ownership or owner-role membership for the runtime
+  role, enabled triggers, hook present (depends on A9, A11).
 
 ## Tests
 
@@ -48,22 +53,25 @@
 - [ ] T5. Stale install: `Connect` with `ExpectedInstallRevision = current-1` returns `stale_install`. `Connect` on a tenant without an install returns `no_install`, and so does `Connect` after `RevokeInstall`.
 - [ ] T6. Reinstall atomicity: after A1 and A2 connect, `Reinstall` bumps the revision by 1 and revokes both with reason `install_reinstalled`. B1 is untouched. A new connect at the new revision succeeds and gets a new `gcn_`.
 - [ ] T7. Race: 50 iterations run A1 `Connect` concurrently with `Reinstall`, separately with `RevokeInstall`, and separately with `Revoke` of A1's prior connection. After both finish, no live connection has `install_revision` below the install's current revision, and at most one live connection exists for A1.
-- [ ] T8. Reconnect: the old connection is `revoked` (`superseded`) and the new one has a different `gcn_` and `supersedes_id` set to the old ID. A retry with the same key returns the same new ID (no third ID). Reconnect naming a foreign prior ID returns `ErrNotFound`.
+- [ ] T8. Reconnect, live branch: the old connection is `revoked` (`superseded`), the hook was called once with its id, and the new one has a different `gcn_` and `supersedes_id` set to the old ID. Terminal branch: from `expired`, `failed`, `revoked` and an `expires_at`-passed prior, a new `gcn_` is created, nothing else is ended, and the hook is called only for the clock-expired prior. A retry with the same key returns the same new ID (no third ID). Reconnect naming a foreign prior ID returns `ErrNotFound`.
 - [ ] T9. Transitions in the DB: the happy path `pending_handoff -> pending_provider -> active -> revoked`. A stale `expectedVersion` returns `stale_version`. A forbidden edge (`revoked -> active`) returns `invalid_transition`. A terminal transition clears `secret_ref` and returns the released ref. A raw SQL update to an unknown state fails the CHECK.
 - [ ] T10. Audit: each state change writes exactly one `gae_` event. A raw `UPDATE` and a raw `DELETE` on `glovo_audit_events` both fail. `SweepAudit` is unavailable; test that forged `SET LOCAL glovo.retention_sweep='on'` cannot enable UPDATE/DELETE of audit rows or connection rows. A raw `DELETE` on `glovo_connections` fails.
 - [ ] T11. Transaction rollback: a test hook (`s.failAfterWrite`, unexported) forces an error after the connection insert. Afterwards there is no connection row, no audit event and no idempotency row.
 - [ ] T12. Schema safety: `ApplySchema` called twice concurrently on a fresh database both succeed, and `NewStore` on a database without (or with a different) `glovo_schema_version` fails closed without running DDL. The runtime role can `INSERT`/`DELETE` on `glovo_pilot_allowlist` and cannot `UPDATE` or `DELETE` on `glovo_audit_events`. Re-applying the schema on a database where a CHECK already exists is a no-op. No non-`glovo_` object is created or altered (queried via `pg_class`/`pg_proc` before and after).
 - [ ] T14. Role separation: with the runtime role, `ALTER TABLE glovo_audit_events DISABLE TRIGGER ALL`, `DROP TRIGGER`, `DROP TABLE` and `ALTER TABLE ... ADD COLUMN` on every `glovo_*` table all fail with insufficient privilege; `NewStore` against a database without `ApplySchema` refuses to start.
 - [ ] T15. Terminal-state purge: for each terminal path (`expired`, `failed`, `revoked`, `superseded`, `install_revoked`, `install_reinstalled`) `secret_ref` is NULL afterwards and the released ref is returned exactly once.
-- [ ] T16. One database and grants: with the bridge and work-items runtime roles, `SELECT`
-  on `glovo.glovo_connections` succeeds and `UPDATE`/`DELETE`/`INSERT` fail; an unset
+- [ ] T16. One database and grants (amended (c)): the runtime role holds exactly the
+  #959 rows of #957 §6d.1 (privilege functions, nothing beyond); the work-items role
+  gets `permission denied` on schema `glovo`; `DELETE` on `glovo.glovo_connections` and
+  `UPDATE` on `glovo.glovo_audit_events` fail for the runtime role; an unset
   `GLOVO_DB_URL` with `AUDIT_DB_URL` set gives `not_ready`.
 - [ ] T17. Revocation fences commands: with a fake hook recording calls, each revoker
-  path (`Revoke`, `membership_removed`, `RevokeInstall`, `Reinstall`, `Transition` to
-  `expired` and `failed`) calls it once with exactly the ended ids, inside the same
-  transaction (a hook error leaves the connection live). With the real #985 hook and a
-  bridge command that is reserved but not yet permitted, a revoke followed by a permit
-  attempt gives no permit, and an expiry followed by a permit attempt gives no permit.
+  path (`Revoke`, `membership_removed`, `RevokeInstall`, `Reinstall`, `Reconnect`
+  `superseded`, `Transition` to `expired` and `failed`) calls it once with exactly the
+  ended ids, inside the same transaction (a hook error leaves the connection live). A
+  connection whose `expires_at` has passed with no `Transition` is `connection_expired`
+  from `LiveConnectionTx`. The end-to-end proof with the real hook (revoke or expiry,
+  then a permit attempt, gives no permit) is mctl-api#985 T24 (amended (c)).
 - [ ] T18. Lock order: a revoker and a #985-style reader (`LockOwnerShared` then an L3
   row lock then an L5 row lock) run in 50 interleavings with no `40P01`.
 - [ ] T13. No secrets or PII: `secretscan.Scan` over JSON of every fixture, connection row and audit row, and over captured `slog` output, finds nothing. Fixtures contain no `@` (emails) and no cookie or session-shaped strings.

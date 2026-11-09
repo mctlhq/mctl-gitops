@@ -5,25 +5,43 @@ mctl-agents#1059 merged (approval basket and vectors); the write payload contrac
 (OPEN-989-6); the ownership move (OPEN-989-1). Until then the code lands dark and
 `Ready` fails.
 
+Amended 2026-11-09 (c): new task 0 (execution binding, #957 §6d.2); kind list is
+`glovo.place_order_fake` only; guard covers INSERT and foreign roles; grants follow the
+owner-confirmed role model of #957 §6d.1.
+
+- [ ] 0. `CreateGlovoExecutionTx` and `ExecutionBindingTx` (design §4, #957 §6d.2):
+  `wi_`/`we_` + 26 `randAlnum` characters, one `work_items` row, one creation event, one
+  `work_item_executions` row (engine `temporal`, `engine_ref = WorkflowID`), on the
+  caller's tx, no `withTx` advisory lock. — DoD: ids match
+  `internal/bridge/store.go:164-165`; an id from the generic store (`store.go:395`,
+  `:676`) is `not_found` in `ExecutionBindingTx`; a rollback leaves no row.
+
 - [ ] 1. `workitems.ApplyGlovoApprovalSchema(ctx, migrationPool)` (design §2): schema
   version row; the widened state CHECK and the exact-kind CHECK (guarded, `NOT VALID`
   then `VALIDATE`); `glovo.approval_bindings` with `UNIQUE (order_ref)`, the partial
   unique index on `command_id` and `install_revision TEXT`; `glovo.aar_guard()`,
   `glovo.approval_bindings_guard()` and the deferred `glovo.aar_binding_required()`
-  constraint trigger; column-level grants. Ownership check, version downgrade refusal.
+  constraint trigger (the guard is `BEFORE INSERT OR UPDATE OR DELETE` and refuses a
+  Glovo-kind write by any role other than `runtimeRole`); the `glovo_runtime` and
+  work-items grants of #957 §6d.1, nothing else. Ownership check, version downgrade
+  refusal.
   — DoD: applies twice; fails when an object is owned by another role.
-- [ ] 2. Kinds, states, intent: `GlovoActionKinds`, `IsGlovoKind`, the SQL constant
+- [ ] 2. Kinds, states, intent: `GlovoActionKinds` (`glovo.place_order_fake` only), `IsGlovoKind`, the SQL constant
   `glovoKindPredicate`, `ApprovalReserved`, `ApprovalUnknown`, `GlovoBinding`,
   `GlovoIntent`, `GlovoReceiptState` (expiry precedence of design §1), errors. — DoD:
   golden hash for a binding; any field change changes the hash.
 - [ ] 2b. (OPEN-989-1, after the owner decides) `workitems.ApplySchema` runs the generic
-  `actionApprovalSchema` under the migration role, and `NewStore` only verifies the
-  version when `action_approval_requests` is not owned by `current_user`. — DoD:
-  generic work-items tests pass with both owners.
+  `actionApprovalSchema` and the `work_items*` DDL under `glovo_migrator`, which grants
+  the work-items role its existing DML explicitly (#957 §6d.1 "existing consumers"), and
+  `NewStore` only verifies the version when it does not own the tables. — DoD: generic
+  work-items tests pass with both owners; T15b.
 - [ ] 3. Store methods of design §4: `CreateGlovoApprovalTx` (binding row, complete
-  governance context, #988 `BindApproval` in the same tx), `LockGlovoApprovalTx`,
-  `ReserveGlovoApprovalTx` (binding equality, idempotent for the same `cmd_`),
-  `ConsumeGlovoApprovalTx`, `RevokeGlovoApprovalTx`, `MarkGlovoApprovalUnknownTx`,
+  governance context, `idempotency_key = "glovo-prepare:" + order_ref`, kinds other than
+  `glovo.place_order_fake` refused, #988 `BindApproval` with the §4 Scope and Actor in
+  the same tx), `LockGlovoApprovalTx`,
+  `ReserveGlovoApprovalTx` (the one `ReserveCommand` struct, every field required,
+  binding equality, idempotent for the same `cmd_`), `ConsumeGlovoApprovalTx`,
+  `RevokeGlovoApprovalTx` and `MarkGlovoApprovalUnknownTx` (both idempotent as #985 §3),
   `DecideGlovoApprovalTx` (aar_ only), `GlovoApprovalStatus`. — DoD: none begins or
   commits; nil collaborators give `not_ready`.
 - [ ] 4. Generic paths: `CreateActionApproval` refuses `glovo.` kinds; the four generic
@@ -34,16 +52,19 @@ mctl-agents#1059 merged (approval basket and vectors); the write payload contrac
   `glovo.order.owner-approval` v1 in `governance.Policies`; `decisionCapture` records
   `resource_owner` for Glovo kinds.
 - [ ] 6. Owner decision (design §5): the non-admin branch with one uniform 403, the
-  direct membership read, `isGlovoOwnerDecider`, `DecideGlovoApprovalTx` on a bridge-pool
+  membership read through `decideWrittenRole` + `PrincipalMembership` without
+  `roleGate`, `isGlovoOwnerDecider`, `DecideGlovoApprovalTx` on a bridge-pool
   transaction, `canSeeActionApproval` owner rule for Glovo kinds, audit without
   `args_digest`. — DoD: existing decide tests pass unchanged.
 - [ ] 7. `internal/glovo/receipt`: `Fence` with `PreLock` and `Check` (design §6),
-  including the recompute of fingerprint and intent hash from the stored payload; the
+  including `basket.Parse` on the whole stored payload, the recompute of fingerprint and
+  intent hash (command-row and binding sources of design §6 step 5), the decider and
+  `authority_basis` re-check, `LockOrderForControl(..., []string{tenant})`; the
   refusal codes of design §10 wrapping `bridge.ErrWriteFenceRefused`; `afr_` ref;
   `Audit(ctx)` for the joint-state table; `Sweeper` (design §7) in the `Expirer` tick.
   `PreLock` itself is added to `bridge.WriteFence` by #985.
-- [ ] 8. `receipt.Ready()` with every condition of design §8. #985 task 9 is the only
-  `SetFence` caller. — DoD: with today's closed gate and unset URLs, startup is
+- [ ] 8. `receipt.Ready(ctx)` with every condition of design §8. #985 task 9 is the only
+  `SetFence` caller, after all six #985 §7.3 preconditions. — DoD: with today's closed gate and unset URLs, startup is
   unchanged and the fence stays `refusingFence`.
 - [ ] 9. Cross-slice notes in package comments: #957 prepare calls `CreateGlovoApprovalTx`
   under L3; #985 uses the `Receipts` methods and calls `MarkGlovoApprovalUnknownTx` on
@@ -53,8 +74,8 @@ mctl-agents#1059 merged (approval basket and vectors); the write payload contrac
 
 ## Tests
 
-Postgres tests use `TEST_DATABASE_URL` (skip when unset), a migration role and a
-separate runtime role. Fence tests use fakes for `Orders` and `Conns` until #988 and #959
+Postgres tests use `TEST_DATABASE_URL` (skip when unset), `glovo_migrator`, a separate
+`glovo_runtime` and a work-items role. Fence tests use fakes for `Orders` and `Conns` until #988 and #959
 merge.
 
 - [ ] T1. A `hir_` answer alone changes no `aar_`, order or bridge row, and
@@ -69,7 +90,10 @@ merge.
 - [ ] T5. 20 concurrent approve/refuse pairs: one winner per `aar_`; no order row is
   written by the decision.
 - [ ] T6. Binding mismatch at the fence, one subtest per field (`we_`, `wi_`, tenant,
-  owner, connection, install revision): `intent_mismatch`; the `aar_` stays `reserved`.
+  owner, connection, install revision, `provider_ref` vs binding `provider`,
+  `order_ref` vs binding `order_ref`, `install_id`): `intent_mismatch`; the `aar_` stays
+  `reserved`. Reserve: one subtest per `ReserveCommand` field changed, and one per field
+  empty, is refused and the `aar_` stays `approved`.
 - [ ] T7. Expiry: decide, reserve and fence past `expires_at` or `fresh_until` are refused
   with `approval_expired`; a reserved row past expiry can become `unknown` but never
   `consumed`; `consumed`/`unknown`/`denied` never read as `expired`.
@@ -86,7 +110,9 @@ merge.
   `intent_hash`: the permit is refused `basket_changed`, no `bridge_write_permits` row
   exists and `effect_state` stays `none`. A second case changes the payload's
   `item_code` set; a third stores a command `intent_hash` that differs from the
-  recomputed one (`intent_mismatch`). A matching payload gets the permit.
+  recomputed one (`intent_mismatch`). Amended (c): a payload that is the approved basket
+  plus one extra top-level field, the basket wrapped in `{"approval_basket": …}`, and a
+  payload missing `lines` are each `basket_changed`. A matching payload gets the permit.
 - [ ] T11. Reconnect after approval: a new `gcn_` or install revision makes the fence
   refuse (`connection_revoked` / `stale_install`); nothing moves the `aar_` back.
 - [ ] T12. Owner removed from the tenant after approval: `no_tenant`.
@@ -101,7 +127,19 @@ merge.
   `unknown→reserved`), a change of `action_kind` into or out of a Glovo kind, a change of
   `intent_hash`, `expires_at` or `subject_principal_id`, `DELETE`, a binding column
   update other than the first `command_id`, a Glovo `aar_` committed without a binding,
-  and `ALTER TABLE … DISABLE TRIGGER` are each rejected.
+  and `ALTER TABLE … DISABLE TRIGGER` are each rejected. Amended (c): one subtest per
+  immutable column (`action_kind`, `intent_hash`, `expires_at`, `execution_id`,
+  `work_item_id`, `subject_principal_id`, `requested_by`, `policy_rule_id`,
+  `policy_version`); raw `INSERT` of a Glovo row in `approved`, `reserved` or
+  `consumed`, with a `decided_*` field set, with another `requested_by`, or with an
+  incomplete policy context; raw `INSERT` of `glovo.other` and of
+  `glovo.cancel_order_fake`; `pending→approved` with a decider other than the owner or
+  an `authority_basis` other than `resource_owner`.
+- [ ] T15b. Foreign roles and existing consumers (#957 §6d.1 R3/R5): the work-items
+  role is refused a Glovo-kind `aar_` insert or update by `glovo.aar_guard()` and gets
+  `permission denied` on `glovo.approval_bindings`; with `glovo_migrator` owning the
+  tables, the existing generic work-items and action-approvals suites pass unchanged
+  under the work-items role, and `workitems.NewStore` sends no DDL.
 - [ ] T16. Invariant table of design §7 over every lifecycle path; `consumed` iff a
   permit exists.
 - [ ] T17. Secrecy: logs and audit rows across T1-T16 contain no basket, `args_digest`,
@@ -112,8 +150,10 @@ merge.
 - [ ] T19. Governance in strict mode: an owner approve passes `guardDecision` and records
   `authority_basis = resource_owner`; the start-up backfill leaves Glovo rows unchanged.
 - [ ] T20. Control worker: `GlovoApprovalStatus` returns only ids and enums, and
-  `not_found` outside `tenants`; `RevokeGlovoApprovalTx` moves `approved` to `denied`
-  and is refused on `reserved`.
+  `not_found` outside `tenants`; `RevokeGlovoApprovalTx` moves `pending` and `approved`
+  to `denied`, succeeds again on a row already `denied` for that order, and is refused
+  on `reserved`; `MarkGlovoApprovalUnknownTx` succeeds again on a row already `unknown`
+  for the same `cmd_`.
 - [ ] T21. Deadlocks, deterministic with two connections and advisory barriers:
   permit vs #985 cancel, permit vs decide, dispatch vs decide, permit vs #959 revoke,
   sweeper vs permit. No `40P01` in any pair; the outcome matches the design §6 and

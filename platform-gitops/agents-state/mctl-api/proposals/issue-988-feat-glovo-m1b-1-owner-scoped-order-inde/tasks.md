@@ -6,25 +6,33 @@ and `not_ready`.
 
 - [ ] 1. Extend `glovo.Code` (`internal/glovo/errors.go`) with the codes of design §7
   that are missing. DoD: one table test pins code -> HTTP status -> wire string.
-- [ ] 2. `internal/glovo/basket`: vendor the #1059 `approval-basket.schema.json`,
-  `basket-fingerprint.json` and `must-reject.json` by sha256; `Approval`, `Validate`
-  (sort, uniqueness, arithmetic), `Fingerprint` (JCS from `internal/bridge`). DoD: every
-  vector reproduces; no field is defined locally.
+- [ ] 2. `internal/glovo/basket`: use the #1059 files vendored once by #986
+  (`internal/bridge/schema/v1alpha2`); `Approval`, `Validate` (sort, uniqueness,
+  arithmetic), `Parse(raw []byte) (Approval, []byte, error)` (raw-bytes pre-check, schema
+  with no extra fields, `Validate`, JCS bytes) and `Fingerprint(canonical []byte)`
+  (amended (c)). DoD: every vector reproduces; every `must_reject` case, an extra
+  `item_name` field and `quantity: 1.0` are refused by `Parse`; no field is defined
+  locally.
 - [ ] 3. `internal/glovo/orders/schema.go` and `ApplySchema` (design §2, §3): schema
   `glovo`, tables, CHECKs, partial unique indexes, `CREATE OR REPLACE FUNCTION` for both
   trigger functions, guarded trigger creation, ownership check, version downgrade
   refusal, column-level grants. DoD: applies twice; fails on a pre-created table owned
   by another role.
 - [ ] 4. `NewStore` and `Ready`: version, `to_regclass`, triggers present with
-  `tgenabled='O'`, `relowner <> current_user`, nil collaborators -> `not_ready`.
-- [ ] 5. Owner path: `Create` (READ COMMITTED check, live connection, fingerprint check,
-  idempotent insert, join refs, snapshot 1), `AppendSnapshot`, `Finalize`, `Get`,
-  `LockOrder`, `Snapshot`, `Cancel`. DoD: one statement per lookup.
-- [ ] 6. `BindApproval`, `RecordEffect` (with `ExecutionBindingTx` tenant+owner check).
+  `tgenabled='O'`, `NOT pg_has_role(current_user, owner, 'MEMBER')` for tables, trigger
+  functions and schema `glovo`, the #957 §6d.1 grants, nil collaborators ->
+  `not_ready` (amended (c)).
+- [ ] 5. Owner path: `Create` with `CreateInput` (READ COMMITTED check, live connection,
+  expected install revision, `ExecutionBindingTx` tenant+owner check and write-once
+  `execution_id`, `basket.Parse` of the stored preview bytes, fingerprint check,
+  idempotent insert, snapshot 1), `AppendSnapshot`, `Finalize`, `Get`, `LockOrder`,
+  `Snapshot`. No owner `Cancel` (amended (c)). DoD: one statement per lookup.
+- [ ] 6. `BindApproval` (amended (c): `RecordEffect` withdrawn; the effect row is written
+  by `MarkDispatched`, task 7).
 - [ ] 7. Control path: `PeekOrderScope`, `LockOrderForControl`, `ScopeFromRefs`,
   `MarkDispatched`, `MarkCancelled`, `MarkUnknown`, all with `Actor`.
-- [ ] 8. `MintJoinRefTx` for `tnr_`, `prr_`, `ordr_` (single owner of
-  `glovo.join_refs`).
+- [ ] 8. `MintJoinRefTx` and `LookupJoinRefTx` for `tnr_`, `prr_`, `ordr_` and `irv_`
+  (single owner of `glovo.join_refs`; amended (c)).
 - [ ] 9. Docs in package comments: the lifecycle table, the refusal map, and a pointer to
   the canonical lock order in #957 design §6b. Run `go fmt`, `go vet`,
   `golangci-lint`, `go test ./...`; MCP tool count unchanged.
@@ -49,9 +57,12 @@ separate runtime role.
   permuted-input, price-change and fee-change vectors and every `must_reject` case; a wrong `ExpectedFingerprint` gives
   `fingerprint_changed` and writes nothing.
 - [ ] T8. Snapshots are append-only; finalize freezes the fingerprint; a new basket after
-  finalize needs a new order.
-- [ ] T9. `RecordEffect` with a `we_` of another tenant, and of another owner in the same
-  tenant, is `not_found`; a second `place_order_fake` `we_` is `invalid_transition`.
+  finalize needs a new order; a raw-SQL snapshot insert for a finalized order and a
+  snapshot whose fingerprint does not hash its bytes are refused (amended (c)).
+- [ ] T9. `Create` with a `we_` of another tenant, and of another owner in the same
+  tenant, is `not_found`; a `we_`+UUID id from the real generic work-items store is
+  refused by the CHECK; changing `execution_id` after insert is refused; `MarkDispatched`
+  writes exactly one effect row (amended (c)).
 - [ ] T10. Runtime role (order tables only): no `ALTER`, `DROP`, `DELETE`, `TRUNCATE` or
   `DISABLE TRIGGER`; an `UPDATE` of an identity column is refused by grant or trigger.
 - [ ] T11. Lifecycle: every allowed transition succeeds; every other pair fails through
@@ -61,12 +72,16 @@ separate runtime role.
 - [ ] T12. Write-once: `approval_ref`, `command_id`, `execution_id` and the final
   fingerprint cannot be changed once set; a second order with the same `aar_` or `cmd_`
   is rejected; `command_id` without `approval_ref` is rejected.
-- [ ] T13. Shared transaction: `Create` + `Finalize` + `BindApproval` + `RecordEffect` and
-  a bridge `Enqueue` in one `pgx.Tx`; a failure after the last statement leaves nothing.
+- [ ] T13. Shared transaction: #989 `CreateGlovoExecutionTx` + `Create` + `Finalize` +
+  `BindApproval`, and `MarkDispatched` + a bridge `Enqueue` in one `pgx.Tx`; a failure
+  after the last statement leaves nothing.
 - [ ] T14. Readiness: a disabled guard trigger, a table owned by the runtime role, a
-  version mismatch and a nil collaborator each give `not_ready`.
+  table owned by a role the runtime role inherits, schema `glovo` owned by the runtime
+  role, an extra grant, a version mismatch and a nil collaborator each give `not_ready`;
+  with the matching check removed, each case is wrongly reported ready (mutation
+  check). `ApplySchema` refuses a downgrade (amended (c)).
 - [ ] T15. Refusal map: each design §7 row produces its code; an injected database error
-  gives `dependency_unavailable`, never `not_ready`.
+  gives `unavailable`, never `not_ready`.
 - [ ] T16. Audit: events carry `actor_kind`; #985 calls record `control_worker`; no
   fingerprint or basket bytes appear in events or logs.
 

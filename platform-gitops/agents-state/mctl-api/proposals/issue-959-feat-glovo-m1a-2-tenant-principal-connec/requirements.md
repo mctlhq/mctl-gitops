@@ -93,9 +93,12 @@ Connect, reconnect, idempotency
   SYSTEM SHALL return the original connection with `replayed=true` and
   create nothing. IF the same key arrives with different arguments THEN THE
   SYSTEM SHALL refuse with `idempotency_key_reused`.
-- WHEN `Reconnect` runs THE SYSTEM SHALL, in one transaction, revoke the
-  owner's current connection (reason `superseded`) and create a connection
-  with a NEW `gcn_` ID. THE SYSTEM SHALL never reuse a connection ID.
+- WHEN `Reconnect` runs on a live prior connection THE SYSTEM SHALL, in one
+  transaction, end it through `endConnection` (reason `superseded`, purge and
+  `RevocationHook` included) and create a connection with a NEW `gcn_` ID. WHEN the
+  prior connection is terminal THE SYSTEM SHALL create a NEW `gcn_` linked by
+  `supersedes_id` and end nothing. THE SYSTEM SHALL never reuse a connection ID.
+  (amended (c))
 
 Revoke and reinstall atomicity
 - WHEN a connection is revoked THE SYSTEM SHALL set state `revoked`,
@@ -106,19 +109,23 @@ Revoke and reinstall atomicity
   state `uninstalled` (on revoke), and move every live connection of that
   tenant bound to an older revision to `revoked` with reason
   `install_revoked` or `install_reinstalled`.
-- WHEN any revoker ends a connection (`Revoke`, including reason
-  `membership_removed`, `RevokeInstall`, `Reinstall`, or a `Transition` to a terminal
-  state) THE SYSTEM SHALL call the installed `RevocationHook` with the ended ids in the
+- WHEN any path ends a connection (`Revoke`, including reason
+  `membership_removed`, `RevokeInstall`, `Reinstall`, `Reconnect` with reason
+  `superseded`, or a `Transition` to a terminal state) THE SYSTEM SHALL call the installed `RevocationHook` with the ended ids in the
   same transaction, after taking L1 and L2, and SHALL roll back if the hook fails.
 - WHILE no `RevocationHook` is installed THE SYSTEM SHALL report
   `revocation_hook_missing` from `Ready`.
 - WHEN `LockOwnerShared` or `LiveConnectionTx` is called THE SYSTEM SHALL run on the
   caller's transaction and SHALL NOT begin or commit one.
+- WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= now()` (database
+  clock) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
+  has run. (amended (c))
 - WHILE `GLOVO_DB_URL` is not set explicitly THE SYSTEM SHALL report `not_ready`; it
   SHALL NOT fall back to `AUDIT_DB_URL`.
 - THE SYSTEM SHALL create every object in the Postgres schema `glovo`, owned by the
-  migration role, and SHALL grant the bridge and work-items runtime roles only `USAGE`
-  on the schema and `SELECT` on `glovo_installs` and `glovo_connections`.
+  migration role, and SHALL grant the one Glovo runtime role exactly the #959 rows of
+  mctl-api#957 design §6d.1 and the work-items role nothing. (amended (c); role
+  model confirmed by the owner 2026-11-09)
 - WHILE a `Connect` races a connection revoke or an install
   revoke/reinstall for the same tenant THE SYSTEM SHALL serialize them so
   that after both commit no live connection references a revoked install
@@ -156,9 +163,11 @@ Secret reference
   KEK design as "crypto-shredding" in code or docs.
 
 Schema safety
-- WHEN the store starts THE SYSTEM SHALL apply its schema idempotently
-  under a schema advisory lock, creating only new `glovo_*` objects and
-  never altering or dropping an existing non-`glovo_*` table.
+- THE SYSTEM SHALL apply its schema only through `ApplySchema(ctx,
+  migrationConnStr, runtimeRole)` under the migration role, idempotently under a
+  schema advisory lock, creating only objects in schema `glovo` and never altering
+  or dropping any other object. WHEN `NewStore` starts THE SYSTEM SHALL run no DDL,
+  check the recorded schema version and fail closed on a mismatch. (amended (c))
 
 ## Out of scope
 

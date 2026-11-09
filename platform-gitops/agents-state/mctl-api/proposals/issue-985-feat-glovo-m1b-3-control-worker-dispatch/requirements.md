@@ -68,7 +68,7 @@ Readiness and one database (owner decision A)
 - IF any of the following holds THEN THE SYSTEM SHALL answer 503 `not_ready` and write
   nothing:
   - the Glovo control gate is closed;
-  - any of `GLOVO_DB_URL`, `COMMERCE_DB_URL` or `WORK_ITEMS_DB_URL` is unset;
+  - `GLOVO_DB_URL` or `WORK_ITEMS_DB_URL` is unset, or `current_user` of the Glovo pool is not the configured `glovo_runtime` role, or its grants differ from #957 §6d.1;
   - the #959, #988 or #989 collaborator is missing;
   - the startup one-database proof failed.
 - THE SYSTEM SHALL NOT fall back to `AUDIT_DB_URL`, and SHALL NOT accept equal URL
@@ -101,7 +101,7 @@ Dispatch
   oracle.
 - IF there is no live connection THEN THE SYSTEM SHALL answer 404 `no_connection`. IF
   the connection is revoked or expired THEN 409 `connection_revoked` or
-  `connection_expired`. IF the install revision moved THEN 409 `stale_install`.
+  `connection_expired`. IF the install revision moved THEN 403 `stale_install` (amended (c), mctl-api#957 design §4.1).
 - IF the owner principal is no longer a member of the tenant THEN THE SYSTEM SHALL
   refuse with 403 `no_tenant`.
 - WHEN a dispatch repeats for an order already dispatched under the same `aar_` and
@@ -154,9 +154,14 @@ Revocation race and the write fence
   revocation wait on the advisory key. The revocation SHALL then cancel every open
   command of the ended connections in its own transaction, so a permitted effect
   becomes `unknown`.
-- THE SYSTEM SHALL install the write fence only when all three hold: the control gate
-  is open, the one-database proof passed, and the membership-removal revocation hook is
-  present.
+- THE SYSTEM SHALL install the write fence only when all six hold (design §7.3, the
+  only list; amended (c)): `glovo.ControlDefault.Open` is true; the owner has lifted hold
+  mctl-gitops#2457; the one-database proof passed; #959 `Ready()` returns nil (a
+  `RevocationHook` is installed); #959 `MembershipRevocationWired()` is true; #989
+  `receipt.Ready(ctx)` returns nil.
+- WHEN a `lock_timeout` (SQLSTATE `55P03`) occurs on any lock of the #957 §6b order THE
+  SYSTEM SHALL answer 409 `tenant_busy`; any other store I/O error SHALL be 503
+  `unavailable`. (amended (c))
 
 Data hygiene
 - THE SYSTEM SHALL accept no provider payload, credential, endpoint or token in a
@@ -195,14 +200,16 @@ Data hygiene
   `ControlApiPort`?
 - OPEN-985-5. Who owns the transition from a completed command result to order `closed`
   (or `unknown` after a timeout)?
-- OPEN-985-6. How the database roles and cross-store grants of decision A are
-  provisioned (CNPG managed roles in mctl-gitops, plus the grantee for
-  `bridge_cancel_open_for_connections`). Until they exist, the §4 proof fails and the
-  routes stay `not_ready`.
+- OPEN-985-6. How the migration role and the one Glovo runtime role of mctl-api#957
+  design §6d.1 are provisioned (CNPG managed roles in mctl-gitops). Until they exist
+  with exactly those grants, the §4 proof fails (it checks every grant) and the routes
+  stay `not_ready`. (amended (c): no `SECURITY DEFINER` grantee any more)
 - OPEN-985-7. The live pod env of mctl-api was not observed. The startup proof covers it
   either way.
-- OPEN-985-8. The command payload of a Glovo `place_order_fake` must be the #1059 approval
-  basket, so #989's fence can recompute the fingerprint from what is written. v1alpha1
-  fixes the payload to `{item_codes, quantity_total, note}` without prices, and #1059
-  covers reads only. The owner decides whether #1059 adds this write shape or a separate
-  contract issue does (= mctl-agents OPEN-1059-1). Until then dispatch is `not_ready`.
+- OPEN-985-8. The command payload of a Glovo `place_order_fake` is exactly the order's
+  final approval-basket bytes, with no wrapper (fixed by mctl-api#957 design §6d.3,
+  amended (c)), so #989's fence recomputes the fingerprint from what is written.
+  v1alpha1 fixes the payload to `{item_codes, quantity_total, note}` without prices, and
+  #1059 covers reads only. Still open: whether #1059 or a separate contract issue adds
+  this write schema and version (= mctl-agents OPEN-1059-1). Until then dispatch is
+  `not_ready`.

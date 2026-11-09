@@ -34,7 +34,7 @@ contract for writes and for `read_status`.
 
 ## Acceptance criteria (EARS)
 
-Amended 2026-11-09 (b); design.md has the finding -> fix table.
+Amended 2026-11-09 (b) and (c); design.md has the finding -> fix tables.
 
 v1alpha1 and versioning
 - WHEN the v1alpha2 contract lands THE SYSTEM SHALL keep every file under
@@ -46,6 +46,10 @@ v1alpha1 and versioning
   that the claim response states its protocol version, that mctl-api leases a v1alpha2
   command only to a provider whose server-side config declares v1alpha2, and that a
   provider drops an unknown version without side effects.
+- THE SYSTEM SHALL define `claim-response.schema.json` (`schema_version`, `commands`
+  0..10, `additionalProperties: false`), with an envelope version independent of each
+  command's `schema_version`, and SHALL keep the v1alpha1 envelope byte-identical for a
+  provider that declares only v1alpha1. (amended (c))
 
 Read command
 - WHEN a read command has `schema_version` `bridge.mctl.ai/v1alpha2`, a `kind` of
@@ -65,8 +69,15 @@ Read result
 - THE SYSTEM SHALL declare `required` on every payload, order, line and basket object, so
   that `{}` and any object missing a field are invalid.
 - THE SYSTEM SHALL bound every string by pattern, with `item_name` and `store_name`
-  `^[A-Za-z0-9 .,'()-]{1,60}$`, `error_detail` printable ASCII up to 128 bytes, and
-  `placed_on` a date without time.
+  `^[A-Za-z0-9 .,'()-]{1,60}$`, `error_detail` printable ASCII up to 128 bytes,
+  `placed_on` `^\d{4}-\d{2}-\d{2}$`, and `issued_at`, `expires_at` and `completed_at`
+  an explicit RFC 3339 UTC pattern in addition to `format`.
+- THE SYSTEM SHALL carry a required boolean `empty` in the preview and basket payloads;
+  `approval_basket` SHALL be required iff `empty` is false and forbidden iff it is true,
+  and an empty read SHALL be a valid successful read with `display: []`. (amended (c))
+- THE README SHALL list the provider MUSTs of design.md: `history_order_ref` and
+  `cursor` resolve only within the command's `connection_ref` and `principal_ref`, and
+  an unknown or foreign value is `failed_terminal`/`provider_rejected`, never data.
 
 Approval basket and fingerprint
 - THE SYSTEM SHALL define `approval-basket.schema.json` with `v`, `store_ref`, `currency`,
@@ -86,12 +97,14 @@ Approval basket and fingerprint
 Size
 - IF a result body is larger than 16384 bytes, or `JCS(payload)` is larger than 12288
   bytes THEN the reference validator SHALL reject it with `payload_too_large`.
-- THE README SHALL record the measured worst cases (history 10,673 B, basket 7,109 B,
-  preview 5,605 B, envelope 910 B).
+- THE README SHALL record the measured worst cases (history 10,673 B, basket read
+  7,127 B, preview 8,273 B, approval basket 3,135 B, envelope 910 B) and state that no
+  schema-valid payload reaches the 12,288-byte cap, which is defense in depth.
 
 Raw bytes, numbers and digest
 - THE SYSTEM SHALL validate results and commands from raw bytes. Before schema
-  validation it SHALL reject duplicate keys at any depth, lone surrogate escapes, `NaN`,
+  validation it SHALL reject duplicate keys at any depth, compared after JSON unescaping,
+  any `\u` escape in an object key, lone surrogate escapes, `NaN`,
   `Infinity`, numbers outside ±(2^53-1), and any non-integer token (`1.0`, `1e2`, `true`)
   in an integer position.
 - THE SYSTEM SHALL ship `vectors/must-reject.json` as raw text, and the README SHALL
@@ -107,7 +120,8 @@ Consumer duties
   consumer's own row, kind and id match, TTL, the raw-bytes pre-check, digest recompute,
   re-checks at serve time (binding, TTL, revocation, install revision, `glovo:read`),
   never persisting `lease_token`, no payload in outbox, signal, audit, log or Temporal
-  history, and computing the fingerprint itself.
+  history, computing the fingerprint itself, and accepting a `pho_` or cursor only if a
+  prior history read for the same binding returned it.
 
 Hygiene
 - THE SYSTEM SHALL use only synthetic data in fixtures and vectors.
@@ -126,7 +140,8 @@ Hygiene
   Temporal signal.
 - `prepare`: it stays a write in mctl-api (mctlhq/mctl-api#957 D5) and is not a read kind.
 - Changing v1alpha1, or moving `read_status` to v1alpha2.
-- A v1alpha2 write command (OPEN-1059-1).
+- A v1alpha2 write command (OPEN-1059-1; its shape, the approval basket exactly, is
+  fixed by mctl-api#957 §6d.3).
 - Real provider access of any kind.
 - Changing `orchestrator/context_snapshot.canonical_json`, which is a different, non-JCS
   canonical form used by context snapshots.
@@ -137,13 +152,13 @@ Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefix
 (P3-7), the per-kind fields (P1-3, §Crosswalk), the size cap (P1-1), and `lease_token`
 (kept on the result, never persisted by a consumer).
 
-- OPEN-1059-1. The write-side shape: the `place_order_fake` command payload must carry
-  the approval basket so the #989 fence can recompute the fingerprint (mctl-api
-  OPEN-985-8). The v1alpha1 payload is `{item_codes, quantity_total, note}`. The owner
-  decides whether this issue adds a v1alpha2 write command or a separate contract issue
-  does. This proposal does not add one.
-- OPEN-1059-2. Who changes the mctl-api claim response to a versioned envelope and
-  `BridgeProviderConfig` to declared versions: #986 (proposed there) or a separate
-  slice.
+- OPEN-1059-1 (narrowed (c)). The shape is fixed: the `place_order_fake` command
+  payload is exactly an approval basket, with no wrapper (mctl-api#957 §6d.3), and the
+  #989 fence parses it whole. The v1alpha1 payload is `{item_codes, quantity_total,
+  note}`. Still open: whether this issue adds that v1alpha2 write command schema or a
+  separate contract issue does (mctl-api OPEN-985-8).
+- OPEN-1059-2. Who implements the versioned claim envelope in mctl-api and the declared
+  versions in `BridgeProviderConfig`: #986 (proposed there) or a separate slice. The
+  envelope's shape is fixed here (design §Claim response).
 - OPEN-1059-3. mctl-telegram#1262 must vendor these files and pass `must-reject.json`
   with its Go parser; tracked on that issue.

@@ -66,7 +66,13 @@ Submission
 - THE SYSTEM SHALL lease a read-kind command only to a provider whose server-side config
   declares `bridge.mctl.ai/v1alpha2`, and SHALL version the claim response.
 - IF a read-kind result carries a provider effect other than `none`, or a non-read kind
-  carries a read payload THEN THE SYSTEM SHALL refuse with `result_inconsistent`.
+  carries a read payload THEN THE SYSTEM SHALL refuse with `invalid_document` (the
+  vendored schema fails first; amended (c)).
+- IF a read result's `request_id` differs from the stored one THEN THE SYSTEM SHALL
+  refuse with `binding_mismatch`.
+- THE SYSTEM SHALL store `''` in `workflow_id`, `run_id`, `execution_id`,
+  `work_item_id` and `order_ref` of a read command, relax no NOT NULL, and SHALL write
+  no `bridge_signal_outbox` row when a read command completes or expires. (amended (c))
 - WHEN the same result is replayed THE SYSTEM SHALL return the same `res_`; a different
   digest SHALL be `result_conflict`.
 
@@ -89,8 +95,8 @@ Schema
   order and execution columns through a kind-conditional CHECK.
 
 Retention and hygiene
-- THE SYSTEM SHALL erase stored bytes at `expires_at` (TTL default 600 s, clamped
-  1..900 s) and delete the row 24 h later.
+- THE SYSTEM SHALL erase stored bytes at `expires_at` (TTL default 300 s, clamped
+  1..300 s; amended (c)) and delete the row 24 h later.
 - THE SYSTEM SHALL log and audit only ids, kinds, sizes and digests, never payload bytes.
 - THE SYSTEM SHALL accept only the bounded synthetic shapes defined by #1059 (`FAKE-`
   item codes, no person, address, email or phone fields).
@@ -111,6 +117,5 @@ Retention and hygiene
   whatever #1059 merges.
 - OPEN-986-2. The mctl-telegram provider must vendor the same #1059 files. That is an
   extension of mctl-telegram#1262, not tracked here.
-- OPEN-986-3. `install_revision_ref` (`irv_`) in #1059 versus the bridge's string
-  `install_revision`: the mapping (an opaque ref of the #959 revision) is owned by #959
-  and must be fixed before task 4.
+- OPEN-986-3. Closed 2026-11-09 (c): `irv_` is the `install_revision` kind of #988
+  `glovo.join_refs`, minted by #957 read routes (#957 design §2a).

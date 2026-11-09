@@ -31,12 +31,12 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 | Columns | reconnect link `supersedes_id`; `glovo_connections.expires_at TIMESTAMPTZ NULL`; `glovo_audit_events.actor_kind` (`user`, `owner`, `admin`, `worker`, `system`) | #959 |
 | Store API | `Install`, `GetInstall`, `RevokeInstall`, `Reinstall`, `Connect`, `Reconnect`, `Transition`, `Revoke`, `GetConnection`, `LiveConnection`, `ListAudit`, `IsAllowlisted` | #959 |
 | Store states | `pending_handoff`, `pending_provider`, `active`, `expired`, `failed`, `revoked`; wire `PublicState`: both `pending_*` -> `pending`, the rest unchanged | #959 states, #961 mapping |
-| Refusal enum (closed, `glovo.Code`) | `not_ready`, `unavailable`, `not_authorized`, `invalid_request`, `not_found`, `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`, `stale_version`, `no_connection`, `connection_exists`, `connection_revoked`, `connection_expired`, `invalid_transition`, `idempotency_key_reused`, `rate_limited` | #959 |
-| HTTP status | 503: `not_ready`, `unavailable`; 401/403: `not_authorized` (401 only when no valid token); 400: `invalid_request`; 404: `not_found`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`; 429: `rate_limited`; 409: every other code. One function, `glovo.Status(code)` | #959 |
+| Refusal enum (closed, `glovo.Code`) | `not_ready`, `unavailable`, `not_authorized`, `invalid_request`, `not_found`, `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`, `stale_version`, `no_connection`, `connection_exists`, `connection_revoked`, `connection_expired`, `invalid_transition`, `idempotency_key_reused`, `rate_limited`; since 2026-11-09 (c) also `fingerprint_changed`, `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `basket_changed`, `tenant_busy`. The one closed set, with every status and wire value, is mctl-api#957 design §4.1 | #959 adds the M1a codes; #985, #988 and #989 add theirs through #957 §4.1 |
+| HTTP status | Amended 2026-11-09 (c) to equal mctl-api#957 design §4.1: 503: `not_ready`, `unavailable`; 401/403: `not_authorized` (401 only when no valid token); 400: `invalid_request`; 404: `not_found`, `no_connection`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`; 429: `rate_limited`; 409: every other code. One function, `glovo.Status(code)`; the #957 A6 golden test checks it against §4.1 for every code | #959 |
 | Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
 | Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
 | Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
-| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr)` with a dedicated migration role that owns the objects. `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
+| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr, runtimeRole)` with a dedicated migration role that owns the objects; the one Glovo runtime role and its grants are mctl-api#957 design §6d.1 (amended (c)). `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
 | Worker identity | none exists today: `auth.IsGlovoWorker()` is the reserved stub (`internal/auth/oidc.go`, always false). #961 builds it, default OFF. It is distinct from the #968 bridge provider (`service:bridge-provider:<ref>`, `bridge:provide`): the Glovo worker is refused on `/api/v1/bridge/*` and the bridge provider on `/api/v1/glovo/*`, tested both ways. Its credential is test-only until the issuer decision (mctl-gitops#2506 / #2540) | #961 |
 | Facade routes | `/api/v1/glovo/facade/*` is added to #977's empty `glovoAudienceRoutes` by #961 (the only slice that adds those routes) | #961 |
 | Allowlist routes | `PUT\|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` are defined only in #960 | #960 |
@@ -148,7 +148,7 @@ store.
 | `GET /api/v1/glovo/facade/connections/{id}` | owner-scoped read; foreign or missing ids get the same 404 |
 | `POST /api/v1/glovo/facade/connections/{id}/handoff` | issues the synthetic handoff reference `ghr_` + 32 random bytes, stores only the SHA-256, TTL 10 min, single use |
 | `POST /api/v1/glovo/facade/connections/{id}/revoke` | `-> revoked`, idempotent |
-| `POST /api/v1/glovo/facade/connections/{id}/reconnect` (`Idempotency-Key`) | new `gcn_` `pending`, `supersedes_id` set; only from `expired`, `failed` or `revoked` |
+| `POST /api/v1/glovo/facade/connections/{id}/reconnect` (`Idempotency-Key`) | new `gcn_` `pending`, `supersedes_id` set; this route exposes only the terminal branch of #959 `Reconnect` (prior connection `expired`, `failed` or `revoked`; amended 2026-11-09 (c)). A prior connection that is still live is refused with `connection_exists`, so the route never supersedes |
 
 These routes are added to #977's `glovoAudienceRoutes`, which is empty today; every other route
 stays closed to a Glovo-audience token.
@@ -206,8 +206,9 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 ### 6. End-to-end contract tests (`internal/api/glovo_e2e_test.go`)
 
 - The tests build the actual `NewRouter(...)` with a real `glovo.Store` on `TEST_DATABASE_URL`.
-  The schema is applied by the production `NewStore` migration code, in a per-test schema or
-  with cleanup, following the commerce fixture.
+  The schema is applied by the production `glovo.ApplySchema` under a migration role, and the
+  store is opened with `NewStore` (no DDL) under the runtime role of mctl-api#957 design §6d.1,
+  in a per-test schema or with cleanup (amended 2026-11-09 (c)).
 - Auth uses the real middleware. Glovo-audience access tokens are minted through the real
   `OAuthServer` authorization-code and consent flow with a selected team (slice 3). The worker
   uses its real token through the real token provider. Users are not injected via context.

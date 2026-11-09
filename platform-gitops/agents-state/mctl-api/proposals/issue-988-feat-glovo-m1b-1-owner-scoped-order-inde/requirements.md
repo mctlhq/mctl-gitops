@@ -80,21 +80,28 @@ Lifecycle
 - THE SYSTEM SHALL make `final_basket_fingerprint`, `final_snapshot_seq`, `approval_ref`,
   `command_id` and `execution_id` write-once, and SHALL allow at most one order per
   `approval_ref` and per `command_id`.
-- WHEN an order is cancelled from `open` THE SYSTEM SHALL allow it without a fingerprint.
+- WHEN an order is cancelled from `open` THE SYSTEM SHALL allow it without a fingerprint
+  (only through `MarkCancelled`; there is no owner `Cancel`, amended (c)).
 - WHEN #985 records that a cancelled command's effect is unknown THE SYSTEM SHALL move the
   order to `unknown`, never to `cancelled`.
 
 Effects
-- WHEN `RecordEffect` is called THE SYSTEM SHALL require the `we_`'s tenant **and** owner
-  principal to equal the order's, else `not_found`.
-- THE SYSTEM SHALL bind at most one `we_` per effect, and one `place_order_fake` `we_`
-  per order (`Order.ExecutionID`).
+- WHEN `Create` is called THE SYSTEM SHALL require `CreateInput.ExecutionID` to match
+  `^we_[A-Za-z0-9]{16,40}$` and its tenant **and** owner principal (#989
+  `ExecutionBindingTx`) to equal the order's, else `not_found`, and SHALL write it once
+  at insert. (amended (c); `RecordEffect` is withdrawn)
+- WHEN `MarkDispatched` runs THE SYSTEM SHALL write exactly one `place_order_fake` row
+  of `glovo.order_effects` for the order's `we_` in the same transaction.
+- WHEN `basket.Parse` receives bytes THE SYSTEM SHALL run the #1059 raw-bytes pre-check,
+  the vendored `approval-basket.schema.json` with no extra fields, and `Validate`, and
+  SHALL fingerprint only the JCS bytes it returns. (amended (c))
 
 Refusals
-- THE SYSTEM SHALL use only `glovo.Code` values, each mapped to one #957 §4 wire row in
-  design §7.
-- IF a collaborator or the database fails THEN THE SYSTEM SHALL return
-  `dependency_unavailable`. `not_ready` SHALL mean not configured.
+- THE SYSTEM SHALL use only `glovo.Code` values, each mapped through mctl-api#957 design
+  §4.1 as listed in design §7.
+- IF a collaborator or the database fails THEN THE SYSTEM SHALL return `unavailable`
+  (wire `dependency_unavailable` on facade routes). `not_ready` SHALL mean not
+  configured. (amended (c))
 
 Schema and roles
 - THE SYSTEM SHALL create its objects only through `ApplySchema` under the migration
@@ -103,10 +110,12 @@ Schema and roles
   is newer than the code THEN `ApplySchema` SHALL fail.
 - THE SYSTEM SHALL grant the runtime role no table-wide `UPDATE`, no `DELETE` and no
   `TRIGGER`.
-- WHILE any guard trigger is missing or not enabled (`tgenabled <> 'O'`), or a table is
-  owned by the runtime role THE SYSTEM SHALL report `not_ready`.
+- WHILE any guard trigger is missing or not enabled (`tgenabled <> 'O'`), or the runtime
+  role owns, or is a member of the owner of, any order table, trigger function or schema
+  `glovo`, or its grants differ from the #988 rows of mctl-api#957 design §6d.1, THE
+  SYSTEM SHALL report `not_ready`. (amended (c))
 - WHEN `Create` runs in a transaction that is not READ COMMITTED THE SYSTEM SHALL refuse
-  with `dependency_unavailable`.
+  with `unavailable`.
 
 Audit and hygiene
 - THE SYSTEM SHALL append one event per write with the actor kind (`owner`,

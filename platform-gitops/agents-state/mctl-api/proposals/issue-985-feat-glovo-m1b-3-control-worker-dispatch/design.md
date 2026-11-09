@@ -1,5 +1,29 @@
 # Design: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
+## Amendment 2026-11-09 (c), round 2 of the AMEND PR
+
+Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
+`ceac9ed`. The cross-slice seams have one owner each: roles and grants, execution
+binding, approval-basket payload and the interface list are mctl-api#957 design §6d; the
+closed refusal set is #957 §4. This slice references them. Where this section and older
+text disagree, this section wins; the older passages are edited.
+
+| Finding | Change |
+|---|---|
+| F1, X-6 (hook name collision; `WithRevocationHook` never wired) | `Connections` keeps only `LockOwnerShared` and `LiveConnectionTx` with the #957 §6d.4 signatures. The membership precondition is #959 `MembershipRevocationWired()`, a separate signal. Task 9 constructs the #959 store with `glovo.WithRevocationHook(bridge.CancelOpenForConnections)` |
+| F2 (fence preconditions differ) | §7.3 is the single precondition list (six items, including #959 `Ready` and #989 `receipt.Ready`); requirements mirror it verbatim and #989 §8 references it. T17 has one case per item |
+| F3 (new DDL by the runtime role; `SECURITY DEFINER`) | New `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole)` under the migration role carries `bridgeSchema`, the partial unique index, `bridge_colocation_probe` and #986's read objects, and grants per #957 §6d.1. With Glovo enabled the bridge opens with `bridge.NewRuntimeStore` (no DDL). The `SECURITY DEFINER` function is withdrawn: `bridge.CancelOpenForConnections` is plain Go on the revoker's transaction. The (b) row "Kept in `bridgeSchema`" is withdrawn |
+| F4 (proof does not check the write-path grants) | §4 step 4 checks the full #957 §6d.1 grant table, that the bridge and Glovo pools share the runtime role, that it owns nothing and is not a member of an owner role, and that the work-items role has no `glovo` access. OPEN-985-6 is now true as written |
+| X-3, P3 F8 (codes) | §2b statuses now equal #957 §4.1 (`stale_install` 403); `tenant_busy` is defined as `lock_timeout` (SQLSTATE `55P03`) on any §6b lock; other I/O is `unavailable`. The §2b set is a subset of #957 §4.1 |
+| P3 F5 (`PreLock` before the scope check) | `PreLock(ctx, tx, c bridge.Caller, commandID)` applies the `lockOwned` provider and tenant check before any lock and answers `ErrCommandNotFound` alike for absent and foreign ids |
+| P3 F6 (consumed signatures drift) | §3 copies #988 `PeekOrderScope(...) (orders.Scope, error)` and #989 `ReserveCommand` verbatim; step 12 passes `BasketFingerprint` |
+| P3 F7 (cancel vs concurrent receipt transitions) | Cancel treats a receipt already `denied` (for this order) or `unknown` (for this `cmd_`) as success; T7 adds refused-then-cancel and sweeper-then-cancel |
+| P3 F8 (test gaps) | T16 adds the surface principal and `PinClaims` negatives (wrong aud, iss, sub; expired; nbf) and a production-build check that no verifier is wired; the revokers list includes `Reconnect` and terminal `Transition` |
+| X-1, #957 F5 (workflow id, run id, refs) | `EnqueueInput.WorkflowID` comes from #989 `ExecutionBindingTx`, `RunID` from #957 `glovojoin.ControlStartTx` (may be `''`), `TenantRef`/`PrincipalRef` from #988 `LookupJoinRefTx` (§5 step 11) |
+| X-2, X-8 (payload shape) | The `place_order_fake` payload is exactly the order's final approval-basket bytes, no wrapper (#957 §6d.3); OPEN-985-8 is narrowed to which contract version carries the command shape |
+| #959 F7 (end-to-end revocation proof) | New T24 here: with the real hook and fence, revoke-then-permit and `expires_at`-passed-then-permit give no permit |
+| #989 F3 (`cancel_order_fake`) | `read_command_result` answers only for `place_order_fake`; Glovo M1 never enqueues `cancel_order_fake` |
+
 ## Amendment 2026-11-09 (b)
 
 This amendment resolves the independent review of digest
@@ -12,8 +36,8 @@ disagree, this section wins. Every older passage that contradicted it has been r
 - The connection store (#959), the order index (#988), the `aar_` receipts (#989) and the
   command bridge live in **one physical Postgres database**. They are used through one
   shared `pgx.Tx`.
-- `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` must all point to that
-  database. A startup check proves transaction compatibility. Equal URL strings are not
+- `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL` must both point to that database; `COMMERCE_DB_URL` stays the commerce
+  ledger's (amended (c)). A startup check proves transaction compatibility. Equal URL strings are not
   proof.
 - Stores keep separate schemas and roles with least privilege.
 - Revocation and write authorization serialize through locks, with **one documented lock
@@ -41,7 +65,7 @@ disagree, this section wins. Every older passage that contradicted it has been r
 | P3 `Enqueue` returns `created=false` while the order is still undispatched | Refused as an invariant violation with `unavailable`; nothing is committed (§5 step 11) |
 | P3 Cancel before dispatch leaves the `aar_` `approved` | Cancel before dispatch calls #989 `RevokeGlovoApprovalTx` (`pending|approved -> refused`) |
 | P3 `ProveColocated` gaps (physical standbys share `system_identifier`; EXECUTE on `pg_control_system`) | Replaced by a nonce written in one transaction and read back through every pool, plus privilege and `to_regclass` checks (§4). `pg_control_system` is no longer used |
-| P3 The partial unique index is applied on every boot | Kept in `bridgeSchema`. The runtime role owns `bridge_commands` and already creates `bridge_commands_sequence` the same way at every start (`store.go:66-67`, `:115-116`), so `CREATE UNIQUE INDEX IF NOT EXISTS` is idempotent and permitted. Verified; no change |
+| P3 The partial unique index is applied on every boot | Withdrawn by (c): all bridge DDL moves to `bridge.ApplySchema` under the migration role (§ Platform impact) |
 | P3 Crash after commit but before the response | T22: the retry returns the same `cmd_` |
 | P3 `glovo.Default` is a `var` (`gate.go:24`) | `ControlDefault` is backed by an unexported `const controlGateOpen = false` |
 | P3 `in_flight` is called an effective state | Corrected: it is a stored state (`action_approvals.go:215-232`) |
@@ -167,23 +191,26 @@ Deployed state:
 - A replayed dispatch returns the original body byte for byte, with the header
   `Idempotent-Replayed: true` (the #957 M4 convention). The body has no `replayed` field.
 - `read_command_result` returns ids, enums and the digest only, never the stored result
-  body or a payload. It answers only for Glovo `place_order_fake`/`cancel_order_fake`
+  body or a payload. It answers only for Glovo `place_order_fake`
   commands whose order is inside the `tenants` bound. Anything else is `not_found`.
+  (Amended (c): `place_order_fake` only. Glovo M1 never enqueues `cancel_order_fake`;
+  cancellation is `bridge.Store.Cancel` on the existing command.)
 - `revalidate_scope` and `resolve_connection` from #1044's `ControlApiPort` are not
   added here. Their owner is an OPEN item.
 
 #### 2b. Closed refusal table
 
 Every refusal uses the #959 `glovo.WriteError` body `{"error","error_description"}`
-with fixed text. Codes come only from #1044 M10 and the #959 closed enum; nothing else is
-sent. The internal reason goes to audit only.
+with fixed text. Amended (c): every code and status here is a row of the closed set in
+mctl-api#957 design §4.1 (control-route column), and nothing else is sent. The internal
+reason goes to audit only.
 
 | Condition | HTTP | `error` | #1044 M10 |
 |---|---|---|---|
 | The caller is not the control worker, or a control worker calls another route | 403 | `not_authorized` | terminal |
 | Gate closed after mount, missing config, failed proof, or a missing collaborator | 503 | `not_ready` | `provider_disabled` (mapped on the #1044 side) |
-| Store I/O error, `lock_timeout` | 503 | `unavailable` | retryable |
-| Lock contention on the tenant beyond the retry budget | 409 | `tenant_busy` | `tenant_busy` |
+| Store I/O error | 503 | `unavailable` | retryable |
+| `lock_timeout` (SQLSTATE `55P03`) on any lock of the #957 §6b order | 409 | `tenant_busy` | `tenant_busy` |
 | Malformed ref, unknown or duplicate field | 400 | `invalid_request` | terminal |
 | Order, command or approval is absent, foreign, or outside `tenants` | 404 | `not_found` | terminal |
 | The `aar_` is not `approved` (`pending`, `refused`, `unknown`, `consumed` without this command) or is not a Glovo-kind `aar_` | 409 | `approval_invalid` | `approval_invalid` |
@@ -193,7 +220,7 @@ sent. The internal reason goes to audit only.
 | The body fingerprint differs from the order's final fingerprint or the `aar_` binding | 409 | `basket_changed` | `basket_changed` |
 | The owner is no longer a tenant member | 403 | `no_tenant` | terminal |
 | No live connection / connection revoked / connection expired | 404 / 409 / 409 | `no_connection` / `connection_revoked` / `connection_expired` | terminal |
-| The install revision moved | 409 | `stale_install` | terminal |
+| The install revision moved | 403 | `stale_install` | terminal |
 | Dispatch of an order that is `cancelled`, `unknown` or `closed` | 409 | `invalid_transition` | terminal |
 | Rate limit | 429 (+ `Retry-After`) | `rate_limited` | retryable |
 
@@ -209,7 +236,7 @@ the same wave.
 
 ```go
 type OrderIndex interface { // #988 (M1b/1), tx-scoped, control path
-    PeekOrderScope(ctx context.Context, q Querier, orderRef string, tenants []string) (tenant, owner string, err error) // unlocked read of write-once columns
+    PeekOrderScope(ctx context.Context, q orders.Querier, orderRef string, tenants []string) (orders.Scope, error) // unlocked read of write-once columns
     LockOrderForControl(ctx context.Context, tx pgx.Tx, orderRef string, tenants []string) (*orders.Order, error) // L3, FOR UPDATE; scope derived from the row
     MarkDispatched(ctx context.Context, tx pgx.Tx, o *orders.Order, commandID string, actor orders.Actor) error // finalized -> dispatched, command_id write-once
     MarkCancelled(ctx context.Context, tx pgx.Tx, o *orders.Order, actor orders.Actor) error  // only when no effect is possible
@@ -218,15 +245,17 @@ type OrderIndex interface { // #988 (M1b/1), tx-scoped, control path
 type Receipts interface { // provided by #989 (internal/workitems, glovo_approvals.go); tx-scoped; #985 never writes action_approval_requests itself
     LockGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string) (*workitems.ActionApprovalRequest, *workitems.GlovoBinding, error) // L4, FOR UPDATE
     ReserveGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, cmd workitems.ReserveCommand) (replayed bool, err error) // approved -> reserved; idempotent for the same cmd_
-    RevokeGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, actor string) error // pending|approved -> refused (cancel before dispatch)
-    MarkGlovoApprovalUnknownTx(ctx context.Context, tx pgx.Tx, id, commandID string) error // reserved -> unknown (command ended without a permit)
+    RevokeGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, actor string) error // pending|approved -> refused (cancel before dispatch); already denied for this order = success
+    MarkGlovoApprovalUnknownTx(ctx context.Context, tx pgx.Tx, id, commandID string) error // reserved -> unknown; already unknown for this cmd_ = success
     GlovoApprovalStatus(ctx context.Context, tenants []string, id string) (*workitems.GlovoApprovalStatus, error) // tx-free; ids and enums only; read_approval
 }
 type Connections interface { // #959, tx-scoped, on the shared tx
     LockOwnerShared(ctx context.Context, tx pgx.Tx, tenant, principal string) error // L1 shared + L2 shared, the #959 withLocks order
-    LiveConnectionTx(ctx context.Context, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error) // no row lock; L1/L2 already held
-    RevocationHook() bool // true only when a membership removal revokes connections (§7.3)
+    LiveConnectionTx(ctx context.Context, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error) // no row lock; L1/L2 already held; expires_at fenced
+    MembershipRevocationWired() bool // #959; true only when a membership detector is registered (§7.3, OPEN-985-2)
+    Ready(ctx context.Context) error // #959; revocation_hook_missing without a hook
 }
+// Every signature above is copied from mctl-api#957 design §6d.4 (amended (c)).
 type Membership interface{ IsMember(tenant, principalID string) (bool, error) } // GitOps, best effort
 type Dispatcher struct {
     Bridge *bridge.Store; Orders OrderIndex; Receipts Receipts; Conns Connections
@@ -243,13 +272,14 @@ type Dispatcher struct {
   the #989 `Receipts` implementation exists.
 
 ### 4. One-database proof (owner decision A)
-- Required config: `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL`, each set
-  explicitly. A missing value is `not_ready`. None of them falls back to `AUDIT_DB_URL`
+- Required config: `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL`, each set explicitly. With Glovo enabled the bridge
+  store is `bridge.NewRuntimeStore` on the `GLOVO_DB_URL` pool; `COMMERCE_DB_URL` is
+  not read for the bridge (amended (c)). A missing value is `not_ready`. None of them falls back to `AUDIT_DB_URL`
   or to another one.
 - `control.ProveOneDatabase(ctx, bridgePool, workItemsPool, glovoPool)` runs at startup:
   1. In one transaction on the bridge pool, insert a fresh 128-bit nonce into
-     `bridge_colocation_probe` and commit. The table is created idempotently in
-     `bridgeSchema`.
+     `bridge_colocation_probe` and commit. The table is created by `bridge.ApplySchema`
+     (amended (c)).
   2. Read the nonce back through the work-items pool and the Glovo pool. If either does
      not find it, the proof fails. This proves one database, not merely one cluster. It
      does not depend on `system_identifier` (physical standbys share it) or on EXECUTE
@@ -257,9 +287,14 @@ type Dispatcher struct {
   3. Each pool must report `pg_is_in_recovery() = false`.
   4. From the bridge pool, `to_regclass` must find every participating table:
      `bridge_commands`, the #988 order tables, the #989 receipt table, and the #959
-     `glovo.glovo_installs` and `glovo.glovo_connections`. `has_table_privilege` must
-     show exactly the grants in the role table of #959's amendment: SELECT on the #959
-     tables, and no UPDATE or DELETE on them.
+     `glovo.glovo_installs` and `glovo.glovo_connections`. Amended (c): from the bridge
+     pool, `has_schema_privilege`, `has_table_privilege` and `has_column_privilege`
+     reproduce the grant table of mctl-api#957 design §6d.1 exactly, with nothing
+     beyond it (this covers every DML right dispatch, cancel, prepare and the revoker
+     need); the bridge and Glovo pools report the same `current_user`, which owns no
+     object in schema `glovo` and no bridge table, is not a member of any owner role,
+     and has `rolsuper` and `rolbypassrls` false; the work-items pool reports another
+     role, without `USAGE` on `glovo`.
   5. Delete the nonce.
 - Any failure sets `Ready()` to `not_ready` for the life of the process. It logs once,
   with no URL, and leaves the fence as `refusingFence`.
@@ -303,19 +338,25 @@ This is the only step order. Task 5 implements exactly this.
     `basket.Fingerprint(snapshot) == order.final_basket_fingerprint`. Call
     `bridge.Store.Enqueue(ctx, tx, EnqueueInput{Kind: KindPlaceOrderFake,
     OperationKey: "glovo-dispatch:"+order_ref, Sequence: sequence, ApprovalRef: aar,
-    IntentHash: <the aar_ row's intent_hash>, Payload: <the snapshot's approval basket>,
-    Attempt: 1, …})`. Every field comes from the locked rows. The payload shape is the
-    #1059 approval basket for a Glovo `place_order_fake` command (OPEN-985-8); until that
-    contract exists, dispatch is `not_ready`. `created=false` at this
+    IntentHash: <the aar_ row's intent_hash>, Payload: <the snapshot's JCS approval-basket
+    bytes, exactly, no wrapper>, Attempt: 1, …})`. Every field comes from the locked rows
+    (amended (c), #957 §6d.2): `ExecutionID` and `WorkItemID`/`WorkflowID` from
+    `Order.ExecutionID` and #989 `ExecutionBindingTx`; `RunID` from #957
+    `glovojoin.ControlStartTx` (empty is valid, `bridge_commands.run_id` defaults to
+    `''`, `internal/bridge/store.go:74`); `TenantRef`/`PrincipalRef` from #988
+    `LookupJoinRefTx`; `OrderRef` the `ordr_`; `ConnectionRef` the `gcn_`. The payload
+    shape is fixed in #957 §6d.3; which contract version carries the command is
+    OPEN-985-8, and until it exists dispatch is `not_ready`. `created=false` at this
     point (the order is still `finalized`) is an invariant violation: roll back, audit
     it, and answer `unavailable`.
-12. `Receipts.ReserveGlovoApprovalTx(aar, {cmd_, tenant, owner, we_, order, connection,
-    install revision, intent hash})`. #989 re-checks the binding against these command
+12. `Receipts.ReserveGlovoApprovalTx(aar, workitems.ReserveCommand{CommandID, Tenant,
+    OwnerPrincipalID, ExecutionID, OrderRef, ConnectionRef, InstallRevision, IntentHash,
+    BasketFingerprint})` (the #989 §4 type, all fields required). #989 re-checks the binding against these command
     fields and is idempotent for the same `cmd_`.
 13. `Orders.MarkDispatched(order, cmd_, Actor{Kind: control_worker})`.
 14. Commit. Any error rolls back everything.
 
-A backstop index goes in `bridgeSchema`: `CREATE UNIQUE INDEX IF NOT EXISTS
+A backstop index goes in `bridge.ApplySchema` (amended (c)): `CREATE UNIQUE INDEX IF NOT EXISTS
 bridge_commands_mutating_approval ON bridge_commands (approval_ref) WHERE
 operation_kind='place_order_fake'`.
 
@@ -347,15 +388,18 @@ design §6b. This slice takes:
 - dispatch and cancel: L1 shared, L2 shared, L3 (order), L4 (`aar_`), L5 (commands);
 - permit (through `WriteFence.PreLock`, then `lockOwned`): L1 shared, L2 shared, L3, L4,
   then L5;
-- `bridge_cancel_open_for_connections` (called by the #959 revokers after L1/L2): L5
-  only, `ORDER BY command_id`.
+- `bridge.CancelOpenForConnections` (called by every #959 connection-ending path after
+  L1/L2): L5 only, `ORDER BY command_id`.
 
 The provider claim, result and expiry paths take only L5.
 
 #### 7.2 Write fence (#989 `receipt.Fence`, a `bridge.WriteFence`)
-- `bridge.WriteFence` gains `PreLock(ctx, tx, commandID) error`. `permitTx` calls it
-  **before** `lockOwned`. This is a change to `permit.go:86`, owned by this slice. The
-  default `refusingFence.PreLock` is a no-op.
+- `bridge.WriteFence` gains `PreLock(ctx, tx, c bridge.Caller, commandID) error`.
+  `permitTx` calls it **before** `lockOwned`. This is a change to `permit.go:86`, owned
+  by this slice. The default `refusingFence.PreLock` is a no-op. Amended (c): the
+  fence's `PreLock` first applies the same provider and tenants check as `lockOwned`
+  (`internal/bridge/store.go:659-668`) to an unlocked read, and answers
+  `ErrCommandNotFound` alike for an absent and a foreign id, before taking any lock.
 - #989's `receipt.Fence.PreLock` reads the command's immutable binding without a lock (tenant,
   owner, order, `aar_`). It then takes L1 shared, L2 shared, L3 and L4.
 - `permitTx` then takes L5 (`lockOwned`). #989's `Check` re-verifies that the binding
@@ -363,8 +407,9 @@ The provider claim, result and expiry paths take only L5.
   stored command payload, checks the connection, the install revision, membership and
   the receipt state (`reserved` for this `cmd_`), and consumes the `aar_` (#989 design
   §6). That is the single-use point at the physical write.
-- The #959 revokers are `Revoke` (including reason `membership_removed`),
-  `RevokeInstall` and `Reinstall`. Each one:
+- The #959 connection-ending paths are `Revoke` (including reason
+  `membership_removed`), `RevokeInstall`, `Reinstall`, `Reconnect` (`superseded`) and
+  terminal `Transition`s, all through `endConnection` (amended (c)). Each one:
   1. takes L1 and L2 as today;
   2. updates the connection rows;
   3. in the **same transaction**, cancels the open bridge commands of every ended
@@ -382,14 +427,19 @@ The provider claim, result and expiry paths take only L5.
 
 #### 7.3 When the fence is installed
 `main.go` (task 9 here, the single installer) calls
-`bridgeStore.SetFence(receipt.NewFence(...))` (#989) only when all three of these hold:
-1. `glovo.ControlDefault.Open` is true, and the owner has lifted hold
-   mctl-gitops#2457.
-2. The §4 one-database proof passed.
-3. `Conns.RevocationHook()` is true. That means the component that observes a GitOps
+`bridgeStore.SetFence(receipt.NewFence(...))` (#989) only when **all six** of these
+hold. This is the only copy of the list (amended (c)); the requirements mirror it and
+#989 §8 references it.
+1. `glovo.ControlDefault.Open` is true.
+2. The owner has lifted hold mctl-gitops#2457.
+3. The §4 one-database proof passed.
+4. #959 `Ready()` returns nil, so a `RevocationHook` is installed
+   (`glovo.WithRevocationHook(bridge.CancelOpenForConnections)`, task 9).
+5. #959 `MembershipRevocationWired()` is true: the component that observes a GitOps
    membership removal revokes the member's connection (`Revoke` with reason
-   `membership_removed`). Who builds that detector is an OPEN item. Until it exists, the
+   `membership_removed`). Who builds that detector is OPEN-985-2. Until it exists, the
    fence stays `refusingFence`.
+6. #989 `receipt.Ready(ctx)` returns nil.
 
 A residual window remains between the GitOps membership removal and the hook's
 revocation. The owner must accept it explicitly; this is an OPEN item.
@@ -420,14 +470,25 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
 
 ## Platform impact
 
-- **Migrations.** These go in `bridgeSchema`, applied by the runtime role, idempotently,
-  in the same pattern as `bridge_commands_sequence`:
+- **Migrations (amended (c)).** New `bridge.ApplySchema(ctx, migrationConnStr,
+  runtimeRole)`, run under the migration role in the order of mctl-api#957 design
+  §6d.1, applies `bridgeSchema` (`internal/bridge/store.go:66-67` onward), then:
   - the partial unique index `bridge_commands_mutating_approval`;
   - the table `bridge_colocation_probe(nonce TEXT PRIMARY KEY, created_at TIMESTAMPTZ)`;
-  - the `SECURITY DEFINER` function `bridge_cancel_open_for_connections(text[], text)`.
-    It uses `CREATE OR REPLACE` and a fixed `search_path`. EXECUTE is revoked from
-    PUBLIC and granted only to the Glovo runtime role named in config. If that grantee
-    is not configured, the #959 hook is unavailable and the fence stays refusing.
+  - #986's guarded read objects;
+  - the grants of the bridge rows of #957 §6d.1 to `runtimeRole`, and `SELECT` on
+    `bridge_colocation_probe` to the work-items role for the proof, and `SELECT`,
+    `UPDATE (result)` on `bridge_commands` to the bridge maintenance role
+    (`cmd/bridge-scrub`), the "existing consumers" rows of #957 §6d.1.
+  With Glovo enabled the store is opened with the new `bridge.NewRuntimeStore`, which
+  runs no DDL and checks the schema, in the pattern of `OpenExistingStore`
+  (`store.go:381-404`); today `NewStore` runs `bridgeSchema` on every start
+  (`store.go:374`). Bridge use without Glovo keeps `NewStore`. The runtime role is
+  never given `CREATE`, ownership or any other right to make `NewStore` pass (owner
+  decision 2026-11-09, #957 §6d.1). There is no
+  `SECURITY DEFINER` function: `bridge.CancelOpenForConnections` is a Go function that
+  runs on the revoker's transaction with the runtime role's own `bridge_commands`
+  rights.
 - **Backward compatibility.** The routes are absent unless the const and the env flag
   are both on. `refusingFence.PreLock` is a no-op, so the default permit path is
   unchanged.
@@ -437,7 +498,7 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
   - The database is split: the proof fails closed.
   - Membership changes are invisible to Postgres: the fence needs the hook, and the
     owner accepts the residual.
-  - Lock waits: a 5 s `lock_timeout` maps to `unavailable`.
+  - Lock waits: a 5 s `lock_timeout` maps to `tenant_busy` (#957 §4.1).
   - Token confusion: exact audience, a confining gate and the `tenants` bound.
 - **Dependencies (blocking).** If any of these is missing, the routes answer
   `not_ready`:

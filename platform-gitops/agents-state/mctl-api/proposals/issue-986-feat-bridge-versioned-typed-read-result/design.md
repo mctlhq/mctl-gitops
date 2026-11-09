@@ -1,5 +1,26 @@
 # Design: issue-986-feat-bridge-versioned-typed-read-result
 
+## Amendment 2026-11-09 (c), round 2 of the AMEND PR
+
+Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
+`ceac9ed`. Cross-slice seams are owned by mctl-api#957 design §6d (roles and grants,
+interfaces, approval-basket source) and §4 (refusal codes). Where this section and older
+text disagree, this section wins; the older passages are edited.
+
+| Finding | Change |
+|---|---|
+| F1 (NULL refs on read rows break every scanner and the expiry sweep) | No NOT NULL is relaxed. Read rows store `''` in `workflow_id`, `execution_id`, `work_item_id` and `order_ref` (`run_id` already defaults to `''`, `internal/bridge/store.go:74`), so `cmdCols`/`scanCmd` (`store.go:284-298`), `claimTx`, `lockOwned`, `Cancel` and `permitTx` keep scanning plain strings. The kind-conditional CHECK requires `''` for read kinds and non-empty values otherwise. `expireTx` (`store.go:868-910`) returns `operation_kind` and skips the `bridge_signal_outbox` insert (`:904`) for read kinds; `permitTx` refuses a read kind. T5b, T7d |
+| F3 (#957 request lacks owner id and scopes) | #957 design §5 now passes the full `ReadRequest` below. `FetchReadResult` is the **authoritative** binding check for reads, not defence in depth; T10b crosses principals through the #957 adapter |
+| P3 F2 (checker bound to a #959 API that does not exist) | `ConnectionChecker` is bound to #959 `LiveConnection(ctx, glovo.Owner)` (#957 §6d.4), which fences `expires_at`; its `no_connection`, revoked and expired answers and a different revision map to the §5 sentinels |
+| X-5 (`irv_` has no owner) | `irv_` is a #988 `glovo.join_refs` kind (`install_revision`), minted by #957 read routes through `MintJoinRefTx` (#957 §2a). `FetchReadResult` compares the stored `install_revision` ref with the request's; OPEN-986-3 is closed |
+| #957 F2, X-4 (DDL by the runtime role) | The §4 changes are part of `bridge.ApplySchema` (#985) under the migration role, not of a runtime `bridgeSchema` run; grants per #957 §6d.1 |
+| X-2 (read TTL vs preview) | Prepare no longer re-reads: #957 stores the approval-basket bytes with the preview. `MCTL_BRIDGE_READ_RESULT_TTL` defaults to 300 s, clamped 1..300 s, and a read command's TTL is at most 300 s (#1059 `ttl_seconds`) |
+| P3 F5 (codes contradict the schema) | §5 lists submission checks in pipeline order with one code each; a non-`none` effect and a read payload on a non-read kind fail the schema first and are `invalid_document`; `ErrPayloadTooLarge` is added to `errors.go` |
+| P3 F6 (stale #1059 names) | Vendored set uses the #1059 file names (`read-command.schema.json`, `read-result.schema.json`, `approval-basket.schema.json`, fixtures, vectors); the column is `operation_kind` |
+| P3 F7 (T7b impossible) | T7b is scoped to `bridge_commands.result`, `bridge_read_results`, transitions, logs and audit; `bridge_commands.lease_token` stores the lease token by design (`store.go:97`) |
+| P3 F8 (unspecified row details) | `request_id` equality is checked at submission; read rows use `intent_hash` = the `payload_digest` of the command params, `operation_key` = `"read:"+rdq_`, `sequence` = 1, `approval_ref` = `''`; a non-`succeeded` outcome maps to `ErrReadUnavailable` |
+| P3 F9 (weak negative tests, no lock order) | T15 diffs the full route, MCP tool and Temporal registration lists; T16 uses the statement log. Reads take only L5 of #957 §6b on `bridge_commands`, and `bridge_read_results` is never locked together with L1-L4 |
+
 ## Amendment 2026-11-09 (b)
 
 Resolves the independent review of digest
@@ -23,13 +44,13 @@ the bridge, so the connection check is a live read with no cross-database window
 
 | Review finding | Fix in this proposal |
 |---|---|
-| P1-1 nobody starts a read; the v1alpha2 command keeps `order_ref`/`we_`/`wi_`/`workflow_id`; reads write a signal-outbox row | The in-process `bridge.ReadClient` (§3) enqueues read commands and waits on the store with a deadline. Read commands carry the #1059 read binding set (no order, `we_`, `wi_` or workflow fields); `bridgeSchema` relaxes those NOT NULLs only for read kinds via a kind-conditional CHECK. Read kinds write no `bridge_signal_outbox` row and need no `workflow_id` (§4). Task 4 implements the `ReadClient`; #957 A12 wires it behind its `ReadBridge` interface |
+| P1-1 nobody starts a read; the v1alpha2 command keeps `order_ref`/`we_`/`wi_`/`workflow_id`; reads write a signal-outbox row | The in-process `bridge.ReadClient` (§3) enqueues read commands and waits on the store with a deadline. Read commands carry the #1059 read binding set (no order, `we_`, `wi_` or workflow fields); a kind-conditional CHECK requires `''` there for read kinds (amended (c): no NOT NULL is relaxed). Read kinds write no `bridge_signal_outbox` row and store `''` as `workflow_id` (§4, amended (c)). Task 4 implements the `ReadClient`; #957 A12 wires it behind its `ReadBridge` interface |
 | P1-2 public `GET /api/v1/glovo/read-results/{ref}` and a `glovoAudienceRoutes` entry bypass #957's checks | Dropped. No route and no `glovoAudienceRoutes` change. `Store.FetchReadResult` is in process only and is called by the `ReadClient` on behalf of #957's handlers after their own checks; it re-checks binding, TTL, revocation and `glovo:read` as defence in depth (§5). T15 asserts no route is added |
 | P2-1 `read_prepare` contradicts the merged contract | Dropped. Read kinds are `read_history`, `read_preview`, `read_basket` (names from #1059). Prepare is the #957 `/orders:prepare` write, which consumes the preview/basket read; open question 3 is closed by #957 D5 |
 | P2-2 digest over Go struct order; JSONB re-orders keys | The digest is sha256 over the RFC 8785 (JCS) canonical form, defined by #1059 with vendored test vectors. mctl-api stores the canonical bytes as `BYTEA`, recomputes `sha256(stored) == data_digest` on every fetch and fails closed on a mismatch. Round-trip test T9 |
 | P2-3 contract-first split half there; fixtures local | The contract slice is mctl-agents#1059. This slice vendors its schemas, fixtures and digest vectors by sha256 (task 1); T2/T3 use the vendored fixtures only. The provider-side vendoring is an extension of mctl-telegram#1262 (OPEN-986-2) |
 | P2-4 `ADD CONSTRAINT bridge_commands_read_wire_chk` fails on the second boot; drop/re-add takes ACCESS EXCLUSIVE every boot | Every schema change is guarded by a catalog check in one `DO` block (`pg_constraint`, `pg_attribute`), constraints are added `NOT VALID` and validated once, and nothing is dropped and re-added on a normal boot (§4). Task 3 DoD and T16 apply the schema twice and on a populated v1alpha1 database |
-| P2-5 connection checker undecided | `ConnectionChecker` is the #959 live connection read on the same database, the mechanism #957 names (`glovo.Connections.Current(tenant, principal)`, #957 design §3). The fail-closed default stays; task 5 wires it |
+| P2-5 connection checker undecided | `ConnectionChecker` is the #959 live connection read on the same database, `LiveConnection(ctx, glovo.Owner)` (amended (c), #957 §6d.4). The fail-closed default stays; task 5 wires it |
 | P3 `SubmitResult` hard-refuses non-v1alpha1 (`store.go:745`), `validate()` (`store.go:229-256`), `projection()` (`store.go:334`) | Tasks 2-4 name all three |
 | P3 checker-unavailable sentinel falls through `bridgeStatus` (`handlers_bridge.go:95-113`) | No HTTP route uses it any more; the sentinel stays in process and #957 maps it. `bridgeStatus` gains an explicit case anyway so a future caller cannot fall through to 409 |
 | P3 `provenance: "synthetic"` is self-declared | Bounded field shapes come from #1059 (item codes in the `FAKE-n` catalogue pattern, no name/address/phone/person fields, coarse timestamps); mctl-api validates against the vendored schema |
@@ -68,9 +89,10 @@ Skipped P3s: none.
 ## Proposed solution
 
 ### 1. Contract (vendored from mctl-agents#1059)
-- Task 1 vendors, byte for byte, the #1059 v1alpha2 `command.schema.json`,
-  `result.schema.json`, the per-kind read-result schemas, the valid and invalid fixtures
-  and the RFC 8785 digest vectors into `internal/bridge/schema/v1alpha2/` with a
+- Task 1 vendors, byte for byte, the #1059 v1alpha2 `read-command.schema.json`,
+  `read-result.schema.json` (the per-kind shapes are definitions inside it),
+  `approval-basket.schema.json`, the valid and invalid fixtures, the RFC 8785 digest
+  vectors and the basket-fingerprint vectors (amended (c)) into `internal/bridge/schema/v1alpha2/` with a
   `PROVENANCE` file (repo, PR, merge commit, sha256 per file). It does not author or edit
   any of them. If #1059 is not merged, the task stops.
 - Read kinds: `read_history`, `read_preview`, `read_basket` (final names from #1059).
@@ -131,25 +153,33 @@ func (c *ReadClient) Read(ctx context.Context, r ReadRequest) (*ReadResult, erro
    install revision and scopes, and return the canonical bytes.
 
 Only #957's handlers call `ReadClient.Read`, through #957's `ReadBridge` interface
-(#957 task A12 owns the few-line adapter). No HTTP route, MCP tool, Temporal workflow or
+(#957 task A12 owns the adapter). Amended (c): #957 passes every `ReadRequest` field
+(design §5 there): the verified owner principal id, the `tnr_`/`prr_`/`gcn_` refs, the
+`irv_` install-revision ref and the subject token's scopes. `FetchReadResult` is the
+authoritative binding check for reads. `EnqueueRead` sets the command TTL to
+`min(Deadline - now, 300 s)`, `intent_hash` to the params digest, `operation_key` to
+`"read:"+rdq_`, `sequence` to 1 and `approval_ref` to `''`. No HTTP route, MCP tool, Temporal workflow or
 signal is involved.
 
-### 4. Storage (`bridgeSchema`, idempotent)
+### 4. Storage (in `bridge.ApplySchema`, idempotent; amended (c))
 
-All changes run in one `DO $$ … $$` block whose steps each test the catalog first, so a
+These changes are applied by #985's `bridge.ApplySchema` under the migration role, with
+the grants of mctl-api#957 design §6d.1; the runtime role never runs them. All changes
+run in one `DO $$ … $$` block whose steps each test the catalog first, so a
 second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock:
 - add `wire_version TEXT NOT NULL DEFAULT 'bridge.mctl.ai/v1alpha1'` and
   `read_request_id TEXT` (holds the #1059 `request_id`; `ADD COLUMN IF NOT EXISTS`);
-- drop NOT NULL on `workflow_id`, `run_id`, `execution_id`, `work_item_id` and
-  `order_ref` only if `pg_attribute.attnotnull` is still true;
+- (amended (c)) no NOT NULL is dropped; read rows store `''` in `workflow_id`,
+  `run_id`, `execution_id`, `work_item_id` and `order_ref`;
 - add, only if absent in `pg_constraint`, `NOT VALID`, then `VALIDATE CONSTRAINT` once
   in the same guarded step:
-  - `bridge_commands_kind_v2_chk`: kind in the v1alpha1 kinds plus the three read kinds
+  - `bridge_commands_kind_v2_chk`: `operation_kind` in the v1alpha1 kinds plus the three read kinds
     (the old `bridge_commands_kind_chk` is dropped in the same guarded step, which runs
     exactly once);
   - `bridge_commands_read_shape_chk`: a read kind has `wire_version` v1alpha2, a
-    non-null `read_request_id` and null workflow/order/`we_`/`wi_`; every other kind has
-    all of those non-null, which preserves the old guarantee for v1alpha1 rows;
+    non-null `read_request_id` and `''` in workflow/order/`we_`/`wi_`; every other kind
+    has all of those non-empty (which `validate()` already guarantees for v1alpha1 rows,
+    `store.go:228-256`);
 - `CREATE UNIQUE INDEX IF NOT EXISTS bridge_commands_read_request ON bridge_commands
   (tenant, read_request_id) WHERE read_request_id IS NOT NULL`;
 - table `bridge_read_results` (`CREATE TABLE IF NOT EXISTS`):
@@ -158,17 +188,26 @@ second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock:
   `install_revision`, `data BYTEA` (canonical bytes; NULL after erase), `data_digest`,
   `size_bytes`, `created_at`, `expires_at`, `erased_at`; index on `expires_at`.
 
-`submitTx` for a read kind writes **no** `bridge_signal_outbox` row and no transition to
-a workflow; it inserts the `bridge_read_results` row in the same transaction as the
+Every path that reads or transitions a `bridge_commands` row was checked (amended (c)):
+`cmdCols`/`scanCmd`, `claimTx`, `lockOwned` and `Cancel` need no change because no
+column becomes nullable; `permitTx` refuses a read kind (no write permit for a read);
+`expireTx` adds `operation_kind` to its `RETURNING` and skips the
+`bridge_signal_outbox` insert for read kinds. `submitTx` for a read kind writes **no**
+`bridge_signal_outbox` row and no transition to a workflow; it inserts the `bridge_read_results` row in the same transaction as the
 result CAS. Raw data never enters `bridge_commands.result`, which keeps
 `{kind, digest, size_bytes, result_ref}` only.
 
 ### 5. Submission and fetch rules
-Submission (provider, existing `/api/v1/bridge/commands/{id}/result` route):
+Submission (provider, existing `/api/v1/bridge/commands/{id}/result` route), in this
+pipeline order, one code per check (amended (c)):
 1. `schema_version` must equal the stored `wire_version`, else `binding_mismatch`.
-2. Read kind: `provider_effect = none`, no provider-chosen `result_ref`, and on
-   `outcome = succeeded` a `payload` of the command's kind (a payload on any other
-   outcome, or on a non-read kind, is refused). Violations: `result_inconsistent`.
+   `request_id` must equal the stored `read_request_id`, else `binding_mismatch`.
+2. Read kind: a non-`none` `provider_effect`, a provider-chosen `result_ref`, a payload
+   on a non-`succeeded` outcome, or a read payload on a non-read kind all fail the
+   vendored schema in step 4 and are `invalid_document` (the schema makes
+   `provider_effect` const `none`). A body over 16384 bytes is refused by
+   `bridgeMaxBody` before this pipeline, as `payload_too_large`
+   (`ErrPayloadTooLarge`, added to `errors.go`).
 3. Run the #1059 raw-bytes pre-check on the body before any `json.Unmarshal`. It rejects
    duplicate keys, lone surrogates, `NaN`/`Infinity`, numbers outside ±(2^53-1) and any
    non-integer token in an integer position. Go's `encoding/json` accepts duplicate keys
@@ -196,12 +235,14 @@ InstallRevision, Scopes})`, in process only, checks in this order:
 | `glovo:read` not in `Scopes` | `ErrReadNotAuthorized` |
 | `expires_at <= now()` or `data IS NULL` | `ErrCommandExpired` |
 | row's connection or install revision differs from the request | `ErrBindingMismatch` |
-| `ConnectionChecker.Live(tenant, principal)`: no connection, revoked, expired, other revision | `ErrBindingMismatch` with the M1a state attached for #957's mapping |
+| #959 `LiveConnection(ctx, glovo.Owner{TenantID, PrincipalID})`: `no_connection`, revoked, expired (including `expires_at` passed), or a connection or install revision other than the row's | `ErrBindingMismatch` with the M1a state attached for #957's mapping |
 | checker error | `ErrReadUnavailable` |
 | `sha256(data) != data_digest` (constant-time compare) | `ErrReadUnavailable`, logged as an integrity failure |
 
-`ConnectionChecker` is implemented by the #959 store's live connection read (same
-database, owner decision A). Default `DenyConnectionChecker` returns
+`ConnectionChecker` is implemented by the #959 store's `LiveConnection` (same database,
+owner decision A; amended (c)). A command whose outcome is not `succeeded` answers
+`ErrReadUnavailable`. The install revision on the row is the `irv_` ref; the checker
+resolves it through #988 `LookupJoinRefTx` and compares with the live revision. Default `DenyConnectionChecker` returns
 `ErrReadUnavailable`. #957 maps every sentinel through its §4 table (no bridge code
 reaches the Glovo wire); `bridgeStatus` also gains explicit cases for the new sentinels
 so they cannot fall through to 409 if ever exposed.
@@ -210,7 +251,8 @@ so they cannot fall through to 409 if ever exposed.
 `EraseExpiredReads` sets `data=NULL, erased_at=now()` for expired rows and deletes rows
 whose `expires_at` is more than 24 h ago, in bounded `FOR UPDATE SKIP LOCKED` batches
 from the existing `Expirer` tick. Metric `mctl_api_bridge_read_results_erased_total`, no
-tenant labels. `MCTL_BRIDGE_READ_RESULT_TTL`: default 600 s, clamped 1..900 s.
+tenant labels. `MCTL_BRIDGE_READ_RESULT_TTL`: default 300 s, clamped 1..300 s
+(amended (c); prepare does not re-read, #957 §6d.3).
 
 ## Alternatives
 
@@ -224,14 +266,17 @@ tenant labels. `MCTL_BRIDGE_READ_RESULT_TTL`: default 600 s, clamped 1..900 s.
 
 ## Platform impact
 
-- Migrations: additive, guarded, idempotent (§4). Existing v1alpha1 rows satisfy the new
-  CHECKs; the NOT NULL relaxation is compensated by the kind-conditional CHECK.
+- Migrations: additive, guarded, idempotent (§4), applied by `bridge.ApplySchema` under
+  the migration role. Existing v1alpha1 rows satisfy the new CHECKs; no NOT NULL is
+  relaxed.
 - Backward compatibility: v1alpha1 unchanged and golden-pinned. Providers receive
   v1alpha2 commands only for read kinds, which nobody enqueues until #957 wires the
   client.
 - Security: no new route or audience; data reachable only in process after #957's checks
   plus this store's re-checks; providers cannot read data back.
-- Resources: ≤ 12 KiB per read row (the #1059 `JCS(payload)` cap of 12288 bytes), erased within 900 s, deleted after
+- Resources: ≤ 12 KiB per read row (the #1059 `JCS(payload)` cap of 12288 bytes), erased within 300 s, deleted after
   24 h.
+- Locks: reads take only L5 of mctl-api#957 design §6b on `bridge_commands`;
+  `bridge_read_results` is never locked together with L1-L4.
 - Order: #1059 approved and merged -> this slice -> #957 A12 and the mctl-telegram
   provider read path -> #990 tests. Nothing is enabled by this slice.

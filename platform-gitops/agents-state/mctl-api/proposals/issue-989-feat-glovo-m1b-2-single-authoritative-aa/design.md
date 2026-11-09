@@ -1,5 +1,29 @@
 # Design: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
+## Amendment 2026-11-09 (c), round 2 of the AMEND PR
+
+Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
+`ceac9ed`. Cross-slice seams are owned by mctl-api#957 design §6d (roles and grants,
+execution binding, approval-basket source, interface list) and §4 (refusal codes).
+Where this section and older text disagree, this section wins; the older passages are
+edited.
+
+| Finding | Change |
+|---|---|
+| X-1, #957 F1/F5, #988 F1/F2 (no tx-aware `wi_`/`we_` create; nobody owns the execution binding) | This slice owns `CreateGlovoExecutionTx` and `ExecutionBindingTx` (#957 §6d.2), §4. Ids are `wi_`/`we_` plus 26 `randAlnum` characters; no own transaction, no `withTx` advisory lock |
+| F1, X-2 (the fence fingerprints only one member of the payload; #985 and #989 disagree on the shape) | The write payload **is** the approval basket (#957 §6d.3). Fence step 4 runs #988 `basket.Parse` on the whole `bridge_commands.payload`: an extra top-level field, a wrapper, a missing field or any other shape is `basket_changed`. `basket.Fingerprint` is taken over the canonical bytes `Parse` returns. T10 gains the cases |
+| F3 (`glovo.cancel_order_fake` can be created but never spent; binding undefined) | Dropped from M1. The only Glovo kind is `glovo.place_order_fake`; the kind CHECK admits only it, and `CreateGlovoApprovalTx` refuses any other kind (T15). Cancel before dispatch revokes the existing `aar_`; cancel after dispatch needs no approval (#985 §6). #1044's cancel row is unreachable in M1 |
+| F4 (the lifecycle guard misses INSERT) | `glovo.aar_guard()` is `BEFORE INSERT OR UPDATE OR DELETE`. A Glovo row is inserted only as `pending`, with every `decided_*` field empty, `requested_by='service:glovo-prepare'` and a complete policy context. `pending→approved` additionally needs `decided_by_principal_id` = the binding's owner and `authority_basis='resource_owner'`; the fence re-checks both. T15 INSERT cases |
+| F5, X-4 (grants go to an unnamed role; writes run as the bridge role) | One Glovo runtime role (#957 §6d.1) serves the bridge and Glovo pools, and every Glovo approval write runs on it. Its grants on `action_approval_requests` and `glovo.approval_bindings` are in the #957 §6d.1 table; this design only points there. The work-items role keeps its generic grants and gets nothing in schema `glovo`; a Glovo-kind write by any role other than `glovo_runtime` is refused by `glovo.aar_guard()`. Owner-confirmed 2026-11-09 |
+| P3 F2 (ReserveCommand fields) | `ReserveCommand` is published once in §4 with every field required; an empty field is a refusal, never a skip. #985 §5 step 12 passes every field. T-case per field |
+| P3 F6 (no tenant membership table) | The owner decider calls `decideWrittenRole` with `PrincipalMembership.MemberRolesForPrincipal` directly (`internal/api/tenant_role.go:148-151`, `:185`) and skips `roleGate`. The fence's membership check is the #985 `Membership` read (GitOps, best effort, outside the transaction); the transactional guarantee is #985 §7.3 (the revocation hook plus L2) |
+| P3 F7 (intent recompute sources) | §6 step 5 lists them: `tenant`, `owner_principal_id`, `order_ref`, `connection_ref`, `install_revision` and `provider_ref` come from the command row, `install_id` from the binding. `command.provider_ref == binding.provider` and `command.order_ref == binding.order_ref` are required. T6 subtests |
+| P3 F8 (gate and installer disagree with #985) | §8 uses the #985 §7.3 list: `glovo.ControlDefault.Open` and `receipt.Ready(ctx) == nil` |
+| P3 F9, X-9 (idempotency key unspecified) | `idempotency_key = "glovo-prepare:" + ordr_`, set server-side, never from client input (§4) |
+| P3 F10 (negative tests) | T15 per immutable column and raw INSERT of `glovo.other`; Reserve mismatch per field; T20 revoke from `pending` |
+| #985 consistency (Revoke and MarkUnknown idempotency) | `RevokeGlovoApprovalTx` on a row already `denied` for this order succeeds; `MarkGlovoApprovalUnknownTx` on a row already `unknown` for this `cmd_` succeeds (§4), as #985 §3 states |
+| P2-4 row of (b) said "the owner cancels through #957" | Corrected: an unapproved order is closed by #985 cancel (which revokes the `aar_`) or by expiry of its `aar_`; #957 exposes no cancel |
+
 ## Amendment 2026-11-09 (b)
 
 Resolves the independent review of digest
@@ -16,14 +40,14 @@ section survives.
 | P1 the fence compares two values mctl-api wrote itself; a command with the approved `intent_hash` and another payload gets a permit | The fence recomputes from what is written. Under the command lock it reads `bridge_commands.payload`, extracts the #1059 **approval basket**, validates it (sort, uniqueness, arithmetic) and computes `basket_fingerprint`. It then recomputes the intent hash with `GlovoIntent` from the command row's own fields and that fingerprint. Both must equal the `aar_` binding, and the command's stored `intent_hash` must equal the recomputed one. Caller-supplied hashes are never trusted (§6). The provider contract (mctl-telegram#1262) is: write exactly the command payload's lines, never a re-read basket (OPEN-989-4). T10 uses a real command whose payload differs from the approved basket while carrying the approved `intent_hash` |
 | P2-2 state machine only in Go; DDL runtime-owned; no `ApplySchema` exists (`workitems/store.go:243`) | `glovo.aar_guard()` (`BEFORE UPDATE OR DELETE` on `action_approval_requests`) allows only `pending→approved|denied`, `approved→reserved|denied`, `reserved→consumed|unknown`; `consumed`, `unknown` and `denied` are final; identity columns are immutable; `DELETE` is refused; no row can move into or out of a Glovo kind. A deferred constraint trigger requires one binding row per Glovo `aar_`. `glovo.approval_bindings` has `UNIQUE (order_ref)`. All of it is created by a new `workitems.ApplyGlovoApprovalSchema` under the migration role; the runtime role gets DML only (column-level `UPDATE (command_id)` on bindings, no `DELETE`, no `TRIGGER`). The ownership of `action_approval_requests` must move to the migration role (OPEN-989-1); until it does, Glovo is `not_ready` (§2) |
 | P2-3 no single lock order; the permit already holds the command lock | One global order L1..L6, written once in #957 design §6b. `receipt.Fence.PreLock` runs before `lockOwned` and takes L1 sh, L2 sh, L3, L4; the permit then takes L5. Decide takes L4 only. The in-tx `OutcomeRecorder` is dropped (it would have taken L4 after L5); a sweeper and #985 cancel record `unknown` instead (§6, §7). Deadlock tests T21 |
-| P2-4 order `approved` state is a second authority | Dropped. The decision writes only the `aar_`. `CreateGlovoApprovalTx` calls #988 `BindApproval` in the same transaction. A refusal does not cancel the order; the owner cancels through #957, and #985 then calls `RevokeGlovoApprovalTx` (§4, §5) |
+| P2-4 order `approved` state is a second authority | Dropped. The decision writes only the `aar_`. `CreateGlovoApprovalTx` calls #988 `BindApproval` in the same transaction. A refusal does not cancel the order; an unapproved order is closed by #985 cancel, which calls `RevokeGlovoApprovalTx`, or by expiry of its `aar_` (§4, §5; corrected in (c)) |
 | P2-5 owner decision recorded as `platform_admin`; policy unregistered; context incomplete | `governance.AuthorityBasisResourceOwner = "resource_owner"`, recorded for Glovo kinds. The rule `glovo.order.owner-approval` v1 is registered in `governance.Policies`. `CreateGlovoApprovalTx` writes a complete context (`intent_source = execution:<we_>`, `policy_decision`, `policy_reasons`), so the start-up backfill never touches it. T19 runs strict mode (§5) |
 | P2-6 readiness ignores D2 and decision A | `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` set explicitly, no fallback; #985 `ProveOneDatabase` passes; schema version, triggers enabled and table owners checked; policy registered; every collaborator non-nil. Otherwise no `SetFence` and every Glovo approval method answers `not_ready`. The connection read is #959 `LiveConnectionTx` under L2; `LockConnectionShared` is gone (§8) |
 | P2-7 contract gaps with #957/#1044 | `GlovoControlInput` carries `approval_ref` **and** the fingerprint, as the merged #957 §6c and #1044 M10 say (§9). New: `GlovoApprovalStatus` for the control worker's `read_approval`, `RevokeGlovoApprovalTx`, an idempotent `ReserveGlovoApprovalTx` that also checks the binding against the command fields, and one refusal table to the seven M10 reasons and #957 §4 (§10) |
 | P3 generic create can mint Glovo kinds; `IsGlovoKind` vs `LIKE` | The generic create refuses any `glovo.` kind. One predicate: a DB `CHECK` that a `glovo.`-prefixed kind is one of the exact list, so `LIKE 'glovo.%'` and `IsGlovoKind` agree (§1) |
 | P3 invariant table misses `unknown` + effect `unknown` | Added (§7) |
 | P3 expired vs `MarkUnknown` | `unknown` wins for forensics: a stored `reserved` row past `expires_at` can only become `unknown`, never `consumed`. `expired` is a reading of `pending`, `approved` or `reserved` only (§1) |
-| P3 admins skip the live role check | For Glovo kinds the decider's membership is read directly from the tenant membership table, with no admin pass (§5) |
+| P3 admins skip the live role check | For Glovo kinds the decider's membership is read through `PrincipalMembership` with no admin pass (§5; see (c) P3 F6) |
 | P3 refusal oracle | Every non-admin caller who cannot decide gets the same 403 `approval_decider_forbidden`, whether the id is unknown, non-Glovo or someone else's (§5) |
 | P3 factual errors | `glovo.Default` is a `var` (`gate.go:24`); `install_revision` is `TEXT` holding the canonical decimal, compared byte for byte with `FenceBinding.InstallRevision`; `SetFence` is `store.go:418`; the decide route keeps its existing `writeErrorCode` body; owner decision C1's `{"error","error_description"}` applies to the #957/#985 Glovo routes |
 
@@ -144,8 +168,8 @@ Clone at `ceac9ed` (Merge #984).
   `issue-960-*`: read for the contracts cited above. All are `status: proposed`, not
   merged.
 - The deployed values of `COMMERCE_DB_URL`, `WORK_ITEMS_DB_URL`, `GLOVO_DB_URL` and
-  `MCTL_BRIDGE_ENABLED` for mctl-api were **not observed**. The design requires all
-  three URLs to be set explicitly and #985's `ProveOneDatabase` to pass (§8).
+  `MCTL_BRIDGE_ENABLED` for mctl-api were **not observed**. The design requires
+  `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` to be set explicitly (#957 §6d.1 R4) and #985's `ProveOneDatabase` to pass (§8).
 
 ## Proposed solution
 
@@ -153,10 +177,11 @@ Clone at `ceac9ed` (Merge #984).
 
 The authoritative object is the existing `action_approval_requests` row. Glovo adds:
 
-- **Action kinds** `glovo.place_order_fake` and `glovo.cancel_order_fake`
-  (`workitems.GlovoActionKinds`, `IsGlovoKind`). One predicate everywhere: the CHECK
-  `action_approval_requests_glovo_kind_chk`
-  `action_kind NOT LIKE 'glovo.%' OR action_kind IN ('glovo.place_order_fake','glovo.cancel_order_fake')`
+- **Action kind** `glovo.place_order_fake` only (`workitems.GlovoActionKinds`,
+  `IsGlovoKind`). M1 has no `glovo.cancel_order_fake`: cancel before dispatch revokes
+  the existing `aar_`, and cancel after dispatch needs no approval (#985 §6). One
+  predicate everywhere: the CHECK `action_approval_requests_glovo_kind_chk`
+  `action_kind NOT LIKE 'glovo.%' OR action_kind = 'glovo.place_order_fake'`
   makes `LIKE 'glovo.%'` and the exact list equivalent. Go uses the SQL constant
   `glovoKindPredicate` for every query.
 - **Two stored states**, `reserved` and `unknown`, added to the state CHECK.
@@ -203,7 +228,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   compared byte for byte with `FenceBinding.InstallRevision`.
 - `glovo.approval_bindings_guard()` (`BEFORE UPDATE OR DELETE`): refuses every change
   except `command_id` from `''` to a `cmd_` value, and refuses `DELETE`.
-- `glovo.aar_guard()` (`BEFORE UPDATE OR DELETE` on `action_approval_requests`):
+- `glovo.aar_guard()` (`BEFORE INSERT OR UPDATE OR DELETE` on
+  `action_approval_requests`):
+  - INSERT of a Glovo-kind row: only `state='pending'`, every `decided_*` column and
+    `authority_basis` empty, `consumed_at`/`reserved_at`/`executed_at` null,
+    `requested_by='service:glovo-prepare'`, and a complete policy context
+    (`intent_source`, `policy_rule_id='glovo.order.owner-approval'`,
+    `policy_version='1'`, `policy_decision`, `policy_reasons` non-empty);
+  - `pending→approved` additionally needs `NEW.decided_by_principal_id` equal to the
+    binding's `owner_principal_id` and `NEW.authority_basis='resource_owner'`;
   - a row whose `OLD.action_kind` or `NEW.action_kind` is a Glovo kind may not change
     `action_kind`, `intent_hash`, `expires_at`, `execution_id`, `work_item_id`,
     `subject_principal_id`, `requested_by` or `policy_rule_id`/`policy_version`;
@@ -216,8 +249,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   binding row by commit.
 - The widened state CHECK and the kind CHECK are added here too (guarded, `NOT VALID`
   then `VALIDATE`), not in the runtime `actionApprovalSchema`.
-- Grants to the runtime role: `SELECT, INSERT` on `glovo.approval_bindings`, `UPDATE
-  (command_id)` only, no `DELETE`, `TRUNCATE` or `TRIGGER`; `EXECUTE` on no function.
+- Grants: every Glovo approval write runs on the one Glovo runtime role of #957 §6d.1
+  (the bridge pool). Its rights on `glovo.approval_bindings` (`SELECT, INSERT, UPDATE
+  (command_id)`) and on `action_approval_requests` (column-level, no `DELETE`,
+  `TRUNCATE` or `TRIGGER`) are listed in that table and nowhere else; this slice's
+  `ApplyGlovoApprovalSchema` issues them. The work-items role keeps its generic rights
+  and gets nothing in schema `glovo` (#957 §6d.1 "existing consumers").
+- `glovo.aar_guard()` refuses any INSERT or UPDATE of a Glovo-kind row whose
+  `current_user` is not the `runtimeRole` given to `ApplyGlovoApprovalSchema` (written
+  into the function body as a literal at apply time), so no other role can mint or move
+  a Glovo receipt. Grants govern service access only; the owner, membership, connection
+  and `aar_` checks of §5 and §6 still run on every decision and permit.
 - **Ownership of `action_approval_requests`.** A trigger on a table owned by the
   runtime role can be disabled by that role. The table must therefore be owned by the
   migration role, and `actionApprovalSchema` must stop running DDL on the runtime pool
@@ -228,8 +270,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   `current_user`. Until the move happens, Glovo `Ready` fails and every Glovo approval
   method answers `not_ready`; generic work items are unchanged.
 - `Ready` checks: schema version; both guard triggers and the constraint trigger exist
-  with `tgenabled = 'O'`; `relowner` of `action_approval_requests` and
-  `glovo.approval_bindings` is not `current_user`.
+  with `tgenabled = 'O'`; `NOT pg_has_role(current_user, relowner, 'MEMBER')` for
+  `action_approval_requests` and `glovo.approval_bindings`; the runtime role's
+  privileges equal the #957 §6d.1 rows (checked by #985 `ProveOneDatabase`).
 
 ### 3. Intent hash
 
@@ -245,10 +288,13 @@ caller-supplied hash is only ever compared.
 
 ### 4. Tx-aware store API (`internal/workitems/glovo_approvals.go`)
 
-None of these methods begins, commits or rolls back a transaction. The names match the
-`Receipts` interface in #985 design §3.
+None of these methods begins, commits or rolls back a transaction, and none takes an
+advisory lock. The names match #957 design §6d.4 and the `Receipts` interface in #985
+design §3.
 
 ```go
+func (s *Store) CreateGlovoExecutionTx(ctx, tx pgx.Tx, in GlovoExecutionInput) (workItemID, executionID string, err error)
+func (s *Store) ExecutionBindingTx(ctx, q Querier, executionID string) (tenant, ownerPrincipalID, workItemID, workflowID string, err error)
 func (s *Store) CreateGlovoApprovalTx(ctx, tx pgx.Tx, in GlovoApprovalInput) (*ActionApprovalRequest, bool, error)
 func (s *Store) LockGlovoApprovalTx(ctx, tx pgx.Tx, id string) (*ActionApprovalRequest, *GlovoBinding, error) // L4
 func (s *Store) ReserveGlovoApprovalTx(ctx, tx pgx.Tx, id string, cmd ReserveCommand) (replayed bool, err error)
@@ -259,17 +305,38 @@ func (s *Store) DecideGlovoApprovalTx(ctx, tx pgx.Tx, in ActionDecisionInput) (*
 func (s *Store) GlovoApprovalStatus(ctx, tenants []string, id string) (*GlovoApprovalStatus, error)
 ```
 
+```go
+type GlovoExecutionInput struct{ Tenant, OwnerPrincipalID, WorkflowID, Actor string }
+type ReserveCommand struct { // every field required; an empty field is ErrReserveIncomplete (intent_mismatch), never a skip
+    CommandID, Tenant, OwnerPrincipalID, ExecutionID, OrderRef, ConnectionRef string
+    InstallRevision, IntentHash, BasketFingerprint string
+}
+```
+
+- **CreateGlovoExecutionTx** (#957 prepare, #957 §6d.2): one `work_items` row (owner
+  = the principal, origin surface `glovo`), one creation event and one
+  `work_item_executions` row (engine `temporal`, `engine_ref = WorkflowID`, attempt 1)
+  on the caller's transaction. Ids are `wi_`/`we_` plus 26 characters of the bridge
+  `randAlnum` alphabet, matching `internal/bridge/store.go:164-165`; the generic
+  hyphenated UUID ids (`internal/workitems/store.go:395`, `:676`) never would. The
+  generic `withTx` advisory lock (`store.go:266-272`) is not taken.
+- **ExecutionBindingTx**: the #988 `Executions` collaborator and the #985 workflow-id
+  source; `not_found` for an id it did not create.
 - **Create** (called by #957 prepare, which already holds L3 on the order): inserts the
   `aar_` row and the binding, and calls #988 `BindApproval(tx, order_ref, aar_)` in the
   same transaction. `requested_by = "service:glovo-prepare"`, `subject_principal_id =
   owner`, `risk_level = high`, `side_effect = write`, and a complete governance
   context: `intent_source = "execution:" + we_`, `policy_rule_id`/`policy_version` of
   §3, `policy_decision = "require_approval"`, `policy_reasons =
-  ["glovo.order.owner-approval"]`. Idempotent on `(requested_by, idempotency_key)`. A
+  ["glovo.order.owner-approval"]`. `idempotency_key = "glovo-prepare:" + order_ref`,
+  set here and never taken from client input, so the global `UNIQUE (requested_by,
+  idempotency_key)` (`action_approvals.go:152`) is per order. Any kind other than
+  `glovo.place_order_fake` is refused. It calls `BindApproval` with
+  `Scope{Tenant, PrincipalID: owner}` and `Actor{Kind: system, ID:
+  "service:glovo-prepare"}`. Idempotent on that key. A
   second `aar_` for the same order hits `UNIQUE (order_ref)` and is `approval_replayed`.
-- **Reserve** (#985 dispatch, under L3+L4): `cmd` carries `CommandID`, `Tenant`,
-  `OwnerPrincipalID`, `ExecutionID`, `OrderRef`, `ConnectionRef`, `InstallRevision`,
-  `IntentHash` and `BasketFingerprint`. Each must equal the binding (else
+- **Reserve** (#985 dispatch, under L3+L4): every `ReserveCommand` field is required
+  and must equal the binding (else
   `intent_mismatch`, or `basket_changed` for the fingerprint). If the row is already
   `reserved` with `command_id == cmd.CommandID`, it returns `replayed = true` and
   changes nothing (crash-retry). Otherwise one CAS `approved → reserved` (unexpired,
@@ -277,8 +344,10 @@ func (s *Store) GlovoApprovalStatus(ctx, tenants []string, id string) (*GlovoApp
 - **Consume** (fence only): CAS `reserved → consumed` guarded by `command_id` and
   `expires_at > now()`.
 - **Revoke** (#985 cancel before dispatch): CAS `pending|approved → denied`, recording
-  the actor and reason `order_cancelled`. Exposed as `refused`.
+  the actor and reason `order_cancelled`. Exposed as `refused`. A row already `denied`
+  for this order is success (idempotent retry); any other state is `invalid_transition`.
 - **MarkUnknown**: CAS `reserved → unknown` guarded by `command_id`; allowed past expiry.
+  A row already `unknown` for the same `command_id` is success.
 - **Decide**: `FOR UPDATE … WHERE state='pending'` on the `aar_` only (L4). It writes no
   order row.
 - **GlovoApprovalStatus** (tx-free, for the #985 `read_approval` route): returns
@@ -304,9 +373,11 @@ func (s *Store) GlovoApprovalStatus(ctx, tenants []string, id string) (*GlovoApp
 - a resolved principal; not a service, agent, CI, relayed or surface caller; not a
   Glovo-audience token (the facade and the model never decide);
 - `binding.owner_principal_id == user.PrincipalID()`;
-- live membership read **directly** from the tenant membership table for
-  `binding.tenant` with at least the minimum role (proposed `developer`, OPEN-989-3).
-  Admins get no pass here;
+- live membership for `binding.tenant` with at least the minimum role (proposed
+  `developer`, OPEN-989-3): `decideWrittenRole` (`internal/api/tenant_role.go:185`)
+  over `PrincipalMembership.MemberRolesForPrincipal` (`:148-151`), called directly so
+  `roleGate` (`:157`) gives admins no pass. Membership is a GitOps checkout, not a
+  Postgres table;
 - `glovo.Default.Open` and Glovo approvals readiness (§8), else 503 `not_ready`.
 
 Governance:
@@ -326,14 +397,15 @@ access (`canSeeActionApproval`) gains the same owner rule for Glovo kinds only.
 
 `receipt.Fence` implements `bridge.WriteFence`, including the `PreLock` hook that #985
 adds to `permitTx`. Collaborators: `Approvals` (this store), `Orders` (#988), `Conns`
-(#959 `LockOwnerShared`, `LiveConnectionTx`) and `Membership` (direct read). The lock
+(#959 `LockOwnerShared`, `LiveConnectionTx`) and `Membership` (#985 §3: GitOps, best
+effort, read outside any row lock; the transactional guarantee is #985 §7.3). The lock
 levels are the canonical ones of #957 design §6b.
 
 `PreLock(ctx, tx, commandID)`, before `lockOwned`:
 1. Read, without a lock, the command's immutable binding columns: `tenant`,
    `owner_principal_id`, `order_ref`, `approval_ref`.
 2. `Conns.LockOwnerShared(tenant, owner)`: L1 shared, L2 shared.
-3. `Orders.LockOrderForControl(order_ref)`: L3.
+3. `Orders.LockOrderForControl(ctx, tx, order_ref, []string{tenant})`: L3.
 4. `Approvals.LockGlovoApprovalTx(approval_ref)`: L4.
 
 `permitTx` then takes L5 (`lockOwned`) and calls `Check(ctx, tx, b)`:
@@ -345,15 +417,25 @@ levels are the canonical ones of #957 design §6b.
    to another command.
 3. `expires_at` and `fresh_until` are in the future, else `approval_expired`.
 4. **Recompute from the written content.** Read `bridge_commands.payload` from the
-   locked row, extract `approval_basket`, run `basket.Validate` (the #1059 rules: sorted
-   unique `item_code`, arithmetic) and compute `fp = basket.Fingerprint(…)`. `fp` must
-   equal `binding.basket_fingerprint` and the order's `final_basket_fingerprint`, else
-   `basket_changed`. A payload without a valid approval basket is `basket_changed`.
-5. Recompute `ih = IntentHash(GlovoIntent(binding fields from the command row, fp))`.
+   locked row and run #988 `basket.Parse(payload)` on the **whole** payload (#957
+   §6d.3: the payload is exactly the approval basket, no wrapper, no other top-level
+   field; the #1059 rules: closed schema, sorted unique `item_code`, arithmetic). Then
+   `fp = basket.Fingerprint(canonical)`. `fp` must equal `binding.basket_fingerprint`
+   and the order's `final_basket_fingerprint`, else `basket_changed`. An extra or
+   missing field, a wrapper object or any other shape fails `Parse` and is
+   `basket_changed`.
+5. Recompute `ih = IntentHash(GlovoIntent(..., fp))`. From the command row: `tenant`,
+   `owner_principal_id`, `order_ref`, `connection_ref`, `install_revision` and
+   `provider_ref`; from the binding: `install_id`. `command.provider_ref` must equal
+   `binding.provider` and `command.order_ref` must equal `binding.order_ref`, else
+   `intent_mismatch`. The `aar_` must also carry `decided_by_principal_id ==
+   binding.owner_principal_id` and `authority_basis = 'resource_owner'`, else
+   `approval_invalid`.
    `ih` must equal the `aar_` `intent_hash` and `b.IntentHash`, else `intent_mismatch`.
    The same check covers `b.ExecutionID`, `b.WorkItemID`, `b.Tenant`,
    `b.OwnerPrincipalID`, `b.ConnectionRef` and `b.InstallRevision`.
-6. `Membership`: the owner is still a member of the tenant, else `no_tenant`.
+6. `Membership.IsMember(tenant, owner)` (#985 §3, best effort): false is `no_tenant`;
+   a read error is `unavailable`.
 7. `Conns.LiveConnectionTx(owner)`: active, same `gcn_`, same install revision (decimal
    string). Else `no_connection`, `connection_revoked`, `connection_expired` or
    `stale_install`.
@@ -404,19 +486,20 @@ reports violations as a readiness failure.
 
 ### 8. Wiring and readiness
 
-`receipt.Ready()` is nil only when all of the following hold:
-- `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` are each set explicitly, with
-  no `AUDIT_DB_URL` fallback;
+`receipt.Ready(ctx)` is nil only when all of the following hold:
+- `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` are each set explicitly, with no
+  `AUDIT_DB_URL` fallback, and `current_user` on the Glovo pool is `glovo_runtime`;
 - #985 `control.ProveOneDatabase` passed (one physical database, owner decision A);
-- `ApplyGlovoApprovalSchema`'s version matches, the triggers are enabled and the table
-  owners are not the runtime role (§2);
+- `ApplyGlovoApprovalSchema`'s version matches, the triggers are enabled, the runtime
+  role is not a member of the table owners, and its grants equal #957 §6d.1 (§2);
 - `glovo.order.owner-approval` v1 is registered;
 - the work-items, bridge, #988 order and #959 connection stores are non-nil;
 - the #1059 approval basket is vendored and the write payload contract exists
-  (OPEN-985-8).
+  (OPEN-985-8, OPEN-1059-1).
 
 Only #985 task 9 calls `bridgeStore.SetFence(receipt.NewFence(...))`, and only when
-`receipt.Ready()` is nil and `glovo.Default.Open` is true. Otherwise the fence stays
+all six #985 §7.3 preconditions hold, among them `glovo.ControlDefault.Open` and
+`receipt.Ready(ctx) == nil`. Otherwise the fence stays
 `refusingFence` and every Glovo approval method returns `glovo.CodeNotReady`.
 `glovo.Default` is a closed package `var`, and nothing in this slice opens it.
 
@@ -433,19 +516,19 @@ Only #985 task 9 calls `bridgeStore.SetFence(receipt.NewFence(...))`, and only w
 
 ### 10. Refusal map
 
-| Internal condition | #1044 M10 reason | #957 §4 / #985 wire |
+| Internal condition | #1044 M10 reason | #957 §4.1 / #985 wire (status equals the §4.1 row; amended (c)) |
 |---|---|---|
 | `aar_` missing, not a Glovo kind, or outside `tenants` (control read) | — | 404 `not_found` |
-| state `pending`, `refused` or `unknown`; or `consumed`/`reserved` without this command at the fence | `approval_invalid` | 409 `approval_invalid` |
+| state `pending`, `refused` or `unknown`; `consumed`/`reserved` without this command at the fence; decider is not the bound owner or `authority_basis` is not `resource_owner` | `approval_invalid` | 409 `approval_invalid` |
 | reserved or consumed for another `cmd_`; a second `aar_` for the order | `approval_replayed` | 409 `approval_replayed` |
 | past `expires_at` or `fresh_until` | `approval_expired` | 409 `approval_expired` |
-| binding differs (tenant, owner, `we_`, order, connection, install revision) or recomputed intent hash differs | `intent_mismatch` | 409 `intent_mismatch` |
-| fingerprint differs (body, order, or recomputed from the payload) | `basket_changed` | 409 `basket_changed` |
-| lock contention beyond the retry budget | `tenant_busy` | 409 `tenant_busy` |
+| binding differs (tenant, owner, `we_`, order, connection, install revision, provider), a `ReserveCommand` field is empty, or recomputed intent hash differs | `intent_mismatch` | 409 `intent_mismatch` |
+| fingerprint differs (body, order, or recomputed from the payload), or the payload is not exactly an approval basket (`basket.Parse` fails) | `basket_changed` | 409 `basket_changed` |
+| `lock_timeout` (55P03) on any §6b lock | `tenant_busy` | 409 `tenant_busy` |
 | not configured, proof failed, gate closed | `provider_disabled` | 503 `not_ready` |
 | owner no longer a member | terminal | 403 `no_tenant` |
-| connection absent / revoked / expired; revision moved | terminal | `no_connection` / `connection_revoked` / `connection_expired` / `stale_install` |
-| I/O error | retryable | 503 `unavailable` |
+| connection absent / revoked / expired; revision moved | terminal | 404 `no_connection` / 409 `connection_revoked` / 409 `connection_expired` / 403 `stale_install` |
+| I/O error, or a membership read error | retryable | 503 `unavailable` |
 | generic `aar_` route used on a Glovo row | — | 409 `approval_kind_not_spendable_here` (generic routes only) |
 
 ## Alternatives
@@ -465,9 +548,10 @@ Only #985 task 9 calls `bridgeStore.SetFence(receipt.NewFence(...))`, and only w
 
 ## Platform impact
 
-- **Migrations:** additive, only through `ApplyGlovoApprovalSchema` under the migration
-  role: the bindings table, three triggers, two CHECKs and the widened state CHECK. No
-  backfill. The ownership move of `action_approval_requests` is OPEN-989-1.
+- **Migrations:** additive, only through `ApplyGlovoApprovalSchema` under
+  `glovo_migrator`: the bindings table, three triggers, two CHECKs, the widened state
+  CHECK and the #957 §6d.1 grants. No backfill. The ownership move of
+  `action_approval_requests` and `work_items*` is OPEN-989-1 (extended).
 - **Backward compatibility:** non-Glovo kinds keep their decision, consume, reserve and
   settle behaviour; the generic CAS statements gain one predicate that is always true
   for them. A non-admin on a non-Glovo id still gets the same 403.

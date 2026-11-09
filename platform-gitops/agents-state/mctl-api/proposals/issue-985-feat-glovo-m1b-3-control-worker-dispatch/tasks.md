@@ -1,8 +1,9 @@
 # Tasks: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
 Blocking dependencies (amended 2026-11-09 (b)):
-- the amended #959 store, with tx-scoped `LockOwnerShared` and `LiveConnectionTx`, and
-  revokers that cancel bridge commands in the same tx;
+- the amended #959 store, with tx-scoped `LockOwnerShared` and `LiveConnectionTx`,
+  `Ready`, `MembershipRevocationWired`, and connection-ending paths that call the hook
+  in the same tx (mctl-api#957 design §6d.4);
 - the #988 order index (control-path methods);
 - the amended #989 methods and `receipt.Fence`;
 - the #1059 approval-basket payload for Glovo `place_order_fake` (OPEN-985-8);
@@ -36,22 +37,35 @@ With any of them missing, the code merges with nil collaborators and answers
   - the nonce through `bridge_colocation_probe`;
   - `pg_is_in_recovery`;
   - `to_regclass`;
-  - `has_table_privilege` for the grants table in the #959 amendment;
-  - explicit `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` with no fallback.
+  - `has_schema_privilege`, `has_table_privilege` and `has_column_privilege` for the
+    full grant table of mctl-api#957 design §6d.1, nothing beyond it; one runtime role
+    shared by the bridge and Glovo pools, owning nothing, member of no owner role, not
+    superuser or `BYPASSRLS`; no `glovo` access for the work-items role (amended (c));
+  - explicit `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` with no fallback; the bridge store
+    on the `GLOVO_DB_URL` pool (#957 §6d.1 R4).
 
   DoD: a missing env var, a nonce not found, a missing table or a wrong privilege makes
   the dispatcher `not_ready` permanently, and no URL is logged.
 - [ ] 4. Bridge changes in `internal/bridge` (depends on 2):
-  - `WriteFence.PreLock`, called by `permitTx` before `lockOwned`, with a no-op on
-    `refusingFence`;
-  - in `bridgeSchema`: the `bridge_commands_mutating_approval` partial unique index, the
-    `bridge_colocation_probe` table, and the `SECURITY DEFINER` function
-    `bridge_cancel_open_for_connections(text[], text)` with its EXECUTE grant to the
-    configured Glovo runtime role only;
-  - `bridge.CancelOpenForConnections(ctx, tx, gcnIDs, actor)`.
+  - `WriteFence.PreLock(ctx, tx, c bridge.Caller, commandID)`, called by `permitTx`
+    before `lockOwned`, with a no-op on `refusingFence`;
+  - (amended (c)) `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole)` under the
+    migration role: `bridgeSchema`, the `bridge_commands_mutating_approval` partial
+    unique index, the `bridge_colocation_probe` table, #986's read objects and the grants
+    of mctl-api#957 design §6d.1; and `bridge.NewRuntimeStore(ctx, pool)` on the shared
+    `GLOVO_DB_URL` pool, which runs no DDL and only checks the schema version and the
+    grants. `cmd/api/main.go` uses it while Glovo is enabled, instead of `NewStore`
+    (`internal/bridge/store.go:365-379`, which runs `bridgeSchema` at `:374` on every
+    start at origin/main `ceac9ed`). This is the owner-mandated bridge startup AMEND
+    (#957 §6d.1): `glovo_runtime` gets no extra right to make the old startup pass, and
+    `NewStore` stays unchanged for deployments without Glovo. `cmd/bridge-scrub` keeps
+    `OpenExistingStore` under its own maintenance role with the grants #957 §6d.1 lists;
+    No `SECURITY DEFINER` function;
+  - `bridge.CancelOpenForConnections(ctx, tx, gcnIDs, actor)`, a plain Go function.
 
-  DoD: the existing permit tests pass unchanged. The schema applies twice in a row. A
-  second `place_order_fake` row with the same `aar_` fails at insert. The function locks
+  DoD: the existing permit tests pass unchanged. `bridge.ApplySchema` applies twice in a
+  row and fails under the runtime role; `NewRuntimeStore` runs no DDL (pgx tracer). A
+  second `place_order_fake` row with the same `aar_` fails at insert. `CancelOpenForConnections` locks
   `ORDER BY command_id` and keeps the semantics of `Store.Cancel` (a permitted effect
   becomes `unknown`).
 - [ ] 5. Implement `Dispatcher.Dispatch` exactly as in design §5 (depends on 2, 4),
@@ -85,9 +99,11 @@ With any of them missing, the code merges with nil collaborators and answers
   - the env `MCTL_GLOVO_CONTROL_ENABLED`;
   - the dispatcher, with #959, #988 and #989 collaborators nil until they land.
 
-  Call `SetFence(receipt.NewFence(...))` only when all three hold, plus #989 readiness: the gate is open, the proof
-  passed, and `Conns.RevocationHook()` is true. DoD: the default build mounts no route
-  and keeps `refusingFence`.
+  - the #959 store built with `glovo.NewStore(ctx, glovoURL,
+    glovo.WithRevocationHook(bridge.CancelOpenForConnections))` (amended (c)).
+
+  Call `SetFence(receipt.NewFence(...))` only when all six preconditions of design §7.3
+  hold. DoD: the default build mounts no route and keeps `refusingFence`.
 - [ ] 10. Write `docs/glovo-control.md` and reference it from the "Write fence" section
   of `docs/bridge.md`. It covers the principal, the routes, the code table, the global
   lock order (a pointer to #957 design §6b), the one-database rule and proof, the revoker contract, and the
@@ -123,7 +139,9 @@ advisory keys are used.
   - `completed` gives 200 and changes nothing.
 
   A later `IssueWritePermit` returns `command_cancelled`.
-- [ ] T8. A repeated cancel is a no-op with 200.
+- [ ] T8. A repeated cancel is a no-op with 200. Amended (c): a cancel after #989
+  already refused the `aar_` for this order, and a cancel after the #989 sweeper marked
+  it `unknown` for this `cmd_`, both succeed and leave the receipt state unchanged.
 - [ ] T9. A foreign tenant, a foreign owner, an order outside `tenants`, and an unknown
   order all return 404 `not_found` with an identical body.
 - [ ] T10. A changed intent hash, install revision, `we_` or connection returns
@@ -144,7 +162,10 @@ advisory keys are used.
   fake store records zero calls):
   - a human user, an admin, a Glovo-audience facade token, a bridge-provider token;
   - the #961 Glovo worker, the orchestrator-DevLoop principal, an agent token, a CI
-    token.
+    token, a surface principal (amended (c));
+  - a control-worker token with a wrong `aud`, `iss` or `sub`, expired, or before `nbf`.
+
+  A production build wires no control-worker verifier (build-tag test).
 
   A control-worker token on any other route is refused with 403 by the confining gate.
 - [ ] T17. Missing config: each of these gives 503 `not_ready` with zero writes:
@@ -153,9 +174,10 @@ advisory keys are used.
   - a missing table or privilege;
   - nil #959, #988 or #989 collaborators.
 
-  The default build has no route (404), and the fence is `refusingFence`. With the
-  gate open and the proof passing but `RevocationHook()` false, `SetFence` is not
-  called.
+  The default build has no route (404), and the fence is `refusingFence`. Amended (c):
+  one case per §7.3 precondition; with the other five true and that one false,
+  `SetFence` is not called. The proof cases include each missing grant of #957 §6d.1,
+  an extra grant, and a runtime role that owns a `glovo` table.
 - [ ] T18. Body hygiene: unknown fields (for example `payload`, `endpoint` or
   `execution_id`) give 400 `invalid_request`. Audit entries and logs contain no payload,
   nonce, lease token or credential. Order events name the control worker as actor.
@@ -175,6 +197,23 @@ advisory keys are used.
 - [ ] T23. Read routes: `read_command_result` and `read_approval` return only the
   fields of §2a. A sentinel placed in the stored result never appears in the response.
   A command of another tenant or a non-Glovo kind returns `not_found`.
+- [ ] T24. End-to-end revocation fence (moved here from #959 T17, amended (c)): with the
+  real #959 store, the real `bridge.CancelOpenForConnections` hook and #989's
+  `receipt.Fence`, and a command that is reserved but not yet permitted: a `Revoke`, a
+  `Reconnect` (`superseded`) and an `expires_at` that passes with no `Transition` are
+  each followed by a permit attempt, and none gives a permit. A `PreLock` for a foreign
+  or absent command id answers `ErrCommandNotFound` before any lock is taken.
+- [ ] T25. Dispatch payload and refs: the enqueued payload is byte-equal to the order's
+  final snapshot; `workflow_id` equals `glovo.control_starts.workflow_id`; `run_id` is
+  `''` before the workflow started and the started run id after.
+- [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09): with a
+  runtime role that has an extra `TRIGGER`, `CREATE` or ownership, or lacks one listed
+  DML right, or a Glovo pool whose `current_user` is not the configured role, the proof
+  fails and the dispatcher is `not_ready`; `glovo_runtime` cannot `ALTER TABLE …
+  DISABLE TRIGGER`, `CREATE TABLE` or `DROP`; the work-items and commerce roles get
+  `permission denied` on every `glovo.*` table; with Glovo enabled, startup sends no
+  DDL (pgx tracer); the existing bridge tests (`NewStore`, Glovo disabled) and the
+  bridge-scrub test pass unchanged; the fake provider sees zero writes in every case.
 
 ## Rollback
 
@@ -183,8 +222,7 @@ advisory keys are used.
   leaves the fence `refusingFence`.
 - Code rollback is a revert of the PR. The schema artifacts can stay, or be removed
   with `DROP INDEX IF EXISTS bridge_commands_mutating_approval`,
-  `DROP FUNCTION IF EXISTS bridge_cancel_open_for_connections(text[], text)` and
-  `DROP TABLE IF EXISTS bridge_colocation_probe`. Reverting `PreLock` restores the old
+  and `DROP TABLE IF EXISTS bridge_colocation_probe`. Reverting `PreLock` restores the old
   permit path, which only ever ran with `refusingFence` in production.
 - If commands were enqueued before the rollback, cancel the open ones with the existing
   procedure in `docs/bridge.md`. Hold mctl-gitops#2457 stays ON throughout, so no
