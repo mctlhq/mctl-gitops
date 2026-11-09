@@ -1,5 +1,59 @@
 # Design: issue-1044-feat-assistants-m1-trusted-glovo-control
 
+## Amendment 2026-11-09
+
+Resolves the crosswalk mismatches assigned to this slice (M6-M10 in mctl-gitops
+`deploy/staged/glovo-m1/CROSSWALK.md`, PR #2545), the re-review request on mctl-agents#1044
+(comment 6740430920) and the #1258 carry-overs (comment 6740200693). Sources re-read at
+mctl-api `a9ca5814` (merged bridge #968, `docs/bridge.md`, `internal/bridge/schema/`) and
+mctl-gitops `4f2d2d76`. Rows marked **(owner)** record owner decisions of 2026-11-09. The
+owner decided on 2026-11-09 that #968 is the canonical bridge; the transport question of
+mctl-agents#1043 is closed by that decision. Where this section and older text below
+disagree, this section wins; the passages it contradicts have been edited.
+
+| # | Finding | Change |
+|---|---|---|
+| M6 | The workflow waited for `assistants_provider_result(command_id)`; mctl-api sends `bridge-result` with `{command_id, result_digest}` to the stored workflow and run, at least once (`docs/bridge.md` "Signals") | The signal is `bridge-result`, payload `{command_id, result_digest}`. The workflow dedupes on `command_id`, ignores a `command_id` it did not receive from mctl-api, and then reads the result back through `ControlApiPort.read_command_result(command_id)`, accepting it only if the digest equals the signalled `result_digest`. The signal is a wake-up, never the result |
+| M6b | Found during this amendment: the workflow also waited for `assistants_approval_decided`, which no mctl-api component sends (the dispatcher sends only `bridge-result`) | The approval wait is poll-only: `read_approval` every `approval_poll_interval_s` (default 15, bounded 5-60), capped by the `aar_` expiry. No approval signal is registered |
+| M7 | `ProviderBridgePort.create_command` assumed an HTTP enqueue route; #968 has only in-process `Store.Enqueue(ctx, tx, …)` | **(owner, option b)** The workflow orchestrates only through mctl-api APIs. `ProviderBridgePort`, `bridge.py` and `bridge_decision.json` are removed. Dispatch and cancel are `ControlApiPort.dispatch_order(order_ref, approval_ref, fingerprint)` and `cancel_order(order_ref)`; mctl-api performs the order transition, the `aar_` reserve and `Enqueue` in one transaction (mctl-api#957 design §6a). The HTTP route behind them is not decided (mctl-api#957 OPEN-3); until it is merged and pinned, the client is exercised against a fake only and a real `ControlApiPort` refuses to construct (`BLOCKED_FOR_INTEGRATION`) |
+| M8 | `command_id` derived client-side (`cmd_` + base32(sha256)[:26]); #968 generates `cmd_` server-side and dedupes on `(tenant, execution_id, operation_key)` (`internal/bridge/store.go:478-536`) | **(owner)** `ids.command_id` is removed. `dispatch_order` returns the server's `cmd_`, which the workflow stores. An activity retry calls `dispatch_order` again and gets the same `cmd_` back (`created=false`). The operation key is built by mctl-api, not by the workflow |
+| M9 | `order_status` vs the bridge's `outcome` × `provider_effect` × `error_code`; `unknown` after a reclaim must survive | "Result mapping (M9)": one total mapping table over the frozen v1alpha1 enums. `provider_effect=unknown` maps to `unknown` in every row, is never `completed` and never re-dispatched. The fake provider reports reclaim-after-permit and `permit_already_issued` as `failed_terminal`/`internal`/`unknown` (mctl-telegram#1262 design, owner decision), which the table maps to `unknown` |
+| M10 | Approval binding and refusal reasons (#1258 carry-overs) | The `aar_` is created once, by mctl-api at prepare (mctl-api#957 §6, bound to execution, Target and basket fingerprint). `GlovoControlInput` gains `approval_ref` and `fingerprint`; the `quoting` state and `request_order_approval` are removed, so the workflow never creates a second approval. Dispatch passes the input fingerprint; mctl-api compares it with the `aar_` intent, and a difference ends as `refused`/`basket_changed`, which needs a new `we_` and a new `aar_`. Refusal reasons are distinct: `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `provider_disabled`, `tenant_busy`. `hir_` stays non-authorizing |
+| M1 (consumer side) | Ref families | `tnr_`, `prr_`, `ordr_` come from mctl-api's mapping (mctl-api#957 §2a); `connection_ref` is the M1a `gcn_` id and `install_ref` the M1a `gin_` id, both passed through unchanged. The `ins_` prefix is dropped |
+
+### Open items
+
+- **Workflow start.** mctl-api starts `GlovoControlWorkflow` (crosswalk §4). When and in
+  which slice is mctl-api#957 OPEN-5; the input contract here does not depend on it.
+- **Control route ownership.** mctl-api#957 OPEN-3. No HTTP route constants for dispatch
+  or cancel are frozen before it is decided.
+
+### Result mapping (M9)
+
+Applies to the command the workflow dispatched (`place_order_fake`) or cancelled
+(`cancel_order_fake`). Rows are evaluated top to bottom; the first match wins.
+
+| `outcome` | `provider_effect` | `error_code` | `order_status` | `reason_code` |
+|---|---|---|---|---|
+| any | `unknown` | any | `unknown` | `provider_effect_unknown` |
+| `succeeded` | `applied` | `none` | `completed` (`place_order_fake`) / `cancelled` (`cancel_order_fake`) | `none` |
+| `succeeded` | `none` | any | `unknown` | `result_inconsistent` |
+| `failed_retryable`, `failed_terminal`, `cancelled`, `approval_refused` | `applied` | any | `unknown` | `result_inconsistent` |
+| `approval_refused` | `none` | any | `refused` | `approval_refused` |
+| `cancelled` | `none` | any | `cancelled` | `cancel_requested` |
+| `failed_terminal` | `none` | `expired` | `expired` | `command_expired` |
+| `failed_terminal` | `none` | `provider_rejected` | `failed` | `provider_rejected` |
+| `failed_terminal` | `none` | `none`, `stale_lease`, `approval_refused`, `provider_unavailable`, `internal` | `failed` | the `error_code` (`none` becomes `internal`) |
+| `failed_retryable` | `none` | any | `failed` | the `error_code` (`none` becomes `provider_unavailable`) |
+
+- M1 never re-dispatches. A retry after `failed` is a new execution with a new `aar_`.
+- Settle timeout (`settle_timeout_s`, no accepted result): `cancel_order(order_ref)`, then
+  `read_command_result`. A terminal `expired` or `cancelled` command with effect `none`
+  maps by the table; anything else, including a read failure, is `unknown`/`settle_timeout`.
+- A test enumerates every (`outcome`, `provider_effect`, `error_code`) triple of the
+  vendored enums (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
+  with `provider_effect=unknown` yields anything but `unknown`.
+
 ## Current state
 
 mctl-agents (this clone, HEAD `883b3a1`):
@@ -95,41 +149,40 @@ Files:
 
 - `orchestrator/assistants/contracts.py` — frozen dataclasses with explicit
   validators: `GlovoControlInput` (`schema_version`, `tenant_ref`,
-  `principal_ref`, `install_ref`, `install_revision`, `connection_ref` (`gcn_`),
-  `order_ref`, `execution_id` (`we_`), `work_item_id` (`wi_`), `limits`),
+  `principal_ref`, `install_ref` (`gin_`), `install_revision`, `connection_ref` (`gcn_`),
+  `order_ref`, `execution_id` (`we_`), `work_item_id` (`wi_`), `approval_ref` (`aar_`),
+  `fingerprint`, `limits`; amended 2026-11-09),
   `GlovoControlResult` (`schema_version`, `order_status` enum
   `completed|refused|cancelled|expired|unknown|failed`, `reason_code` enum,
   `handoff_ref` opaque, `approval_ref`, `fingerprint`, `command_id`), plus
   activity I/O types. Refs use the opaque-handle patterns from #1043
-  (`^(tnr|prr|ordr|gcn|ins)_[A-Za-z0-9]{16,40}$`), lengths <= 64, no free text
+  (`^(tnr|prr|ordr|gcn|gin)_[A-Za-z0-9]{16,40}$`, amended 2026-11-09), lengths <= 64, no free text
   > 256. `SCHEMA_VERSION = "assistants.mctl.ai/glovo-control/v1alpha1"`.
 - `orchestrator/assistants/schemas/glovo-control-{input,result}.v1alpha1.json`
   plus `SHA256SUMS` — generated by `tools/assistants_schema.py`; a test
   regenerates and compares (source-pinned contract).
 - `orchestrator/assistants/ids.py` — `control_workflow_id(tenant_ref,
   principal_ref, install_ref, order_ref)` ->
-  `asst-glovo-<t>-<p>-<i>-<o>`; `command_id(workflow_id, step, attempt)` ->
-  `cmd_` + base32(sha256)[:26]. mctl-api is the only caller that starts the
-  workflow; the workflow re-derives and compares its own id as defense in depth.
+  `asst-glovo-<t>-<p>-<i>-<o>`. There is no client-side `command_id` (amended
+  2026-11-09, M8): `cmd_` ids come from mctl-api. mctl-api is the only caller that
+  starts the workflow; the workflow re-derives and compares its own id as defense in depth.
 - `orchestrator/assistants/workflow.py` — `GlovoControlWorkflow`.
 - `orchestrator/assistants/activities.py` — activities over two ports.
-- `orchestrator/assistants/ports.py` — `ControlApiPort` (mctl-api) and
-  `ProviderBridgePort` (transport) Protocols.
+- `orchestrator/assistants/ports.py` — `ControlApiPort` (mctl-api) only. Amended
+  2026-11-09 (M7): it carries `dispatch_order`, `cancel_order` and
+  `read_command_result`; there is no `ProviderBridgePort`.
 - `orchestrator/assistants/api_client.py` — HTTP `ControlApiPort` using
   `MCTL_ASSISTANTS_TOKEN` (distinct from `MCTL_TOKEN`), base URL from env,
   no redirects (same pattern as `action_approvals._no_redirect_opener`).
   Route paths are constants mirroring #953/#954 proposals and gated by
   `ASSISTANTS_API_CONTRACT` pin; until those mctl-api routes are merged the
   client is exercised only against a fake.
-- `orchestrator/assistants/bridge.py` — `ProviderBridgePort` with
-  `create_command`, `read_result`, `request_cancel`; `load_bridge()` reads
-  `orchestrator/assistants/bridge_decision.json`. The committed file says
-  `{"decision": "BLOCKED_FOR_INTEGRATION", "source": null}`; `load_bridge()`
-  raises `BridgeBlocked` for any real transport in that state. An
-  `ApiCommandBridge` (mctl-api outbox per #1043 B1-B4) may be added only in a
-  follow-up PR that changes the decision file to a verified `API_BRIDGE_SELECTED`
-  or `NEXUS_VERIFIED` record with memo path, commit sha and approver. No raw
-  cross-namespace Activity and no Nexus endpoint is implemented here.
+- ~~`orchestrator/assistants/bridge.py`~~ — removed by the 2026-11-09 amendment (M7).
+  The bridge is mctl-api#968 and the workflow reaches it only through mctl-api APIs.
+  The integration gate moves to `api_client.py`: a real `ControlApiPort` refuses to
+  construct (`BLOCKED_FOR_INTEGRATION`) until `ASSISTANTS_API_CONTRACT` pins a merged
+  mctl-api control route contract (mctl-api#957 OPEN-3). No raw cross-namespace
+  Activity and no Nexus endpoint is implemented here.
 - `orchestrator/assistants/worker.py` — standalone entrypoint
   `python -m orchestrator.assistants.worker`.
 - `Dockerfile.assistants-control` — python:3.12-slim pinned by digest,
@@ -141,19 +194,17 @@ Files:
 ### 2. Workflow
 
 ```
-mctl-api --start(id derived from server scope, GlovoControlInput)--> [mctl-assistants / mctl-assistants-control]
-GlovoControlWorkflow
+mctl-api --start(id derived from server scope, GlovoControlInput incl. aar_ + fingerprint)--> [mctl-assistants / mctl-assistants-control]
+GlovoControlWorkflow   (amended 2026-11-09)
   check schema_version, re-derive workflow id
   resolving:  revalidate_scope -> resolve_connection(gcn_, owner)       (ControlApiPort)
-  quoting:    revalidate_scope -> quote_fake_basket -> bind fingerprint+consent_ref (immutable)
-  awaiting_approval: revalidate_scope -> request_order_approval -> aar_
-              wait signal assistants_approval_decided(aar_) | poll timer (read_approval)
+  awaiting_approval: poll read_approval(aar_) every approval_poll_interval_s
               every revalidate_interval_s: revalidate_scope; bounded by aar_ expiry
-  dispatching: revalidate_scope -> bridge.create_command(command_id, aar_, intent_hash, fingerprint)
-              (mctl-api performs Reserve/consume at its boundary, #954 step 4)
-  settling:   wait signal assistants_provider_result(command_id) | poll read_result
-              accept only matching command_id/execution_id/fingerprint; duplicates are no-ops
-  completed:  return GlovoControlResult(order_status, handoff_ref)
+  dispatching: revalidate_scope -> dispatch_order(order_ref, aar_, fingerprint) -> cmd_
+              (mctl-api: order transition + aar_ reserve + bridge Enqueue in one tx)
+  settling:   wait signal bridge-result{command_id, result_digest} | poll read_command_result
+              accept only the stored cmd_ and a matching digest; duplicates are no-ops
+  completed:  return GlovoControlResult(order_status, reason_code, handoff_ref)  (map: "Result mapping (M9)")
 ```
 
 Rules:
@@ -163,23 +214,25 @@ Rules:
   decides whether to ask.
 - `hir_` is not a field of any input type; a test asserts the dataclass
   rejects it.
-- Fingerprint and `consent_ref` are set once in workflow state; any later
-  mismatch ends in `refused/fingerprint_mismatch`. A retry with a different
+- Fingerprint and `approval_ref` arrive in the input and never change; mctl-api
+  compares them with the `aar_` intent at dispatch and a mismatch ends in
+  `refused/basket_changed` (amended 2026-11-09, M10). A retry with a different
   basket requires a new execution (`we_`) and a new `aar_`, matching #954.
 - `revalidate_scope` answers `live|revoked|stale_install|not_member|
   tenant_cap_reached`. An activity failure after bounded retries is treated as
   not live; the workflow never proceeds on an unknown answer.
 - Cancellation: a `CancelledError` handler runs in a
   `workflow.shield`-equivalent (non-cancellable) scope only
-  `bridge.request_cancel(command_id)` if a command exists and
+  `cancel_order(order_ref)` if a command exists and
   `release_reservation`. It never calls resolve/activate/approve and never
   reopens a revoked connection.
-- Provider `unknown` -> no re-dispatch; result `order_status=unknown`.
-- Signals carry ids only (`aar_`, `command_id`), never payloads, so no provider
+- Provider `unknown` -> no re-dispatch; result `order_status=unknown`. The full
+  mapping is "Result mapping (M9)".
+- The only signal is `bridge-result` (`command_id`, `result_digest`), never a payload, so no provider
   data or token enters history. Activities return ids, enums and bounded refs.
 - Bounded wait: workflow `execution_timeout` (default 2 h), approval wait capped
-  by `aar_` expiry, settle wait capped at `settle_timeout_s` (default 15 min,
-  the #1043 command TTL).
+  by `aar_` expiry, settle wait capped at `settle_timeout_s` (default 15 min, the
+  bridge `MaxTTL` of 900 s in the vendored command schema).
 
 ### 3. Worker
 
@@ -197,8 +250,9 @@ Rules:
 - Explicit limits from bounded env: `ASSISTANTS_MAX_CONCURRENT_ACTIVITIES`
   (default 20, range 1-100), `ASSISTANTS_MAX_CONCURRENT_WORKFLOW_TASKS`
   (default 20), activity start-to-close <= 30 s, schedule-to-close <= 5 min.
-- At startup logs the bridge decision; if `ASSISTANTS_BRIDGE=real` while the
-  decision file is blocked, exits with status `BLOCKED_FOR_INTEGRATION`.
+- At startup logs the `ASSISTANTS_API_CONTRACT` pin; if `ASSISTANTS_API=real` while
+  no merged control route contract is pinned, exits with status
+  `BLOCKED_FOR_INTEGRATION` (amended 2026-11-09).
 - Noisy-tenant caps are enforced by mctl-api admission (it is the only
   starter); the worker's slot limits cap total parallelism.
 
@@ -207,8 +261,9 @@ Rules:
 `tests/assistants_harness.py`: starts `WorkflowEnvironment.start_local()`
 (disposable dev server) with namespaces `mctl-assistants` and a decoy
 `mctl-agents`, a fake `ControlApiPort` holding two tenants and two principals
-in one tenant, and an in-memory `LocalFakeBridge` (test-only, in `tests/`)
-with a write counter keyed by `command_id`. Time-skipping env is used for
+in one tenant; the fake's `dispatch_order` mints server-style `cmd_` ids, keeps a
+write counter per `cmd_` and can emit `bridge-result` signals with digests (amended
+2026-11-09; there is no `LocalFakeBridge`). Time-skipping env is used for
 timers/revalidation.
 
 ### 5. CI

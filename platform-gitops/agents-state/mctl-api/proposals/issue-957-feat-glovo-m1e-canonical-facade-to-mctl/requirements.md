@@ -21,6 +21,19 @@ contract with golden fixtures, and a harness that runs against the real mctl-api
 Nothing touches a real Glovo API, session, payment or production activation. The proposal
 must not claim deploy-readiness until M1a and M1b are independently reviewed and merged.
 
+## AMEND 2026-11-09 — alignment with the merged facade (mctl-telegram `27c671d2`) and bridge (mctl-api `a9ca5814`)
+
+Crosswalk mismatches M1-M5, M7, M11 and M12 (mctl-gitops `deploy/staged/glovo-m1/CROSSWALK.md`) and the review on this issue (comment 6740430430). design.md "Amendment 2026-11-09" has the full table and the open items OPEN-1 to OPEN-5.
+
+- THE SYSTEM SHALL answer `POST /resolve` with exactly `{scope_ref, tenant, expires_at}` and SHALL require a valid `X-Mctl-Scope-Ref` on every other join route except `/compatibility`, validated as in design §2b (server-issued, 192-bit random, bound to principal, tenant, install revision and grant family, TTL at most 5 minutes, stored as a hash only, re-validated on every use, never a source of tenant or owner). (owner decision)
+- THE SYSTEM SHALL send on 401, 403, 404 and 409 only the wire codes listed in design §4, and SHALL record the internal reason in audit and spans only. The error body SHALL be `{"error","error_description"}` with fixed text. (owner decision, joint contract C1)
+- WHEN a write is replayed with the same idempotency key and body THE SYSTEM SHALL return the original body byte for byte and the header `Idempotent-Replayed: true`, and SHALL NOT add a `replayed` field to any body.
+- THE SYSTEM SHALL NOT define a second wire protocol for reads. WHILE no approved bridge read extension exists THE SYSTEM SHALL answer history, preview, basket and prepare with 503 `not_ready`.
+- THE SYSTEM SHALL enqueue bridge commands only in process, with `bridge.Store.Enqueue` in the same `pgx.Tx` as the order-state change, SHALL generate `cmd_` ids on the server, and SHALL NOT register any HTTP route that enqueues a command or accepts a command id, kind or payload. (owner decision, option b)
+- THE SYSTEM SHALL run every write of the prepare and dispatch transactions on the bridge store's pool and SHALL report `provider_orders: not_ready` unless all participating tables are visible on that pool.
+- THE SYSTEM SHALL never put a raw tenant name, `prn_` or `pord_` into a bridge command or a control-workflow input; it SHALL use the `tnr_`/`prr_`/`ordr_` refs of design §2a.
+- WHILE #960's `GLOVO_ENABLED` admission is not live THE SYSTEM SHALL keep answering `invalid_target` for the Glovo resource on `/oauth/authorize` and `/oauth/token`, and consent-time tenant selection SHALL NOT be reachable.
+
 ## AMEND 2026-11-08 — refusal code + real transactional prepare consistency
 
 **Independent review P2/contract correctness:** #957 introduces `tenant_selection_required`, which is **not** in the closed Glovo M0 refusal enum and conflicts with the already prepared M1a #953 AMEND (`ambiguous_tenant` for a user who has not explicitly selected a team, including the case of one eligible team). The public MCP contract must not drift silently. For v1alpha1, use the **existing `ambiguous_tenant`** refusal for absence/invalidity of a human-selected-team OAuth grant, even when a sole eligible team exists, unless a **separately reviewed version bump** changes M0, #953 and the facade together. `tenant_mismatch` may be retained as an internal wire-only refusal if mapped to a closed public error; no new public tool enum without schema update.
@@ -42,11 +55,11 @@ The OAuth selected team must be human-chosen, server-owned, bound to access+refr
 ### Routing and identity
 - THE SYSTEM SHALL serve the join API only under `/api/v1/assistants/glovo/v1alpha1/`, with exactly the routes in design.md "Route matrix". It SHALL register nothing under `/mcp` and no host route that shadows `tg.mctl.ai` or the mctl-api `/mcp`.
 - WHILE `GLOVO_JOIN_ENABLED` is not `true` THE SYSTEM SHALL leave the join routes unregistered (404), with all other routes unchanged.
-- WHEN a request reaches a join route THE SYSTEM SHALL accept it only if the bearer token is the Glovo facade workload identity (`MCTL_GLOVO_FACADE_TOKEN`, compared in constant time). Any other principal, including admins, the service token, support, agent, surface and Glovo-worker principals, SHALL get 401 `not_facade_identity`.
+- WHEN a request reaches a join route THE SYSTEM SHALL accept it only if the bearer token is the Glovo facade workload identity (`MCTL_GLOVO_FACADE_TOKEN`, compared in constant time). Any other principal, including admins, the service token, support, agent, surface and Glovo-worker principals, SHALL get 401 with wire code `not_authorized` (internal reason `not_facade_identity`, design §4).
 - WHEN the facade workload identity calls any route outside the join prefix (including `/mcp`) THE SYSTEM SHALL refuse it with 401.
-- WHEN a join request arrives THE SYSTEM SHALL re-verify `X-Mctl-Subject-Token` with mctl-api's own OAuth verifier. The token must be RS-signed by mctl-api, with `iss` equal to the mctl-api base URL, `aud` containing exactly the configured Glovo resource (`GLOVO_MCP_RESOURCE`, from M1a) and no other mctl audience, and it must be unexpired and not revoked. If any check fails THE SYSTEM SHALL return 401 `subject_token_invalid` and SHALL NOT log, echo or store the raw token. Only its SHA-256 may appear in audit records.
+- WHEN a join request arrives THE SYSTEM SHALL re-verify `X-Mctl-Subject-Token` with mctl-api's own OAuth verifier. The token must be RS-signed by mctl-api, with `iss` equal to the mctl-api base URL, `aud` containing exactly the configured Glovo resource (`GLOVO_MCP_RESOURCE`, from M1a) and no other mctl audience, and it must be unexpired and not revoked. If any check fails THE SYSTEM SHALL return 401 `not_authorized` (internal reason `subject_token_invalid`) and SHALL NOT log, echo or store the raw token. Only its SHA-256 may appear in audit records.
 - IF the subject token lacks a **valid human-selected-team, grant-bound** claim THEN THE SYSTEM SHALL return 403 `ambiguous_tenant` (the M0 closed refusal code) even when exactly one tenant would be eligible. It SHALL NOT use membership count, pilot rows or hosting default `labs` as a substitute; the same code must appear in #953/#1235 and shared fixtures.
-- IF `X-Mctl-Selected-Tenant` is present and differs from the verified `mctl_tenant` claim THEN THE SYSTEM SHALL return 403 `tenant_mismatch`. The header SHALL never be used as a source of the tenant.
+- IF `X-Mctl-Selected-Tenant` is present and differs from the verified `mctl_tenant` claim THEN THE SYSTEM SHALL return 403 `not_authorized` (internal reason `tenant_mismatch`). The header SHALL never be used as a source of the tenant.
 - WHEN the verified claim names a tenant THE SYSTEM SHALL still run the M1a resolver (principal-mode membership, the pilot allowlist and a current installation) and return that resolver's refusal codes unchanged. The claim narrows the tenant and never widens access.
 - WHEN a human completes `/oauth/consent` for the Glovo resource THE SYSTEM SHALL require the human to pick exactly one eligible tenant. It SHALL mint that tenant as `mctl_tenant` into the access and refresh tokens. A tenant not in the eligible set SHALL be refused, and no selection SHALL be preselected.
 
@@ -54,18 +67,18 @@ The OAuth selected team must be human-chosen, server-owned, bound to access+refr
 - WHEN the facade calls a join route THE SYSTEM SHALL answer with a body that validates against the frozen v1alpha1 response schema for that route. The response output SHALL equal the contract output object of the matching MCP tool.
 - WHEN `POST /orders:prepare` succeeds THE SYSTEM SHALL atomically create, through the M1b service, a `pord_` order, an owner-bound `we_` execution and a pending `aar_` approval. These SHALL be bound to (tenant, principal, connection, install revision, preview fingerprint). The handler SHALL make zero provider writes and SHALL return the `aar_` id as `consent_request_id`.
 - THE SYSTEM SHALL NOT expose any join route that decides, consumes, reserves or settles an `aar_`, accepts an `hir_` id, or dispatches a provider effect.
-- WHEN `GET /orders/{order_id}` is called for an order owned by another principal or another tenant THE SYSTEM SHALL return 404 `order_not_found`, the same answer as for a missing id.
-- WHEN `POST /previews` or `POST /orders:prepare` names a connection, preview or order that is not bound to the resolved (tenant, principal) THE SYSTEM SHALL return 404 with the matching `*_not_found` code.
+- WHEN `GET /orders/{order_id}` is called for an order owned by another principal or another tenant THE SYSTEM SHALL return 404 `not_found`, the same answer as for a missing id.
+- WHEN `POST /previews` or `POST /orders:prepare` names a connection, preview or order that is not bound to the resolved (tenant, principal) THE SYSTEM SHALL return 404 `no_connection` for a connection and 404 `not_found` for a preview or order (design §4).
 
 ### Reads through the bridge
-- WHEN a history, preview or basket route needs provider data THE SYSTEM SHALL send a versioned `GlovoReadRequest` message through the `ReadBridge` interface and accept only a `GlovoReadResult` that matches the request id, tenant, connection and install revision.
-- WHILE no bridge transport is configured THE SYSTEM SHALL return 503 `{"error":"not_ready","dependency":"read_bridge"}`. It SHALL NOT return empty history, an empty basket or a fabricated preview.
+- WHEN a history, preview or basket route needs provider data THE SYSTEM SHALL call the in-process `ReadBridge` interface and accept only a result that matches the request, tenant, connection and install revision. `ReadBridge` has no wire format of its own (amended 2026-11-09, M5).
+- WHILE no approved bridge read extension is configured THE SYSTEM SHALL return 503 `{"error":"not_ready","error_description":…}` and report `read_bridge: not_ready` on `/compatibility`. It SHALL NOT return empty history, an empty basket or a fabricated preview.
 - WHILE an M1a or M1b store is unconfigured or unreachable THE SYSTEM SHALL return 503 `not_ready` naming `connection_registry` or `provider_orders`. Unknown SHALL never be reported as absent.
 
 ### Idempotency, limits, tracing
-- WHEN `POST /connections` or `POST /orders:prepare` is repeated with the same `idempotency_key` and the same body THE SYSTEM SHALL return the original result with `"replayed": true`.
+- WHEN `POST /connections` or `POST /orders:prepare` is repeated with the same `idempotency_key` and the same body THE SYSTEM SHALL return the original body byte for byte with the header `Idempotent-Replayed: true` (amended 2026-11-09, M4).
 - IF the same `idempotency_key` arrives with a different body THEN THE SYSTEM SHALL return 409 `idempotency_key_reused`.
-- IF an `Idempotency-Key` header is present and differs from the body key THEN THE SYSTEM SHALL return 400 `invalid_request`.
+- IF an `Idempotency-Key` header is present and differs from the body key THEN THE SYSTEM SHALL return 400 `invalid_arguments` (internal reason `invalid_request`).
 - THE SYSTEM SHALL rate-limit join routes per subject principal (60/min, writes 10/min) and in aggregate for the facade identity (600/min). Over-limit calls SHALL get 429 `rate_limited` with `Retry-After`.
 - WHEN a join request carries a W3C `traceparent` THE SYSTEM SHALL continue that trace. Spans SHALL carry route, refusal code and tenant, and never token material.
 
@@ -78,7 +91,7 @@ The OAuth selected team must be human-chosen, server-owned, bound to access+refr
 
 - The M1a connection registry, Glovo audience and resolver internals (mctl-api#953) and the M1b order index, effect and `aar_` dispatch engine (mctl-api#954). This proposal consumes their in-process Go APIs and adds no store of theirs.
 - The facade implementation (mctl-telegram#1235) and the fake provider worker (mctl-telegram#1236). The only cross-repo work here is the contract file they must vendor.
-- The bridge transport itself (mctl-agents#1043) and the control workflow (mctl-agents#1044).
+- The bridge itself (merged in mctl-api#968; mctl-agents#1043 is history) and the control workflow (mctl-agents#1044).
 - GitOps deployment and enabling the flag in any environment (mctl-gitops#2470).
 - Any real Glovo API, login, session, checkout, payment or production activation.
 - Personal (non-tenant) scope, which waits on mctlhq/.github#309.
@@ -86,8 +99,8 @@ The OAuth selected team must be human-chosen, server-owned, bound to access+refr
 ## Open questions
 
 - mctl-api#953 explicitly adds no tenant selector and leaves `ambiguous_tenant` open. This proposal assigns the consent-time selection and the `mctl_tenant` claim to M1e. The M1a owner must confirm this does not conflict with M1a's resolver, or take the claim into M1a.
-- mctl-telegram#1235 froze `X-Mctl-Selected-Tenant` as the source of the tenant and introduced a `gsc_` `scope_ref`. v1alpha1 here demotes the header to a must-match echo and drops `scope_ref`, since every call is fully re-verified. The facade proposal must be amended to match.
+- Resolved 2026-11-09 (owner): `X-Mctl-Selected-Tenant` stays a must-match echo, and `scope_ref` stays, specified in design §2b. The merged facade (`27c671d2`) is not changed.
 - mctl-api#954 has the worker principal create the `aar_` through `/action-approvals`. The issue requires `glovo_prepare_order` to create a pending `aar_`. This proposal needs M1b to expose an in-process `Prepare` that creates `pord_` + `we_` + pending `aar_` in one transaction. If M1b keeps creation in the worker, prepare answers `not_ready` until the worker exists.
 - The facade workload identity is a static machine token here, following the existing evidence-writer and M1a Glovo-worker pattern. A projected ServiceAccount token checked with TokenReview (the `agent-run-tokens/exchange` pattern) would be stronger if the facade runs in-cluster. Reviewers should choose.
 - The M0 tool schema `docs/contracts/glovo-mcp-tools.json` lives in mctl-telegram and could not be read from this clone. The output shapes here are taken from the M0 proposal table (`issue-1227`). The pinned copy must be byte-checked when task 2 lands.
-- The transport of mctl-agents#1043 is not yet chosen. Only the message envelope and the `ReadBridge` interface are frozen here.
+- Superseded 2026-11-09: #968 is the canonical bridge (owner). Reads have no transport until a joint bridge read extension is approved (design OPEN-1).
