@@ -46,7 +46,8 @@ Deployed state checked:
 
 ## Proposed solution
 
-There are three artifacts. Only the first two are implemented now. The third is a gated future PR.
+There are three **planned** artifacts. Only A, the docs-only runbook, is in scope now.
+B (executable enforcement) and C (production tag-bump) require separate proposals and owner approvals.
 
 ### A. Release-readiness runbook: `docs/runbooks/mctl-api-4.155.0-dark-rollout.md` (doc-only PR)
 
@@ -93,20 +94,31 @@ The runbook contains:
      #1007 guidance, and only then revert. This is a STOP-and-page condition, not an operator judgment call.
    - The chart cannot be rolled back by the tag revert, because it tracks main. Note this explicitly.
 
-### B. CI guard: `tests/test_mctl_api_bridge_dark.py`, wired into `validate-manifests.yml`
+### Release gate not inherited from documentation
 
-The test parses the `helm.values` block of `mctl-api.yaml`. It strips the `{{ }}` templating first, the same
-way other tests in `tests/` handle bootstrap templates. It asserts that:
+Publishing this runbook does not authorise release, CI/workflow changes, tag bump,
+deployment or activation. #934's owner hold remains active until Part M/Part S,
+B4/drain, actual deploy-path enforcement and an explicit owner GO are evidenced.
+The future guard must be independently designed, reviewed, approved and verified;
+E1–E11 are necessary evidence but cannot by themselves enforce the release hold.
+
+### B. Future fail-closed release/deployment guard (NOT part of this docs-only slice)
+
+An independently approved implementation can add a PR CI test parsing the
+`helm.values` block in `mctl-api.yaml`, asserting that:
 
 - `MCTL_BRIDGE_ENABLED` is absent or `"false"`;
 - `MCTL_BRIDGE_PROVIDERS` and `MCTL_BRIDGE_PROVIDER_TOKENS` are absent;
 - `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE` is absent or `"false"`;
 - no `envFromExtraSecret` / ExternalSecret name contains `bridge`.
 
-The assertions are written as the hold, with a pointer to the security-owner GO. Lifting the hold later
-means a reviewed PR that edits this test. That makes activation a visible, deliberate act.
+**PR-only CI does not enforce the hold**: `release-deploy.yaml` and `gitops-bump.yaml`
+can push bootstrap tags directly to `main`, bypassing PR checks. A separate, reviewed,
+fail-closed point-of-effect guard MUST cover those writes and every other production
+deployment path, with negative bypass tests and missing/unknown-hold denial. This docs-only
+proposal installs no guard, so the decision gate stays `BLOCKED_RELEASE_HOLD`.
 
-### C. Future tag-bump PR (only after the gate reads READY and the owner approves)
+### C. Future tag-bump PR (only after separately enforced guard, READY evidence and owner GO)
 
 The diff is one line, `tag: "4.154.0"` to `tag: "4.155.0"`, in `mctl-api.yaml`, opened from a feature branch.
 The PR body links the filled runbook. CI runs `validate-manifests.yml` (including test B) and a
@@ -128,7 +140,8 @@ would skip the separate owner approval.
 
 ## Platform impact
 
-- No migration and no runtime change from A or B. B is a CI-only check, and it passes on the current file.
+- No migration or runtime change from A (the only in-scope artifact: docs-only).
+  B is not authorised here; it must prove real point-of-effect enforcement.
 - The future change C rolls 2 pods (a new image). The sticky-cookie identity link flow restarts its link
   challenges ("start again"), which is acceptable.
 - Risks and mitigations:
@@ -136,7 +149,7 @@ would skip the separate owner approval.
     Temporal-aware rollback branch.
   - Chart drift from `targetRevision: main`: mitigated by E10 and by stating that the tag revert does not
     roll back the chart.
-  - The bypass path (`release-deploy.yaml`): mitigated by the runbook forbidding it. The release owner
-    should also not dispatch it.
+  - The bypass path (`release-deploy.yaml` / `gitops-bump.yaml`): **NOT** mitigated by a
+    runbook prohibition. A separate enforced gate with denial tests is mandatory before release.
   - A new 4.155.0 default activating something: mitigated by the STOP condition on the release notes, the
     test B env assertions, and the negative smoke P3.
