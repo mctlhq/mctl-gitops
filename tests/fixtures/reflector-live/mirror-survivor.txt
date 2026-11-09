@@ -1,0 +1,15 @@
+#CLUSTER context=fixture-ctx server=https://fixture.invalid:6443
+argocd|argocd-secret||||||
+argocd|repo-creds-example||||||
+argo-workflows|workflow-token||||||
+database|object-storage-credentials|false|false||||
+database|postgres-credentials|false|false||||
+database|tenant-bootstrap-secret|false|false||||
+kube-system|cluster-ca||||||
+monitoring|grafana-admin||||||
+tenant-a|app-credentials||||||
+tenant-a|registry-pull||||||
+tenant-b|app-credentials||||||
+vault|vault-unseal||||||
+tenant-a|postgres-credentials|||database/postgres-credentials|True|1234|2026-01-01T00:00:00Z
+#END rows=13
