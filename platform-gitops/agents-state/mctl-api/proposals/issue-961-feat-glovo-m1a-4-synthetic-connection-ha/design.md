@@ -178,7 +178,7 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
   absent, worker routes answer 503 `not_ready`.
 - `POST /api/v1/glovo/worker/check` takes `{schema, connection_id, install_revision}` and
   returns `{schema, allowed, tenant, owner_principal_id, state, expires_at}`. Lost membership is
-  `no_tenant`, lost pilot admission `not_in_pilot`. The tenant comes
+  `no_tenant`, lost pilot admission `not_in_pilot`, a `failed` connection `no_connection`. The tenant comes
   from the connection row, never from the request. At call time the handler re-reads:
   installation state and revision, connection state and expiry, the owner's live role (through
   the same principal-mode role reader the resolver uses), and the allowlist row.

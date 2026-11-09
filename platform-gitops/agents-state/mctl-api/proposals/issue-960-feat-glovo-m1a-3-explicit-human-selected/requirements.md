@@ -71,7 +71,7 @@ team is never chosen on the human's behalf.
 - Approval: this proposal does not inherit the #953 grant. It needs its own reviewed digest and human implementation approval.
 
 ## Open questions
-- Ownership of the `glovo_pilot_allowlist` table between slice 2 and slice 3. Assumption: slice 3 ships the DDL with `CREATE TABLE IF NOT EXISTS` and the identical schema from the #953 design, so either merge order converges. If slice 2 has already merged it, slice 3 reuses slice 2's reader.
+- Resolved by the 2026-11-09 amendment: #959 owns the `glovo_pilot_allowlist` DDL and grants the runtime role `SELECT, INSERT, DELETE` on it; this slice ships no DDL and no grant, only `Add`/`Remove` and the admin routes.
 - Exact identifiers from slices 1 and 2 (`OAuthServer.GlovoResource`, `User.IsGlovoAudience()`, the `internal/glovo` refusal enum) are taken from the #953 design and are not yet in the clone. The implementer codes against the closed interfaces described in design.md until they land.
 - Which tenants are excluded from selection besides `admins`. Corrected: `labs` is **not** implicitly selected, but an explicitly consenting allowlisted team member may select it. `GLOVO_NON_SELECTABLE_TENANTS` defaults to `admins` only; personal/system-only scopes remain unsupported. There is no personal-tenant marker in the code today, so personal scope is refused by rule rather than detected (see design).
 - Team grant lifetime. Assumption: equal to the refresh token TTL (`RefreshTokenTTL`, default 30 days), with no sliding extension. Re-consent is needed after expiry.

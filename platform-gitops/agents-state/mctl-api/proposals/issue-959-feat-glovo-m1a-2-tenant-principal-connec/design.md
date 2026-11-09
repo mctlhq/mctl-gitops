@@ -246,8 +246,9 @@ The whole schema runs in one transaction under
 migrationConnStr)`, executed by a dedicated migration role that owns every
 `glovo_*` object. It ends by issuing the runtime grants: `SELECT, INSERT,
 UPDATE` on `glovo_installs`, `glovo_connections`, `glovo_connect_requests`;
-`SELECT, INSERT` on `glovo_audit_events`; `SELECT` on `glovo_pilot_allowlist`
-(writes are #960's admin path, which gets its own grant there). `NewStore`
+`SELECT, INSERT` on `glovo_audit_events`; `SELECT, INSERT, DELETE` on
+`glovo_pilot_allowlist` (the writes are reachable only through #960's admin
+routes; #960 has no DDL role and issues no grant of its own). `NewStore`
 uses the runtime connection, runs **no DDL**, and fails closed when
 `glovo_schema_version` is missing or differs from the compiled version. This
 departs from the DDL-in-`NewStore` convention of other mctl-api stores
