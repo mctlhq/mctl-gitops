@@ -46,8 +46,9 @@ Unresolved unknowns (explicit):
 7. Temporal-web identity needs `temporal-system:read` (read in every
    namespace); deferred pending admin-only risk acceptance (node J).
 
-Companion documents: `docs/runbooks/temporal-authz-role-matrix.md` and
-`docs/runbooks/temporal-auth-canary.md`. ADR 0003 stays `Proposed`.
+Companion documents: `docs/runbooks/temporal-authz-role-matrix.md`,
+`docs/runbooks/temporal-auth-canary.md` and
+`docs/spikes/2506-temporal-jwt-issuer.md` (issuer comparison, #2506). ADR 0003 stays `Proposed`.
 
 ## Desired state (from this repository)
 
