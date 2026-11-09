@@ -90,3 +90,59 @@ removes the aggregator, runner, workflow and harness alignment, and restores the
 report. There is nothing to undo in deployment, data or config. If only the manual workflow
 misbehaves, delete `.github/workflows/l2finance-gate.yml` on its own. The default CI is unaffected
 either way.
+
+## AMEND acceptance tasks (normative; update the corresponding tasks above)
+
+These are required before implementation acceptance and supersede older DoDs
+where contradictory. They do **not** authorize executing them at intake time.
+
+- [ ] A1. Freeze a reviewed #1244 T1–T10 / M1–M4 **subcase crosswalk** with
+  exact canonical `package:id` and a `fixture_id` requirement per entry.
+  Include all missing emitters in the manifest as mandatory and mark them
+  MISSING; do not infer completion from current `l2Record` call sites.
+- [ ] A2. Add `OFFLINE.default_paths` tests to **policy, control and
+  telegram** (listener and agentapi already emit one). Confirm exactly one
+  PASS per package, while `OFFLINE.whole_process` stays
+  CANNOT-OBSERVE unless a separate real sandbox is verified.
+- [ ] A3. Implement a runner **BLOCKED sentinel + EXIT finalizer**, preserve
+  the exit codes of every test/vet/comparison/aggregator command and reject
+  empty/unusable streams. A real subprocess failure must make the runner
+  exit non-zero; a complete, intentionally observed gap may exit zero with
+  a visible BLOCKED security gate. Test early preflight failure, compile
+  failure, vet failure, assertion failure and a failing command in a pipe.
+- [ ] A4. Split dependency resolution into an explicit preflight.
+  Execute all tests, vet and aggregation with
+  `GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly`,
+  with credentials removed in the parent environment before spawn.
+  Verify missing dependencies produce BLOCKED, not a hidden network fetch.
+- [ ] A5. Add stable synthetic `fixture_id` metadata to mandatory
+  canonical results (use explicit `none` only where legitimately
+  inapplicable). Verify two tagged runs match full
+  `(package,id,outcome,fixture_id,rev)` tuples and the manifest.
+  A mismatched fixture/rev must yield INVALID and BLOCKED.
+- [ ] A6. Split the existing T10 redaction evidence between durable audit
+  and real slog emission. A slog PASS requires `slog_bytes>0` from a
+  synthetic marker sent through the production redacting handler;
+  otherwise emit CANNOT-OBSERVE, without rewriting slice-C historical
+  evidence or hiding the known plaintext-intent FAIL/GAP.
+- [ ] A7. Make manual workflow summary and artifact steps
+  `if: always()`, with a fallback BLOCKED artifact when an early
+  step fails; no secrets, product permissions or deployment.
+  If normal `build.yml` still skips tagged tests, explicitly record
+  the **unresolved continuous-CI gap** and open a separately governed
+  follow-up only after owner acceptance.
+- [ ] A8. Add negative aggregator/runner fixtures for missing mandatory
+  emitters, unexpected row, duplicate, unknown token, M1–M4 non-PASS,
+  five-package offline control failure, empty/no JSON, executable failure,
+  wrong revision, unstable fixture and zero-byte slog.
+- [ ] A9. Final evidence report must distinguish COMPLETE and
+  COMPLETE_WITH_GAPS_BLOCKED from any transport/build/CI error; show
+  source revision, exact commands, manifest crosswalk, all missing
+  emitters and gaps, run exit codes, fixture fingerprint, actual
+  offline coverage, `FINANCE_SECURITY_GATE=BLOCKED` and
+  `RESEARCH_ONLY_DEFER`.
+- [ ] A10. Preserve only docs-only changes in this AMEND PR. Require a
+  fresh Claude/Agy review on its final HEAD and a protected merge,
+  then re-compute canonical content digest before any separate owner
+  approval through Temporal DevLoop #1251. **No implementer or
+  standalone approval in this AMEND.**

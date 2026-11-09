@@ -195,3 +195,72 @@ rows, about 5 NOT-IMPLEMENTED rows and several CANNOT-OBSERVE rows.
     existing default-path guard. Tests unset Telegram and database env.
   - Risk: a green job is read as approval. Mitigation: `FINANCE_SECURITY_GATE=BLOCKED` is the first
     line of the summary and the report.
+
+## AMEND — implementation guardrails before Tier 2 (normative)
+
+The following changes supersede conflicting runner/aggregator details in this design.
+They do not change production scope or accept the security gate.
+
+1. **Status state machine and finalization.** Initialize the run with
+   `harness_status=INVALID`, `FINANCE_SECURITY_GATE=BLOCKED`,
+   `issue_outcome=CANNOT_OBSERVE_BLOCKED`. Capture all subprocess exit codes,
+   including piped output. Write the status and a fallback report via a robust EXIT
+   finalizer on every ordinary exit; in manual CI, `if: always()` summary and artifact
+   steps publish a minimal BLOCKED result even if the runner failed before creating files.
+   Only replace the initialized sentinel after **all** tagged tests, tagged vet,
+   untagged comparison, reproducibility and manifest checks complete successfully.
+   Non-zero code from a prerequisite, build, test, vet or comparison is fatal and cannot
+   produce an exit-0 COMPLETE outcome. An intentionally observed `FAIL/GAP` case
+   with successful assertions is not an executable failure and may yield
+   `COMPLETE_WITH_GAPS_BLOCKED` / exit 0. In contrast, assertion or manifest failures
+   yield `INCOMPLETE_BLOCKED`; absent/unusable test evidence yields
+   `CANNOT_OBSERVE_BLOCKED`. Both exit non-zero.
+2. **Offline boundary.** Move `go mod download` to a separate explicit preflight
+   (manual workflow only when added). During both tagged runs, vet, untagged
+   comparison and aggregator set `GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly`.
+   Use a dependency cache; missing modules fail closed. Unset integration
+   credentials in the launcher before the Go subprocesses, not merely inside
+   TestMain. Each of five packages must emit `OFFLINE.default_paths=PASS`.
+   These guards cover default resolver/HTTP transport, **not** arbitrary custom
+   dialers; include `OFFLINE.whole_process=CANNOT-OBSERVE` and explicitly
+   avoid claiming that whole-process egress is blocked. A separate network
+   sandbox can be researched under a new gate, not silently assumed here.
+3. **Manifest truth source.** Before generating `testdata/manifest.txt`, record
+   a reviewed, line-by-line #1244 subcase-to-current-emitter crosswalk.
+   Required-but-unimplemented emitters stay in the manifest marked missing,
+   so the aggregate is INVALID rather than appearing magically complete.
+   Qualify rows by package and reject unknown/extraneous rows or duplicate
+   canonical IDs; a mere grep of `l2Record` calls cannot establish coverage.
+   Include control/telegram offline self-tests and check all T1 wire branches
+   produce at most one row per run.
+4. **Reproducibility.** Do not compare only `(id,outcome)`. Emit or map
+   stable synthetic `fixture_id` per canonical case (explicit `none`
+   only for legitimately fixture-less cases). Compare
+   `(package,id,outcome,fixture_id,rev)` across **two independently executed**
+   tagged runs. Validate fixture requirements against the manifest.
+   An unstable/missing fixture field invalidates the harness.
+5. **T10 evidence must have a real emitter.** Keep durable audit
+   observations separately from slog. In tagged test scope, exercise the
+   production redacting handler with a **non-empty** synthetic log message
+   containing the marker and assert sanitization; or emit a separate
+   `CANNOT-OBSERVE` slog result with `slog_bytes=0` rather than
+   claiming PASS. Preserve durable `agent_actions.intent` FAIL/GAP.
+   If the result IDs/outcomes are normalized, explain the mapping to
+   historical slice-C evidence explicitly in the consolidated report.
+6. **Reporting and CI.** The generated Markdown first line remains
+   `FINANCE_SECURITY_GATE=BLOCKED` for the known current gaps.
+   Every run includes runner/vet/untagged exit status, pin, result counts,
+   fixture fingerprints, missing IDs, zero-byte tracing and log
+   limitations, and unknown egress scope. The optional manual workflow
+   must have no secrets or deployment rights and use `if: always()`
+   for the summary and artifact. Not adding `-tags l2finance` to
+   `build.yml` leaves a documented *continuous-CI regression gap*
+   to be independently governed; manual green evidence is not a CI
+   coverage fix. Do not auto-file follow-up security fixes or grant
+   implementer approval here.
+
+**Approval gate:** docs-only AMEND PR -> independent Claude + Agy review of
+exact HEAD -> protected merge -> compute canonical proposal content digest on
+`mctl-gitops/main` -> fresh owner approval for live Temporal workflow
+`dev-loop-mctlhq-mctl-telegram-1251`. No standalone approval, grant reuse,
+or implementer before this sequence.
