@@ -1,143 +1,132 @@
 # Tasks: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
-- [ ] 1. Schema: in `internal/workitems/action_approvals.go`, widen
-  `action_approval_requests_state_check` with the replace-once `DO $$` block keyed on
-  `'reserved'`, so it admits `reserved` and `unknown`. Add
-  `action_approval_requests_glovo_states_chk`. Add `glovo_approval_bindings`, its
-  partial unique index on `command_id`, and the `glovo_approval_bindings_immutable()`
-  trigger, which allows only a one-time `command_id` write. — DoD: a restart is a no-op;
-  existing rows are unaffected; a raw-SQL UPDATE of any binding column other than the
-  first `command_id` write raises.
-- [ ] 2. Kinds, states and the intent (depends on 1): in a new
-  `internal/workitems/glovo_approvals.go`, add `GlovoActionKinds`, `IsGlovoKind`,
-  `ApprovalReserved`, `ApprovalUnknown`, `GlovoBinding`, `GlovoIntent` (canonical
-  `Target` plus `ArgsDigest` = fingerprint) and `GlovoReceiptState`. Extend
-  `effectiveState` so that `reserved` past `expires_at` reads as `expired`. Add the
-  errors `ErrApprovalReserved`, `ErrApprovalKindNotSpendable`,
-  `ErrApprovalCommandMismatch` and `ErrApprovalBindingMismatch`. — DoD: unit tests pin
-  the hash for a golden binding, and changing any one binding field changes the hash.
-- [ ] 3. Tx-aware store methods (depends on 2): `CreateGlovoApprovalTx`,
-  `LockGlovoApprovalTx`, `DecideGlovoApprovalTx`, `ReserveGlovoApprovalTx`,
-  `ConsumeGlovoApprovalTx` and `MarkGlovoApprovalUnknownTx`. Each is a single CAS on
-  the caller's `pgx.Tx`, and none begins or commits. Create takes an `Orders`
-  collaborator to lock the order and require an empty `approval_ref`. Decide takes it to
-  run the `finalized -> approved | cancelled` transition. — DoD: the methods compile
-  against the #988 `orders` interface, or against a local interface when #988 is not
-  merged. Nil collaborators return `glovo.CodeNotReady`.
-- [ ] 4. Fence the generic paths (depends on 2): add `AND action_kind NOT LIKE 'glovo.%'`
-  to the CAS in `ConsumeActionApproval`, `ReserveActionApproval`, `SettleActionApproval`
-  and `MarkActionApprovalExecuted`. Map a miss on a Glovo kind to
-  `ErrApprovalKindNotSpendable`. Map the error to 409 `approval_kind_not_spendable_here`
-  in `writeActionApprovalError`. — DoD: existing tests in
-  `internal/workitems/action_approvals_test.go` and `internal/api/agent_receipt_gate_test.go`
-  pass unchanged.
-- [ ] 5. Owner-decider (depends on 3): in `internal/api/handlers_action_approvals.go`,
-  pre-read the `aar_`. For a Glovo kind, run `isGlovoOwnerDecider`: owner principal
-  equality, a direct human (no service, agent, CI, relay, surface or Glovo audience),
-  `checkTenantRole(..., RoleDeveloper)` with 404 when there is no role, and an open
-  gate. Then call `DecideGlovoApprovalTx` on a transaction from the shared pool.
-  Non-Glovo kinds keep `isHumanAdmin`. Extend `canSeeActionApproval` with the owner
-  rule for Glovo kinds only. Audit Glovo decisions without `args_digest`. — DoD: the
-  existing tests in `handlers_action_approvals_test.go`,
-  `handlers_devloop_decide_test.go` and `handlers_write_approver_test.go` pass unchanged.
-- [ ] 6. Bridge hook (independent of 3-5): in `internal/bridge/permit.go`, add the
-  `OutcomeRecorder` interface. Call it from `submitTx`, `Cancel` and `ExpireDue` in
-  `internal/bridge/store.go` for mutating commands that reach a terminal status
-  without `effect_state='permitted'` ever being set, in the same tx. — DoD: with
-  `refusingFence`, all existing bridge tests pass.
-- [ ] 7. Fence (depends on 3, 6): add the package `internal/glovo/receipt` with `Fence`
-  (`Check` steps 1-8 of design §6, plus `CommandEndedWithoutPermit`), its collaborator
-  interfaces (`Orders`, `Connections`, `Membership`), a typed refusal code per check
-  wrapping `bridge.ErrWriteFenceRefused`, the opaque `afr_` fence ref, and
-  `Audit(ctx)` for the joint-state invariant table. — DoD: no log line contains anything
-  other than ids and codes.
-- [ ] 8. Wiring (depends on 7, and on #985 `ProveColocated`, #988 and #959 stores): in
-  `cmd/api/main.go`, call `bridgeStore.SetFence(receipt.NewFence(...))` only when
-  `glovo.Default.Open` holds, every collaborator is non-nil and the co-location proof
-  passes. Otherwise log once (no URL) and keep `refusingFence`. — DoD: with today's
-  closed gate, startup behaviour is unchanged.
-- [ ] 9. Cross-slice contracts (documentation in code comments and the PR description):
-  - #957 prepare calls `CreateGlovoApprovalTx` on its shared `pgx.Tx` and stores the
-    `aar_` in `glovo_orders.approval_ref`.
-  - #985 dispatch calls `ReserveGlovoApprovalTx` (not a consume), locks the approval
-    before the order, and passes `cmd_` from `Enqueue`.
-  - `GlovoControlInput` carries `approval_ref` only, never a fingerprint or token.
+Amended 2026-11-09 (b); design.md has the finding -> fix table. Blocking dependencies:
+mctl-agents#1059 merged (approval basket and vectors); the write payload contract
+(OPEN-989-6); the ownership move (OPEN-989-1). Until then the code lands dark and
+`Ready` fails.
 
-  — DoD: the PR links #957, #985 and #988 and states these interface changes.
-- [ ] 10. Docs: update the state-machine comment at the top of `action_approvals.go`
-  and the `WriteFence` comment in `permit.go` with the composition table of design §7.
-  Run `go fmt`, `go vet` and `golangci-lint`. No MCP tool is added, so the
-  `server_test.go` count is unchanged.
+- [ ] 1. `workitems.ApplyGlovoApprovalSchema(ctx, migrationPool)` (design §2): schema
+  version row; the widened state CHECK and the exact-kind CHECK (guarded, `NOT VALID`
+  then `VALIDATE`); `glovo.approval_bindings` with `UNIQUE (order_ref)`, the partial
+  unique index on `command_id` and `install_revision TEXT`; `glovo.aar_guard()`,
+  `glovo.approval_bindings_guard()` and the deferred `glovo.aar_binding_required()`
+  constraint trigger; column-level grants. Ownership check, version downgrade refusal.
+  — DoD: applies twice; fails when an object is owned by another role.
+- [ ] 2. Kinds, states, intent: `GlovoActionKinds`, `IsGlovoKind`, the SQL constant
+  `glovoKindPredicate`, `ApprovalReserved`, `ApprovalUnknown`, `GlovoBinding`,
+  `GlovoIntent`, `GlovoReceiptState` (expiry precedence of design §1), errors. — DoD:
+  golden hash for a binding; any field change changes the hash.
+- [ ] 2b. (OPEN-989-1, after the owner decides) `workitems.ApplySchema` runs the generic
+  `actionApprovalSchema` under the migration role, and `NewStore` only verifies the
+  version when `action_approval_requests` is not owned by `current_user`. — DoD:
+  generic work-items tests pass with both owners.
+- [ ] 3. Store methods of design §4: `CreateGlovoApprovalTx` (binding row, complete
+  governance context, #988 `BindApproval` in the same tx), `LockGlovoApprovalTx`,
+  `ReserveGlovoApprovalTx` (binding equality, idempotent for the same `cmd_`),
+  `ConsumeGlovoApprovalTx`, `RevokeGlovoApprovalTx`, `MarkGlovoApprovalUnknownTx`,
+  `DecideGlovoApprovalTx` (aar_ only), `GlovoApprovalStatus`. — DoD: none begins or
+  commits; nil collaborators give `not_ready`.
+- [ ] 4. Generic paths: `CreateActionApproval` refuses `glovo.` kinds; the four generic
+  CAS statements add `AND NOT (glovoKindPredicate)` and map a Glovo row to 409
+  `approval_kind_not_spendable_here`. — DoD: existing work-items and receipt-gate tests
+  pass unchanged.
+- [ ] 5. Governance: `governance.AuthorityBasisResourceOwner`; register
+  `glovo.order.owner-approval` v1 in `governance.Policies`; `decisionCapture` records
+  `resource_owner` for Glovo kinds.
+- [ ] 6. Owner decision (design §5): the non-admin branch with one uniform 403, the
+  direct membership read, `isGlovoOwnerDecider`, `DecideGlovoApprovalTx` on a bridge-pool
+  transaction, `canSeeActionApproval` owner rule for Glovo kinds, audit without
+  `args_digest`. — DoD: existing decide tests pass unchanged.
+- [ ] 7. `internal/glovo/receipt`: `Fence` with `PreLock` and `Check` (design §6),
+  including the recompute of fingerprint and intent hash from the stored payload; the
+  refusal codes of design §10 wrapping `bridge.ErrWriteFenceRefused`; `afr_` ref;
+  `Audit(ctx)` for the joint-state table; `Sweeper` (design §7) in the `Expirer` tick.
+  `PreLock` itself is added to `bridge.WriteFence` by #985.
+- [ ] 8. `receipt.Ready()` with every condition of design §8. #985 task 9 is the only
+  `SetFence` caller. — DoD: with today's closed gate and unset URLs, startup is
+  unchanged and the fence stays `refusingFence`.
+- [ ] 9. Cross-slice notes in package comments: #957 prepare calls `CreateGlovoApprovalTx`
+  under L3; #985 uses the `Receipts` methods and calls `MarkGlovoApprovalUnknownTx` on
+  cancel without permit; the lock order is #957 §6b; `GlovoControlInput` carries
+  `approval_ref` and the fingerprint; the provider writes only the payload's lines
+  (OPEN-989-4). Run `go fmt`, `go vet`, `golangci-lint`, `go test ./...`.
 
 ## Tests
 
-Postgres-backed tests use the existing store test harness. Fence tests run on one
-database with fakes for `Orders` and `Connections` until #988 and #959 merge.
+Postgres tests use `TEST_DATABASE_URL` (skip when unset), a migration role and a
+separate runtime role. Fence tests use fakes for `Orders` and `Conns` until #988 and #959
+merge.
 
-- [ ] T1. A `hir_` alone causes zero effects: answer a human-input request linked to
-  the order's work item, then assert that the `aar_` is still `pending`, the order is
-  still `finalized`, no bridge command exists and `IssueWritePermit` is refused.
-- [ ] T2. Wrong-owner decider: another member of the same tenant gets 403. A platform
-  admin who is not the owner gets 403 `approval_decider_forbidden`. A Glovo-audience
-  token for the owner, an agent, a service and a relayed or surface caller are each
+- [ ] T1. A `hir_` answer alone changes no `aar_`, order or bridge row, and
+  `IssueWritePermit` is refused.
+- [ ] T2. Wrong decider: another tenant member, a non-owner admin, a Glovo-audience token
+  for the owner, an agent, a service, CI, a relayed and a surface caller are each
   refused.
-- [ ] T3. Scope does not grow: a tenant `developer` owner cannot decide a non-Glovo
-  `aar_` (still 403 `approval_decider_forbidden`), and a `mctl-agents-approve` `aar_`
-  stays admin-only.
-- [ ] T4. Cross-tenant decision: a caller with no role on the binding's tenant gets 404
-  `approval_not_found`, and the audit entry records the refusal.
-- [ ] T5. Concurrent approve and refuse: run 20 goroutine pairs. Exactly one decision
-  wins per `aar_`, the other gets 409, and the order state matches the winner.
-- [ ] T6. An `aar_` from a different `we_` or intent: a fence `Check` with a
-  `FenceBinding` whose `ExecutionID`, `IntentHash`, `WorkItemID`, `Tenant`,
-  `OwnerPrincipalID`, `ConnectionRef` or `InstallRevision` differs (one subtest per
-  field) is refused, and the `aar_` stays `reserved`.
-- [ ] T7. Expired: a decision, a reserve and a fence check past `expires_at` are each
-  refused, and the state reads `expired`. A `fresh_until` in the past refuses the
-  reserve and the fence check.
-- [ ] T8. Replayed: a second `IssueWritePermit` for the same command gets
-  `ErrPermitExists`. A second `ReserveGlovoApprovalTx` with a different `cmd_` gets
-  `ErrApprovalReserved`. A second fence `Check` on a `consumed` `aar_` is refused.
-- [ ] T9. Consumed: a `consumed` `aar_` cannot be decided, reserved, consumed or marked
-  unknown, and the generic consume, reserve, settle and mark-executed routes return 409
-  `approval_kind_not_spendable_here` for every Glovo state.
-- [ ] T10. Fingerprint changed: with a fake order whose `final_basket_fingerprint`
-  differs, the fence refuses `fingerprint_changed`, no `bridge_write_permits` row
-  exists, and `effect_state` stays `none`.
-- [ ] T11. Reconnect after approval: after the connection is revoked and a new `gcn_`
-  or install revision is active, the fence refuses `connection_changed`. No API path
-  moves the old `aar_` back to `approved`.
-- [ ] T12. Owner removed from the tenant after approval: the fence refuses
-  `owner_not_member`.
-- [ ] T13. Ending without a permit: a reserved command that expires (`ExpireDue`), is
-  cancelled while leased, or completes with `approval_refused` moves the `aar_` to
-  `unknown` in the same tx. After a forced error in `CommandEndedWithoutPermit`, both
-  sides roll back.
-- [ ] T14. Atomicity: inject a failure after `ConsumeGlovoApprovalTx` inside `permitTx`.
-  The `aar_` is still `reserved`, there is no permit row, and `effect_state` is `none`.
-- [ ] T15. The schema is fail-closed: raw SQL that sets a Glovo row to `in_flight` or
-  `executed`, a non-Glovo row to `reserved`, or a binding column after creation is
-  rejected by the database.
-- [ ] T16. Invariant table: walk every lifecycle path and assert that each
-  (`aar_` state, `effect_state`) pair is in the allowed table of design §7, and that
-  `consumed` holds exactly when a permit exists.
-- [ ] T17. Secrecy: capture the `slog` output and audit rows across T1-T16 and assert
-  that no fingerprint, basket bytes, lease token or `args_digest` of a Glovo kind
-  appears. When #957's `GlovoControlInput` builder is present, assert that it carries
-  only refs.
-- [ ] T18. Readiness: with `glovo.Default` closed or any nil collaborator, every Glovo
-  store method returns `not_ready` and `IssueWritePermit` returns
-  `ErrWriteFenceUnavailable`.
+- [ ] T3. Scope: an owner cannot decide a non-Glovo `aar_`; `mctl-agents-approve` stays
+  admin-only.
+- [ ] T4. No oracle: a non-admin caller gets byte-identical 403 bodies for an unknown id,
+  a non-Glovo id and someone else's Glovo id.
+- [ ] T5. 20 concurrent approve/refuse pairs: one winner per `aar_`; no order row is
+  written by the decision.
+- [ ] T6. Binding mismatch at the fence, one subtest per field (`we_`, `wi_`, tenant,
+  owner, connection, install revision): `intent_mismatch`; the `aar_` stays `reserved`.
+- [ ] T7. Expiry: decide, reserve and fence past `expires_at` or `fresh_until` are refused
+  with `approval_expired`; a reserved row past expiry can become `unknown` but never
+  `consumed`; `consumed`/`unknown`/`denied` never read as `expired`.
+- [ ] T8. Replay: a second permit for the same command gets `ErrPermitExists`; reserve
+  with the same `cmd_` returns `replayed=true` and changes nothing; reserve with another
+  `cmd_` is `approval_replayed`; a second `aar_` for the same order is refused by
+  `UNIQUE (order_ref)`.
+- [ ] T9. Final states: a `consumed`, `unknown` or `denied` `aar_` cannot be decided,
+  reserved, consumed or revoked; the generic routes answer
+  `approval_kind_not_spendable_here` for every Glovo state; the generic create refuses
+  `glovo.place_order_fake` and `glovo.other`.
+- [ ] T10. **Written content differs.** Enqueue a real bridge command whose payload's
+  approval basket differs from the approved one by one unit price, carrying the approved
+  `intent_hash`: the permit is refused `basket_changed`, no `bridge_write_permits` row
+  exists and `effect_state` stays `none`. A second case changes the payload's
+  `item_code` set; a third stores a command `intent_hash` that differs from the
+  recomputed one (`intent_mismatch`). A matching payload gets the permit.
+- [ ] T11. Reconnect after approval: a new `gcn_` or install revision makes the fence
+  refuse (`connection_revoked` / `stale_install`); nothing moves the `aar_` back.
+- [ ] T12. Owner removed from the tenant after approval: `no_tenant`.
+- [ ] T13. Ending without a permit: #985 cancel moves the `aar_` to `unknown` in its own
+  transaction; the sweeper moves a reserved `aar_` whose command expired or completed
+  without a permit to `unknown`; a command with provider-reported `unknown` and no permit
+  gives the `unknown`/`unknown` pair.
+- [ ] T14. Atomicity: a failure injected after `ConsumeGlovoApprovalTx` inside
+  `permitTx` leaves the `aar_` `reserved`, no permit row and `effect_state` `none`.
+- [ ] T15. Database enforcement under the runtime role, raw SQL: every forbidden
+  transition (including `consumed→approved`, `reserved→approved`, `denied→approved`,
+  `unknown→reserved`), a change of `action_kind` into or out of a Glovo kind, a change of
+  `intent_hash`, `expires_at` or `subject_principal_id`, `DELETE`, a binding column
+  update other than the first `command_id`, a Glovo `aar_` committed without a binding,
+  and `ALTER TABLE … DISABLE TRIGGER` are each rejected.
+- [ ] T16. Invariant table of design §7 over every lifecycle path; `consumed` iff a
+  permit exists.
+- [ ] T17. Secrecy: logs and audit rows across T1-T16 contain no basket, `args_digest`,
+  lease token or credential.
+- [ ] T18. Readiness: each missing URL, a failed `ProveOneDatabase`, a disabled trigger, a
+  runtime-owned table, an unregistered policy, and each nil collaborator give
+  `not_ready`, and `SetFence` is not called.
+- [ ] T19. Governance in strict mode: an owner approve passes `guardDecision` and records
+  `authority_basis = resource_owner`; the start-up backfill leaves Glovo rows unchanged.
+- [ ] T20. Control worker: `GlovoApprovalStatus` returns only ids and enums, and
+  `not_found` outside `tenants`; `RevokeGlovoApprovalTx` moves `approved` to `denied`
+  and is refused on `reserved`.
+- [ ] T21. Deadlocks, deterministic with two connections and advisory barriers:
+  permit vs #985 cancel, permit vs decide, dispatch vs decide, permit vs #959 revoke,
+  sweeper vs permit. No `40P01` in any pair; the outcome matches the design §6 and
+  #985 §7.2 race table.
+- [ ] T22. Refusal map: every row of design §10 produces its M10 reason and wire code.
 
 ## Rollback
 
 - The feature is inert while `glovo.Default` is closed and the fence is not installed.
-  To roll back behaviour, revert the PR or leave the gate closed. The bridge then keeps
-  `refusingFence`.
-- The schema is additive. Reverting the code leaves the widened CHECK, which admits
-  more states, and an unused `glovo_approval_bindings` table. Both are harmless to the
-  generic code, which never writes `reserved` or `unknown`. If needed, drop the table
-  and restore the CHECK in a follow-up migration, after confirming that no
-  `glovo.%` rows exist.
-- The generic-path predicate (`action_kind NOT LIKE 'glovo.%'`) is a no-op for existing
-  kinds, so a revert changes nothing for them.
+  Revert the PR, or leave the gate closed; the bridge keeps `refusingFence`.
+- The schema is additive. The widened CHECK admits more states and is harmless to
+  generic code. `glovo.approval_bindings` and the triggers can be dropped by the
+  migration role after confirming no Glovo-kind rows exist. The trigger functions act
+  only on Glovo-kind rows, so leaving them in place changes nothing for generic kinds.
+- If task 2b ran, the table ownership can stay with the migration role; reverting
+  `NewStore`'s verify-only mode requires moving ownership back first.

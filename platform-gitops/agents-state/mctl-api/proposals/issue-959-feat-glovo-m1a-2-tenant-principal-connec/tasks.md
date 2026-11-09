@@ -25,6 +25,20 @@
 - [ ] A7. Route every terminal transition through one `endConnection` helper implementing the terminal-state purge table (depends on 5, 6) — DoD: T15 passes.
 - [ ] A8. Document the joint contract (names, enum, status mapping, error body, kill switch) in `docs/glovo-connections.md` as the single reference for #960 and #961 (depends on 9).
 
+## AMEND 2026-11-09 (b) — owner decision A
+
+- [ ] A9. Move every object into the Postgres schema `glovo` (schema-qualified DDL in
+  `ApplySchema`), add the role table grants of design Amendment (b), and require
+  `GLOVO_DB_URL` explicitly with no `AUDIT_DB_URL` fallback (depends on A5) — DoD: T16.
+- [ ] A10. `LockOwnerShared` and `LiveConnectionTx` on a caller `pgx.Tx`, sharing the
+  `withLocks` key encoding (depends on 4, 6) — DoD: neither begins or commits (pgx
+  tracer test).
+- [ ] A11. `RevocationHook`, `WithRevocationHook`, reason `membership_removed`,
+  `RevokeForMembership`; every revoker calls the hook after L1/L2 and the row updates,
+  in the same transaction (depends on 5, 6, A7) — DoD: T17, T18.
+- [ ] A12. `Ready`: explicit URL, schema version, owners, enabled triggers, hook
+  present (depends on A9, A11).
+
 ## Tests
 
 - [ ] T1. Unit, no DB: the transition table is exhaustive (every from/to pair checked), terminal states have no exits, `Owner.validate` rejects an empty tenant and a principal without the `prn_` prefix, and the ID prefixes and lengths are correct.
@@ -41,6 +55,17 @@
 - [ ] T12. Schema safety: `ApplySchema` called twice concurrently on a fresh database both succeed, and `NewStore` on a database without (or with a different) `glovo_schema_version` fails closed without running DDL. The runtime role can `INSERT`/`DELETE` on `glovo_pilot_allowlist` and cannot `UPDATE` or `DELETE` on `glovo_audit_events`. Re-applying the schema on a database where a CHECK already exists is a no-op. No non-`glovo_` object is created or altered (queried via `pg_class`/`pg_proc` before and after).
 - [ ] T14. Role separation: with the runtime role, `ALTER TABLE glovo_audit_events DISABLE TRIGGER ALL`, `DROP TRIGGER`, `DROP TABLE` and `ALTER TABLE ... ADD COLUMN` on every `glovo_*` table all fail with insufficient privilege; `NewStore` against a database without `ApplySchema` refuses to start.
 - [ ] T15. Terminal-state purge: for each terminal path (`expired`, `failed`, `revoked`, `superseded`, `install_revoked`, `install_reinstalled`) `secret_ref` is NULL afterwards and the released ref is returned exactly once.
+- [ ] T16. One database and grants: with the bridge and work-items runtime roles, `SELECT`
+  on `glovo.glovo_connections` succeeds and `UPDATE`/`DELETE`/`INSERT` fail; an unset
+  `GLOVO_DB_URL` with `AUDIT_DB_URL` set gives `not_ready`.
+- [ ] T17. Revocation fences commands: with a fake hook recording calls, each revoker
+  path (`Revoke`, `membership_removed`, `RevokeInstall`, `Reinstall`, `Transition` to
+  `expired` and `failed`) calls it once with exactly the ended ids, inside the same
+  transaction (a hook error leaves the connection live). With the real #985 hook and a
+  bridge command that is reserved but not yet permitted, a revoke followed by a permit
+  attempt gives no permit, and an expiry followed by a permit attempt gives no permit.
+- [ ] T18. Lock order: a revoker and a #985-style reader (`LockOwnerShared` then an L3
+  row lock then an L5 row lock) run in 50 interleavings with no `40P01`.
 - [ ] T13. No secrets or PII: `secretscan.Scan` over JSON of every fixture, connection row and audit row, and over captured `slog` output, finds nothing. Fixtures contain no `@` (emails) and no cookie or session-shaped strings.
 
 ## Rollback

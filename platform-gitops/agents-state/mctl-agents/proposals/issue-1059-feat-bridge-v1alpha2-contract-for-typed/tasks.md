@@ -1,92 +1,82 @@
 # Tasks: issue-1059-feat-bridge-v1alpha2-contract-for-typed
 
-- [ ] 1. Record the v1alpha1 baseline: compute the sha256 of every file under
-  `docs/spikes/1043/` (both schemas and the 8 fixtures) and hard-code them in the new test
-  as `V1ALPHA1_SHA256`. Do not modify any of those files. — DoD: the constant matches the
-  files on the merge base, and `tests/test_spike_1043_contracts.py` is unchanged and green.
-- [ ] 2. Add `tools/jcs.py`, a stdlib-only RFC 8785 canonicalizer: `canonicalize(value) ->
-  bytes`, `canonicalize_text(text) -> bytes` (parses with a duplicate-key-rejecting
-  `object_pairs_hook`), and `digest(value) -> "sha256:<hex>"`. It sorts keys by UTF-16
-  code units, uses the RFC 8785 string escaping, uses ES number serialization, and rejects
-  NaN, Infinity, lone surrogates and integers outside +/-2^53. Add a module docstring
-  stating it is bridge-contract-only and that `orchestrator/context_snapshot.canonical_json`
-  is a different, unchanged rule. — DoD: imports nothing outside the stdlib; ruff clean.
-- [ ] 3. Add `docs/contracts/bridge/v1alpha2/vectors/jcs-digest.json` (depends on 2). It
-  holds `{name, input, canonical, digest}` entries where `input` is raw JSON text,
-  covering key reordering, unicode (raw, escaped-input, non-BMP, the UTF-16 vs code-point
-  key-order case), control-character escaping, numbers (`0`, `-0`, `1.0`, `1e20`, `1e21`,
-  `1e-7`, `0.000001`, `123.456`, `-1.5e-10`, `9007199254740991`, the RFC 8785 Appendix B
-  samples) and nested arrays and objects (including empty ones), plus the RFC 8785
-  section 3.2.4 example. — DoD: at least 20 vectors. The expected values are cross-checked
-  against an independent JCS implementation (Go `gowebpki/jcs` or the cyberphone
-  reference), and the README records the tool and version used.
-- [ ] 4. Add `docs/contracts/bridge/v1alpha2/read-command.schema.json`: JSON Schema
-  2020-12, `schema_version` const `bridge.mctl.ai/v1alpha2`, `kind` in
-  `read_history|read_preview|read_basket`, the required read fields from design.md, an
-  explicit `not/anyOf` forbidding `execution_id`, `work_item_id`, `order_ref`,
-  `workflow_id`, `approval_ref` and `intent_hash`, `ttl_seconds` 1..300, and per-kind
-  `params` via `allOf`/`if`/`then` with `$defs` `params_read_history|preview|basket`.
-  — DoD: passes `Draft202012Validator.check_schema`; every string is bounded or
-  pattern-limited; `additionalProperties: false` at every object level.
-- [ ] 5. Add `docs/contracts/bridge/v1alpha2/read-result.schema.json` (depends on 4):
-  required envelope fields echoing tenant, principal, connection and install revision
-  refs; `provider_effect` const `none`; `outcome` without `approval_refused`; the
-  `error_code` enum including `payload_too_large`; `payload` and `payload_digest`
-  required if and only if `outcome` is `succeeded`; per-kind payload `$defs` with
-  integer-only money fields, bounded arrays and strings, and no personal-data fields.
-  — DoD: passes `check_schema`; same boundedness rules as task 4.
-- [ ] 6. Add `tools/bridge_contract.py` (depends on 2, 4, 5): `check_read_command(doc)` and
-  `check_read_result(doc)` return a list of error strings. Result checking runs schema
-  validation, then the size cap (JCS bytes of `payload` <= 65536), then the digest check
-  (`payload_digest == jcs.digest(payload)`). A CLI `python tools/bridge_contract.py
-  {validate <kind> <file>|digest <file>|sums}` prints `SHA256SUMS` content. jsonschema is
-  imported here only (dev dependency, already locked at 4.26.0). — DoD: the CLI exits
-  non-zero on any error; no network or provider access.
-- [ ] 7. Add the fixtures under `docs/contracts/bridge/v1alpha2/fixtures/` listed in
-  design.md (depends on 4, 5, 6). Valid results carry `payload_digest` values computed
-  with `tools/jcs.py`. `read-result.oversize.json` is schema-valid but over 65536 JCS
-  bytes. `read-result.digest-mismatch.json` is schema-valid with a wrong digest. All
-  values are synthetic (`FAKE-` codes, `Synthetic` names, zero-ish refs as in v1alpha1).
-  — DoD: every fixture behaves as named in task T2.
-- [ ] 8. Add `docs/contracts/bridge/v1alpha2/README.md` and `SHA256SUMS` (depends on 3-7).
-  The README covers scope (reads only; `prepare` stays a write per mctl-api#957 D5; no
-  Temporal signal; no public `/read-results/{ref}` route), field tables, the digest rule,
-  the size cap as a MUST, the statement that v1alpha1 remains canonical at
-  `docs/spikes/1043/` and stays accepted, and one-way vendoring pinned by `SHA256SUMS`.
-  — DoD: `SHA256SUMS` equals the output of `tools/bridge_contract.py sums`.
-- [ ] 9. Add `tests/test_bridge_v1alpha2_contract.py` covering T1-T7 (depends on 1-8).
-  — DoD: `uv run pytest tests/test_bridge_v1alpha2_contract.py tests/test_spike_1043_contracts.py`
-  is green, and the full suite stays green.
-- [ ] 10. After merge, comment on mctlhq/mctl-api#986, mctlhq/mctl-api#990 and
-  mctlhq/mctl-telegram#1262 with the merge commit and the `SHA256SUMS` content, so that the
-  implementation slices vendor the approved bytes. — DoD: links posted. No consumer repo
-  changes are made here.
+Amended 2026-11-09 (b); design.md has the finding -> fix table.
+
+- [ ] 1. Record the v1alpha1 baseline as `V1ALPHA1_SHA256`: the command and result values
+  from mctl-api `internal/bridge/schema/PROVENANCE` (`b857f62b…6dae1`, `c91bb86e…9354f`)
+  plus the sha256 of every fixture under `docs/spikes/1043/`. Do not modify those files.
+  — DoD: the constant matches the merge base and mctl-api's PROVENANCE.
+- [ ] 2. `tools/jcs.py` (stdlib only): `precheck(raw: bytes)` scans tokens and rejects
+  duplicate keys at any depth, lone surrogate escapes, `NaN`/`Infinity`, numbers outside
+  ±(2^53-1), and returns the integer-token positions; `canonicalize`,
+  `canonicalize_text`, `digest`. Keys sorted by UTF-16 code units, RFC 8785 §3.2.2.2
+  string escaping, ES number serialization, `bool` tested before `int`. — DoD: ruff clean,
+  no import outside the stdlib.
+- [ ] 3. `vectors/jcs-digest.json` (depends on 2): the original categories plus
+  `[true,false,null]`, `{"a":true}`, and RFC 8785 §3.2.2 and §3.2.3 as two separate
+  vectors. — DoD: at least 22 vectors, cross-checked with an independent Go JCS
+  implementation recorded in the README.
+- [ ] 4. `vectors/must-reject.json` (depends on 2): raw-text entries with a reason each —
+  duplicate key top-level and nested, lone high and low surrogate, `NaN`, `Infinity`,
+  `1e400`, 2^53+1, -(2^53+1), `1.0` and `1e2` and `true` in an integer position.
+  — DoD: every entry fails `precheck` or the integer-token check with its reason.
+- [ ] 5. `approval-basket.schema.json` and `vectors/basket-fingerprint.json` (depends on
+  2): all fields required, `additionalProperties: false`; vectors for a minimal basket, a
+  30-line basket, permuted input keys (same fingerprint), one unit price +1 and the
+  delivery fee changed (different fingerprint); `must_reject` for unsorted lines, a
+  duplicate `item_code`, a wrong subtotal, a wrong total, an extra `item_name`, and
+  `quantity: 1.0`. — DoD: `bridge_contract.check_approval_basket(raw)` reproduces every
+  vector.
+- [ ] 6. `read-command.schema.json`: design.md fields, the forbidden-field `not/anyOf`,
+  per-kind params (history `{limit, cursor?}`, preview `{history_order_ref}`, basket
+  `{}`). — DoD: `check_schema` passes; every object has `additionalProperties: false`
+  and a `required` list.
+- [ ] 7. `read-result.schema.json` (depends on 5, 6): no binding refs; `payload` and
+  `payload_digest` iff `succeeded`; per-kind payloads embedding `approval_basket` by
+  `$ref`; `required` everywhere; the name and `error_detail` patterns; `placed_on`
+  `format: date`. — DoD: `{}` as a payload, and each payload missing one field, is
+  invalid.
+- [ ] 8. `tools/bridge_contract.py` (depends on 2-7): `check_read_command(raw: bytes)`,
+  `check_read_result(raw: bytes)` and `check_approval_basket(raw: bytes)`. The order is
+  precheck, integer tokens, schema, body cap 16384, `JCS(payload)` cap 12288, digest
+  recompute, basket sort/uniqueness/arithmetic, display codes present in the basket. CLI
+  `validate|digest|fingerprint|sums`. — DoD: non-zero exit on any error.
+- [ ] 9. Fixtures of design.md (depends on 8), including `at-cap` (16384 B, valid) and
+  `over-cap` (16385 B), the three missing-field fixtures, `with-binding-echo` and
+  `quantity-float`. Generate the maximal fixtures with a script kept in `tools/`, so that
+  the README's measured sizes are reproducible.
+- [ ] 10. README (depends on 3-9): scope, field tables, §Crosswalk to mctl-api#957, the
+  approval basket and fingerprint, size cap with the measured table, raw-bytes and
+  number rules, stored bytes, "Consumer MUST" list, versioning, vendoring by
+  `SHA256SUMS`, and the statement that `prepare` and writes are out of scope
+  (OPEN-1059-1). Then `SHA256SUMS`.
+- [ ] 11. `tests/test_bridge_v1alpha2_contract.py` covering T1-T10. — DoD: the new file and
+  `tests/test_spike_1043_contracts.py` are green, and so is the full suite.
+- [ ] 12. After merge, comment on mctl-api#986, #988, #989, #990 and mctl-telegram#1262
+  with the merge commit and `SHA256SUMS`. No consumer repo changes here.
 
 ## Tests
 
-- [ ] T1. v1alpha1 unchanged: the sha256 of every file under `docs/spikes/1043/` equals
-  `V1ALPHA1_SHA256`, and every v1alpha1 fixture validates, or fails, against the v1alpha1
-  schemas exactly as in `tests/test_spike_1043_contracts.py` `CASES`.
-- [ ] T2. Parametrized fixture table (the same pattern as `CASES` in
-  `test_spike_1043_contracts.py`): the 3 valid read commands and 4 valid read results
-  pass. `with-order-ref`, `with-execution-id`, `with-workflow-id`, `kind-prepare`,
-  `params-wrong-kind`, `failed-with-payload`, `too-many-items` and `extra-field` fail,
-  each with the expected path substring. `oversize` passes the schema but
-  `check_read_result` reports `payload_too_large`. `digest-mismatch` passes the schema
-  but `check_read_result` reports a digest mismatch.
-- [ ] T3. Each of `execution_id`, `work_item_id`, `order_ref`, `workflow_id`,
-  `approval_ref` and `intent_hash`, injected into each valid read command, is rejected.
-- [ ] T4. A v1alpha1 command or result validated against the v1alpha2 schemas is rejected
-  on `schema_version`, and the reverse is also rejected (the versions do not cross-validate).
-- [ ] T5. Every vector in `vectors/jcs-digest.json` yields the exact `canonical` bytes
-  and `digest` from `tools/jcs.canonicalize_text`. Coverage asserts at least one vector
-  per category (key-order, unicode, numbers, nested-arrays). Negative cases: NaN,
-  Infinity, a duplicate key, a lone surrogate and 2^53+1 raise.
-- [ ] T6. `SHA256SUMS` matches the current file bytes, and every valid result fixture's
-  `payload_digest` equals `jcs.digest(payload)`.
-- [ ] T7. Synthetic-data guard: no JWT, `Bearer ` or `MCTL_TOKEN=` strings, no `@` email
-  shapes, and no phone-number shapes in any v1alpha2 fixture or vector (extends
-  `test_no_credential_shaped_values`).
+- [ ] T1. v1alpha1 unchanged: every pinned hash matches, and every v1alpha1 fixture
+  behaves as in `test_spike_1043_contracts.py` `CASES`.
+- [ ] T2. Fixture table: valid fixtures pass; each invalid fixture fails with its expected
+  reason; `at-cap` passes and `over-cap` gives `payload_too_large`; `digest-mismatch`
+  gives a digest error; `with-binding-echo` fails; `quantity-float` fails in the
+  integer-token check.
+- [ ] T3. Each forbidden field injected into each valid read command is rejected.
+- [ ] T4. v1alpha1 and v1alpha2 do not cross-validate in either direction; a v1alpha2
+  command inside a v1alpha1 claim envelope is rejected by the v1alpha1 schema.
+- [ ] T5. `jcs-digest.json` reproduces byte for byte; at least one vector per category.
+- [ ] T6. Every `must-reject.json` entry is rejected by `check_read_result` and by
+  `check_read_command` where it applies, with the recorded reason.
+- [ ] T7. `basket-fingerprint.json`: every vector reproduces; permuted input gives the
+  same fingerprint; price and fee changes give different fingerprints; every
+  `must_reject` case is rejected.
+- [ ] T8. Required fields: `{}` and each one-field-missing payload, line and basket fail.
+- [ ] T9. `SHA256SUMS` matches, and every valid result fixture's `payload_digest` equals
+  `jcs.digest(payload)`.
+- [ ] T10. Synthetic-data guard: no JWT, `Bearer `, `MCTL_TOKEN=`, email or phone shapes in
+  any fixture or vector.
 
 ## Rollback
 

@@ -1,5 +1,65 @@
 # Design: issue-959-feat-glovo-m1a-2-tenant-principal-connec
 
+## Amendment 2026-11-09 (b) — owner decision A, companion to #985/#988/#989
+
+Owner decision A (2026-11-09): connections, orders, `aar_` and the bridge live in **one
+physical Postgres database** and share one `pgx.Tx`. This section supersedes every
+earlier text in this proposal that leaves the database URL open or lets the store fall
+back to `AUDIT_DB_URL`. It is the #959 side of the #985 review P2-4/P2-6 and the #989
+review P2-3/P2-6 fixes in the same PR.
+
+| Driver | Change in this slice |
+|---|---|
+| Decision A: one physical database, explicit URLs | The store lives in the Postgres schema `glovo` (`glovo.glovo_installs`, `glovo.glovo_connections`, …) of the same database as the bridge, the work items and the #988 orders. `GLOVO_DB_URL` must be set explicitly; there is no `AUDIT_DB_URL` fallback. Same-database is proven by #985 `control.ProveOneDatabase`, not by URL equality |
+| Least privilege across pools | Role table below: the migration role owns every `glovo` object; the Glovo runtime role keeps its DML; the bridge and work-items runtime roles get `USAGE` on schema `glovo` and `SELECT` on `glovo_installs` and `glovo_connections` only |
+| #985/#988/#989 need tx-scoped reads on their transaction | `LockOwnerShared(ctx, tx, tenant, principal)` (L1 shared, L2 shared) and `LiveConnectionTx(ctx, tx, owner)` (no row lock; valid because every writer holds L2 exclusive). Neither begins or commits |
+| One lock order | L1 and L2 here are levels L1 and L2 of the canonical order in #957 design §6b. Readers on the Glovo write path take both shared; every connection write takes L1 shared (L1 exclusive for install changes) and L2 exclusive |
+| Revocation must fence open bridge commands (#985 review P2-4) | Every revoker (`Revoke`, including reason `membership_removed`, `RevokeInstall`, `Reinstall`, and terminal `Transition`s) calls the installed `RevocationHook` in the **same transaction**, after L1/L2 and the row updates, with the ended `gcn_` ids. #985 installs `bridge.CancelOpenForConnections`, which runs the `SECURITY DEFINER` function `bridge_cancel_open_for_connections(text[], text)` (L5, `ORDER BY command_id`) |
+| Membership loss | New reason `membership_removed` and `RevokeForMembership(ctx, tenant, principal, actor)`. Who detects membership removal and calls it is an OPEN item |
+| Timeout fencing must still be proven | `expired` through `Transition` is a revoker too, so the hook runs; T17 covers revoke-after-approval-before-permit and expiry-before-permit |
+
+### Role table (owner decision A)
+
+| Role | Objects | Rights |
+|---|---|---|
+| migration role | every object in schema `glovo` | owner; runs `ApplySchema` only |
+| Glovo runtime role (`GLOVO_DB_URL`) | `glovo_installs`, `glovo_connections`, `glovo_connect_requests` | `SELECT, INSERT, UPDATE` |
+| | `glovo_audit_events` | `SELECT, INSERT` |
+| | `glovo_pilot_allowlist` | `SELECT, INSERT, DELETE` |
+| | `bridge_cancel_open_for_connections(text[], text)` | `EXECUTE` (granted by #985's bridge DDL) |
+| bridge runtime role (`COMMERCE_DB_URL`), work-items runtime role (`WORK_ITEMS_DB_URL`) | schema `glovo` | `USAGE` |
+| | `glovo_installs`, `glovo_connections` | `SELECT` only |
+
+No role other than the migration role owns a `glovo` object, so no runtime role can
+`ALTER`, `DROP` or `DISABLE TRIGGER`. If the three URLs resolve to the same role, the
+rights are the union and the ownership rule still holds; `Ready` checks ownership,
+not role names.
+
+### Tx-scoped API and revocation hook
+
+```go
+// LockOwnerShared takes L1 (install key) shared, then L2 (owner key) shared, on tx.
+func (s *Store) LockOwnerShared(ctx context.Context, tx pgx.Tx, tenant, principal string) error
+// LiveConnectionTx reads the owner's live connection on tx without a row lock.
+// The caller must hold L2 (shared or exclusive).
+func (s *Store) LiveConnectionTx(ctx context.Context, tx pgx.Tx, owner Owner) (*Connection, error)
+// RevocationHook is called by every revoker in its own transaction, after the
+// connection rows are ended, with the ended connection ids.
+type RevocationHook func(ctx context.Context, tx pgx.Tx, ended []string, actor string) error
+func WithRevocationHook(h RevocationHook) Option
+func (s *Store) RevokeForMembership(ctx context.Context, tenant, principal, actor string) ([]Connection, error)
+func (s *Store) Ready(ctx context.Context) error
+```
+
+- A hook error rolls the revoker back: no connection is ended without its commands
+  being cancelled.
+- Without a hook, revokers still work (the M1a store stays usable), but `Ready` reports
+  `revocation_hook_missing`. #985 and #989 treat that as `not_ready`, so no Glovo
+  write can be dispatched or permitted.
+- `Ready` also checks: `GLOVO_DB_URL` set explicitly, the schema version, table owners
+  are not `current_user`, and the audit and no-delete triggers are enabled.
+
+
 ## Amendment 2026-11-09 — joint 959/960/961 AMEND
 
 Independent review of digest `sha256:718181577b889372ffec9eb565489b3cf53130b7e9a3b2545f0de65198467651` (mctl-api#959, comment of 2026-11-09) required one joint amendment across #959, #960 and #961. Finding -> change in this slice:
@@ -86,7 +146,8 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
   `postgres:16` in `.github/workflows/validate.yml`. Concurrency tests
   exist (`TestConcurrentAcceptsOfOneKeyYieldOneRow`).
 - Stores are wired in `cmd/api/main.go` through `initStore(...)` with an
-  env DB URL that falls back to `AUDIT_DB_URL` (commerce at ~line 556).
+  env DB URL that falls back to `AUDIT_DB_URL` (commerce at ~line 556). The Glovo store
+  does **not** follow that fallback: `GLOVO_DB_URL` is required (Amendment (b)).
 
 Deployed state checked:
 - `mctl_get_service_config(team=admins, service=mctl-api)` returned
@@ -275,7 +336,12 @@ Two advisory keys, always taken in this order inside one transaction:
    connection `Transition`. Taken **exclusive** by `Install`,
    `RevokeInstall` and `Reinstall`.
 2. Owner key `glovo-owner/v1|<tenant>|<principal>`. Taken exclusive by
-   every connection write for that owner.
+   every connection write for that owner, and shared by the readers on the Glovo
+   write path (`LockOwnerShared`: #985 dispatch and cancel, the #989 permit fence).
+
+These are levels L1 and L2 of the canonical lock order in #957 design §6b. A revoker
+holds L1 and L2, ends the rows, then calls the `RevocationHook`, which takes L5 (bridge
+commands) only.
 
 Keys are length-prefixed (as `commerce.lengthPrefixed`) so a tenant name
 containing `|` cannot collide. Under the shared install lock, `Connect`

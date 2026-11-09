@@ -1,5 +1,26 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-09 (b)
+
+Companion edits from the mctl-gitops AMEND PR that fixes mctl-api#985, #986, #988, #989,
+#959 and mctl-agents#1059 after their independent reviews. Owner decisions of
+2026-11-09 (b): **A**, one physical database for every Glovo store, explicit URLs, no
+`AUDIT_DB_URL` fallback, proof of one database (not URL equality), separate schemas and
+roles, one lock order; **B**, #986 is the mctl-api store/serve slice of the read
+contract that mctl-agents#1059 defines. Where this section and older text disagree, this
+section wins; the contradicted passages below are edited to match.
+
+| Driver | Change here |
+|---|---|
+| Decision A (supersedes D2 and the M11 row) | §6b rewritten: `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` set explicitly to one physical database, proven by #985 `control.ProveOneDatabase` (nonce written on one pool, read on the others); `GLOVO_DB_URL` is now part of the transaction; the "different database" branch and its TOCTOU test gate are removed. Schemas and roles per #959's role table |
+| One lock order (#985 P2-4, #989 P2-3, #959) | §6b holds the **canonical lock order L1..L6** and the table of which path takes which levels. #985, #988, #989 and #959 reference it and do not restate it |
+| #988 P2-7 (two owners of the join-ref table) | §2a: the table is #988's `glovo.join_refs`, minted through #988 `MintJoinRefTx`; the `order` ref is #988's own `ordr_` (the `order_ref` of the order row). #988's internal `pord_` primary key is unexported and never leaves the store |
+| #989 P2-4 (second approval authority) | §3 and §6: prepare creates the #988 order and the pending `aar_` through #989 `CreateGlovoApprovalTx`; `IntentHash` comes from #989 `GlovoIntent`. No order `approved` state, no #954 `providerorders` service |
+| mctl-agents#1059 approval basket | §3, §5 and §6: the preview and basket `fingerprint` are computed by mctl-api as `"sha256:"+hex(sha256(JCS(approval basket)))` over the #1059 approval-basket projection, prices included; `mctl-basket/v1` and any facade-side fingerprint are gone |
+| #1059 / #986 read binding (no echo) | §5: the handler no longer checks echoed binding fields; #986 `FetchReadResult` takes every binding from the stored command row and checks scope, connection and revision; the handler checks kind and schema version only |
+| M5/D1 wording | Reads are history, preview and basket. Prepare is a write that consumes a stored preview; it is not a read kind |
+| Preview wire field | `POST /previews` keeps the wire field `order_ref` (the facade is unchanged); its value is the `pho_` history-order ref of #1059, not an `ordr_` |
+
 ## Amendment 2026-11-09
 
 Resolves the crosswalk mismatches assigned to this slice (M1-M5, M7, M11, M12 in
@@ -14,13 +35,13 @@ has been edited to match.
 
 | # | Finding | Change |
 |---|---|---|
-| M1 | Identifier families differ: M1a `prn_` principals and tenant names, the bridge and mctl-agents#1044 `tnr_`/`prr_`/`ordr_` (bridge `command.schema.json` patterns; `EnqueueInput` at `internal/bridge/store.go:205-226`) | New §2a: one mapping table `glovo_join_refs`, refs minted by mctl-api only, random (not derived), per-tenant `prr_`; raw `prn_`, tenant names and `pord_` never leave mctl-api in a bridge command or a control-workflow input |
+| M1 | Identifier families differ: M1a `prn_` principals and tenant names, the bridge and mctl-agents#1044 `tnr_`/`prr_`/`ordr_` (bridge `command.schema.json` patterns; `EnqueueInput` at `internal/bridge/store.go:205-226`) | New §2a: one mapping table (since (b): #988's `glovo.join_refs`), refs minted by mctl-api only, random (not derived), per-tenant `prr_`; raw `prn_`, tenant names and the internal `pord_` never leave mctl-api in a bridge command or a control-workflow input |
 | M2 | Refusal set not closed against the facade (`internal/glovo/mctlapi/mctlapi.go:24-47`, `client.go:252-267` at `27c671d2`) | §4 rewritten as a wire mapping table: every 401/403/404/409 `error` value is in the facade's accepted set or is one of the four codes the facade fix mctl-telegram#1264 will consume (**owner**, D4). Internal reasons go to audit and spans only. Golden fixtures: the facade's `wire.golden.json` vendored byte for byte plus one mctl-api fixture per table row. The `ambiguous_tenant` paragraph is rewritten (review row below) |
 | M3 | `/resolve` shape: the merged facade decodes exactly `{scope_ref, tenant, expires_at}` with `DisallowUnknownFields` and refuses an empty `scope_ref` (`client.go:112-128`); it sends `X-Mctl-Scope-Ref` on every other call (`client.go:231-233`) | **(owner)** The facade's `/resolve` handling stays unchanged. `/resolve` returns exactly `{scope_ref, tenant, expires_at}`; `principal_ref` and `contract_version` leave `/resolve` (the version stays on `/compatibility`). New §2b specifies `scope_ref`. The old "No `scope_ref`" decision is withdrawn and task 11 no longer asks the facade to drop `X-Mctl-Scope-Ref`. Additive, no contract version bump |
 | M4 | `"replayed": true` in the 200 body breaks the `additionalProperties: false` output schemas | Replay is signalled out of band by the response header `Idempotent-Replayed: true`; the body is byte-identical to the original response |
 | M5 | Second wire protocol `glovo-read/v1alpha1` (`grr_` ids) next to #968 | **(owner, D1)** Withdrawn. Reads go through the versioned, additive bridge read extension mctl-api#986 (own proposal and digest). `ReadBridge` stays the in-process seam; its transport implementation is the #986 client. History, preview, basket and prepare answer `not_ready` only until #986 lands; P1 acceptance requires all four working, fake-only |
 | M7 | Enqueue path: mctl-agents#1044 assumed an HTTP route; #968 exposes only in-process `Store.Enqueue(ctx, tx pgx.Tx, …)` (`internal/bridge/store.go:478-536`) | **(owner, option b; D3)** Enqueue is in process, inside the dispatch transaction, which is owned by mctl-api#985 (M1b/3, child of #954, own digest) together with the dispatch/cancel routes, the control-worker principal and the `aar_` plus revocation re-check. #957 prepare does **not** enqueue a bridge command. #957 keeps the contracts #985 relies on (§6a) and integration checks against #985. No HTTP enqueue route exists in any slice |
-| M11 | DB topology for the shared `pgx.Tx`: bridge on `COMMERCE_DB_URL` else `AUDIT_DB_URL` (`cmd/api/main.go:1019-1021`), work items on `WORK_ITEMS_DB_URL` else `AUDIT_DB_URL` (`main.go:621-633`), M1a on `GLOVO_DB_URL` without fallback | **(owner, D2)** §6b: Glovo never relies on an `AUDIT_DB_URL` fallback; P1 values set `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` explicitly to one physical database; equal URLs are not proof, a test proves the prepare writes and #985's `Enqueue` share one `pgx.Tx`; missing config or an unproven boundary is `not_ready`. Removing #968's generic fallback is mctl-api#987 |
+| M11 (superseded by decision A, see the (b) amendment and §6b) | DB topology for the shared `pgx.Tx`: bridge on `COMMERCE_DB_URL` else `AUDIT_DB_URL` (`cmd/api/main.go:1019-1021`), work items on `WORK_ITEMS_DB_URL` else `AUDIT_DB_URL` (`main.go:621-633`), M1a on `GLOVO_DB_URL` without fallback | **(owner, D2)** §6b: Glovo never relies on an `AUDIT_DB_URL` fallback; P1 values set `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` explicitly to one physical database; equal URLs are not proof, a test proves the prepare writes and #985's `Enqueue` share one `pgx.Tx`; missing config or an unproven boundary is `not_ready`. Removing #968's generic fallback is mctl-api#987 |
 | M12 | #977 answers `invalid_target` for the Glovo resource on `/oauth/authorize` and `/oauth/token` (`internal/api/oauth_handlers.go:214`, `:523`) | Consent-time tenant selection (task 5) depends on #960's `GLOVO_ENABLED` admission lifting that refusal. Until then `invalid_target` is the expected answer, and a test pins it |
 | Start | Nothing started `GlovoControlWorkflow` after prepare | **(owner, D5)** §6c: a transactional workflow-start outbox written in the prepare transaction; a separate dispatcher, owned by this slice, starts the workflow after commit |
 | Review P2 | AMEND prose contradicts itself (old design line 81, task A1) | Rewritten as one instruction: a missing or unbound human-selected team grant is 403 `ambiguous_tenant`, which is already in the facade's closed set at `27c671d2` |
@@ -30,13 +51,13 @@ has been edited to match.
 
 These replace the open items OPEN-1 to OPEN-5 of the first version of this amendment.
 
-- **D1, reads (was OPEN-1): required for P1.** History, preview, basket and prepare are
-  part of P1 acceptance, fake-only. They use the versioned, additive bridge read
+- **D1, reads (was OPEN-1): required for P1.** History, preview and basket (reads) and
+  prepare (a write that consumes a stored preview) are part of P1 acceptance, fake-only. They use the versioned, additive bridge read
   extension mctl-api#986, a separate issue with its own proposal and digest; there is no
   second `glovo-read` protocol. This slice consumes #986 through `ReadBridge` and answers
   `not_ready` for those four tools only until #986 lands. Raw read payloads never enter
   Temporal history, signals or logs; mctl-agents#1044 carries refs and digests only.
-- **D2, database (was OPEN-2).** Glovo never uses an `AUDIT_DB_URL` fallback. P1 values
+- **D2, database (was OPEN-2; superseded by owner decision A, 2026-11-09 (b), §6b).** Glovo never uses an `AUDIT_DB_URL` fallback. P1 values
   set `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` explicitly to one physical database. Equal
   URL strings are not proof: a test proves that the prepare writes and #985's `Enqueue`
   share one `pgx.Tx`. Missing configuration or an unproven boundary answers `not_ready`.
@@ -113,7 +134,9 @@ Sibling proposals read (mctl-gitops `agents-state`, all `status: proposed`):
 - `mctl-api/proposals/issue-954-...`: `provider_orders` (`pord_`), routes
   `/api/v1/provider-orders*` behind `PROVIDER_ORDERS_ENABLED`, the `aar_` created and
   consumed by the worker principal, Target
-  `provider:fake/connection:<cid>/install:<iid>@<rev>/order:<pord_>`.
+  `provider:fake/connection:<cid>/install:<iid>@<rev>/order:<pord_>`. Superseded
+  2026-11-09 (b): #954 is decomposed into #988 (orders, `ordr_`), #989 (`aar_`) and
+  #985 (dispatch); `pord_` and `providerorders` are history only.
 - `mctl-telegram/proposals/issue-1235-...`: the wire protocol `glovo-facade-mctl-api/v1alpha1`
   under `/api/v1/assistants/glovo/v1alpha1/` with headers `Authorization` (facade
   workload credential), `X-Mctl-Subject-Token`, `X-Mctl-Selected-Tenant`; routes
@@ -154,7 +177,8 @@ The `Prepare` sequence is not atomically satisfied merely by invoking existing `
 Keep the prefix #1235 froze, `/api/v1/assistants/glovo/v1alpha1/`. It is versioned, does
 not collide with `/mcp`, `/api/v1/glovo/*` or `/api/v1/provider-orders/*`, and it is what
 the facade already targets. Under it mctl-api serves thin join handlers that call the M1a
-and M1b packages in process (`internal/glovo`, `internal/providerorders`). The facade
+and M1b packages in process (`internal/glovo`; since (b) `internal/glovo/orders` of #988
+and the #989 `workitems` Glovo methods instead of `internal/providerorders`). The facade
 never calls `/api/v1/glovo/facade/*` or `/api/v1/provider-orders/*`. Those stay
 human/owner and worker routes. The M1a Glovo-audience gate keeps confining a bare Glovo
 token to `/api/v1/glovo/facade/*`, which this join API does not need. Whether M1a still
@@ -215,19 +239,21 @@ join routes without the facade credential (TM3 in #1235).
 
 ### 2a. Opaque reference mapping (M1, amended 2026-11-09)
 
-- Raw identifiers stay inside mctl-api: tenant names, `prn_` principal ids and `pord_`
-  order ids never appear in a bridge command projection or in a `GlovoControlInput`
+- Raw identifiers stay inside mctl-api: tenant names, `prn_` principal ids and #988's
+  internal `pord_` order key never appear in a bridge command projection or in a `GlovoControlInput`
   (mctl-agents#1044). The M1a `gcn_` connection and `gin_` install ids are random ULIDs
   that carry no personal data and match the bridge patterns, so they pass through
   unchanged.
-- mctl-api mints the opaque refs and keeps the only mapping, in `glovo_join_refs(kind,
-  ref, tenant, principal_id, subject_id, created_at)`:
+- mctl-api mints the opaque refs and keeps the only mapping, in #988's
+  `glovo.join_refs(kind, ref, tenant, principal_id, subject_id, created_at)`, through
+  #988 `MintJoinRefTx` (amended (b): #988 is the single owner of the table and its
+  minting helper; this slice calls it and creates no join-ref table of its own):
 
   | Kind | Ref | One per | Subject |
   |---|---|---|---|
   | `tenant` | `tnr_` | tenant | tenant name |
   | `principal` | `prr_` | (tenant, principal) | `prn_`; the same human in two tenants gets two unrelated refs |
-  | `order` | `ordr_` | `pord_` | `pord_` |
+  | `order` | `ordr_` | #988 order | the #988 order row's own `order_ref` (#988's `pord_` primary key stays unexported) |
 
 - Format: prefix plus 26 base62 characters from `crypto/rand` (the bridge's `randAlnum`),
   inside the bridge patterns `^(tnr|prr|ordr)_[A-Za-z0-9]{16,40}$`. Refs are random, never
@@ -283,10 +309,10 @@ Scopes are checked against the subject token.
 | `glovo_auth_status` | `GET /connection` | none | `{connection_state, connection_id?, provider_account_label?, expires_at?}` | `glovo:read` | `glovo.Connections.Current(tenant, principal)` | M1a #953 |
 | `glovo_connect_account` | `POST /connections` | `{idempotency_key}` | `{connection_id, state:"pending_handoff", handoff_url, expires_at}` | `glovo:basket:prepare` | `glovo.Connections.Create` (synthetic handoff URL) | M1a #953 |
 | `glovo_get_order_history` | `POST /orders:list` | `{limit<=20, cursor?}` | `{orders:[...], next_cursor?}` | `glovo:read` | `ReadBridge.History` | M1e (seam), mctl-api#986 (transport), mctl-telegram#1262 (fake data) |
-| `glovo_preview_reorder` | `POST /previews` | `{order_ref}` | `{preview_id, items, unavailable_items, fingerprint, expires_at}` | `glovo:read` | `ReadBridge.Preview` plus a `glovo_join_previews` row | M1e |
-| `glovo_get_basket` | `GET /basket` | none | `{store_name?, items, totals_label, fingerprint}` | `glovo:read` | `ReadBridge.Basket` | M1e / mctl-api#986 / mctl-telegram#1262 |
-| `glovo_prepare_order` | `POST /orders:prepare` | `{preview_id, idempotency_key}` | `{order_id, fingerprint, consent_request_id, expires_at}` | `glovo:basket:prepare` | `providerorders.Service.Prepare` -> `pord_` + `we_` + pending `aar_`, zero provider writes | M1b #954 |
-| `glovo_order_status` | `GET /orders/{order_id}` | none | `{state, outcome, handoff_url?}` | `glovo:read` | `providerorders.Service.OwnerStatus` | M1b #954 |
+| `glovo_preview_reorder` | `POST /previews` | `{order_ref}` (wire name unchanged; value is the #1059 `pho_` history-order ref) | `{preview_id, items, unavailable_items, fingerprint, expires_at}` | `glovo:read` | `ReadBridge.Preview` plus a `glovo_join_previews` row; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e |
+| `glovo_get_basket` | `GET /basket` | none | `{store_name?, items, totals_label, fingerprint}` | `glovo:read` | `ReadBridge.Basket`; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e / mctl-api#986 / mctl-telegram#1262 |
+| `glovo_prepare_order` | `POST /orders:prepare` | `{preview_id, idempotency_key}` | `{order_id, fingerprint, consent_request_id, expires_at}` | `glovo:basket:prepare` | #988 order (`ordr_`) + `we_` + #989 `CreateGlovoApprovalTx` pending `aar_`, zero provider writes; `order_id` is the `ordr_` | #988, #989 |
+| `glovo_order_status` | `GET /orders/{order_id}` | none | `{state, outcome, handoff_url?}` | `glovo:read` | #988 owner-path `Get` plus #989 `GlovoApprovalStatus` | #988, #989 |
 | (launch) | `GET /compatibility` | none | `{contract_version, contract_digest, api_version, dependencies:{connection_registry, provider_orders, read_bridge, control_worker, provider_worker}, deploy_ready}` | facade identity, no subject needed | `glovojoin.Readiness` | M1e |
 
 `consent_request_id` is the `aar_` id. The human decides it only through the existing
@@ -355,9 +381,13 @@ type ReadBridge interface {
 // GlovoReadResult{RequestID, Kind, ConnectionID, InstallRevision, Payload (schema per kind), Synthetic: true}
 ```
 
-- The join handler validates that the result echoes `RequestID`, `ConnectionID` and
-  `InstallRevision`, that `Synthetic` is `true`, and that `Payload` matches the kind's
-  schema. Anything else becomes `dependency_unavailable`.
+- Amended (b): the result carries no binding refs and the handler checks no echo.
+  #986 `FetchReadResult` takes every binding from the stored command row and checks
+  tenant, owner, `glovo:read`, expiry, connection and install revision. The handler
+  checks only that the kind and the #1059 schema version are the ones it asked for and
+  that `Payload` validates against the kind's #1059 schema. Anything else becomes
+  `dependency_unavailable`. The handler computes the approval-basket fingerprint itself
+  from the #1059 approval-basket projection of the preview or basket payload.
 - Implementations: `NotReadyBridge` (the default: every call gets `not_ready`,
   `dependency: read_bridge`); `FixtureBridge` (tests and harness only, built under the
   `glovojoin_fixture` tag so it cannot ship in the release image); and later
@@ -375,17 +405,19 @@ type ReadBridge interface {
 
 `POST /orders:prepare` runs as follows. Load the `gpv_` row by (id, tenant, principal),
 otherwise 404. Check it is unexpired, otherwise 409. Re-check that the connection is
-active and the install revision is current through M1a. Then call
-`providerorders.Service.Prepare(ctx, PrepareInput{Tenant, Owner, ConnectionID, Install,
-Fingerprint, Items, IdempotencyKey})`. In one transaction that call must create the
-`pord_`, a `we_` owned by the principal, and a pending `aar_` (`CreateActionApproval`,
-whose `IntentHash` covers the full Target string from #954 plus the fingerprint), and
-the workflow-start record of §6c. No provider effect row, no bridge command and no
+active and the install revision is current through #959 `LockOwnerShared` and
+`LiveConnectionTx` on the §6b transaction (L1, L2 shared). Then, in that one
+transaction (amended (b)): create the #988 order (`Create` + `Finalize`, which binds the
+connection and the approval-basket fingerprint; its `order_ref` is the `ordr_` returned
+as `order_id`), a `we_` owned by the principal, the pending `aar_` through #989
+`CreateGlovoApprovalTx` (which calls #988 `BindApproval`; its `IntentHash` is #989
+`GlovoIntent` over the binding and the fingerprint), and the workflow-start record of
+§6c. No provider effect row, no bridge command and no
 dispatch is created. Idempotency is
-`UNIQUE(requested_by, idempotency_key)` in M1b, and a replay with a different
+#988's idempotent create plus #989's `(requested_by, idempotency_key)`, and a replay with a different
 fingerprint gets 409 `idempotency_key_reused`. A replay with the same key and body returns
 the original body byte for byte with the header `Idempotent-Replayed: true` (M4); the
-body never gains a `replayed` field. The transaction is the one named in §6b. If M1b does not expose a verified transactional or compensating `Prepare`, `Readiness` reports `provider_orders: not_ready` and the route returns 503. A nominal `Prepare` method without tested cross-store atomicity and crash recovery does not satisfy readiness.
+body never gains a `replayed` field. The transaction is the one named in §6b. If #988 or #989 does not expose the verified tx-aware methods above, `Readiness` reports `provider_orders: not_ready` and the route returns 503. A nominal `Prepare` method without tested cross-store atomicity and crash recovery does not satisfy readiness.
 
 ### 6a. Enqueue and dispatch (M7, owner option b; owned by mctl-api#985)
 
@@ -405,33 +437,67 @@ body never gains a `replayed` field. The transaction is the one named in §6b. I
   (the `WorkflowID`/`RunID` that `EnqueueInput` needs for `bridge-result`); every write
   #985 makes can run on the §6b transaction boundary.
 
-### 6b. One database and one transaction boundary (M11, owner D2)
+### 6b. One database, one transaction boundary, one lock order (owner decision A)
 
-- Every write of the prepare transaction (join tables, `glovo_join_refs`, the M1b order
-  rows, the `we_` execution, the pending `aar_` and the workflow-start record), and every
-  write of #985's dispatch transaction including `bridge_commands`, runs on one `pgx.Tx`
-  opened from the bridge store's pool, `bridge.Store.Pool()` (`store.go:414`). The
-  work-item and order stores gain tx-aware variants of execution creation,
-  pending-approval creation and the M1b order writes that take that `pgx.Tx`. None
-  exists at `a9ca5814`/`ceac9ed6` (the work-item store has only its private `withTx`,
-  `internal/workitems/store.go:266`); no participant opens its own transaction inside the
-  shared one.
-- Configuration: Glovo never relies on the `AUDIT_DB_URL` fallback. P1 values set
-  `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` explicitly to one physical database. If
-  either is unset while Glovo is enabled, `Readiness` reports `provider_orders:
-  not_ready`. Removing the bridge's generic fallback (`main.go:1019-1021`) is
+Rewritten 2026-11-09 (b); this replaces the D2 text. Decision A supersedes D2.
+
+- **One physical database.** Every Glovo store lives in one Postgres database: the
+  bridge (`bridge_commands`, `bridge_read_results`), the work items and `aar_`
+  (`action_approval_requests`, `glovo.approval_bindings`), the #988 order tables and
+  `glovo.join_refs`, this slice's join tables, and the #959 `glovo.glovo_installs` /
+  `glovo.glovo_connections`.
+- **Explicit URLs, no fallback.** `GLOVO_DB_URL`, `COMMERCE_DB_URL` and
+  `WORK_ITEMS_DB_URL` must each be set explicitly while Glovo is enabled. None falls back
+  to `AUDIT_DB_URL` or to another of the three. A missing value is `provider_orders:
+  not_ready`. Removing #968's generic bridge fallback (`main.go:1019-1021`) is
   mctl-api#987.
-- Proof, not string equality: equal URLs are not accepted as evidence. A test runs the
-  prepare writes and #985's `Enqueue` in one `pgx.Tx`, injects a failure after the last
-  statement and asserts that nothing from either side committed. At startup, `to_regclass`
-  on the one pool must find every participating table; otherwise `not_ready`.
-- `GLOVO_DB_URL` (M1a connections and revocation, no fallback) is not part of the
-  transaction. Connection state and install revision are live reads. If it is a different
-  database, a revoke-after-approval-before-write test must prove there is no TOCTOU
-  window (the fake provider's write permit re-checks revocation through #985 and the #954
-  write fence); until that test passes the write fence stays blocked.
-- If tx-aware variants cannot be provided, the compensating state machine allowed by the
-  2026-11-08 amendment applies, with every intermediate state answering `not_ready`.
+- **Proof of one database, not URL equality.** #985 `control.ProveOneDatabase` writes a
+  random nonce through the bridge pool and reads it back through the work-items and Glovo
+  pools, checks `pg_is_in_recovery() = false`, finds every participating table with
+  `to_regclass` and checks the grants (#985 design §4). Any failure keeps every Glovo
+  write path `not_ready` for the life of the process.
+- **One transaction.** Every write of the prepare transaction (join tables, #988 order
+  and join refs, the `we_`, the pending `aar_`, the workflow-start record) and every write
+  of #985's dispatch transaction (including `bridge_commands`) runs on one `pgx.Tx`
+  opened from `bridge.Store.Pool()` (`store.go:414`). The connection read is on the same
+  transaction (#959 `LiveConnectionTx`), so revocation is no longer a separate-database
+  TOCTOU case. No participant opens its own transaction inside the shared one (the
+  work-item store has only its private `withTx`, `internal/workitems/store.go:266`; the
+  tx-aware variants are #989's `...Tx` methods). CI proves the boundary (#985 T20):
+  prepare writes plus dispatch in one `pgx.Tx`, a failure injected after the last
+  statement, nothing committed on either side.
+- **Schemas and roles.** Glovo tables live in the Postgres schema `glovo`, owned by the
+  migration role and created only through each slice's `ApplySchema` entry point. The
+  runtime roles get DML grants only, as in #959's role table: the Glovo runtime role
+  has DML on its own tables and EXECUTE on `bridge_cancel_open_for_connections`; the
+  bridge and work-items roles have USAGE on `glovo` and SELECT on installs and
+  connections, never UPDATE or DELETE.
+
+#### Canonical lock order (the only copy; every Glovo slice references it)
+
+| Level | Lock | Mode |
+|---|---|---|
+| L1 | advisory key `glovo-install/v1\|<tenant>` (#959) | shared for dispatch, cancel, permit, prepare, connect and connection revoke; exclusive for `Install`, `RevokeInstall`, `Reinstall` |
+| L2 | advisory key `glovo-owner/v1\|<tenant>\|<principal>` (#959) | shared for prepare, dispatch, cancel and permit; exclusive for #959 connection writes (including revoke) |
+| L3 | #988 order row | `FOR UPDATE` |
+| L4 | #989 `aar_` row | `FOR UPDATE` |
+| L5 | `bridge_commands` rows | `FOR UPDATE`, `ORDER BY command_id` |
+| L6 | #959 connection row | read under L2, no row lock |
+
+A path may skip levels but never takes a lower level after a higher one.
+
+| Path | Levels taken, in order |
+|---|---|
+| #957 prepare | L1 sh, L2 sh, L6 read, L3 (new order), L4 (new `aar_`) |
+| #985 dispatch / cancel | L1 sh, L2 sh, L6 read, L3, L4, L5 |
+| Bridge permit | `WriteFence.PreLock` (#989): L1 sh, L2 sh, L3, L4; then `lockOwned`: L5; then `Check` |
+| #989 owner decision | L4 only |
+| #959 revokers (`Revoke`, `RevokeForMembership`, `RevokeInstall`, `Reinstall`) | L1 (sh, or ex for install changes), L2 ex, connection rows, then the revocation hook `bridge_cancel_open_for_connections`: L5 `ORDER BY command_id`, same transaction |
+| Provider claim, result, expiry | L5 only |
+| #989 sweeper (replaces an outcome recorder) | L4 `SKIP LOCKED`, then a plain read of the terminal command (no L5) |
+
+Deterministic tests for the races are #985 T-series and #989 T21; this slice adds the
+prepare-versus-revoke case (tasks.md T12).
 
 ### 6c. Workflow-start outbox (owner D5, owned by this slice)
 
@@ -482,7 +548,7 @@ body never gains a `replayed` field. The transaction is the one named in §6b. I
 
 `internal/glovojoin/harness_test.go` (requires `TEST_DATABASE_URL`, build tag
 `glovojoin_fixture`) builds the real `api.NewRouter` with the real `workitems.Store`, the
-M1a `glovo` store, the M1b `providerorders` store, a test OAuth server that mints real
+M1a `glovo` store, the #988 order store and the #989 `aar_` methods (amended (b)), a test OAuth server that mints real
 local-OAuth Glovo tokens, and `FixtureBridge`. It then replays every golden fixture and
 the negative matrix (tasks.md T6). An exported `cmd/glovo-join-harness` (fixture tag)
 serves the same stack on a local port so the mctl-telegram facade's integration test can
@@ -491,7 +557,8 @@ target real mctl-api handlers instead of `fakeapi`.
 ### 9. Readiness and launch matrix
 
 `glovojoin.Readiness` probes each dependency: the M1a store is configured and has its
-schema version, the M1b store and `Prepare` are present, the bridge is not
+schema version, the #988 and #989 stores are present and #985 `ProveOneDatabase` passed
+(amended (b)), the bridge is not
 `NotReadyBridge`, and the control and provider worker heartbeats are seen through the
 bridge. `docs/glovo-join.md` holds the launch compatibility matrix (facade image ×
 mctl-api release × control worker × provider worker × gitops revision × contract
@@ -525,8 +592,8 @@ code, tenant and request_id.
 
 ## Platform impact
 
-- **Migrations:** the tables `glovo_join_previews`, `glovo_join_scope_refs` and
-  `glovo_join_refs`, created by the migration entry point under the migration role
+- **Migrations:** the tables `glovo_join_previews` and `glovo_join_scope_refs` (the
+  join-ref table is #988's `glovo.join_refs`), created by the migration entry point under the migration role
   (amended 2026-11-09; the runtime role gets DML only), and one column on the OAuth authorization-code and
   refresh-family store for the selected tenant (nullable, ignored for non-Glovo
   resources). Both are additive.
@@ -546,6 +613,6 @@ code, tenant and request_id.
   - Cross-repo drift. Mitigation: a digest pinned on both sides plus golden fixtures.
   - Premature launch claim. Mitigation: `deploy_ready` is false until all dependencies
     are ready, and the docs require M1a and M1b to be merged first.
-  - M1b API shape differs from the assumed `Prepare` and `OwnerStatus`. Mitigation: the
+  - The #988/#989 tx-aware API differs from what §6 assumes. Mitigation: the
     join layer depends on a narrow interface `glovojoin.Orders`, and a mismatch shows up
     as `not_ready` rather than a broken route.

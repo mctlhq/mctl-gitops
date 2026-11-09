@@ -106,6 +106,19 @@ Revoke and reinstall atomicity
   state `uninstalled` (on revoke), and move every live connection of that
   tenant bound to an older revision to `revoked` with reason
   `install_revoked` or `install_reinstalled`.
+- WHEN any revoker ends a connection (`Revoke`, including reason
+  `membership_removed`, `RevokeInstall`, `Reinstall`, or a `Transition` to a terminal
+  state) THE SYSTEM SHALL call the installed `RevocationHook` with the ended ids in the
+  same transaction, after taking L1 and L2, and SHALL roll back if the hook fails.
+- WHILE no `RevocationHook` is installed THE SYSTEM SHALL report
+  `revocation_hook_missing` from `Ready`.
+- WHEN `LockOwnerShared` or `LiveConnectionTx` is called THE SYSTEM SHALL run on the
+  caller's transaction and SHALL NOT begin or commit one.
+- WHILE `GLOVO_DB_URL` is not set explicitly THE SYSTEM SHALL report `not_ready`; it
+  SHALL NOT fall back to `AUDIT_DB_URL`.
+- THE SYSTEM SHALL create every object in the Postgres schema `glovo`, owned by the
+  migration role, and SHALL grant the bridge and work-items runtime roles only `USAGE`
+  on the schema and `SELECT` on `glovo_installs` and `glovo_connections`.
 - WHILE a `Connect` races a connection revoke or an install
   revoke/reinstall for the same tenant THE SYSTEM SHALL serialize them so
   that after both commit no live connection references a revoked install
@@ -180,6 +193,13 @@ Schema safety
   behind a feature flag. If the owner wants the schema deployed earlier,
   that is a one-line follow-up.
 - The deployed mctl-api configuration could not be observed (see
-  design.md, Deployed state checked). Which database URL slice 4 will use
-  (a new `GLOVO_DB_URL` or the existing `AUDIT_DB_URL` fallback) is left
-  to slice 4.
+  design.md, Deployed state checked). Resolved by owner decision A
+  (2026-11-09 (b)): `GLOVO_DB_URL` is required, names the same physical
+  database as the bridge and the work items, and never falls back to
+  `AUDIT_DB_URL`.
+- OPEN-959-1. Who detects that an owner lost tenant membership and calls
+  `RevokeForMembership` (a membership-change hook in the tenant role store,
+  or a sweeper). Until it exists, the #989 fence's live membership read is
+  the only guard.
+- OPEN-959-2. Provisioning of the migration and runtime roles (shared with
+  OPEN-985-6, OPEN-988-3, OPEN-989-2).

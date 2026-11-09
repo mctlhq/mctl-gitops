@@ -34,46 +34,85 @@ contract for writes and for `read_status`.
 
 ## Acceptance criteria (EARS)
 
+Amended 2026-11-09 (b); design.md has the finding -> fix table.
+
+v1alpha1 and versioning
 - WHEN the v1alpha2 contract lands THE SYSTEM SHALL keep every file under
-  `docs/spikes/1043/` (the v1alpha1 schemas and fixtures) byte-identical, and every
-  v1alpha1 fixture SHALL still validate, or fail, exactly as before.
-- WHEN a read command whose `kind` is `read_history`, `read_preview` or `read_basket`
-  carries `schema_version` `bridge.mctl.ai/v1alpha2` and every required read field
-  (`command_id`, `kind`, `attempt`, `tenant_ref`, `principal_ref`, `connection_ref`,
-  `install_revision_ref`, `request_id`, `issuer`, `audience`, `nonce`, `issued_at`,
-  `expires_at`, `ttl_seconds`, `params`) THE SYSTEM SHALL validate it against
-  `read-command.schema.json`.
-- IF a v1alpha2 read command carries any of `execution_id`, `work_item_id`, `order_ref`,
-  `workflow_id`, `approval_ref` or `intent_hash` THEN THE SYSTEM SHALL reject it.
-- IF a v1alpha2 read command has `kind` `prepare`, `read_status`, `quote` or any kind
-  outside the three read kinds THEN THE SYSTEM SHALL reject it.
-- IF a read command's `params` do not match the per-kind params shape for its `kind`
+  `docs/spikes/1043/` byte-identical, pinned in T1 by the mctl-api PROVENANCE sha256
+  values (command `b857f62b…6dae1`, result `c91bb86e…9354f`) and the fixture hashes.
+- THE SYSTEM SHALL treat any byte change to a pinned schema as a new `schema_version` and
+  `$id`. Nothing is "additive within a version".
+- THE README SHALL require that each claimed command carries its own `schema_version`,
+  that the claim response states its protocol version, that mctl-api leases a v1alpha2
+  command only to a provider whose server-side config declares v1alpha2, and that a
+  provider drops an unknown version without side effects.
+
+Read command
+- WHEN a read command has `schema_version` `bridge.mctl.ai/v1alpha2`, a `kind` of
+  `read_history`, `read_preview` or `read_basket`, and every required field of design.md
+  THE SYSTEM SHALL validate it against `read-command.schema.json`.
+- IF it carries any of `execution_id`, `work_item_id`, `order_ref`, `workflow_id`,
+  `approval_ref` or `intent_hash`, or another kind, or params that do not match its kind
   THEN THE SYSTEM SHALL reject it.
-- WHEN a read result with `outcome` `succeeded` carries a `payload` matching the payload
-  shape for its `kind` and a `payload_digest` THE SYSTEM SHALL validate it against
-  `read-result.schema.json`.
-- IF a read result's `outcome` is not `succeeded` THEN THE SYSTEM SHALL require that it
-  carries no `payload` and no `payload_digest`.
-- IF a read result payload exceeds a schema bound (array `maxItems`, string `maxLength`,
-  integer range) THEN THE SYSTEM SHALL reject it through the schema.
-- IF the JCS-canonical form of a read result `payload` is larger than 65536 bytes THEN THE
-  SYSTEM SHALL reject it in the reference validator (`check_read_result`), even when every
-  per-field bound passes.
-- WHEN the digest of a payload is computed THE SYSTEM SHALL compute
-  `"sha256:" + lowercase hex(SHA-256(JCS(payload)))`, where JCS is RFC 8785.
-- IF a read result's `payload_digest` does not equal the digest recomputed from its
-  `payload` THEN THE SYSTEM SHALL reject it in the reference validator.
-- WHEN the golden digest vectors are run against the Python reference implementation THE
-  SYSTEM SHALL produce, for every vector, the exact canonical bytes and digest stored in
-  the vector file. The vectors SHALL cover key reordering, unicode (including non-BMP
-  characters and UTF-16 code-unit key ordering), numbers (integers, negative zero,
-  exponents, shortest round-trip doubles) and nested arrays and objects.
-- WHILE the contract is a v1alpha2 artifact THE SYSTEM SHALL use only synthetic data in
-  fixtures and vectors: no real provider identifiers, addresses, emails, phone numbers,
-  tokens or credential-shaped strings.
-- WHEN the contract files change THE SYSTEM SHALL fail the test suite unless
-  `docs/contracts/bridge/v1alpha2/SHA256SUMS` matches the files, so that consumers can pin
-  by sha256.
+- THE SYSTEM SHALL use these per-kind params: history `{limit 1..20, cursor?}`, preview
+  `{history_order_ref}` (`pho_`), basket `{}`.
+
+Read result
+- THE SYSTEM SHALL reject a read result that carries `tenant_ref`, `principal_ref`,
+  `connection_ref` or `install_revision_ref`.
+- IF `outcome` is `succeeded` THEN `payload` and `payload_digest` SHALL be required;
+  otherwise both SHALL be forbidden.
+- THE SYSTEM SHALL declare `required` on every payload, order, line and basket object, so
+  that `{}` and any object missing a field are invalid.
+- THE SYSTEM SHALL bound every string by pattern, with `item_name` and `store_name`
+  `^[A-Za-z0-9 .,'()-]{1,60}$`, `error_detail` printable ASCII up to 128 bytes, and
+  `placed_on` a date without time.
+
+Approval basket and fingerprint
+- THE SYSTEM SHALL define `approval-basket.schema.json` with `v`, `store_ref`, `currency`,
+  `lines` (`item_code`, `quantity`, `unit_price_minor`), `subtotal_minor`,
+  `delivery_fee_minor`, `service_fee_minor`, `discount_minor` and `total_minor`, all
+  required, and no display, availability or time field.
+- IF the lines are not sorted ascending by `item_code`, or an `item_code` repeats, or
+  `subtotal_minor` or `total_minor` does not match the arithmetic of design.md THEN the
+  reference validator SHALL reject the basket.
+- THE SYSTEM SHALL define `basket_fingerprint` as
+  `"sha256:" + hex(SHA-256(JCS(approval_basket)))`, the single M1 fingerprint, and SHALL
+  ship `vectors/basket-fingerprint.json` with permuted-key, price-change and fee-change
+  vectors and the must-reject cases of design.md.
+- THE SYSTEM SHALL keep the read `payload_digest` a transport-integrity digest that is
+  never used as an approval fingerprint.
+
+Size
+- IF a result body is larger than 16384 bytes, or `JCS(payload)` is larger than 12288
+  bytes THEN the reference validator SHALL reject it with `payload_too_large`.
+- THE README SHALL record the measured worst cases (history 10,673 B, basket 7,109 B,
+  preview 5,605 B, envelope 910 B).
+
+Raw bytes, numbers and digest
+- THE SYSTEM SHALL validate results and commands from raw bytes. Before schema
+  validation it SHALL reject duplicate keys at any depth, lone surrogate escapes, `NaN`,
+  `Infinity`, numbers outside ±(2^53-1), and any non-integer token (`1.0`, `1e2`, `true`)
+  in an integer position.
+- THE SYSTEM SHALL ship `vectors/must-reject.json` as raw text, and the README SHALL
+  require every consumer, Go included, to reject every entry.
+- THE SYSTEM SHALL compute `payload_digest = "sha256:" + hex(SHA-256(JCS(payload)))` with
+  RFC 8785, testing `bool` before `int`. Every vector in `vectors/jcs-digest.json` SHALL
+  reproduce byte for byte, cross-checked against an independent Go implementation.
+- THE README SHALL require consumers to store exactly `JCS(payload)` (never JSONB) and to
+  re-verify its digest on every serve.
+
+Consumer duties
+- THE README SHALL list the consumer MUSTs of design.md: bindings only from the
+  consumer's own row, kind and id match, TTL, the raw-bytes pre-check, digest recompute,
+  re-checks at serve time (binding, TTL, revocation, install revision, `glovo:read`),
+  never persisting `lease_token`, no payload in outbox, signal, audit, log or Temporal
+  history, and computing the fingerprint itself.
+
+Hygiene
+- THE SYSTEM SHALL use only synthetic data in fixtures and vectors.
+- WHEN the contract files change THE SYSTEM SHALL fail the tests unless `SHA256SUMS`
+  matches the files.
 
 ## Out of scope
 
@@ -87,29 +126,24 @@ contract for writes and for `read_status`.
   Temporal signal.
 - `prepare`: it stays a write in mctl-api (mctlhq/mctl-api#957 D5) and is not a read kind.
 - Changing v1alpha1, or moving `read_status` to v1alpha2.
+- A v1alpha2 write command (OPEN-1059-1).
 - Real provider access of any kind.
 - Changing `orchestrator/context_snapshot.canonical_json`, which is a different, non-JCS
   canonical form used by context snapshots.
 
 ## Open questions
 
-- The issue says the v1alpha1 command requires `workflow_id` and that the schemas were
-  authored in #1045. In this clone, v1alpha1 lives at `docs/spikes/1043/` and its command
-  schema has no `workflow_id` field. This proposal treats `docs/spikes/1043/` as the
-  v1alpha1 source and still lists `workflow_id` among the forbidden read fields. If #1045
-  moved or changed v1alpha1 on a branch not visible here, the "v1alpha1 unchanged" test
-  must target that location instead.
-- Ref prefixes for the new identifiers are not given by the issue. Proposed:
-  `install_revision_ref` `^irv_[A-Za-z0-9]{16,40}$`, `request_id` `^rdq_[A-Za-z0-9]{26}$`,
-  basket `basket_ref` `^bsk_[A-Za-z0-9]{16,40}$`. mctl-api's reviewer should confirm or
-  replace them before approval.
-- Per-kind params and payload fields are not specified by the issue beyond "typed and
-  bounded". The proposed shapes (design.md) are synthetic and minimal. #986 and the
-  provider slice may need more fields, which would be an additive v1alpha2 revision
-  approved before landing.
-- Size cap value: 65536 bytes of JCS-canonical payload is proposed. The issue sets no
-  number.
-- Whether read commands keep `lease_token` and `attempt` (lease-based claim, as in
-  v1alpha1) or are single-shot in-process. This proposal keeps both, as optional
-  `lease_token` on the command and required on the result, matching v1alpha1's lease
-  model.
+Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefixes
+(P3-7), the per-kind fields (P1-3, §Crosswalk), the size cap (P1-1), and `lease_token`
+(kept on the result, never persisted by a consumer).
+
+- OPEN-1059-1. The write-side shape: the `place_order_fake` command payload must carry
+  the approval basket so the #989 fence can recompute the fingerprint (mctl-api
+  OPEN-985-8). The v1alpha1 payload is `{item_codes, quantity_total, note}`. The owner
+  decides whether this issue adds a v1alpha2 write command or a separate contract issue
+  does. This proposal does not add one.
+- OPEN-1059-2. Who changes the mctl-api claim response to a versioned envelope and
+  `BridgeProviderConfig` to declared versions: #986 (proposed there) or a separate
+  slice.
+- OPEN-1059-3. mctl-telegram#1262 must vendor these files and pass `must-reject.json`
+  with its Go parser; tracked on that issue.

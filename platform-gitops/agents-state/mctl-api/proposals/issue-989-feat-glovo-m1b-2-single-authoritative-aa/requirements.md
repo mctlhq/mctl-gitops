@@ -22,6 +22,13 @@ action kinds, and a Glovo receipt lifecycle on the same row. It also defines how
 lifecycle composes with the bridge's `effect_state`, so that each question has exactly
 one source of truth.
 
+Amended 2026-11-09 (b); design.md has the finding -> fix table. The amendment makes the
+fence recompute the fingerprint and intent hash from the written command payload,
+enforces the lifecycle in the database under a migration role, follows the one lock
+order of #957 §6b, drops the order `approved` state, records the decision as
+`resource_owner` under a registered policy, follows owner decision A for readiness, and
+provides the interfaces #985 and #1044 need.
+
 ## User stories
 
 - AS the owner of a Glovo order I WANT to approve or refuse its one `aar_` myself SO THAT
@@ -42,122 +49,114 @@ one source of truth.
 
 Binding and creation
 - WHEN #957 prepare calls `CreateGlovoApprovalTx` on its `pgx.Tx` THE SYSTEM SHALL insert
-  exactly one `action_approval_requests` row with an action kind in
-  `{glovo.place_order_fake, glovo.cancel_order_fake}`, state `pending`, and one immutable
-  `glovo_approval_bindings` row in the same transaction. That row records tenant, owner
-  principal id (`prn_`), `we_`, `ordr_`, `gcn_`, install id and revision, basket
-  fingerprint, provider and `expires_at`.
-- THE SYSTEM SHALL compute `intent_hash` with the existing `workitems.IntentHash`. Every
-  binding enters the hash through the canonical Glovo `Target` string and an
-  `ArgsDigest` equal to the basket fingerprint. A client-sent hash that differs is
-  refused with `intent_hash_mismatch`.
-- IF an order already has a non-terminal Glovo `aar_` THEN THE SYSTEM SHALL refuse a
-  second one. The order row is locked and its `approval_ref` must be empty, so there is
-  at most one `aar_` per order.
-- WHILE a binding row exists THE SYSTEM SHALL refuse every UPDATE to it except the
-  single write of `command_id` from empty to a `cmd_` value. A database trigger enforces
-  this.
+  one `action_approval_requests` row of kind `glovo.place_order_fake` or
+  `glovo.cancel_order_fake`, its `glovo.approval_bindings` row, and the #988
+  `BindApproval` write, all in that transaction.
+- THE SYSTEM SHALL write a complete governance context at create (`intent_source =
+  execution:<we_>`, registered policy rule and version, `policy_decision`,
+  `policy_reasons`).
+- IF a second `aar_` is created for the same `order_ref` THEN THE SYSTEM SHALL refuse it
+  through `UNIQUE (order_ref)` with `approval_replayed`.
+- IF the generic create route receives any `glovo.` kind THEN THE SYSTEM SHALL refuse it.
+- THE SYSTEM SHALL accept only the two exact Glovo kinds for any `glovo.`-prefixed kind,
+  enforced by a database CHECK.
 
 Decision
-- WHEN a decision is posted for a Glovo-kind `aar_` THE SYSTEM SHALL accept it only from a
-  direct human caller whose principal id equals the binding's owner principal id and
-  who holds a live tenant role of at least `developer` on the binding's tenant. That
-  caller is not a service, agent, CI, relayed or surface caller, and does not hold a
-  Glovo-audience token.
-- IF the caller is a platform admin but is not the owner THEN THE SYSTEM SHALL refuse a
-  Glovo-kind decision with 403 `approval_decider_forbidden`.
-- WHILE an `aar_` has any non-Glovo action kind THE SYSTEM SHALL keep the existing rule
-  that only a human admin acting directly decides. The owner-decider rule SHALL NOT
-  apply to any other kind.
-- IF the caller has no role on the binding's tenant THEN THE SYSTEM SHALL answer 404
-  `approval_not_found` and leak nothing.
-- WHEN an approve and a refuse for the same `aar_` race THE SYSTEM SHALL let exactly one
-  succeed. The other gets 409 `approval_already_decided`.
-- IF the only input is a `hir_` human-input answer or a model or tool output THEN THE
-  SYSTEM SHALL make no state change to any `aar_`, order or bridge command (zero effects).
+- WHEN the bound owner, a resolved human principal with live tenant membership read
+  directly (no admin pass), decides a pending Glovo `aar_` THE SYSTEM SHALL move it to
+  `approved` or `denied`, writing only the `aar_` row.
+- THE SYSTEM SHALL record `authority_basis = resource_owner` for a Glovo approve, and
+  SHALL pass `guardDecision` in strict mode.
+- IF any non-admin caller cannot decide the id (unknown, non-Glovo, someone else's, or a
+  failed check) THEN THE SYSTEM SHALL answer the same 403 `approval_decider_forbidden`.
+- IF an admin who is not the owner, a service, an agent, a CI caller, a relayed or
+  surface caller, or a Glovo-audience token decides a Glovo `aar_` THEN THE SYSTEM SHALL
+  refuse it.
+- THE SYSTEM SHALL leave the decision rules of every non-Glovo kind unchanged.
 
-Receipt lifecycle (Glovo kinds only)
-- THE SYSTEM SHALL expose the receipt states
-  `pending -> approved -> reserved -> consumed | unknown`, plus `refused` (stored as
-  `denied`) and `expired` (derived lazily from `expires_at` while the state is
-  `pending`, `approved` or `reserved`).
-- WHEN #985 dispatch calls `ReserveGlovoApprovalTx(tx, id, cmd_)` THE SYSTEM SHALL move
-  `approved -> reserved` with one compare-and-set. The CAS is guarded by state, intent
-  hash, unexpired and fresh state, and an empty `command_id`, and it writes `command_id`
-  in the same statement.
-- WHEN the bridge calls `WriteFence.Check(ctx, tx, FenceBinding)` THE SYSTEM SHALL lock
-  the `aar_` row `FOR UPDATE` and verify all of the following:
-  - the kind is a Glovo kind and the state is `reserved`;
-  - `command_id`, `we_`, work item, tenant, owner, connection, install revision and
-    intent hash equal the stored command row;
-  - the expiry and `fresh_until` have not passed;
-  - the owner still holds a live tenant role;
-  - the connection is still active at the bound install revision;
-  - the order's `final_basket_fingerprint` equals the bound fingerprint.
+Lifecycle, enforced in the database
+- THE SYSTEM SHALL allow a Glovo `aar_` only the transitions `pending→approved`,
+  `pending→denied`, `approved→reserved`, `approved→denied`, `reserved→consumed` and
+  `reserved→unknown`, through a trigger, so raw SQL by the runtime role is refused too.
+- THE SYSTEM SHALL treat `consumed`, `unknown` and `denied` as final and SHALL never
+  return a Glovo `aar_` to `approved`.
+- THE SYSTEM SHALL keep `action_kind`, `intent_hash`, `expires_at`, `execution_id`,
+  `work_item_id`, `subject_principal_id`, `requested_by` and the policy fields of a
+  Glovo row immutable, and SHALL refuse `DELETE` of a Glovo row.
+- THE SYSTEM SHALL require, at commit, one binding row per Glovo `aar_`.
+- WHILE a `pending`, `approved` or `reserved` row is past `expires_at` or `fresh_until`
+  THE SYSTEM SHALL expose it as `expired`. A `reserved` row past expiry SHALL be able to
+  move only to `unknown`.
+- THE SYSTEM SHALL refuse every generic consume, reserve, settle or mark-executed path on
+  a Glovo row.
 
-  Only when every check passes SHALL it move `reserved -> consumed`, in the caller's
-  transaction, and return an opaque fence reference.
-- IF the order's fingerprint differs from the bound fingerprint at the fence THEN THE
-  SYSTEM SHALL refuse with `fingerprint_changed` (wrapping `bridge.ErrWriteFenceRefused`)
-  and issue no permit.
-- WHILE a Glovo `aar_` is `consumed`, `unknown`, `refused` or `expired` THE SYSTEM SHALL
-  never move it to any other state. No Glovo `aar_` SHALL ever reach `in_flight` or
-  `executed`, or return to `approved`.
-- IF a Glovo `aar_` is presented to the generic consume, reserve, settle or
-  mark-executed paths (HTTP or MCP receipt gate) THEN THE SYSTEM SHALL refuse it with
-  `approval_kind_not_spendable_here`.
-- WHEN a connection is reconnected (a new `gcn_` or install revision) THE SYSTEM SHALL
-  NOT let any `aar_` bound to the old connection or revision pass the fence. A reconnect
-  never revives a receipt.
-- WHEN the bridge command bound to a `reserved` `aar_` ends without a permit (expired,
-  cancelled or completed with effect `none` or `not_performed`) THE SYSTEM SHALL move
-  the `aar_` to `unknown` in the same transaction. It is never released back to
-  `approved`.
+Reserve, revoke, status
+- WHEN #985 reserves THE SYSTEM SHALL require every command field to equal the binding,
+  SHALL be idempotent for the same `cmd_`, and SHALL refuse a different `cmd_` with
+  `approval_replayed`.
+- WHEN #985 cancels before dispatch THE SYSTEM SHALL move a `pending` or `approved` `aar_`
+  to `denied` through `RevokeGlovoApprovalTx`.
+- WHEN the control worker reads an approval THE SYSTEM SHALL return ids and enums only,
+  and `not_found` outside its `tenants` bound.
 
-Composition with the bridge (one source of truth)
-- THE SYSTEM SHALL hold the invariant: a Glovo `aar_` is `consumed` if and only if a
-  `bridge_write_permits` row exists for its `command_id`. Both are written in the one
-  permit transaction.
-- THE SYSTEM SHALL keep the provider outcome only in `bridge_commands.effect_state`
-  (`permitted -> succeeded | failed | not_performed | unknown`). It SHALL NOT copy that
-  outcome onto the `aar_`.
+Fence
+- WHEN `permitTx` runs for a Glovo command THE SYSTEM SHALL take L1 shared, L2 shared, L3
+  and L4 in `PreLock` before the command lock, per #957 §6b.
+- THE SYSTEM SHALL recompute the basket fingerprint from the stored command payload's
+  approval basket, and the intent hash from the command row and that fingerprint, and
+  SHALL refuse the permit unless both equal the `aar_` binding, the order's final
+  fingerprint and the command's stored `intent_hash`.
+- THE SYSTEM SHALL require the `aar_` to be `reserved` for this `cmd_`, unexpired, the
+  owner to be a live member, the connection live at the bound install revision, and the
+  order `dispatched` for this `cmd_`, and SHALL then consume the `aar_` in the same
+  transaction as the `bridge_write_permits` row.
+- IF any check fails THEN THE SYSTEM SHALL roll back the permit and answer with the code
+  of the design §10 map.
 
-Secrecy
-- THE SYSTEM SHALL write only ids (`aar_`, `cmd_`, `we_`, `ordr_`), state names and
-  refusal codes to `slog`, audit rows and any Temporal input or signal this slice
-  touches. It SHALL NOT write a basket, line items, fingerprint, lease token, permit
-  token or credential to them.
+Outcome
+- WHEN a reserved command ends without a permit THE SYSTEM SHALL move the `aar_` to
+  `unknown`, through #985 cancel or the sweeper, without locking L4 after L5.
+- THE SYSTEM SHALL keep the provider outcome only in `bridge_commands.effect_state`.
 
 Readiness
-- WHILE `glovo.Default` is closed, or the co-location proof of #985 has not passed, THE
-  SYSTEM SHALL leave the bridge on `refusingFence`. Every Glovo approval method SHALL
-  answer `not_ready`.
+- WHILE `GLOVO_DB_URL`, `COMMERCE_DB_URL` or `WORK_ITEMS_DB_URL` is not set explicitly,
+  #985 `ProveOneDatabase` has not passed, a trigger is missing or disabled, a table is
+  owned by the runtime role, the policy is unregistered, or a collaborator is nil, THE
+  SYSTEM SHALL keep `refusingFence` and answer `not_ready` from every Glovo approval
+  method.
+- THE SYSTEM SHALL create its schema objects only through `ApplyGlovoApprovalSchema`
+  under the migration role.
+
+Secrecy
+- THE SYSTEM SHALL never write `args_digest`, a basket, a credential or a token to audit
+  rows or logs for Glovo kinds.
+- THE SYSTEM SHALL carry `approval_ref` and the fingerprint in `GlovoControlInput` as
+  the merged #957 §6c and #1044 M10 specify, and nothing else from this slice.
 
 ## Out of scope
 
-- The order index tables and `Transition` (#988), the prepare route and its transaction
-  (#957), the dispatch and cancel routes, the control-worker principal and
-  `bridge.Store.Enqueue` calls (#985), and connection, team-grant and allowlist storage
-  (#959/#960). This slice only calls their interfaces.
-- Any real (non-fake) Glovo provider, payments, or opening `glovo.Default`.
-- Changes to the generic `aar_` behaviour of non-Glovo kinds, including the
-  `in_flight -> consumed` release used by the MCP receipt gate.
-- Removing the bridge's `AUDIT_DB_URL` fallback (mctl-api#987).
+- The order tables (#988), the prepare route (#957), dispatch and cancel (#985), the
+  connection store and revokers (#959/#960). This slice calls their interfaces.
+- The approval basket schema and vectors (mctl-agents#1059).
+- Any real Glovo provider, payments, or opening `glovo.Default`.
+- Generic `aar_` behaviour of non-Glovo kinds.
 
 ## Open questions
 
-- The issue lists `unknown` as a terminal state next to `consumed`. This proposal makes
-  `consumed` mean "the authorization was spent: a permit was issued". `unknown` means
-  "reserved, but the command ended without a permit, or its state could not be read".
-  The provider outcome stays in the bridge's `effect_state`. Under the alternative,
-  `consumed` and `unknown` would mirror the provider outcome, which would duplicate the
-  bridge state. The reviewer should confirm the chosen reading.
-- A reserved receipt whose command expired without a permit provably caused no write.
-  This proposal still moves it to `unknown`, which is fail-closed and never reusable.
-  The owner prepares a new order. Should it instead read `expired`?
-- Refused is stored as the existing `denied` and exposed as `refused` in the Glovo view,
-  so the shared CHECK constraint does not gain a synonym. The reviewer should confirm.
-- The minimum live tenant role for the owner-decider is assumed to be `developer`,
-  matching WorkItem writes. The issue does not say.
-- The deployed values of `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` for mctl-api could
-  not be observed (see design.md, "Deployed state checked").
+Closed by the amendment: the `consumed`/`unknown` reading (kept: `consumed` = spent at a
+permit; provider outcome in `effect_state`), expired versus `unknown` (`unknown` wins),
+and refused stored as `denied` (kept).
+
+- OPEN-989-1. Ownership of `action_approval_requests` moves to the migration role, and
+  the generic work-items DDL moves out of `NewStore` (task 2b). This changes generic
+  work-items startup, so the owner decides. Until then Glovo stays `not_ready`.
+- OPEN-989-2. Role provisioning for the migration and runtime roles (shared with
+  OPEN-985-6 and OPEN-988-3).
+- OPEN-989-3. Minimum live tenant role for the owner-decider: `developer` is proposed.
+- OPEN-989-4. mctl-telegram#1262 must write exactly the command payload's approval
+  basket lines and never a re-read basket; it vendors #1059. Tracked there.
+- OPEN-989-5. The fingerprint of a low-entropy fake basket travels in
+  `GlovoControlInput` (Temporal history), as the merged #957/#1044 contracts say. The
+  owner accepts this for fake-only M1, or asks for a keyed digest before real data.
+- OPEN-989-6. The `place_order_fake` command payload must carry the approval basket
+  (= OPEN-985-8 = mctl-agents OPEN-1059-1).
