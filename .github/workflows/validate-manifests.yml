@@ -315,6 +315,12 @@ jobs:
 
       # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
       # seed must not come back and every agent secretKeyRef must be classified.
+      # mctl-agents#1007 B4: the required checks of the main-protection ruleset
+      # are matched by job id. Renaming `validate`, adding a job-level `if` or
+      # a paths filter would block every PR (or let a skipped check pass).
+      - name: Pin required-check job ids
+        run: python3 tests/test_required_check_job_ids.py
+
       - name: Validate agent credential delivery
         run: |
           set -euo pipefail
