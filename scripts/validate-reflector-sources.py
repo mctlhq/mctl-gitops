@@ -58,7 +58,7 @@ Test seam: the module-level REVERT set disables one rule at a time. Only the
 tests set it (to prove each rule is load-bearing); there is deliberately no
 environment variable or flag that can weaken the guard from outside.
 """
-import gzip, io, os, re, sys, tarfile, zipfile
+import base64, binascii, gzip, io, os, re, sys, tarfile, zipfile
 try:
     import yaml
 except ImportError:                      # reported as UNKNOWN by main(), never as GREEN
@@ -234,12 +234,15 @@ def match_all(raw):
 
 _JOIN = re.compile(r"\\\r?\n[ \t]*")
 
+# A `!!binary` scalar spells its text in base64, so a key can be hidden from every textual check.
+BINARY_TAG = re.compile(r"!!binary|yaml\.org,2002:binary", re.I)
+
 def mentions(dtext):
     """Whether a document can spell a Reflector key at all. Every key contains the whole word `emberstack` once the
     transformations a YAML scalar may apply (escapes, `\\`-newline joins) are undone; case-insensitive on purpose.
     A miss here would skip the structural parse."""
     t = normalise(_JOIN.sub("", dtext)).lower()
-    return "emberstack" in t
+    return "emberstack" in t or bool(BINARY_TAG.search(t))
 
 def strip_comment(line):
     """Drops a YAML comment (a `#` at the start or after whitespace, outside quotes) from one line."""
@@ -258,7 +261,8 @@ def strip_comment(line):
     return line
 
 TRICKS = [re.compile(p) for p in (r"(?m)(?:^|[\s\[{,:-])&[\w-]", r"(?m)(?:^|[\s\[{,:-])\*[\w-]", r"<<\s*:",
-                                  r"(?m)^\s*\?(?:\s|$)", r"(?m)\\[ \t]*$")]
+                                  r"(?m)^\s*\?(?:\s|$)", r"(?m)\\[ \t]*$",
+                                  r"!!binary|yaml\.org,2002:binary", r"(?m)(?:^|[\s\[{,:-])![A-Za-z<]")]
 
 def has_tricks(dtext):
     t = "\n".join(strip_comment(l) for l in dtext.split("\n"))      # a comment may say anything
@@ -277,6 +281,28 @@ def structural(dtext, start, level=0, strict=False):
     except Exception:
         return None
     occ, reasons, hits = [], [], []
+    binary_ids = set()           # scalars written as !!binary: .value now holds the DECODED text
+    # Tags that change what a scalar resolves to. !!binary is decoded; the other tag:yaml.org,2002:* tags keep the
+    # text (judged as written: a value that is not provably "false" is RED anyway); any other tag (custom, local)
+    # may be rewritten by a constructor we cannot see, so it is UNKNOWN.
+    stack, vis = list(roots), set()
+    while stack:
+        n = stack.pop()
+        if id(n) in vis: continue
+        vis.add(id(n))
+        if len(vis) > MAX_NODES: reasons.append(f"more than {MAX_NODES} YAML nodes"); break
+        tag = n.tag or ""
+        if tag == "tag:yaml.org,2002:binary" and isinstance(n, SCALAR):
+            try:
+                n.value = base64.b64decode("".join(n.value.split()), validate=True).decode("utf-8", "replace")
+                binary_ids.add(id(n))
+            except (binascii.Error, ValueError):
+                reasons.append(f"line {start + n.start_mark.line + 1}: !!binary scalar that is not valid base64: cannot be read")
+        elif not tag.startswith("tag:yaml.org,2002:") and not rev("tags"):
+            reasons.append(f"line {start + n.start_mark.line + 1}: non-standard YAML tag {esc(tag)[:40]!r}: "
+                           "the resolved value cannot be known")
+        if isinstance(n, MAPPING): stack.extend(x for kv in n.value for x in kv)
+        elif isinstance(n, SEQUENCE): stack.extend(n.value)
     seen = {}                    # id(container node) -> subtree hit count, so an alias bomb is walked once
     scal = set()                 # id of scalar nodes already used once: a second use is an alias
     consumed = set()             # scalar nodes read as a key or an operation path
@@ -330,7 +356,7 @@ def structural(dtext, start, level=0, strict=False):
         m = OCC.search(kn.value)
         if hits_in_key != 1 or not m or m.end() != len(kn.value) or kn.value[:m.start()]:
             occ.append((ln_of(kn), "<unparsed key " + esc(kn.value)[:60] + ">", None, False)); return
-        raw = vn.value if isinstance(vn, SCALAR) else None
+        raw = vn.value if isinstance(vn, SCALAR) and id(vn) not in binary_ids else None
         occ.append((ln_of(kn), m.group("suf"), raw, False))
 
     def judge_op(items):
@@ -341,7 +367,7 @@ def structural(dtext, start, level=0, strict=False):
         if id(pn) in scal: state["hidden"] = True
         ms = list(OCC.finditer(pn.value))
         vn = d.get("value")
-        raw = vn.value if isinstance(vn, SCALAR) else None
+        raw = vn.value if isinstance(vn, SCALAR) and id(vn) not in binary_ids else None
         if len(PFX_ANY.findall(pn.value)) != len(ms):
             occ.append((ln_of(pn), "<unparsed path " + esc(pn.value)[:60] + ">", None, False)); return
         for m in ms: occ.append((ln_of(pn), m.group("suf"), raw, False))

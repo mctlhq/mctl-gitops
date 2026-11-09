@@ -151,7 +151,7 @@ report("V12 an unreadable mirror source is reported as unreadable only, not ALSO
 rc, out = run([listing("n9msg", BASE + [row("admins", "copy-of-x", reflects="database/postgres-credentials", autoref="True")])] + ANCHOR)
 report("N9b the mirror finding names the reason: source not allow-listed", rc == 1 and "source not allow-listed" in out, out[-400:])
 copy_trunc = TMP / "u_copy_trunc.txt"; copy_trunc.write_text(HEAD + "\n" + "\n".join(BASE + [row("zz", "postgres-credentials")]) + "\n")
-expect("V12 copy present but listing truncated => UNKNOWN, not RED/GREEN", [copy_trunc], 2)
+expect("V12b copy present but listing truncated => UNKNOWN, not RED/GREEN", [copy_trunc], 2)
 expect("V13 bad rc argument (not an int)", [CONVERGED, "notanint"], 2)
 expect("V14 --anchor and --no-anchor together", [CONVERGED, "--anchor", "database/postgres-credentials", "--no-anchor"], 2)
 expect("V15 --anchor missing its value", [CONVERGED, "--anchor"], 2)
@@ -508,6 +508,11 @@ report("T1 RED prints at most 10 findings and counts all", rc == 1 and out.count
 mixed = listing("t_mix", BASE + [row("zz%d" % i, "n%d" % i, allowed="true") for i in range(6)] + [row("zq", "x", at="2026-11-09T10:00:00Z")])
 rc, out = run([mixed] + ANCHOR)
 report("T2 UNKNOWN outranks RED and shows the unknown reason plus at most 3 reds", rc == 2 and "findings=4" in out, out[-400:])
+
+rc, out = run([CONVERGED] + ANCHOR + ["--expect-context"], exp=False)
+report("A7 --expect-context as the last argument is reported as a bad argument", rc == 2 and "bad argument" in out, out[-300:])
+rc, out = run([post_row5, 0, "--no-anchor"])
+report("A8 a positional rc followed by --no-anchor: both are consumed (GREEN without the default anchor)", rc == 0, out[-300:])
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nchecks={counter[0]} failures={len(failures)}")
