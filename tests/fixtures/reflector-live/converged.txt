@@ -1,3 +1,4 @@
+#CLUSTER context=fixture-ctx server=https://fixture.invalid:6443
 argocd|argocd-secret||||||
 argocd|repo-creds-example||||||
 argo-workflows|workflow-token||||||

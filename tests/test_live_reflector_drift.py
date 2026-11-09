@@ -37,15 +37,17 @@ TMP = pathlib.Path(tempfile.mkdtemp(prefix="d2-proof-"))
 failures, counter = [], [0]
 CONVERGED = FIX / "converged.txt"
 ANCHOR = ["--anchor", "database/postgres-credentials"]
+HEAD = "#CLUSTER context=fixture-ctx server=https://fixture.invalid:6443"
+EXP = ["--expect-context", "fixture-ctx"]
 
 
 def rows_of(path):
     return [l for l in pathlib.Path(path).read_text().splitlines() if l and not l.startswith("#")]
 
 
-def listing(name, rows, trailer=True):
+def listing(name, rows, trailer=True, head=True):
     p = TMP / (name + ".txt")
-    p.write_text("\n".join(rows) + "\n" + (f"#END rows={len(rows)}\n" if trailer else ""))
+    p.write_text((HEAD + "\n" if head else "") + "\n".join(rows) + "\n" + (f"#END rows={len(rows)}\n" if trailer else ""))
     return p
 
 
@@ -63,7 +65,10 @@ def report(label, ok, detail=""):
         failures.append(f"{label}: {detail}")
 
 
-def run(args, revert=()):
+def run(args, revert=(), exp=True):
+    args = list(args)
+    if exp and args and not any(str(a).startswith("--expect-") for a in args):
+        args += EXP                      # every ordinary case states which cluster it expects; identity cases pass exp=False
     buf = io.StringIO()
     d2.REVERT.clear()
     d2.REVERT.update(revert)
@@ -75,8 +80,8 @@ def run(args, revert=()):
     return rc, buf.getvalue()
 
 
-def expect(label, args, want, revert=()):
-    rc, out = run(args, revert)
+def expect(label, args, want, revert=(), exp=True):
+    rc, out = run(args, revert, exp)
     report(label, rc == want, f"rc={rc} want={want}\n{out[-500:]}")
 
 
@@ -129,18 +134,18 @@ empty = TMP / "u_empty.txt"; empty.write_text("")
 expect("V3 empty file", [empty] + ANCHOR, 2)
 expect("V4 kubectl rc != 0", [CONVERGED, 1] + ANCHOR, 2)
 expect("V5 truncated listing (no trailer)", [FIX / "truncated.txt"] + ANCHOR, 2)
-cnt = TMP / "u_count.txt"; cnt.write_text("\n".join(BASE[:8]) + "\n#END rows=384\n")
+cnt = TMP / "u_count.txt"; cnt.write_text(HEAD + "\n" + "\n".join(BASE[:8]) + "\n#END rows=384\n")
 expect("V6 trailer count mismatch (partial)", [cnt] + ANCHOR, 2)
-mal = TMP / "u_mal.txt"; mal.write_text("\n".join(BASE[:3] + ["a|b|c"]) + "\n#END rows=4\n")
+mal = TMP / "u_mal.txt"; mal.write_text(HEAD + "\n" + "\n".join(BASE[:3] + ["a|b|c"]) + "\n#END rows=4\n")
 expect("V7 malformed row (3 fields)", [mal] + ANCHOR, 2)
 no_anchor = listing("u_anc", [r for r in BASE if not r.startswith("database|postgres-credentials")])
 expect("V8 anchor Secret missing from listing", [no_anchor] + ANCHOR, 2)
-zero = TMP / "u_zero.txt"; zero.write_text("#END rows=0\n")
-expect("V9 zero rows with trailer", [zero] + ANCHOR, 2)
+zero = TMP / "u_zero.txt"; zero.write_text(HEAD + "\n#END rows=0\n")
+expect("V9 zero rows with trailer", [zero, "--no-anchor"], 2)
 expect("V10 missing file", [TMP / "none.txt"] + ANCHOR, 2)
 BOTH = listing("u_both", BASE + [row("zz", "new-secret", allowed="true"), row("zz", "x", reflects="not-a-ref", autoref="True")])
 expect("V11 unknown outranks red (red + unreadable mirror => 2)", [BOTH] + ANCHOR, 2)
-copy_trunc = TMP / "u_copy_trunc.txt"; copy_trunc.write_text("\n".join(BASE + [row("zz", "postgres-credentials")]) + "\n")
+copy_trunc = TMP / "u_copy_trunc.txt"; copy_trunc.write_text(HEAD + "\n" + "\n".join(BASE + [row("zz", "postgres-credentials")]) + "\n")
 expect("V12 copy present but listing truncated => UNKNOWN, not RED/GREEN", [copy_trunc], 2)
 expect("V13 bad rc argument (not an int)", [CONVERGED, "notanint"], 2)
 expect("V14 --anchor and --no-anchor together", [CONVERGED, "--anchor", "database/postgres-credentials", "--no-anchor"], 2)
@@ -165,9 +170,9 @@ not_detected("V16 default anchor", [no_anchor], 2, "default_anchor")
 # ---------------------------------------------------------------- no outside lever
 print("== no outside lever on the check ==")
 env = dict(os.environ, SA_DET_REVERT="mirror_rule,copy_rule,source_flags,trailer", SA_DET_PROOF_NONCE="x")
-r = subprocess.run([sys.executable, str(SCRIPT), str(RED["N1"][1][0])] + ANCHOR, env=env, capture_output=True, text=True)
+r = subprocess.run([sys.executable, str(SCRIPT), str(RED["N1"][1][0])] + ANCHOR + EXP, env=env, capture_output=True, text=True)
 report("H1 env var cannot weaken the check (CLI still RED on N1)", r.returncode == 1, r.stdout[-300:] + r.stderr[-300:])
-r = subprocess.run([sys.executable, str(SCRIPT), str(CONVERGED)] + ANCHOR, capture_output=True, text=True)
+r = subprocess.run([sys.executable, str(SCRIPT), str(CONVERGED)] + ANCHOR + EXP, capture_output=True, text=True)
 report("H2 CLI on the converged fixture: rc 0, prints GREEN", r.returncode == 0 and "GREEN" in r.stdout, r.stdout + r.stderr)
 
 # ---------------------------------------------------------------- CRLF and mixed line endings
@@ -178,22 +183,98 @@ def write_bytes(name, text, eol):
     return p
 conv_text = CONVERGED.read_text()
 expect("L1 converged listing with CRLF is GREEN", [write_bytes("l1.txt", conv_text, "\r\n")], 0)
-mut_text = "\n".join(BASE + [row("admins", "postgres-credentials", reflects="database/postgres-credentials", autoref="True")]) + f"\n#END rows={len(BASE) + 1}\n"
+mut_text = HEAD + "\n" + "\n".join(BASE + [row("admins", "postgres-credentials", reflects="database/postgres-credentials", autoref="True")]) + f"\n#END rows={len(BASE) + 1}\n"
 expect("L2 mutated listing (mirror survivor) with CRLF is RED", [write_bytes("l2.txt", mut_text, "\r\n")] + ANCHOR, 1)
 mixed = TMP / "l3.txt"
-mixed.write_bytes(("\r\n".join(BASE[:6]) + "\n" + "\r\n".join(BASE[6:]) + "\r\n#END rows=%d\n" % len(BASE)).encode())
+mixed.write_bytes((HEAD + "\r\n" + "\r\n".join(BASE[:6]) + "\n" + "\r\n".join(BASE[6:]) + "\r\n#END rows=%d\n" % len(BASE)).encode())
 expect("L3 mixed endings (CRLF and LF) converged is GREEN", [mixed], 0)
 mixed_red = TMP / "l4.txt"
-mixed_red.write_bytes(("\n".join(BASE) + "\r\n" + row("zz", "new-secret", allowed="true") + f"\n#END rows={len(BASE) + 1}\r\n").encode())
+mixed_red.write_bytes((HEAD + "\n" + "\n".join(BASE) + "\r\n" + row("zz", "new-secret", allowed="true") + f"\n#END rows={len(BASE) + 1}\r\n").encode())
 expect("L4 mixed endings with a source flag true is RED", [mixed_red], 1)
-expect("L5 CRLF truncated (no trailer) is UNKNOWN", [write_bytes("l5.txt", "\n".join(BASE[:5]) + "\n", "\r\n")], 2)
-expect("L6 CRLF trailer count mismatch is UNKNOWN", [write_bytes("l6.txt", "\n".join(BASE[:5]) + "\n#END rows=99\n", "\r\n")], 2)
+expect("L5 CRLF truncated (no trailer) is UNKNOWN", [write_bytes("l5.txt", HEAD + "\n" + "\n".join(BASE[:5]) + "\n", "\r\n")], 2)
+expect("L6 CRLF trailer count mismatch is UNKNOWN", [write_bytes("l6.txt", HEAD + "\n" + "\n".join(BASE[:5]) + "\n#END rows=99\n", "\r\n")], 2)
 not_detected("L1 CRLF listing", [write_bytes("l1r.txt", conv_text, "\r\n")], 0, "crlf")   # with CR handling reverted GREEN must turn into UNKNOWN
 rc, _ = run([TMP / "l1r.txt"], {"crlf"})
 report("L1 revert-the-fix: CRLF handling reverted => CRLF converged is UNKNOWN (rc 2), the old false negative", rc == 2, f"rc={rc}")
-sr = TMP / "l7.txt"; sr.write_bytes(b"a|b|||||| \rzz\n#END rows=1\n")
+sr = TMP / "l7.txt"; sr.write_bytes((HEAD + "\n").encode() + b"a|b|||||| \rzz\n#END rows=1\n")
 rc, out = run([sr, "--no-anchor"])
 report("L7 stray carriage return inside a row is not GREEN", rc != 0, out)
+
+# ---------------------------------------------------------------- cluster identity header (D2 refuses a listing of an unknown or unexpected cluster)
+print("== cluster identity: header present, unique, first, and equal to what the operator expects ==")
+rows_ok = BASE
+def raw(name, text):
+    p = TMP / (name + ".txt"); p.write_text(text); return p
+body = "\n".join(rows_ok) + f"\n#END rows={len(rows_ok)}\n"
+expect("I1 header matches --expect-context: GREEN", [raw("i1", HEAD + "\n" + body), "--expect-context", "fixture-ctx"], 0, exp=False)
+expect("I2 header matches --expect-server only: GREEN", [raw("i2", HEAD + "\n" + body), "--expect-server", "https://fixture.invalid:6443"], 0, exp=False)
+expect("I3 both expectations match: GREEN", [raw("i3", HEAD + "\n" + body), "--expect-context", "fixture-ctx", "--expect-server", "https://fixture.invalid:6443"], 0, exp=False)
+I_WRONG_CTX = [raw("i4", HEAD + "\n" + body), "--expect-context", "other-ctx"]
+expect("I4 wrong context: UNKNOWN (a listing of another cluster is not this one)", I_WRONG_CTX, 2, exp=False)
+I_WRONG_SRV = [raw("i5", HEAD + "\n" + body), "--expect-server", "https://other.invalid:6443"]
+expect("I5 wrong server: UNKNOWN", I_WRONG_SRV, 2, exp=False)
+I_BOTH_HALF = [raw("i5b", HEAD + "\n" + body), "--expect-context", "fixture-ctx", "--expect-server", "https://other.invalid:6443"]
+expect("I5b context matches but server does not: UNKNOWN (both given must both match)", I_BOTH_HALF, 2, exp=False)
+I_NOEXP = [raw("i6", HEAD + "\n" + body)]
+expect("I6 no expectation given: UNKNOWN (an unchecked identity proves nothing)", I_NOEXP, 2, exp=False)
+I_NOHEAD = [raw("i7", body), "--expect-context", "fixture-ctx"]
+expect("I7 no header: UNKNOWN", I_NOHEAD, 2, exp=False)
+I_TWO = [raw("i8", HEAD + "\n" + HEAD.replace("fixture-ctx", "other-ctx") + "\n" + body), "--expect-context", "fixture-ctx"]
+expect("I8 two headers: UNKNOWN (not first-wins)", I_TWO, 2, exp=False)
+I_LATE = [raw("i9", rows_ok[0] + "\n" + HEAD + "\n" + "\n".join(rows_ok[1:]) + f"\n#END rows={len(rows_ok)}\n"), "--expect-context", "fixture-ctx"]
+expect("I9 header not on the first line: UNKNOWN", I_LATE, 2, exp=False)
+expect("I10 malformed header (no server): UNKNOWN", [raw("i10", "#CLUSTER context=fixture-ctx\n" + body), "--expect-context", "fixture-ctx"], 2, exp=False)
+expect("I11 --expect-context with no value: UNKNOWN", [CONVERGED, "--expect-context"], 2, exp=False)
+expect("I12 --expect-context followed by another flag: UNKNOWN", [CONVERGED, "--expect-context", "--no-anchor"], 2, exp=False)
+expect("I13 unrecognised comment line: UNKNOWN", [raw("i13", HEAD + "\n#NOTE hi\n" + body)], 2)
+INJ = [raw("i14", "#CLUSTER context=fixture-ctx server=https://fixture.invalid:6443\n" + body), "--expect-context", "x\n::error::forged"]
+rc, out = run(INJ, exp=False)
+report("I14 a hostile expectation cannot forge a log line (control characters escaped in the output)", rc == 2 and "\n::error::" not in out and "\\u000a" in out, out)
+for lab, a in (("I4", I_WRONG_CTX), ("I5", I_WRONG_SRV), ("I5b", I_BOTH_HALF), ("I6", I_NOEXP), ("I7", I_NOHEAD), ("I8", I_TWO), ("I9", I_LATE)):
+    rc, out = run(a, {"cluster_identity"}, exp=False)
+    report(f"{lab} revert-the-fix: cluster_identity reverted => no longer UNKNOWN (rc {rc})", rc != 2, out)
+
+# ---------------------------------------------------------------- shadowing: each guard proven alone
+print("== each guard proven on its own (the others disabled) ==")
+E0 = TMP / "z_empty.txt"; E0.write_text("")
+expect("S1 empty file with identity+trailer checks reverted still UNKNOWN (zero rows)", [E0, "--no-anchor"], 2, {"cluster_identity", "trailer"})
+expect("S2 empty file with only the trailer check reverted still UNKNOWN (header)", [E0, "--no-anchor"], 2, {"trailer"})
+Z = raw("z_zero", HEAD + "\n#END rows=0\n")
+expect("S3 header + trailer rows=0: UNKNOWN by the zero-rows rule alone", [Z, "--no-anchor"], 2)
+rc, out = run([Z, "--no-anchor"])
+report("S3b ...and the reason named is zero rows", "zero rows" in out, out)
+expect("S4 zero-rows check is the only thing between header+trailer(0) and GREEN: kept", [Z, "--no-anchor"], 2, {"default_anchor"})
+TMID = raw("z_mid", HEAD + "\n" + "\n".join(BASE[:4]) + "\n#END rows=%d\n" % len(BASE) + "\n".join(BASE[4:]) + "\n")
+expect("S5 trailer in the middle (rows after it): UNKNOWN", [TMID], 2)
+TTWO = raw("z_two", HEAD + "\n" + body + f"#END rows={len(BASE)}\n")
+expect("S6 two trailers: UNKNOWN", [TTWO], 2)
+TTWOX = raw("z_twox", HEAD + "\n" + "\n".join(BASE) + "\n#END rows=%d\n#END rows=%d\n" % (len(BASE), len(BASE)))
+expect("S6b two trailers, both counts right: UNKNOWN (unique, not last-wins)", [TTWOX], 2)
+R9 = raw("z_r9", HEAD + "\n" + "\n".join(BASE[:3] + [row("zz", "x") + "|extra"]) + "\n#END rows=4\n")
+expect("S7 nine-field row: UNKNOWN (exactly 8 fields, not at least 8)", [R9, "--no-anchor"], 2)
+RN = raw("z_rn", HEAD + "\n" + "\n".join(BASE[:3] + [row("", "x")]) + "\n#END rows=4\n")
+expect("S8 row without a namespace: UNKNOWN", [RN, "--no-anchor"], 2)
+RM = raw("z_rm", HEAD + "\n" + "\n".join(BASE[:3] + [row("zz", "")]) + "\n#END rows=4\n")
+expect("S8b row without a name: UNKNOWN", [RM, "--no-anchor"], 2)
+GF = listing("z_gf", BASE + [row("zz", "other-secret", allowed="False", auto="FALSE")])
+expect("S9 allowed=False / auto=FALSE are provably false: GREEN (case-insensitive)", [GF], 0)
+GS = listing("z_gs", BASE + [row("zz", "other-secret", allowed=" false", auto="false ")])
+expect("S10 surrounding blanks around false: GREEN", [GS], 0)
+# ALLOW_SOURCES is empty in the shipped tool, so the allow-listed-source branch is exercised through evaluate() directly.
+ALLOWED = {("database", "postgres-credentials")}
+MS_LINES = [HEAD] + [r for r in BASE if not r.startswith("database|postgres-credentials")] + [row("admins", "x", reflects="database/postgres-credentials", autoref="True")]
+MS_LINES.append(f"#END rows={len(MS_LINES) - 1}")
+rc, out = d2.evaluate(MS_LINES, 0, (), allow=ALLOWED, expect={"context": "fixture-ctx"})
+report("S11 mirror of an allow-listed source that is absent from the listing: UNKNOWN (cannot read the source)", rc == 2 and "allow-listed source not in listing" in out[0], f"{rc} {out}")
+OK_LINES = [HEAD] + BASE + [row("admins", "x", reflects="database/postgres-credentials", autoref="True")]
+OK_LINES.append(f"#END rows={len(OK_LINES) - 1}")
+rc, out = d2.evaluate(OK_LINES, 0, (), allow=ALLOWED, expect={"context": "fixture-ctx"})
+report("S11c control: the same mirror with its allow-listed source present is GREEN", rc == 0, f"{rc} {out}")
+BOTH_OUT = run([BOTH] + ANCHOR)[1]
+report("S12 unknown outranks red: the unknown reason is the one printed", "UNKNOWN (exit 2)" in BOTH_OUT and "source unreadable" in BOTH_OUT, BOTH_OUT)
+for lab, a, w in (("GREEN", [CONVERGED], "GREEN (exit 0)"), ("RED", RED["N1"][1], "RED (exit 1)"), ("UNKNOWN", [FIX / "truncated.txt"], "UNKNOWN (exit 2)")):
+    rc, out = run(a)
+    report(f"S13 verdict line for {lab} is exact", out.startswith(w), out[:80])
 
 # ---------------------------------------------------------------- collector: real argv, real JSONPath, end to end into D2
 print("== collect-reflector-metadata.sh: argv captured, JSONPath evaluated on synthetic Secrets, then fed to D2 ==")
@@ -206,18 +287,33 @@ ANNO = lambda k: "{.metadata.annotations." + ESC + "/" + k + "}"
 EXPECTED_JP = ("{range .items[*]}{.metadata.namespace}|{.metadata.name}|" + ANNO(RP + "allowed") + "|" + ANNO(RP + "auto-enabled")
                + "|" + ANNO("reflects") + "|" + ANNO("auto-reflects") + "|" + ANNO("reflected-version") + "|" + ANNO("reflected-at")
                + '{"\\n"}{end}')
-EXPECTED_ARGV = ["get", "secret", "-A", "-o", "jsonpath=" + EXPECTED_JP]
+SRV_JP = "jsonpath={.clusters[0].cluster.server}"
+CTX, SRV = "fixture-ctx", "https://fixture.invalid:6443"
+EXPECTED_CALLS = [["config", "current-context"],
+                  ["--context", CTX, "config", "view", "--minify", "-o", SRV_JP],
+                  ["--context", CTX, "get", "secret", "-A", "-o", "jsonpath=" + EXPECTED_JP]]
 REAL_KUBECTL = shutil.which("kubectl")
 
 STUB = r"""#!/usr/bin/env python3
-# Stub kubectl: records argv, then evaluates the -o jsonpath template (the subset the collector uses) on the
-# synthetic Secret list in $STUB_OBJECTS. It mirrors kubectl: a dot in a path segment splits it unless written \.
+# Stub kubectl: appends argv to $STUB_REC, answers the three calls the collector makes, and for `get secret` evaluates
+# the -o jsonpath template (the subset the collector uses) on the synthetic Secret list in $STUB_OBJECTS. It mirrors
+# kubectl: a dot in a path segment splits it unless written \. ; and it only answers calls pinned to --context $STUB_CTX.
 import json, os, re, sys
-json.dump(sys.argv[1:], open(os.environ["STUB_REC"], "w"))
+args = sys.argv[1:]
+with open(os.environ["STUB_REC"], "a") as f: f.write(json.dumps(args) + "\n")
 mode = os.environ.get("STUB_MODE", "ok")
+ctx, srv = os.environ["STUB_CTX"], os.environ["STUB_SERVER"]
+if args == ["config", "current-context"]:
+    if mode == "ctxfail": sys.stderr.write("no current context\n"); sys.exit(5)
+    print(ctx); sys.exit(0)
+if args[:1] != ["--context"] or len(args) < 3 or args[1] != ctx:
+    sys.stderr.write("stub: call not pinned to the current context\n"); sys.exit(1)
+args = args[2:]
+if args == ["config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}"]:
+    if mode == "srvfail": sys.stderr.write("no cluster\n"); sys.exit(6)
+    sys.stdout.write(srv); sys.exit(0)
 if mode == "fail":
     sys.stderr.write("boom\n"); sys.exit(3)
-args = sys.argv[1:]
 if args[:3] != ["get", "secret", "-A"] or len(args) != 5 or args[3] != "-o" or not args[4].startswith("jsonpath="):
     sys.stderr.write("stub: unexpected arguments\n"); sys.exit(1)
 tpl = args[4][len("jsonpath="):]
@@ -264,29 +360,33 @@ def items_of(rows):
     return {"apiVersion": "v1", "kind": "List", "items": items}
 
 counter_c = [0]
-def collect(script, rows=None, mode="ok", tag=None):
+def collect(script, rows=None, mode="ok", tag=None, ctx=CTX, srv=SRV):
     counter_c[0] += 1
     tag = tag or f"c{counter_c[0]}"
     objs, rec = TMP / (tag + ".json"), TMP / (tag + ".argv")
     objs.write_text(json.dumps(items_of(rows if rows is not None else BASE)))
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", STUB_OBJECTS=str(objs), STUB_REC=str(rec), STUB_MODE=mode)
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", STUB_OBJECTS=str(objs), STUB_REC=str(rec), STUB_MODE=mode,
+               STUB_CTX=ctx, STUB_SERVER=srv)
     r = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
-    argv = json.loads(rec.read_text()) if rec.exists() else None
+    calls = [json.loads(l) for l in rec.read_text().splitlines()] if rec.exists() else []
     out = TMP / (tag + ".out"); out.write_text(r.stdout)
-    return r, argv, out
+    return r, calls, out
 
 def collector_proof(script):
     """The collector's verdicts. Returns {check: bool}; all True for the real script, a corrupted one must lose at least one."""
     res = {}
-    r, argv, out = collect(script, BASE)
-    res["argv is exactly: get secret -A -o jsonpath=<expected template>"] = argv == EXPECTED_ARGV
+    r, calls, out = collect(script, BASE)
+    res["the three kubectl calls are exactly: current-context; --context C config view --minify server; --context C get secret -A -o jsonpath=<template>"] = calls == EXPECTED_CALLS
+    res["output starts with the #CLUSTER identity header and ends with the #END trailer"] = r.stdout.splitlines()[:1] == [HEAD] and r.stdout.splitlines()[-1:] == [f"#END rows={len(BASE)}"]
     res["converged synthetic Secrets => D2 GREEN"] = r.returncode == 0 and run([out, "--anchor", "database/postgres-credentials"])[0] == 0
     mirror = BASE + [row("admins", "postgres-credentials", reflects="database/postgres-credentials", autoref="True", ver="7", at="2026-01-01T00:00:00Z")]
-    r, argv, out = collect(script, mirror)
+    r, calls, out = collect(script, mirror)
     res["mirror survivor annotations come through => D2 RED"] = run([out] + ANCHOR)[0] == 1
     flipped = [x.replace("|false|false|", "|true|true|") if x.startswith("database|postgres-credentials") else x for x in BASE]
-    r, argv, out = collect(script, flipped)
+    r, calls, out = collect(script, flipped)
     res["source flags true come through => D2 RED"] = run([out] + ANCHOR)[0] == 1
+    r, calls, out = collect(script, BASE, ctx="other-ctx", srv="https://other.invalid:6443")
+    res["the identity written is the one kubectl reported (a different cluster => D2 UNKNOWN against fixture-ctx)"] = r.returncode == 0 and run([out] + ANCHOR)[0] == 2
     return res
 
 good = collector_proof(COLLECT)
@@ -296,19 +396,39 @@ if REAL_KUBECTL:
     # the template to each object separately, so the per-object body is compared, not the range wrapper.
     items = items_of(BASE + [row("admins", "postgres-credentials", reflects="database/postgres-credentials", autoref="True", ver="7", at="2026-01-01T00:00:00Z")])
     f = TMP / "real.json"; f.write_text(json.dumps(items))
-    body = EXPECTED_JP[len("{range .items[*]}"):-len("{end}")]
-    r = subprocess.run([REAL_KUBECTL, "annotate", "--local", "-f", str(f), "zz=1", "--overwrite", "-o", "jsonpath=" + body],
+    body_jp = EXPECTED_JP[len("{range .items[*]}"):-len("{end}")]
+    r = subprocess.run([REAL_KUBECTL, "annotate", "--local", "-f", str(f), "zz=1", "--overwrite", "-o", "jsonpath=" + body_jp],
                        env=dict(os.environ, KUBECONFIG=os.devnull), capture_output=True, text=True)
     r2, _, _ = collect(COLLECT, BASE + [row("admins", "postgres-credentials", reflects="database/postgres-credentials", autoref="True", ver="7", at="2026-01-01T00:00:00Z")])
-    ok = r.returncode == 0 and r.stdout == "\n".join(r2.stdout.splitlines()[:-1]) + "\n"
+    ok = r.returncode == 0 and r.stdout == "\n".join(r2.stdout.splitlines()[1:-1]) + "\n"
     report("C2 REAL kubectl (%s) parses the collector's JSONPath and returns the same rows as the evaluator" % REAL_KUBECTL, ok, f"rc={r.returncode}\n{r.stderr[-400:]}\nreal={r.stdout[-300:]!r}")
     # the trap agy worried about: unescaped dots do NOT address the map key, kubectl silently returns empty
-    bad_body = body.replace("\\.", ".")
+    bad_body = body_jp.replace("\\.", ".")
     rb = subprocess.run([REAL_KUBECTL, "annotate", "--local", "-f", str(f), "zz=1", "--overwrite", "-o", "jsonpath=" + bad_body],
                         env=dict(os.environ, KUBECONFIG=os.devnull), capture_output=True, text=True)
     report("C3 REAL kubectl: unescaped dots silently return empty annotations (why the escaping is load-bearing)", rb.returncode == 0 and "database/postgres-credentials" not in rb.stdout, rb.stdout[-200:])
+    # identity commands against the REAL kubectl and a synthetic two-context kubeconfig (no cluster is contacted)
+    kc = TMP / "kc.yaml"
+    kc.write_text("apiVersion: v1\nkind: Config\ncurrent-context: ctx-a\n"
+                  "clusters:\n- name: cl-a\n  cluster: {server: 'https://127.0.0.1:1'}\n- name: cl-b\n  cluster: {server: 'https://b.invalid:6443'}\n"
+                  "users:\n- name: u\n  user: {}\n"
+                  "contexts:\n- name: ctx-a\n  context: {cluster: cl-a, user: u}\n- name: ctx-b\n  context: {cluster: cl-b, user: u}\n")
+    kenv = dict(os.environ, KUBECONFIG=str(kc))
+    rc1 = subprocess.run([REAL_KUBECTL, "config", "current-context"], env=kenv, capture_output=True, text=True)
+    rs = subprocess.run([REAL_KUBECTL, "--context", "ctx-b", "config", "view", "--minify", "-o", SRV_JP], env=kenv, capture_output=True, text=True)
+    report("C4 REAL kubectl: `config current-context` and the pinned `--context ctx-b config view --minify` return the context and ITS server",
+           rc1.stdout.strip() == "ctx-a" and rs.stdout == "https://b.invalid:6443", f"{rc1.stdout!r} {rs.stdout!r} {rs.stderr[-200:]}")
+    # C5 is opt-in: kubectl's behaviour against a dead endpoint (127.0.0.1:1) varies between instant failure and a ~90 s
+    # retry loop on this machine, which must never stall CI or a parallel mutation run.
+    if os.environ.get("D2_TEST_REAL_E2E"):
+        try: rcol = subprocess.run(["bash", str(COLLECT)], env=kenv, capture_output=True, text=True, timeout=150)
+        except subprocess.TimeoutExpired: rcol = subprocess.CompletedProcess([], 124, "", "timeout")
+        report("C5 REAL kubectl, unreachable server (127.0.0.1:1): collector fails and writes neither header nor trailer (D2 would read UNKNOWN)",
+               rcol.returncode != 0 and "#END" not in rcol.stdout and "#CLUSTER" not in rcol.stdout, f"rc={rcol.returncode} out={rcol.stdout!r}")
+    else:
+        print("SKIP  C5 real-kubectl unreachable-server run (opt-in: D2_TEST_REAL_E2E=1)")
 else:
-    print("SKIP  C2/C3 real kubectl not found on PATH: JSONPath checked by the in-test evaluator only (NOT against client-go)")
+    print("SKIP  C2-C5 real kubectl not found on PATH: JSONPath and identity commands checked by the in-test stub only (NOT against client-go)")
 
 # collector mutations: corrupt the JSONPath / the arguments, the proof must go RED (lose a check)
 real_text = COLLECT.read_text()
@@ -324,19 +444,48 @@ mutate("wrong-key", "${P}/reflects}", "${P}/reflected}")
 mutate("drop-allowed", "${P}/${R}allowed}", "${P}/${R}allowed2}")
 mutate("output-yaml", "-o jsonpath=", "-o yaml --template=")
 mutate("bracket-unescaped", "{.metadata.annotations.${P}/${R}allowed}", "{.metadata.annotations['" + DOM + "/" + RP + "allowed']}")
+mutate("drop-context-pin-get", '--context "$ctx" get secret', "get secret")
+mutate("drop-context-pin-view", '--context "$ctx" config view', "config view")
+mutate("header-wrong-field", "'#CLUSTER context=%s server=%s\\n' \"$ctx\" \"$srv\"", "'#CLUSTER context=%s server=%s\\n' \"$srv\" \"$ctx\"")
+mutate("drop-header", "printf '#CLUSTER context=%s server=%s\\n' \"$ctx\" \"$srv\"\n", "")
+mutate("header-before-get", "out=$(kubectl", "printf '#CLUSTER context=%s server=%s\\n' \"$ctx\" \"$srv\"; out=$(kubectl")
 
 # failure behaviour, end to end into D2
-r, argv, out = collect(COLLECT, BASE, mode="fail")
-report("E1 kubectl failure: collector exits with kubectl's rc 3 and prints NO trailer", r.returncode == 3 and "#END" not in r.stdout, f"rc={r.returncode} out={r.stdout!r}")
+r, calls, out = collect(COLLECT, BASE, mode="fail")
+report("E1 kubectl failure: collector exits with kubectl's rc 3 and prints NO trailer and NO header", r.returncode == 3 and "#END" not in r.stdout and "#CLUSTER" not in r.stdout, f"rc={r.returncode} out={r.stdout!r}")
 expect("E2 ...and D2 reads that output as UNKNOWN, never GREEN", [out], 2)
-r, argv, out = collect(COLLECT, BASE, mode="truncate")
-report("E3 kubectl dies mid-stream: collector fails, no trailer", r.returncode == 1 and "#END" not in r.stdout, f"rc={r.returncode}")
+r, calls, out = collect(COLLECT, BASE, mode="truncate")
+report("E3 kubectl dies mid-stream: collector fails, no trailer, no header", r.returncode == 1 and "#END" not in r.stdout and "#CLUSTER" not in r.stdout, f"rc={r.returncode}")
 expect("E4 ...and D2 reads the partial output as UNKNOWN", [out], 2)
-r, argv, out = collect(COLLECT, [])
+r, calls, out = collect(COLLECT, [])
 report("E5 no Secrets at all: trailer says rows=0", r.returncode == 0 and "#END rows=0" in r.stdout, r.stdout)
 expect("E6 ...and D2 reads that as UNKNOWN (never as 0 found)", [out], 2)
+r, calls, out = collect(COLLECT, BASE, mode="ctxfail")
+report("E8 `current-context` fails: collector exits with its rc 5, no output, no further kubectl call", r.returncode == 5 and r.stdout == "" and len(calls) == 1, f"rc={r.returncode} calls={calls}")
+r, calls, out = collect(COLLECT, BASE, mode="srvfail")
+report("E9 server lookup fails: collector exits with its rc 6, no output, Secrets never fetched", r.returncode == 6 and r.stdout == "" and all("get" not in c for c in calls), f"rc={r.returncode} calls={calls}")
+r, calls, out = collect(COLLECT, BASE, srv="https://bad server:6443")
+report("E10 whitespace in the server name: collector refuses (rc 1, no output)", r.returncode == 1 and r.stdout == "", f"rc={r.returncode} out={r.stdout!r}")
 code_text = "\n".join(l for l in real_text.splitlines() if not l.lstrip().startswith("#"))
-report("E7 collector code never reads Secret data (no .data, no -o yaml/json; comments excluded)", not re.search(r"\.data\b|-o\s*(yaml|json)\b|--output", code_text) and "-o jsonpath" in code_text, "")
+report("E7 collector code never writes Secret data (no .data, no -o yaml/json; comments excluded)", not re.search(r"\.data\b|-o\s*(yaml|json)\b|--output", code_text) and "-o jsonpath" in code_text, "")
+report("E11 collector comments do not claim the Secret data is never read", "never reads" not in real_text.lower() and "kubectl itself still fetches" in real_text, "")
+
+
+# ---------------------------------------------------------------- mutation-matrix closure (PR #2553 round 3)
+print("== D2 gaps found by the full mutation matrix ==")
+rc, out = d2.evaluate([HEAD + "\n", "a|b||||||\r\n", "x|y|||||| \rz\n", "#END rows=2\n"], 0, (), expect={"context": "fixture-ctx"})
+report("Y1 a carriage return INSIDE a row (reachable through evaluate(), not through readlines) is UNKNOWN with its reason", rc == 2 and "carriage return" in out[0], f"{rc} {out}")
+expect("Y2 whitespace-only reflects value is a marker with an unreadable source: UNKNOWN (not absent)", [listing("y2", BASE + [row("zz", "x", reflects=" ")]), "--no-anchor"], 2)
+expect("Y3 reflects with surrounding blanks is not a readable source: UNKNOWN", [listing("y3", BASE + [row("zz", "x", reflects=" database/postgres-credentials ")]), "--no-anchor"], 2)
+rc, out = run([CONVERGED, "--expect-context", "", "--expect-server", "https://fixture.invalid:6443"], exp=False)
+report("Y4 --expect-context with an empty value is a bad argument even when --expect-server is given", rc == 2 and "bad argument" in out, out)
+rc, out = run([CONVERGED, "--source", "bare"])
+report("Y5 bad argument prints its reason", rc == 2 and "bad argument" in out, out)
+
+ROWS_AL = [HEAD, "argo|x||||||", "other|x||||||"]
+ROWS_AL.append(f"#END rows={len(ROWS_AL) - 1}")
+rc, out = d2.evaluate(ROWS_AL, 0, (), allow={("argo", "x")}, expect={"context": "fixture-ctx"})
+report("Y6 a non-annotated copy of an allow-listed name in another namespace is RED (allow-listed names are copy-checked too)", rc == 1 and "copy" in out[0], f"{rc} {out}")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nchecks={counter[0]} failures={len(failures)}")
