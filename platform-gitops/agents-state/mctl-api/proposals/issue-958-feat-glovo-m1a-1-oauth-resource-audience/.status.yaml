@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-11-09T03:09:33Z'
+status: implemented
+updated_at: '2026-11-09T11:39:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-de9b75ee95c4f774
@@ -47,14 +47,7 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-review_attempts: 1
-refusals: 3
-refusals_head: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
-notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
-  was never charged — the proposal is not at fault; a human must reconcile the review
-  with the operator decision. Last reason: Reviewer text 1 is an approval, not a defect:
-  ''Verdict: approved (0 P1, 0 P2, 0 P3)'' bound to 9c67a1dd, and every previous finding
-  is listed as fixed. Its only remarks are two ''Minor, not blocking'' notes (glovo.WriteError
-  has no nil guard but has no callers yet; the refusal metric reuses supportAudienceRouteClass),
-  which the reviewer says can wait for the slice that adds Glovo routes. No actionable
-  finding, so nothing was changed.'
+github:
+  state: open
+  head_sha: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
+  observed_at: '2026-11-09T11:39:27Z'
