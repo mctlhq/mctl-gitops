@@ -54,6 +54,7 @@ Fencing
 - WHEN a previous claimant presents its claim token to fulfil or reject a request that an operator rejected THE SYSTEM SHALL refuse with 409 `execution_request_closed`, as today for a rejected request.
 - WHILE an operator reject transaction holds the item lock THE SYSTEM SHALL serialize it with claim, fulfil and dispatcher reject of the same request, so exactly one of them takes effect and the others observe the result.
 - IF a dispatcher re-claims a lapsed request between an operator's discovery read and reject THEN THE SYSTEM SHALL refuse the reject with 412 (row_version moved) or 409 (claim live).
+- THE SYSTEM SHALL determine lease liveness in PostgreSQL using `now()` both at discovery and in the guarded mutation, not from a potentially skewed API replica clock. An unexpired DB lease SHALL never be taken.
 - IF `approval_grant_id` is missing, expired, consumed, self-approved, scope/tenant/request/reason-mismatched or not verifiably persisted THEN THE SYSTEM SHALL return 403 with no mutation. The grant's authenticated approver SHALL differ from the operator caller, bind `execution_request.reject` to this exact request, and expire within 24 hours.
 
 Audit
@@ -73,4 +74,4 @@ Audit
 - Deferral reasons (`legacy-loop`, `feedback-not-ready`, `recovery-not-ready`) exist only in mctl-agents logs. mctl-api cannot show them in discovery. Should a later change let the claimant annotate a deferral, so the operator can see it in discovery? Assumed no for this proposal. The operator correlates by request id with mctl-agents logs.
 - **Owner decision resolved (2026-11-09 proposal alignment):** a distinct approver and an already persisted single-use `approval_grant_id` are mandatory, not an optional extension. The implementer must verify the existing grant schema and atomic consumption contract before any operator-reject code; if unsupported, stop and propose a separately reviewed prerequisite. No arbitrary approval string or self-approval.
 - What is the deployed mctl-api configuration (replicas, whether `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE` is on)? The gitops checkout available to this run has no mctl-api service values. The repo default is `helm/values.yaml` `replicaCount: 1`. This was not verified against production.
-- Does a clock skew bound between API replicas matter? `lease_state` and the live-claim check both use the database transaction's `s.now()` in one replica's process. The proposal assumes the API host clock, as `ClaimExecutionRequest` already does.
+- **Owner-v2 safety decision:** discovery and the new operator-reject guard use PostgreSQL `now()`; API replica clocks are not an authority for a live lease. Tests include a replica-clock offset. Do not change unrelated dispatcher claims under this proposal.
