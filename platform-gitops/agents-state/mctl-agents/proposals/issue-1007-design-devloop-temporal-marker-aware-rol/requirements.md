@@ -27,7 +27,9 @@ still missing so the forward-only policy can be enforced and checked, not just w
 - an updated runbook.
 
 Everything here is design, tooling and local verification. Nothing is released, deployed or
-flag-flipped, and nothing touches production Temporal.
+flag-flipped, and nothing touches production Temporal. **B4 remains FAIL** after this proposal
+unless a distinct owner-approved release-gate integration and production-compatible evidence
+also exist. The standalone check cannot prevent an automated GitOps rollback by itself.
 
 ## User stories
 
@@ -61,10 +63,9 @@ Marker-aware rollback check (`tools/rollback_compat_check.py`)
   declaring workflow type, an unreadable file, or a report older than `--max-age` (default 30
   minutes) THEN THE SYSTEM SHALL print UNKNOWN with a stable reason code and exit 2.
 - IF a tree cannot be parsed, or a `workflow.patched` argument is not a literal or resolvable
-  module constant, THEN THE SYSTEM SHALL return UNKNOWN (exit 2) and never COMPATIBLE.
+  module constant, THEN THE SYSTEM SHALL return UNKNOWN (exit 2) and never PATCH_COMPATIBLE.
 - WHEN `removed` is empty, or every id in it has a complete, fresh report with only
-  MARKER_ABSENT, THE SYSTEM SHALL print COMPATIBLE and exit 0, and SHALL state that the result
-  holds at the scan time only.
+  MARKER_ABSENT, THE SYSTEM SHALL print `PATCH_COMPATIBLE` (exit 0) and state that this is **only an offline necessary-condition check**, valid at the scan instant. It SHALL **NOT** assert that the target worker is replay-safe, that a release/rollback is authorised, or that new markers cannot appear before a rollout.
 - THE SYSTEM SHALL NOT connect to Temporal, GitHub or Kubernetes. Its inputs are files and a
   local git repository only.
 - WHEN the scanner writes a JSON report THE SYSTEM SHALL include a UTC `scanned_at` timestamp
@@ -108,6 +109,21 @@ Runbook
   `rollback_compat_check`, and it SHALL replace the UNVERIFIED label on the "fixed worker also
   does not start" scenario with the LOCAL evidence from the experiment, or keep it UNVERIFIED
   if a cell did not PASS.
+
+## Required release-gate boundary (separate approval, not this implementer)
+
+- A `PATCH_COMPATIBLE` / exit-0 decision does not prove workflow-code replay compatibility,
+  Worker Versioning availability, deployment routing, or ability to start the candidate worker.
+  The B4 owner gate remains **FAIL**, not PASS, until those have independent evidence.
+- A live rollout/rollback must pin the exact running image digest and Temporal worker/SDK
+  version, obtain a **complete live scan** covering all relevant workflow types and
+  continue-as-new ancestors, fence starts and marker-producing updates during the decision
+  window or revalidate immediately at the point of effect, and prove that the same scan and
+  rollback check actually block the GitOps / Argo paths (including direct push, manual
+  rollback and other deploy credentials). A stale/partial/unobservable scan is STOP.
+- Integrating the checker as a mandatory fail-closed release gate is a **separately reviewed
+  implementation**; it is not authorised by this proposal. No release hold is lifted by
+  completion of a local experiment or an offline verdict.
 
 ## Out of scope
 
