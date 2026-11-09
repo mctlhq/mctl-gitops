@@ -10,9 +10,23 @@ use the same digest reference: an image pulled by digest only is NOT a cache hit
 for a tag reference (measured in kind with the registry stopped).
 
 The DaemonSet has its own labels, because the Deployment and Service selectors
-would otherwise capture its pods. The verifier's ServiceAccount and Role come
-from the tenant chart (tenant.prepullVerifier): the `apps` project does not
-allow RBAC objects. Without them the Job fails, which is a STOP.
+would otherwise capture its pods. The verifier's Role and RoleBinding come from
+the tenant chart (tenant.prepullVerifier): the `apps` project does not allow RBAC
+objects, so they sync in a different Argo CD app that nothing orders against this
+one. The ServiceAccount is NOT in the tenant chart: it is a PreSync hook of this
+app at sync wave -1, so it always exists before the Job at wave 0. What cannot be
+ordered is the Role, so the script waits for it (prepull.rbacWaitSeconds, only on
+Forbidden) and the failed sync retries; if it never appears the Job fails, which
+is a STOP with the old pod untouched.
+
+Revert: restoring an older image is a deploy too. The revert PR must first set
+prepull.ref to the older repository:tag@digest (and merge, and the DaemonSet
+must be Ready), then restore image.tag and image.digest. Reverting only the
+image keys is a STOP.
+
+Server-side apply: the apps ApplicationSet syncs with ServerSideApply=true. The
+Recreate flip relies on `rollingUpdate: null` in the worker values to clear the
+Deployment's default rolling-update block; it was rehearsed on kind only.
 */ -}}
 {{- if .Values.prepull.enabled }}
 {{- $ref := required "prepull.ref is required when prepull.enabled" .Values.prepull.ref }}
@@ -20,6 +34,9 @@ allow RBAC objects. Without them the Job fails, which is a STOP.
 {{- fail "prepull.ref must be repository:tag@sha256:<64 hex>" }}
 {{- end }}
 {{- $name := printf "%s-prepull" (include "base-service.fullname" .) }}
+{{- if ge (int (add .Values.prepull.rbacWaitSeconds 30)) (int .Values.prepull.verifyDeadlineSeconds) }}
+{{- fail "prepull.rbacWaitSeconds + 30 must stay below prepull.verifyDeadlineSeconds" }}
+{{- end }}
 {{- $podLabels := dict "app.kubernetes.io/name" "base-service-prepull" "app.kubernetes.io/instance" .Release.Name }}
 {{- $security := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) }}
 {{- $podSecurity := dict "runAsNonRoot" true "runAsUser" 65534 "runAsGroup" 65534 "seccompProfile" (dict "type" "RuntimeDefault") }}
@@ -72,6 +89,17 @@ spec:
           resources:
             {{- toYaml .Values.prepull.resources | nindent 12 }}
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.prepull.verifierServiceAccount }}
+  labels:
+    {{- include "base-service.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -80,6 +108,7 @@ metadata:
     {{- include "base-service.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "0"
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 0
@@ -115,6 +144,8 @@ spec:
               value: {{ $name | quote }}
             - name: POD_SELECTOR
               value: "app.kubernetes.io/name=base-service-prepull,app.kubernetes.io/instance={{ .Release.Name }}"
+            - name: RBAC_WAIT_SECONDS
+              value: {{ .Values.prepull.rbacWaitSeconds | quote }}
             - name: TARGET_REF
               value: {{ include "base-service.imageRef" . | quote }}
           securityContext:

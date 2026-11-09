@@ -44,6 +44,10 @@ MUTANTS = {
     "tag differences ignored": ("if len({str(t) for t in tags.values()}) > 1:", "if False:"),
     "repository ignored": ('if g.get("repository") and', "if False and"),
     "unreadable file is skipped": ('out.append(f"UNKNOWN: {p} image.tag unreadable: {type(exc).__name__}")\n                continue', "continue"),
+    "shape: settled digest with a different tag accepted": ("            if tag != ref_tag:\n                return", "            if False:\n                return"),
+    "shape: one tag with two digests accepted": ("        elif tag == ref_tag:\n            return", "        elif False:\n            return"),
+    "shape: tag-only bump over a stale ref accepted": ("    if rt < t:", "    if False:"),
+    "shape: non-semver tag without a digest accepted": ("    if t is None or rt is None:", "    if False:"),
     "unreadable required key is skipped": ('out.append(f"UNKNOWN: {r[\'path\']} {r[\'key\']} unreadable: {type(exc).__name__}")\n                continue', "continue"),
 }
 src = GATE.read_text()

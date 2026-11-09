@@ -17,6 +17,7 @@ prepull:
   verifierImage: ""   # needs sh, kubectl and jq
   verifierServiceAccount: prepull-verifier
   verifyDeadlineSeconds: 120
+  rbacWaitSeconds: 60  # wait for the tenant app's Role; + 30 must stay below the deadline
   resources:
     requests: {cpu: 5m, memory: 16Mi}
     limits: {cpu: 50m, memory: 64Mi}

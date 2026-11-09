@@ -6,6 +6,7 @@ Also runs the workflow's diff step the way GitHub runs it.
 """
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -34,8 +35,8 @@ def git(repo, *a):
     return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, env=GIT_ENV, check=True).stdout.strip()
 
 
-def repo_with(mutate=None, script=SCRIPT):
-    """Parent commit = the real gate + gated files; head = parent + mutate."""
+def repo_with(mutate=None, script=SCRIPT, pre=None):
+    """Parent commit = the real gate + gated files (+ pre); head = parent + mutate."""
     d = pathlib.Path(tempfile.mkdtemp())
     git(d, "init", "-q")
     gate = yaml.safe_load((ROOT / GATE).read_text())
@@ -43,6 +44,8 @@ def repo_with(mutate=None, script=SCRIPT):
     for f in files:
         (d / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / f, d / f)
+    if pre:
+        pre(d, gate["gates"][0]["paths"])
     git(d, "add", "-A")
     git(d, "commit", "-qm", "parent")
     base = git(d, "rev-parse", "HEAD")
@@ -53,8 +56,8 @@ def repo_with(mutate=None, script=SCRIPT):
     return d, base, git(d, "rev-parse", "HEAD")
 
 
-def diff(d, base, head):
-    r = subprocess.run([sys.executable, str(SCRIPT), "--root", str(d), "diff", "--base", base, "--head", head],
+def diff(d, base, head, script=SCRIPT):
+    r = subprocess.run([sys.executable, str(script), "--root", str(d), "diff", "--base", base, "--head", head],
                        capture_output=True, text=True)
     return r.returncode, r.stderr
 
@@ -64,6 +67,51 @@ def retag(tmp, paths, tag="9.9.9"):
         v = tmp / p
         old = yaml.safe_load(v.read_text())["image"]["tag"]
         v.write_text(v.read_text().replace(f'tag: "{old}"', f'tag: "{tag}"'))
+
+
+NEW_REF_TAG = "1.118.0"
+NEW_DIGEST = "sha256:" + "c" * 64
+NEW_REF = f"ghcr.io/mctlhq/mctl-agents:{NEW_REF_TAG}@{NEW_DIGEST}"
+
+
+def set_ref(tmp, paths, ref=NEW_REF):
+    v = tmp / paths[0]
+    txt = re.sub(r'(\n  ref: )"[^"]*"', lambda m: f'{m.group(1)}"{ref}"', v.read_text(), count=1)
+    assert ref in txt
+    v.write_text(txt)
+
+
+def set_image(tmp, paths, tag=NEW_REF_TAG, digest=NEW_DIGEST):
+    """Move the whole group to tag; the pre-pulled control file also gets image.digest."""
+    retag(tmp, paths, tag)
+    if digest:
+        v = tmp / paths[0]
+        txt = v.read_text().replace(f'  tag: "{tag}"\n', f'  tag: "{tag}"\n  digest: "{digest}"\n', 1)
+        assert digest in txt
+        v.write_text(txt)
+
+
+def collapsed(tmp, paths):  # both halves in one commit
+    set_ref(tmp, paths)
+    set_image(tmp, paths)
+
+
+def digest_only(tmp, paths):
+    v = tmp / paths[0]
+    v.write_text(v.read_text().replace('  tag: "1.117.0"\n', f'  tag: "1.117.0"\n  digest: "{NEW_DIGEST}"\n', 1))
+
+
+def step2_wrong_digest(tmp, paths):
+    set_image(tmp, paths, digest="sha256:" + "d" * 64)
+
+
+def step2_to_another_image(tmp, paths):  # a valid "staged" tree for verify, but not the staged ref
+    set_image(tmp, paths, tag="1.119.0", digest="sha256:" + "d" * 64)
+
+
+def step2_and_ref(tmp, paths):
+    set_image(tmp, paths)
+    set_ref(tmp, paths, f"ghcr.io/mctlhq/mctl-agents:1.119.0@sha256:{'e' * 64}")
 
 
 def other_key(tmp, paths):
@@ -103,8 +151,11 @@ def comment_only_policy(tmp, paths):
 # converged
 d, b, h = repo_with()
 check("an unchanged tree is green", diff(d, b, h)[0] == 0)
-d, b, h = repo_with(lambda t, p: retag(t, p, "99.0.0"))
-check("a whole-group tag bump is green", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
+# the two sanctioned steps of a pre-pulled deploy (F1): each is green, the pair in order is green
+d, b, h = repo_with(set_ref)
+check("deploy step 1 (only prepull.ref moves) is green", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
+d, b, h = repo_with(set_image, pre=set_ref)
+check("deploy step 2 (tag + digest settle on the staged ref) is green", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
 d, b, h = repo_with(comment_only_policy)
 check("a comment-only policy edit is green (compared by content)", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
 
@@ -115,6 +166,39 @@ for name, m in [("a non-tag key changed", other_key), ("the policy content chang
     d, b, h = repo_with(m)
     rc, err = diff(d, b, h)
     check(f"red: {name}", rc == 6, f"{rc} {err}")
+
+# F1: everything that is not one of those two steps is red
+d, b, h = repo_with(lambda t, p: retag(t, p, "99.0.0"))
+rc, err = diff(d, b, h)
+check("red: a tag-only bump of the pre-pulled file", rc == 6 and "not one step" in err, f"{rc} {err}")
+for name, m, pre in [("both halves in one commit", collapsed, None), ("a digest alone", digest_only, None),
+                     ("step 2 with a digest other than the staged one", step2_wrong_digest, set_ref),
+                     ("step 2 to an image other than the staged one", step2_to_another_image, set_ref),
+                     ("step 2 that also moves prepull.ref", step2_and_ref, set_ref),
+                     ("step 2 without staging first", set_image, None)]:
+    d, b, h = repo_with(m, pre=pre)
+    rc, err = diff(d, b, h)
+    check(f"red: {name}", rc == 6, f"{rc} {err}")
+
+# F1 mutation evidence: with each rule of the step classifier broken, one of the
+# cases above must flip. Each mutant is a copy of the script with one edit.
+SRC = SCRIPT.read_text()
+STEP_MUTANTS = {
+    # name: (old, new, scenario that must flip, wanted rc under the mutant for a "caught" verdict is the opposite)
+    "classifier accepts every change": ("    if not (ct or cd or cr):\n        return None", "    return None", collapsed, None, 6),
+    "step 1 not understood (strips only image.tag)": ("if _without_deploy_keys(old) != _without_deploy_keys(new):", "if _without_tag(old) != _without_tag(new):", set_ref, None, 0),
+    "step 2 not understood": ("    if ct and cd and not cr:", "    if False:", set_image, set_ref, 0),
+    "step 2 need not settle on the staged ref": ("        if m and m.group(1) == str(nt) and m.group(2) == str(nd):\n            return None", "        if m:\n            return None", step2_to_another_image, set_ref, 6),
+}
+for name, (old, new, scen, pre, want_green_rc) in STEP_MUTANTS.items():
+    check(f"mutant anchor exists: {name}", SRC.count(old) == 1, f"count={SRC.count(old)}")
+    with tempfile.TemporaryDirectory() as t:
+        m = pathlib.Path(t) / "release-gate.py"
+        m.write_text(SRC.replace(old, new))
+        d, b, h = repo_with(scen, pre=pre)
+        real = diff(d, b, h)[0]
+        mut = diff(d, b, h, m)[0]
+        check(f"mutant killed: {name}", real != mut, f"real={real} mutant={mut}")
 
 # the policy is the parent's: a head that rewrites the policy to accept itself is still red
 def self_approving(tmp, paths):

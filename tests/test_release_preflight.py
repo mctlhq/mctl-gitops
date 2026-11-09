@@ -71,11 +71,29 @@ def rc(**kw):
 WORKER_RELEASE = dict(REPO="mctlhq/mctl-agents", IMAGE_NAME=AGENTS, IMAGE_TAG="1.999.0", GIT_REF="1.999.0",
                       TEAM="admins", SERVICE="mctl-agents", VALUES_PATH=",".join(WORKERS))
 
+
+
+def unpulled(tmp):
+    """The gate as it was before the control worker's pre-pull (mctl-agents#1007, #2394):
+    a group whose files are all bumped together. With pre-pull on, the gate refuses an
+    automated bump of the control worker file, on purpose: it deploys through two
+    reviewed PRs, so the worker group release below is refused (rc 6)."""
+    g = tmp / GATE
+    doc = yaml.safe_load(g.read_text())
+    for grp in doc["gates"]:
+        grp.pop("prepull_paths", None)
+        grp["requires"] = [r for r in grp.get("requires", []) if r["key"] != "prepull.enabled"]
+    g.write_text(yaml.safe_dump(doc))
+
+
 # Ordinary releases pass.
 check("an ordinary release passes preflight", rc() == 0)
 check("an ordinary release passes publish", rc(stage="publish") == 0)
-check("the worker group release passes", rc(**WORKER_RELEASE) == 0, run(**WORKER_RELEASE)[1])
-check("newline-separated paths pass", rc(**{**WORKER_RELEASE, "VALUES_PATH": "\n".join(WORKERS)}) == 0)
+r, out, _ = run(**WORKER_RELEASE)
+check("with pre-pull on, an automated worker group release is refused", r == 6 and "pre-pull rollout" in out, out)
+check("a worker group release passes when the gate has no pre-pull file", rc(prepare=unpulled, **WORKER_RELEASE) == 0,
+      run(prepare=unpulled, **WORKER_RELEASE)[1])
+check("newline-separated paths pass", rc(prepare=unpulled, **{**WORKER_RELEASE, "VALUES_PATH": "\n".join(WORKERS)}) == 0)
 
 # Every real caller's pair, read from each repository's default branch on 2026-11-06.
 CALLERS = [("mctl-telegram", "mctl-telegram"), ("mctl-telegram", "agent-worker"), ("mctl-telegram", "agent-worker-preview"),
@@ -303,7 +321,7 @@ def cut(line):
 
 M = {
     "binding off, another repository publishes the worker image":
-        lambda: rc(script=cut("        check_binding()\n"), **{**WORKER_RELEASE, "REPO": "mctlhq/mctl-alice"}) == 0,
+        lambda: rc(script=cut("        check_binding()\n"), prepare=unpulled, **{**WORKER_RELEASE, "REPO": "mctlhq/mctl-alice"}) == 0,
     "ref rule off, a branch builds a release":
         lambda: rc(script=cut("        check_ref()\n"), GIT_REF="feature/x") == 0,
     "gate off, a partial worker release passes":

@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 SCRIPT = pathlib.Path("platform-gitops/helm-charts/base-service/files/prepull-verify.sh")
 D = "sha256:" + "a" * 64
@@ -45,7 +46,7 @@ def pod(node, **kw):
 PODS = {"items": [pod("n1"), pod("n2"), pod("n3")]}
 
 
-def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=()):
+def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=(), forbidden=0, wait="0", script=SCRIPT):
     with tempfile.TemporaryDirectory() as t:
         tmp = pathlib.Path(t)
         for name, doc in (("deployment", deploy), ("daemonset", ds), ("pods", pods)):
@@ -54,12 +55,16 @@ def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=()):
         kubectl.write_text(
             "#!/bin/sh\n"
             f'case " {" ".join(fail)} " in *" $2 "*) echo denied >&2; exit 1;; esac\n'
+            # the first N reads of the Deployment answer Forbidden, as before the tenant Role exists
+            f'if [ "$2" = deployment ]; then n=$(cat "{tmp}/calls" 2>/dev/null || echo 0); echo $((n+1)) > "{tmp}/calls"; '
+            f'[ "$n" -lt {forbidden} ] && {{ echo "Error from server (Forbidden): deployments.apps is forbidden" >&2; exit 1; }}; fi\n'
             f'cat "{tmp}/$2.json"\n'
         )
         kubectl.chmod(kubectl.stat().st_mode | stat.S_IEXEC)
         env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}", "NAMESPACE": "ns", "DEPLOYMENT": "d",
-               "CONTAINER": "base-service", "DAEMONSET": "d-prepull", "POD_SELECTOR": "a=b", "TARGET_REF": target}
-        return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True)
+               "CONTAINER": "base-service", "DAEMONSET": "d-prepull", "POD_SELECTOR": "a=b", "TARGET_REF": target,
+               "RBAC_WAIT_SECONDS": wait, "RBAC_POLL_SECONDS": "1"}
+        return subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True)
 
 
 def ds_with(**status):
@@ -126,6 +131,51 @@ check("a pod runs another digest",
 check("a pod has no image id", run(pods=pods_with(pod("n1"), pod("n2"), pod("n3", image_id=""))), False)
 check("a pod has another reference",
       run(pods=pods_with(pod("n1"), pod("n2"), pod("n3", image=f"ghcr.io/x/y:2.0.0@{OTHER}"))), False)
+
+# F3: the Role comes from another Argo CD app, so the first read waits for it, on Forbidden only.
+check("Role appears within the wait: PASS", run(forbidden=2, wait="5"), True)
+r = run(forbidden=2, wait="5")
+def flag(name, ok, detail=""):
+    print(f"{'PASS' if ok else 'FAIL'}  {name}")
+    if not ok:
+        failures.append(f"{name}: {detail}")
+
+
+flag("the wait is announced in the log", ("waiting for the tenant RBAC" in r.stderr) and r.returncode == 0, r.stderr)
+check("Forbidden that outlasts the wait is a STOP", run(forbidden=999, wait="2"), False)
+check("Forbidden with no wait configured is an immediate STOP", run(forbidden=2, wait="0"), False)
+t0 = time.monotonic()
+r = run(fail=("deployment",), wait="4")
+check("a non-Forbidden read failure does not wait", r, False)
+flag("... and returns at once", time.monotonic() - t0 < 3, f"{time.monotonic() - t0:.1f}s")
+flag("a revert names the missing prepull.ref step", "set prepull.ref" in run(ds=stale_template).stderr)
+flag("a tag-only target names why it cannot pass",
+     "revert to a tag-only reference" in run(target="ghcr.io/x/y:2.0.0").stderr)
+
+# Mutation evidence for the wait: each edit to the script must turn a case above red.
+SRC = SCRIPT.read_text()
+WAIT_MUTANTS = {
+    "never waits": ('[ "$waited" -lt "${RBAC_WAIT_SECONDS:-0}" ] || stop "cannot read Deployment $DEPLOYMENT"\n', 'stop "cannot read Deployment $DEPLOYMENT"\n'),
+    "waits on any error": ('*) stop "cannot read Deployment $DEPLOYMENT" ;;', "*) ;;"),
+}
+
+
+def wait_cases(script):
+    t0 = time.monotonic()
+    quick = run(fail=("deployment",), wait="4", script=script)
+    fast = time.monotonic() - t0 < 3
+    return (run(forbidden=2, wait="5", script=script).returncode == 0
+            and run(forbidden=999, wait="2", script=script).returncode != 0
+            and quick.returncode != 0 and fast)
+
+
+flag("wait cases are green on the real script", wait_cases(SCRIPT))
+for name, (old, new) in WAIT_MUTANTS.items():
+    flag(f"mutant anchor exists: {name}", SRC.count(old) == 1, f"count={SRC.count(old)}")
+    with tempfile.TemporaryDirectory() as t:
+        m = pathlib.Path(t) / "prepull-verify.sh"
+        m.write_text(SRC.replace(old, new))
+        flag(f"mutant killed: {name}", not wait_cases(m))
 
 print()
 if failures:

@@ -564,6 +564,12 @@ jobs:
       - name: Pre-pull PreSync verifier
         run: python3 tests/test_prepull_verify.py
 
+      - name: Pre-pull verifier identity renders in order
+        # mctl-agents#1007: the ServiceAccount is a PreSync hook of the same app
+        # at an earlier wave than the Job; the tenant chart carries only the
+        # Role. Red on each mutation of a copied chart. Needs helm.
+        run: python3 tests/test_prepull_render.py
+
       - name: CI pip installs are hash-pinned
         # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
         # only install with --require-hashes from the pinned requirements file.
@@ -585,6 +591,11 @@ jobs:
           python3 scripts/release-gate.py --selftest
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
+
+      - name: Release gate diff judges a push by content
+        # Includes the two sanctioned steps of a pre-pulled deploy (green) and
+        # every other change to the pre-pulled file (red), with mutants.
+        run: python3 tests/test_release_gate_diff.py
 
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py

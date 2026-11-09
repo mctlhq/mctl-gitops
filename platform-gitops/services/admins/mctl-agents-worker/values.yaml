@@ -48,7 +48,19 @@ imagePullSecrets:
 # prepull.ref, wait until the DaemonSet is Ready, then set image.tag and
 # image.digest to the same reference. The PreSync Job fails the sync, and leaves
 # the old pod running, if the target digest is not on every node. release-gate
-# refuses an automated bump of this file (mctlhq/mctl-agents#1007).
+# refuses an automated bump of this file (mctlhq/mctl-agents#1007), and its
+# `verify` accepts only three shapes: settled (image.tag and image.digest equal
+# prepull.ref), legacy (no image.digest, image.tag equal prepull.ref's tag) and
+# staged (prepull.ref moved ahead of the image).
+#
+# A revert is a deploy too. The revert PR must first set prepull.ref to the
+# repository:tag@digest being restored and merge; once the DaemonSet is Ready, a
+# second PR restores image.tag and image.digest. Reverting only the image keys is
+# a STOP, and so is restoring a tag that was never digest-pinned.
+#
+# The apps ApplicationSet syncs with ServerSideApply=true; the Recreate flip needs
+# the explicit `rollingUpdate: null` above to drop the Deployment's default
+# rolling-update block, and was rehearsed on kind only.
 prepull:
   enabled: true
   ref: "ghcr.io/mctlhq/mctl-agents:1.117.0@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a"
