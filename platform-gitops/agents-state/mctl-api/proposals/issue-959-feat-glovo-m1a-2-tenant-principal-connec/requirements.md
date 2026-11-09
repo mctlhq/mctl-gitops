@@ -93,9 +93,12 @@ Connect, reconnect, idempotency
   SYSTEM SHALL return the original connection with `replayed=true` and
   create nothing. IF the same key arrives with different arguments THEN THE
   SYSTEM SHALL refuse with `idempotency_key_reused`.
-- WHEN `Reconnect` runs THE SYSTEM SHALL, in one transaction, revoke the
-  owner's current connection (reason `superseded`) and create a connection
-  with a NEW `gcn_` ID. THE SYSTEM SHALL never reuse a connection ID.
+- WHEN `Reconnect` runs on a live prior connection THE SYSTEM SHALL, in one
+  transaction, end it through `endConnection` (reason `superseded`, purge and
+  `RevocationHook` included) and create a connection with a NEW `gcn_` ID. WHEN the
+  prior connection is terminal THE SYSTEM SHALL create a NEW `gcn_` linked by
+  `supersedes_id` and end nothing. THE SYSTEM SHALL never reuse a connection ID.
+  (amended (c))
 
 Revoke and reinstall atomicity
 - WHEN a connection is revoked THE SYSTEM SHALL set state `revoked`,
@@ -106,6 +109,24 @@ Revoke and reinstall atomicity
   state `uninstalled` (on revoke), and move every live connection of that
   tenant bound to an older revision to `revoked` with reason
   `install_revoked` or `install_reinstalled`.
+- WHEN any path ends a connection (`Revoke`, including reason
+  `membership_removed`, `RevokeInstall`, `Reinstall`, `Reconnect` with reason
+  `superseded`, or a `Transition` to a terminal state) THE SYSTEM SHALL call the installed `RevocationHook` with the ended ids in the
+  same transaction, after taking L1 and L2, and SHALL roll back if the hook fails.
+- WHILE no `RevocationHook` is installed THE SYSTEM SHALL report
+  `revocation_hook_missing` from `Ready`.
+- WHEN `LockOwnerShared` or `LiveConnectionTx` is called THE SYSTEM SHALL run on the
+  caller's transaction and SHALL NOT begin or commit one.
+- WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= clock_timestamp()` (database
+  clock at statement time, never `now()`, which is the transaction start; round 4) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
+  has run. (amended (c))
+- WHILE `GLOVO_DB_URL` is not set explicitly (the wiring slice passes `WithExplicitURL(false)`) THE SYSTEM SHALL report `not_ready`; it
+  SHALL NOT fall back to `AUDIT_DB_URL`. `NewStore` SHALL take the shared pool and open none of its own (round 3).
+- WHILE `current_user` differs from the configured runtime role, or has `rolsuper`, `rolcreaterole`, `rolcreatedb` or `rolbypassrls`, THE SYSTEM SHALL report `not_ready` from `Ready` (round 3).
+- THE SYSTEM SHALL create every object in the Postgres schema `glovo`, owned by the
+  migration role, and SHALL grant the one Glovo runtime role exactly the #959 rows of
+  mctl-api#957 design §6d.1 and the work-items role nothing. (amended (c); role
+  model confirmed by the owner 2026-11-09)
 - WHILE a `Connect` races a connection revoke or an install
   revoke/reinstall for the same tenant THE SYSTEM SHALL serialize them so
   that after both commit no live connection references a revoked install
@@ -143,9 +164,13 @@ Secret reference
   KEK design as "crypto-shredding" in code or docs.
 
 Schema safety
-- WHEN the store starts THE SYSTEM SHALL apply its schema idempotently
-  under a schema advisory lock, creating only new `glovo_*` objects and
-  never altering or dropping an existing non-`glovo_*` table.
+- THE SYSTEM SHALL apply its schema only through `ApplySchema(ctx,
+  migrationConnStr, runtimeRole)` under the migration role, idempotently under a
+  schema advisory lock, creating only objects in schema `glovo` and never altering
+  or dropping any other object, refusing a schema or object owned by another role, a
+  recorded version above the compiled one and a runtime role name that fails
+  `^[a-z_][a-z0-9_]{0,62}$` (round 5). WHEN `NewStore` starts THE SYSTEM SHALL run no DDL,
+  check the recorded schema version and fail closed on a mismatch. (amended (c))
 
 ## Out of scope
 
@@ -180,6 +205,14 @@ Schema safety
   behind a feature flag. If the owner wants the schema deployed earlier,
   that is a one-line follow-up.
 - The deployed mctl-api configuration could not be observed (see
-  design.md, Deployed state checked). Which database URL slice 4 will use
-  (a new `GLOVO_DB_URL` or the existing `AUDIT_DB_URL` fallback) is left
-  to slice 4.
+  design.md, Deployed state checked). Resolved by owner decision A
+  (2026-11-09 (b)): `GLOVO_DB_URL` is required, names the same physical
+  database as the bridge and the work items, and never falls back to
+  `AUDIT_DB_URL`.
+- OPEN-959-1. Who detects that an owner lost tenant membership and calls
+  `RevokeForMembership` (a membership-change hook in the tenant role store,
+  or a sweeper). Until it exists, the #989 fence's live membership read is
+  the only guard.
+- OPEN-959-2. Provisioning of the migration and runtime roles (shared with
+  OPEN-985-6, OPEN-988-3, OPEN-989-2).
+- OPEN-959-3 (round 6; recommendation: add Go declarations once in design Types and task 1). Only `Connection` and `Install` have a field list (round 6 G4). `AuditEvent`, `ConnectResult`, `ConnectInput`, `RefusalEvent`, `GrantRow` and `Option` still need declarations, and the place where a released `gsr_` ref is returned (a field on the ended `Connection` or a separate `[]SecretRef`) must be stated, so that #957 section 6d.4 "created by #959 task 1" is true.

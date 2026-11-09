@@ -58,6 +58,7 @@ team is never chosen on the human's behalf.
 
 ## Acceptance criteria added by the 2026-11-09 joint AMEND
 
+- IF `GLOVO_ENABLED=true` and `OAUTH_DB_URL` is unset, THEN THE SYSTEM SHALL refuse to start (the fallback DSN has no privilege on `glovo.*`).
 - WHILE `GLOVO_ENABLED` is not `true`, or any readiness dependency (Postgres refresh store, team grant store, principal-mode role reader, allowlist reader, valid `GLOVO_MCP_RESOURCE`) is missing or unhealthy, THE SYSTEM SHALL keep refusing the Glovo resource as not ready and SHALL keep `glovo.Gate` closed.
 - WHEN a Glovo authorization code is exchanged THE SYSTEM SHALL insert the refresh token and activate the team grant in one database transaction, and SHALL sign the access token only after that transaction commits.
 - WHEN a refresh family or a principal's sessions are revoked THE SYSTEM SHALL revoke the bound team grants in the same transaction.

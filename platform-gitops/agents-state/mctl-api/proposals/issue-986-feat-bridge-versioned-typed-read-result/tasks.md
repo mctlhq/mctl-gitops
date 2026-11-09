@@ -1,140 +1,122 @@
 # Tasks: issue-986-feat-bridge-versioned-typed-read-result
 
-- [ ] 1. Vendor the canonical v1alpha2 `command.schema.json`, `result.schema.json`
-  and `read-result.schema.json` from mctl-agents into
-  `internal/bridge/schema/v1alpha2/`, together with a `PROVENANCE` file (repo,
-  PR, merge commit, three sha256). Do not touch the v1alpha1 files. This task is
-  gated: if the canonical files are not merged upstream, stop here and do not
-  author them locally. — DoD: the files are byte-identical to upstream, and
-  `PROVENANCE` digests match.
-- [ ] 2. (depends on 1) Extend `internal/bridge/schema.go`:
-  - embed and compile the v1alpha2 URLs next to v1alpha1;
-  - add `SchemaVersionV1Alpha2`;
-  - make `ParseResult` dispatch on `schema_version`;
-  - add `ReadResult` typed structs (per kind) and `Result.ReadResult` with
-    `omitempty`;
-  - extend `SchemaDigests` (or add a v1alpha2 variant).
+Blocking dependency (amended 2026-11-09 (b)): mctlhq/mctl-agents#1059 approved and
+merged. Without it no task starts.
 
-  DoD: the v1alpha1 parse output and `Digest()` are unchanged for existing
-  fixtures, and v1alpha2 fixtures parse.
-- [ ] 3. (depends on 2) Add read kinds to `store.go`:
-  - add the `Kind*` constants and an `IsReadKind` helper;
-  - in `bridgeSchema`, add the `wire_version` column, the widened
-    `bridge_commands_kind_chk`, `bridge_commands_read_wire_chk`, and the
-    `bridge_read_results` table and index;
-  - make `Enqueue` set `wire_version` from the kind;
-  - make `projection()` emit the stored wire version.
-
-  DoD: the DDL applies twice cleanly on an existing v1alpha1 database, and
-  read-kind commands are claimed with `schema_version=bridge.mctl.ai/v1alpha2`.
-- [ ] 4. (depends on 3) Extend `submitTx` with the read rules from design.md
-  section 3:
-  - the version binding and the read/kind consistency checks;
-  - the 8 KiB canonical size cap and the server digest check;
-  - the server-minted `res_`;
-  - the same-transaction `bridge_read_results` insert;
-  - the reference-only `redacted()` form;
-  - the replay lookup;
-  - `SubmitOutcome.ResultRef`.
-
-  Extend `ReadOutcome` with ref and digest fields. DoD: the existing
-  `submitTx` behaviour for v1alpha1 is unchanged, and the new code paths return
-  only existing codes from `errors.go`.
-- [ ] 5. (depends on 3) Add the `ConnectionChecker` interface,
-  `DenyConnectionChecker` (fail-closed default) and `Store.SetConnectionChecker`.
-  Add `Store.FetchReadResult` with the check order from design.md section 4,
-  using constant-time digest compare. Add a new sentinel for "checker
-  unavailable". DoD: every refusal maps to an existing closed code.
-- [ ] 6. (depends on 5) Add the HTTP handler `BridgeReadResult` in
-  `internal/api/handlers_bridge.go`:
-  - add `FetchReadResult` to `BridgeService`;
-  - mount `GET /api/v1/glovo/read-results/{result_ref}` in `router.go` only
-    under `opts.BridgeEnabled`;
-  - add the exact method and path to `glovoAudienceRoutes`;
-  - map the checker-unavailable sentinel to `bridge_unavailable` 503;
-  - set `Cache-Control: no-store`;
-  - audit ids, digests and codes only.
-
-  Return `result_ref` from `BridgeResult`. DoD: the route answers 404 when
-  disabled and 403 for bridge providers.
-- [ ] 7. (depends on 3) Add `EraseExpiredReads` and call it from the `Expirer`
-  tick. Add the `mctl_api_bridge_read_results_erased_total` metric and the
-  `MCTL_BRIDGE_READ_RESULT_TTL` env in `cmd/api/main.go` (default 600 s,
-  clamped 1..900 s). DoD: expired rows have `data IS NULL` after a sweep.
-- [ ] 8. (depends on 4-7) Update `docs/bridge.md` with a "Read results
-  (v1alpha2)" section: wire, route, codes, data-handling guarantees, v1alpha1
-  compatibility and rollback. Run `go fmt`, `go vet` and `golangci-lint`. DoD:
-  the lint is clean and the docs match the code.
+- [ ] 1. Vendor the #1059 v1alpha2 read files into `internal/bridge/schema/v1alpha2/`
+  (`read-command.schema.json`, `read-result.schema.json`, fixtures, digest vectors; the basket
+  files are #988's, `internal/glovo/basket/contract/`, round 4 N3) with a `PROVENANCE` file (repo, PR, merge commit,
+  sha256 per file) and a `TestVendoredV1alpha2MatchesProvenance`. DoD: no file differs
+  from #1059; v1alpha1 files and their pin test are unchanged.
+- [ ] 2. Versioning in `schema.go` and `store.go` (depends on 1):
+  - `compileSchemas()` compiles both versions; `ParseResult` selects by `schema_version`;
+  - `SubmitResult` (`store.go:745`) accepts v1alpha2 only for a v1alpha2 command;
+  - `validate()` (`store.go:229-256`) gets the read-kind branch of design §2;
+  - `projection()` (`store.go:334`) is unchanged for write kinds and emits the #1059 read
+    projection, including `install_revision_ref`, for read kinds (round 4, R3-1);
+  - `cmdCols`/`scanCmd` are NOT changed; the new columns are read only in read-kind paths
+    through the extras query of design §4a (round 4, R3-3);
+  - `BridgeProviderConfig.SupportedVersions` (default `[v1alpha1]`), `Claim` leases read
+    kinds only to v1alpha2-capable providers, versioned claim envelope
+    (`handlers_bridge.go:200`) (OPEN-1059-2).
+  DoD: all v1alpha1 tests pass unchanged.
+- [ ] 3. Idempotent schema (depends on 2): `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx,
+  runtimeRole string) error` (round 4, X-3), the one owner of the read DDL: the guarded `DO` block
+  of design §4 (incl. `install_revision_ref` and the read-shape CHECK), the `bridge_read_results`
+  table, `bridge_read_schema_version`, the `bridge_commands_read_request` index and their
+  grants, plus `bridge.CheckReadLevel`. #985's `bridge.ApplySchema` calls it (amended (c)). DoD: it applies on a database built only from
+  today's `bridgeSchema` with no #985 object present; applying it twice,
+  and on a database with v1alpha1 rows, succeeds; on the second run, inside the
+  caller's still-open transaction, `pg_locks` shows no `AccessExclusiveLock` held by that
+  backend on any bridge object (round 5, F1; the check runs against `ApplyReadSchemaTx`
+  itself); the runtime role cannot run it.
+- [ ] 3b. `internal/bridge/rawcheck.go`: a thin wrapper over #988 `jcs.Precheck` (token-level pre-check of design §5 step 3; round 4 N3: no second implementation) (depends
+  on 1). DoD: every vendored `must-reject.json` entry is rejected; every valid fixture
+  passes.
+- [ ] 4. `EnqueueRead` (the row values of design §3), `submitTx` read branch (no outbox
+  row, result row in the same tx), `expireTx` read branch (no outbox row), `permitTx`
+  refusing read kinds, `FetchReadResult` with the checks of design §5, and
+  `ReadClient.Read` with the deadline and cancel-on-timeout of design §3 (depends on 3).
+- [ ] 5. `ConnectionChecker`: the interface, `DenyConnectionChecker` as default, and an
+  adapter over #959 `LiveConnection(ctx, glovo.Owner)` (amended (c)) wired when #959 is
+  present. DoD: nil or missing #959 store keeps the deny default.
+- [ ] 6. `bridgeStatus` (`handlers_bridge.go:95-113`) and `codedErrors` (`errors.go:44-48`)
+  (round 4, R3-2): `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` are
+  registered (`payload_too_large`, `read_unavailable`, `read_not_authorized`) with explicit
+  status cases (413, 503, 403); the result handler keeps 400 `invalid_document` for
+  `*http.MaxBytesError` (round 5, F2: the #1059 route contract). No new route. DoD: the #1059
+  `over-cap` fixture (16385 B) gets 400 `invalid_document` from the handler; a `JCS(payload)`
+  of 12289 B gets 413 `payload_too_large` from the Store path; neither is 500 `bridge_internal`
+  (red with the `codedErrors` entry removed).
+- [ ] 7. `EraseExpiredReads` in the `Expirer` tick (erase, then delete after 24 h), the
+  metric, and `MCTL_BRIDGE_READ_RESULT_TTL` with the clamp.
+- [ ] 8. Docs: `docs/bridge.md` gets a v1alpha2 read section (in-process only, no route,
+  pointer to #1059). Run `go fmt`, `go vet`, `golangci-lint`, `go test ./...`.
 
 ## Tests
 
-- [ ] T1. Provenance: v1alpha1 digests are unchanged
-  (`TestVendoredSchemasMatchProvenance`), and the v1alpha2 files match their
-  own `PROVENANCE`.
-- [ ] T2. Compatibility golden: pinned `testdata/v1alpha1/*.golden.json`
-  (command projection, result digest) is unchanged after the change. The
-  existing `command.valid.json` and `result.valid.json` still parse, and a
-  v1alpha1 result containing `read_result` is refused (`invalid_document`).
-- [ ] T3. v1alpha2 fixtures: one valid fixture per read kind, and invalid
-  fixtures for each of these:
-  - extra field;
-  - non-synthetic `provenance`;
-  - over `maxItems`;
-  - wrong kind under `data`.
-- [ ] T4. Cross-tenant fetch: a caller from tenant B with a valid ref and digest
-  of tenant A gets 404 `command_not_found`, and the body is identical to an
-  unknown ref.
-- [ ] T5. Cross-principal fetch: same tenant, different principal gets 404
-  `command_not_found`.
-- [ ] T6. Expired result: after the TTL the fetch returns `command_expired`, and
-  after the sweep `data` is NULL.
-- [ ] T7. Revoked connection: the fake checker returns inactive, or the
-  install revision has changed, and the fetch returns `binding_mismatch`. When
-  the checker errors, the fetch returns `bridge_unavailable` 503. The default
-  checker always refuses.
-- [ ] T8. Replay. An identical resubmission returns `replayed:true`, the same
-  `result_ref` and one row. Resubmitting with different data returns
-  `result_conflict`, and the row is unchanged.
-- [ ] T9. Wrong digest on submission (declared differs from computed) returns
-  `binding_mismatch`, and no read row is created. A wrong digest on fetch
-  returns `binding_mismatch`.
-- [ ] T10. Oversize: canonical data over 8 KiB returns `invalid_document`. A
-  body over `bridgeMaxBody` returns `invalid_document`. Nothing is stored.
-- [ ] T11. Concurrent submissions (N goroutines, Postgres test, as in
-  `store_pg_test.go`) create exactly one read row and one outbox row.
-  Concurrent fetches return byte-identical bodies.
-- [ ] T12. Consistency: each of the following returns `result_inconsistent`:
-  - a read kind with `provider_effect=applied`;
-  - a provider `result_ref` on a read kind;
-  - a missing `read_result` on success;
-  - a kind mismatch;
-  - a `read_result` on `quote`.
-
-  A v1alpha1 result for a v1alpha2 command returns `binding_mismatch`.
-- [ ] T13. Write fence: `IssueWritePermit` on every read kind returns
-  `not_mutating`, and the existing permit tests pass unchanged.
-- [ ] T14. No data leakage. A sentinel string inside `data` must not appear in
-  any of these:
-  - `bridge_commands.result`;
-  - `bridge_signal_outbox`;
-  - `ReadOutcome`;
-  - audit entries;
-  - the captured slog output.
-- [ ] T15. Route gating: the fetch route answers 404 when the bridge is
-  disabled, 403 `bridge_provider_gate` for a bridge provider, and is reachable
-  by a Glovo-audience token. The Glovo-audience token is still refused on every
-  other route (extend `glovo_audience_test.go`).
+- [ ] T1. The vendored files match `PROVENANCE`; a one-byte change fails the test.
+- [ ] T2. Every #1059 valid fixture parses; every invalid fixture fails with the same
+  named reason as in #1059.
+- [ ] T3. The #1059 digest vectors reproduce byte for byte through #988 `internal/jcs` (this slice contains no canonicalizer of its own; a grep test asserts it).
+- [ ] T3b. (round 4, #1059 R3-1) Go leg of `pattern-parity.json` over the vendored read schemas (`placed_on`, `issued_at`, `expires_at`, `completed_at`, `item_name`): trailing `\n` and `\r`, Arabic-Indic and fullwidth digits are rejected by Go `regexp`, exactly as by the Python validator.
+- [ ] T4. v1alpha1 golden projection and result digests are unchanged.
+- [ ] T4b. (round 4, R3-1) A read command enqueued through `EnqueueRead` with `InstallRevisionRef` `irv_...` is projected for `Claim` with `install_revision_ref` equal to it, plus every field the vendored `read-command.schema.json` requires, and the projection validates against that schema (red with the column or the projection field removed); `EnqueueRead` with an empty ref is refused; the decimal `install_revision` is never emitted as the ref.
+- [ ] T4c. (round 4, R3-3) On a database built only from today's `bridgeSchema` (no migrator run), on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without `bridge_read_schema_version`: v1alpha1 `Claim`, `SubmitResult`, `Cancel`, `IssueWritePermit` and `ExpireDue` pass unchanged, and a pgx tracer shows no statement mentioning `wire_version`, `read_request_id` or `install_revision_ref` for a write kind; `EnqueueRead` and `ReadClient.Read` on the first and third give `ErrReadUnavailable` through `bridge.CheckReadLevel` called directly (red with the level check removed). The `NewRuntimeStore` `not_ready` leg is #985's T26 (round 5, F3).
+- [ ] T4d. (round 4, X-3) `ApplyReadSchemaTx` standalone: run as the migration role on a database holding only today's `bridgeSchema` it succeeds twice; run as the runtime role it fails; it refuses when `bridge_commands` is owned by another role; the grants on `bridge_read_results` equal the #957 §6d.1 row.
+- [ ] T5. A read command has `''` as `workflow_id`, `order_ref`, `execution_id` and
+  `work_item_id`, and its completion writes no `bridge_signal_outbox` row.
+- [ ] T5c. Round 3 (N1): two concurrent reads from two tenants, and two reads from one principal, all enqueue and are claimable together (no `unique_violation`, no read waits on another); after `ApplySchema` the index definition carries the read-kind predicate, a second run is a no-op, and a v1alpha1 execution's `sequence` ordering and duplicate-`sequence` refusal are unchanged.
+- [ ] T5b. An expired read command writes no `bridge_signal_outbox` row, and `ExpireDue`
+  in the same batch still expires a v1alpha1 write command and writes its outbox row.
+- [ ] T6. A non-read command with an empty `workflow_id` or `order_ref` is rejected by
+  the CHECK (raw SQL); no column of `bridge_commands` is nullable that was not before.
+- [ ] T7. Submission refusals: wrong `schema_version`, effect other than `none`, payload
+  on a failed outcome, `JCS(payload)` of 12289 bytes, the #1059 `over-cap` fixture,
+  digest mismatch, a result carrying any binding ref, a result of another kind, a result
+  after `expires_at`, a different `request_id`, every `must-reject.json` entry,
+  `quantity: 1.0`, and a read payload on `place_order_fake`, each with the code of the
+  design §5 pipeline (round 5, F2: the 16385-byte fixture is refused by the handler as 400 `invalid_document`, as in #1059, and the 12289-byte `JCS(payload)` by the Store as 413 `payload_too_large`). The #1059 `at-cap` fixture is accepted.
+- [ ] T7b. `lease_token` never appears in `bridge_commands.result`,
+  `bridge_read_results`, `bridge_command_transitions`, logs or audit rows after a read
+  round trip (amended (c): `bridge_commands.lease_token` stores it by design).
+- [ ] T7c. Versioning: a provider configured `[v1alpha1]` never receives a read-kind
+  command from `Claim`; one configured with v1alpha2 does; an unclaimed read command
+  expires.
+- [ ] T7d. A provider queue with mixed read and v1alpha1 write commands: `Claim`,
+  `Cancel`, `IssueWritePermit` (refused for the read) and `ExpireDue` all succeed on both
+  kinds; nothing fails to scan.
+- [ ] T8. Replay returns the same `res_`; a different digest gives `result_conflict`.
+- [ ] T9. Round trip: a payload submitted with shuffled keys is stored canonically, and
+  `FetchReadResult` returns bytes whose digest equals `payload_digest`. A stored byte
+  flipped by raw SQL makes the fetch fail closed.
+- [ ] T10. Fetch scope: another tenant, another owner and an unknown `res_` give the same
+  sentinel; missing `glovo:read` gives `ErrReadNotAuthorized`.
+- [ ] T10b. Round 3: `FetchReadResult` called directly with principal B's id against
+  principal A's `res_` gives `ErrCommandNotFound` (the cross-owner case; it does not go
+  through the A12 adapter, which always enqueues a new command). The `pho_`/cursor origin
+  check (#1059 MUST 10) is #957 T7a, not a #986 test.
+- [ ] T11. Fetch after expiry or erase gives `ErrCommandExpired`.
+- [ ] T12. Connection: revoked, expired, absent and moved install revision each refuse;
+  a checker error gives `ErrReadUnavailable`; the default checker denies. Round 3 (X-2): a row stored at revision N with live revision N+1 is refused `ErrBindingMismatch` (decimal comparison; the `irv_` plays no part), and `EnqueueRead` refuses a request whose `InstallRevision` or `InstallRevisionRef` is empty.
+- [ ] T13. `ReadClient.Read` timeout cancels the command and returns
+  `ErrReadUnavailable`; a late result for the cancelled command is refused.
+- [ ] T14. Erase and delete: bytes are NULL after `expires_at`, the row is gone 24 h
+  later, no tenant label on the metric.
+- [ ] T15. No route: the full route list, the MCP tool list and the Temporal workflow
+  and signal registrations are diffed before and after; nothing is added, and
+  `glovoAudienceRoutes` is unchanged.
+- [ ] T16. Schema idempotency: `bridge.ApplySchema` applied twice on an empty database
+  and on a populated v1alpha1 database; the second run, inside its
+  open transaction, holds no `AccessExclusiveLock` in `pg_locks` (round 5, F1: not a statement
+  log; mutation step: remove one catalog guard of `ApplyReadSchemaTx`, expect red).
+- [ ] T17. Log hygiene: captured logs and audit rows across T7-T13 contain no payload
+  bytes.
 
 ## Rollback
 
-- Unset `MCTL_BRIDGE_ENABLED` (already the default). The read route and all
-  bridge routes then answer 404, and nothing else changes.
-- Revert the PR. The added column, table and constraints are harmless when
-  left in place: `wire_version` has a default, and the widened CHECK accepts
-  everything the old one did.
-- To remove the storage, cancel open read-kind commands through `Store.Cancel`
-  and then run `DROP TABLE bridge_read_results`. The
-  `wire_version` column can stay or be dropped once no v1alpha2 commands
-  remain.
-- The v1alpha1 vendored schemas never change, so v1alpha1 consumers are
-  unaffected by both forward and rollback.
+- Before reverting the code, cancel or expire every open read-kind command
+  (`docs/bridge.md` procedure), so no provider holds a lease on a kind the old code
+  cannot parse.
+- Then revert the PR. The added columns, the CHECKs (no NOT NULL was relaxed), the index and `bridge_read_results` are harmless to v1alpha1 and can stay;
+  they can be dropped in a follow-up after the table is empty.
