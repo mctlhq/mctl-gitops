@@ -6,7 +6,9 @@ Resolves the crosswalk mismatches assigned to this slice (M6-M10 in mctl-gitops
 `deploy/staged/glovo-m1/CROSSWALK.md`, PR #2545), the re-review request on mctl-agents#1044
 (comment 6740430920) and the #1258 carry-overs (comment 6740200693). Sources re-read at
 mctl-api `a9ca5814` (merged bridge #968, `docs/bridge.md`, `internal/bridge/schema/`) and
-mctl-gitops `4f2d2d76`. Rows marked **(owner)** record owner decisions of 2026-11-09. The
+mctl-gitops `4f2d2d76`; re-checked at mctl-api `ceac9ed6` (cited bridge files unchanged).
+Rows marked **(owner)** record owner decisions of 2026-11-09, including D1, D3 and D5
+of mctl-api#957 design "Owner decisions 2026-11-09". The
 owner decided on 2026-11-09 that #968 is the canonical bridge; the transport question of
 mctl-agents#1043 is closed by that decision. Where this section and older text below
 disagree, this section wins; the passages it contradicts have been edited.
@@ -15,28 +17,36 @@ disagree, this section wins; the passages it contradicts have been edited.
 |---|---|---|
 | M6 | The workflow waited for `assistants_provider_result(command_id)`; mctl-api sends `bridge-result` with `{command_id, result_digest}` to the stored workflow and run, at least once (`docs/bridge.md` "Signals") | The signal is `bridge-result`, payload `{command_id, result_digest}`. The workflow dedupes on `command_id`, ignores a `command_id` it did not receive from mctl-api, and then reads the result back through `ControlApiPort.read_command_result(command_id)`, accepting it only if the digest equals the signalled `result_digest`. The signal is a wake-up, never the result |
 | M6b | Found during this amendment: the workflow also waited for `assistants_approval_decided`, which no mctl-api component sends (the dispatcher sends only `bridge-result`) | The approval wait is poll-only: `read_approval` every `approval_poll_interval_s` (default 15, bounded 5-60), capped by the `aar_` expiry. No approval signal is registered |
-| M7 | `ProviderBridgePort.create_command` assumed an HTTP enqueue route; #968 has only in-process `Store.Enqueue(ctx, tx, …)` | **(owner, option b)** The workflow orchestrates only through mctl-api APIs. `ProviderBridgePort`, `bridge.py` and `bridge_decision.json` are removed. Dispatch and cancel are `ControlApiPort.dispatch_order(order_ref, approval_ref, fingerprint)` and `cancel_order(order_ref)`; mctl-api performs the order transition, the `aar_` reserve and `Enqueue` in one transaction (mctl-api#957 design §6a). The HTTP route behind them is not decided (mctl-api#957 OPEN-3); until it is merged and pinned, the client is exercised against a fake only and a real `ControlApiPort` refuses to construct (`BLOCKED_FOR_INTEGRATION`) |
+| M7 | `ProviderBridgePort.create_command` assumed an HTTP enqueue route; #968 has only in-process `Store.Enqueue(ctx, tx, …)` | **(owner, option b)** The workflow orchestrates only through mctl-api APIs. `ProviderBridgePort`, `bridge.py` and `bridge_decision.json` are removed. Dispatch and cancel are `ControlApiPort.dispatch_order(order_ref, approval_ref, fingerprint)` and `cancel_order(order_ref)`; mctl-api performs the order transition, the `aar_` plus revocation re-check and `Enqueue` in one transaction. **(owner, D3)** The dispatch/cancel routes and the control-worker principal are mctl-api#985 (M1b/3); until #985 is merged and its route contract pinned, the client is exercised against a fake only and a real `ControlApiPort` refuses to construct (`BLOCKED_FOR_INTEGRATION`) |
 | M8 | `command_id` derived client-side (`cmd_` + base32(sha256)[:26]); #968 generates `cmd_` server-side and dedupes on `(tenant, execution_id, operation_key)` (`internal/bridge/store.go:478-536`) | **(owner)** `ids.command_id` is removed. `dispatch_order` returns the server's `cmd_`, which the workflow stores. An activity retry calls `dispatch_order` again and gets the same `cmd_` back (`created=false`). The operation key is built by mctl-api, not by the workflow |
 | M9 | `order_status` vs the bridge's `outcome` × `provider_effect` × `error_code`; `unknown` after a reclaim must survive | "Result mapping (M9)": one total mapping table over the frozen v1alpha1 enums. `provider_effect=unknown` maps to `unknown` in every row, is never `completed` and never re-dispatched. The fake provider reports reclaim-after-permit and `permit_already_issued` as `failed_terminal`/`internal`/`unknown` (mctl-telegram#1262 design, owner decision), which the table maps to `unknown` |
 | M10 | Approval binding and refusal reasons (#1258 carry-overs) | The `aar_` is created once, by mctl-api at prepare (mctl-api#957 §6, bound to execution, Target and basket fingerprint). `GlovoControlInput` gains `approval_ref` and `fingerprint`; the `quoting` state and `request_order_approval` are removed, so the workflow never creates a second approval. Dispatch passes the input fingerprint; mctl-api compares it with the `aar_` intent, and a difference ends as `refused`/`basket_changed`, which needs a new `we_` and a new `aar_`. Refusal reasons are distinct: `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `provider_disabled`, `tenant_busy`. `hir_` stays non-authorizing |
+| Reads | **(owner, D1)** History, preview and basket are read by mctl-api through the bridge read extension mctl-api#986 | The workflow never receives a read payload. Its input, activity results, signals and logs carry refs and digests only; a test scans recorded histories for any payload field |
 | M1 (consumer side) | Ref families | `tnr_`, `prr_`, `ordr_` come from mctl-api's mapping (mctl-api#957 §2a); `connection_ref` is the M1a `gcn_` id and `install_ref` the M1a `gin_` id, both passed through unchanged. The `ins_` prefix is dropped |
 
-### Open items
+### Decided 2026-11-09 (owner; formerly open items)
 
-- **Workflow start.** mctl-api starts `GlovoControlWorkflow` (crosswalk §4). When and in
-  which slice is mctl-api#957 OPEN-5; the input contract here does not depend on it.
-- **Control route ownership.** mctl-api#957 OPEN-3. No HTTP route constants for dispatch
-  or cancel are frozen before it is decided.
+- **Workflow start (D5).** mctl-api#957 writes a workflow-start record in the prepare
+  transaction; a dispatcher owned by #957 starts `GlovoControlWorkflow` only after commit,
+  with the deterministic id of `ids.control_workflow_id` and "reject duplicate" reuse
+  policy. The workflow re-derives and compares that id; the input contract is unchanged.
+- **Control routes (D3).** Dispatch and cancel are mctl-api#985's routes. Route constants
+  in `api_client.py` are frozen only from #985's merged contract, pinned through
+  `ASSISTANTS_API_CONTRACT`.
 
 ### Result mapping (M9)
 
 Applies to the command the workflow dispatched (`place_order_fake`) or cancelled
-(`cancel_order_fake`). Rows are evaluated top to bottom; the first match wins.
+(`cancel_order_fake`). Rows are evaluated top to bottom and the first match wins; the rows
+are also pairwise disjoint, so every triple matches exactly one row and the order changes
+nothing. Amended 2026-11-09 (agy P2 on mctl-gitops#2547): the third row covers the six
+`succeeded`/`applied` triples with an `error_code` other than `none`.
 
 | `outcome` | `provider_effect` | `error_code` | `order_status` | `reason_code` |
 |---|---|---|---|---|
 | any | `unknown` | any | `unknown` | `provider_effect_unknown` |
 | `succeeded` | `applied` | `none` | `completed` (`place_order_fake`) / `cancelled` (`cancel_order_fake`) | `none` |
+| `succeeded` | `applied` | `stale_lease`, `expired`, `approval_refused`, `provider_unavailable`, `provider_rejected`, `internal` | `unknown` | `result_inconsistent` |
 | `succeeded` | `none` | any | `unknown` | `result_inconsistent` |
 | `failed_retryable`, `failed_terminal`, `cancelled`, `approval_refused` | `applied` | any | `unknown` | `result_inconsistent` |
 | `approval_refused` | `none` | any | `refused` | `approval_refused` |
@@ -52,7 +62,8 @@ Applies to the command the workflow dispatched (`place_order_fake`) or cancelled
   maps by the table; anything else, including a read failure, is `unknown`/`settle_timeout`.
 - A test enumerates every (`outcome`, `provider_effect`, `error_code`) triple of the
   vendored enums (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
-  with `provider_effect=unknown` yields anything but `unknown`.
+  with `provider_effect=unknown` yields anything but `unknown`. Per-row counts, top to
+  bottom: 35, 1, 6, 7, 28, 7, 7, 1, 1, 5, 7 (total 105, none unmatched).
 
 ## Current state
 
@@ -180,8 +191,8 @@ Files:
 - ~~`orchestrator/assistants/bridge.py`~~ — removed by the 2026-11-09 amendment (M7).
   The bridge is mctl-api#968 and the workflow reaches it only through mctl-api APIs.
   The integration gate moves to `api_client.py`: a real `ControlApiPort` refuses to
-  construct (`BLOCKED_FOR_INTEGRATION`) until `ASSISTANTS_API_CONTRACT` pins a merged
-  mctl-api control route contract (mctl-api#957 OPEN-3). No raw cross-namespace
+  construct (`BLOCKED_FOR_INTEGRATION`) until `ASSISTANTS_API_CONTRACT` pins the merged
+  mctl-api#985 dispatch/cancel route contract (owner decision D3). No raw cross-namespace
   Activity and no Nexus endpoint is implemented here.
 - `orchestrator/assistants/worker.py` — standalone entrypoint
   `python -m orchestrator.assistants.worker`.
@@ -201,7 +212,7 @@ GlovoControlWorkflow   (amended 2026-11-09)
   awaiting_approval: poll read_approval(aar_) every approval_poll_interval_s
               every revalidate_interval_s: revalidate_scope; bounded by aar_ expiry
   dispatching: revalidate_scope -> dispatch_order(order_ref, aar_, fingerprint) -> cmd_
-              (mctl-api: order transition + aar_ reserve + bridge Enqueue in one tx)
+              (mctl-api#985: order transition + aar_/revocation re-check + bridge Enqueue in one tx)
   settling:   wait signal bridge-result{command_id, result_digest} | poll read_command_result
               accept only the stored cmd_ and a matching digest; duplicates are no-ops
   completed:  return GlovoControlResult(order_status, reason_code, handoff_ref)  (map: "Result mapping (M9)")

@@ -34,6 +34,8 @@ Crosswalk M6-M10 and M1 (consumer side); design.md "Amendment 2026-11-09" has th
 - THE SYSTEM SHALL orchestrate only through mctl-api APIs (`dispatch_order`, `cancel_order`, `read_command_result` and the existing read/revalidate calls). It SHALL contain no bridge port, SHALL never compute a command id, and SHALL store the `cmd_` returned by mctl-api. (owner decision, option b)
 - THE SYSTEM SHALL map every (`outcome`, `provider_effect`, `error_code`) triple of the vendored v1alpha1 enums by the the design "Result mapping (M9)" table, and IF `provider_effect` is `unknown` THEN `order_status` SHALL be `unknown` with no re-dispatch.
 - THE SYSTEM SHALL take `approval_ref` and `fingerprint` from `GlovoControlInput` and SHALL NOT create an `aar_`. IF mctl-api reports a fingerprint mismatch at dispatch THEN THE SYSTEM SHALL end `refused`/`basket_changed`. Approval refusals SHALL be reported distinctly as `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `provider_disabled` or `tenant_busy`.
+- THE SYSTEM SHALL call dispatch and cancel only through the routes of mctl-api#985, and SHALL expect to be started only by mctl-api#957's post-commit start dispatcher under the id `control_workflow_id` derives. (owner decisions D3, D5)
+- THE SYSTEM SHALL carry refs and digests only: no read payload (history, preview, basket; mctl-api#986) SHALL appear in its input, activity results, signals or logs. (owner decision D1)
 - THE SYSTEM SHALL accept `install_ref` as an M1a `gin_` id and `connection_ref` as an M1a `gcn_` id, and `tenant_ref`, `principal_ref`, `order_ref` only in the `tnr_`/`prr_`/`ordr_` forms minted by mctl-api.
 
 ## User stories
@@ -169,7 +171,7 @@ Safety:
 
 - Resolved 2026-11-09 (owner): mctl-api#968 is the canonical bridge; the
   workflow reaches it through mctl-api APIs only. The remaining gate is the
-  control route contract (mctl-api#957 OPEN-3).
+  dispatch/cancel route contract of mctl-api#985 (owner decision D3, 2026-11-09).
 - mctl-api#953/#954 route names and payloads are proposals, not merged APIs.
   The activity ports mirror them; any change there means a contract update here.
 - Image publishing: should CI push `ghcr.io/mctlhq/mctl-agents-assistants-control`
