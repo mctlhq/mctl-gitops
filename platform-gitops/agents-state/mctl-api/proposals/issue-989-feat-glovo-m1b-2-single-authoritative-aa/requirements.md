@@ -122,12 +122,12 @@ Reserve, revoke, status
   to `denied` through `RevokeGlovoApprovalTx`; a row already `denied` for that order
   SHALL count as success. `MarkGlovoApprovalUnknownTx` on a row already `unknown` for the
   same `cmd_` SHALL count as success.
-- WHEN the control worker reads an approval THE SYSTEM SHALL return ids and enums only,
+- WHEN the control worker reads an approval THE SYSTEM SHALL read it through a `Querier` on the Glovo pool (never the work-items pool, which has no privilege on schema `glovo`) and SHALL return ids and enums only,
   and `not_found` outside its `tenants` bound.
 
 Fence
-- WHEN `permitTx` runs for a Glovo command THE SYSTEM SHALL take L1 shared, L2 shared, L3
-  and L4 in `PreLock` before the command lock, per #957 §6b.
+- WHEN `permitTx` runs for a Glovo command THE SYSTEM SHALL first apply, in `PreLock(ctx, tx, c, commandID)`, the `lockOwned` provider and tenants predicate to an unlocked read and answer `ErrCommandNotFound` for absent and foreign ids alike (a non-`place_order_fake` kind takes no lock), and only then take L1 shared, L2 shared, L3
+  and L4 before the command lock, per #957 §6b.
 - THE SYSTEM SHALL parse the whole stored command payload as the approval basket (#988
   `basket.Parse`; any extra or missing field or other shape is `basket_changed`),
   recompute the fingerprint from its canonical bytes and the intent hash from the

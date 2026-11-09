@@ -17,6 +17,10 @@ edited.
 | F5 (`invalid_transition` maps to no §4 row) | §7 maps through #957 §4: on the facade prepare route it is an invariant failure (`unavailable`; a replay never reaches a write), on the #985 control routes it is 409 `invalid_transition` |
 | F6, #957 F5 (refs, workflow id, run id) | `LookupJoinRefTx` (read-only) is added; the order row carries only `ordr_`, `we_`, fingerprint and `aar_`. #985 reads `tnr_`/`prr_` here, the workflow id from #989 `ExecutionBindingTx` and the run id from #957 `ControlStartTx` |
 | F7 (readiness only checks `relowner <> current_user`) | `Ready` and `ApplySchema` require `NOT pg_has_role(current_user, owner, 'MEMBER')` for every table, trigger function and schema `glovo`, and that schema `glovo` is owned by the migration role. T14 adds an inherited-membership case and a runtime-owned schema |
+| Round 3 (X-1, F-A) | `CreateInput.OrderRef` and `NewOrderRef()`; read-only `LookupByIdempotencyKey`; the `order` join kind is dropped (the ref is the order's own column) |
+| Round 3 (F-B) | `glovo.orders_insert_guard()` and `glovo.order_effects_insert_guard()` close the raw-`INSERT` gap |
+| Round 3 (F-C) | `lock_timeout` (55P03) maps to `tenant_busy` |
+| Round 3 (F-D) | one `triggerInventory` constant (eight triggers, five functions) shared by `ApplySchema` and `Ready` |
 | X-5 (`irv_`) | `glovo.join_refs.kind` gains `install_revision` (`irv_`), subject `install_id@revision` |
 | X-4 (grants) | The grant list in §3 equals the #988 rows of #957 §6d.1; `execution_id` leaves the column `UPDATE` list (it is written at insert) |
 | P3 F8, F9, F10 | Row P2-3 below now quotes the body's CHECK and cites T11/T12; `order_snapshots` gains `CHECK (basket_fingerprint = 'sha256:' \|\| encode(sha256(basket_canonical), 'hex'))` and a `BEFORE INSERT` trigger that refuses a snapshot unless the order is `open`; `CreateInput` is defined; the owner `Cancel` is dropped (no caller; prepare commits a finalized order in one transaction, so no `open` order is ever visible); a downgrade test is added |
@@ -99,10 +103,13 @@ type CreateInput struct {                                     // amended (c)
     ApprovalBasket []byte                                     // JCS bytes stored with the #957 preview
     ExpectedFingerprint string                                // the preview's fingerprint
     ExecutionID string                                        // we_ from #989 CreateGlovoExecutionTx
+    OrderRef string                                           // ordr_, minted by #957 with NewOrderRef() before the workflow id is derived (round 3, X-1)
 }
+func NewOrderRef() string                                     // "ordr_" + 26 base62 from crypto/rand (the bridge randAlnum); the only minting entry point
 
 // owner path (#957)
 func (s *Store) Create(ctx, tx, in CreateInput) (*Order, bool /*replayed*/, error)
+func (s *Store) LookupByIdempotencyKey(ctx, q Querier, sc Scope, key string) (*Order, error) // read-only, one statement on (tenant, owner, key); not_found on a miss (round 3)
 func (s *Store) AppendSnapshot(ctx, tx, sc Scope, a Actor, orderRef string, expectedVersion int64, b basket.Approval, expectedFP string) (*Snapshot, error)
 func (s *Store) Finalize(ctx, tx, sc Scope, a Actor, orderRef string, expectedVersion int64, expectedFP string) (*Order, error)
 func (s *Store) BindApproval(ctx, tx, sc Scope, a Actor, orderRef, approvalRef string) error // #989 only
@@ -125,7 +132,16 @@ func (s *Store) LookupJoinRefTx(ctx, q Querier, kind JoinKind, tenant, principal
 
 Every signature here is the one listed in mctl-api#957 design §6d.4 (amended (c)).
 
-`Order` exports `OrderRef`, `Tenant`, `OwnerPrincipalID`, `ConnectionID`,
+`Create` requires `in.OrderRef` to match `^ordr_[A-Za-z0-9]{16,40}$` (else `invalid_request`)
+and inserts it as `order_ref`; the order's own column is therefore the only `ordr_`, and
+the workflow id, `engine_ref`, the `aar_` key and `glovo.control_starts` all embed the one
+value #957 minted (round 3). On an idempotency conflict `Create` writes nothing and
+returns the stored order with `replayed=true`, whatever `OrderRef` and `ExecutionID` the
+caller passed; a caller that sees `replayed=true` after it already wrote other rows in
+its transaction must roll the whole transaction back (#957 §6 step 1b).
+`LookupByIdempotencyKey` lets #957 answer a replay before any write.
+
+`Order` exports `RequestHash`, `OrderRef`, `Tenant`, `OwnerPrincipalID`, `ConnectionID`,
 `InstallRevision`, `State`, `FinalBasketFingerprint`, `FinalSnapshotSeq`,
 `ApprovalRef`, `CommandID`, `ExecutionID` and `Version`. `order_id`
 (`pord_`) stays unexported. No write method begins, commits or rolls back a transaction.
@@ -136,13 +152,13 @@ With a nil collaborator every method returns `not_ready`.
 ```sql
 CREATE SCHEMA IF NOT EXISTS glovo;   -- owned by the migration role; every ApplySchema runs this (#957 §6d.1)
 CREATE TABLE IF NOT EXISTS glovo.join_refs (
-  kind TEXT NOT NULL CHECK (kind IN ('tenant','principal','order','install_revision')), -- irv_, amended (c)
+  kind TEXT NOT NULL CHECK (kind IN ('tenant','principal','install_revision')), -- irv_, amended (c); no 'order' kind (round 3): ordr_ is the order's own order_ref column, never a join row
   ref TEXT NOT NULL, tenant TEXT NOT NULL, principal_id TEXT NOT NULL DEFAULT '',
   subject_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (kind, ref), UNIQUE (kind, tenant, subject_id));
 CREATE TABLE IF NOT EXISTS glovo.orders (
   order_id TEXT PRIMARY KEY,                       -- pord_, internal only
-  order_ref TEXT NOT NULL UNIQUE,                  -- ordr_ + 26 base62
+  order_ref TEXT NOT NULL UNIQUE,                  -- ordr_ + 26 base62, supplied by #957 through CreateInput.OrderRef (NewOrderRef), written once
   tenant TEXT NOT NULL, owner_principal_id TEXT NOT NULL,
   connection_id TEXT NOT NULL, install_id TEXT NOT NULL, install_revision BIGINT NOT NULL,
   provider TEXT NOT NULL DEFAULT 'fake' CHECK (provider = 'fake'),
@@ -185,15 +201,26 @@ CREATE TABLE IF NOT EXISTS glovo.orders_schema_version (version INT NOT NULL);
 
 ### 3. Triggers, roles and schema application
 
-- `glovo.orders_immutable_rows()` refuses `UPDATE` and `DELETE` on `join_refs`,
-  `order_snapshots`, `order_effects` and `order_events`.
+Trigger inventory (round 3). One list per function; the exact set below is a single
+constant `triggerInventory` (table, trigger name, function, timing, event) shared by
+`ApplySchema` and `Ready`, so they cannot drift:
+
+| Function | Attached to | Timing and event |
+|---|---|---|
+| `glovo.orders_immutable_rows()` | `join_refs`, `order_snapshots`, `order_effects`, `order_events` (four triggers) | `BEFORE UPDATE OR DELETE` |
+| `glovo.orders_guard()` | `orders` | `BEFORE UPDATE OR DELETE` |
+| `glovo.orders_insert_guard()` | `orders` | `BEFORE INSERT` |
+| `glovo.order_snapshots_guard()` | `order_snapshots` | `BEFORE INSERT` |
+| `glovo.order_effects_insert_guard()` | `order_effects` | `BEFORE INSERT` |
+
+That is eight triggers and five functions.
+
+- `glovo.orders_immutable_rows()` refuses `UPDATE` and `DELETE` on the four tables above.
 - `glovo.orders_guard()` (`BEFORE UPDATE OR DELETE` on `glovo.orders`):
   - refuses `DELETE`;
   - refuses a change to any identity column (`order_id`, `order_ref`, `tenant`,
     `owner_principal_id`, `connection_id`, `install_id`, `install_revision`, `provider`,
     `idempotency_key`, `request_hash`, and since (c) `execution_id`, set at insert);
-- `glovo.order_snapshots_guard()` (`BEFORE INSERT` on `glovo.order_snapshots`, amended
-  (c)) refuses a snapshot unless its order is `open` in the same transaction.
   - allows only these `(OLD.state, NEW.state)` pairs, plus same-state updates that only
     set a write-once column:
     `open->finalized`, `open->cancelled`, `finalized->dispatched`,
@@ -205,11 +232,28 @@ CREATE TABLE IF NOT EXISTS glovo.orders_schema_version (version INT NOT NULL);
     `finalized->dispatched`, and only when `approval_ref` is set;
   - on `open->finalized`, `NEW.final_basket_fingerprint` must equal the
     `basket_fingerprint` of the snapshot at `NEW.final_snapshot_seq`.
+- `glovo.orders_insert_guard()` (`BEFORE INSERT` on `glovo.orders`, round 3) refuses an
+  insert unless `state = 'open'`, `final_basket_fingerprint`, `approval_ref`,
+  `command_id` are empty, `final_snapshot_seq = 0`, `version = 1`, `execution_id` is
+  non-empty and resolves, through the same join as #989 `ExecutionBindingTx`
+  (`work_item_executions` to `work_items`), to the order's `tenant` and
+  `owner_principal_id`. It runs as the invoker and needs only the `SELECT` on those
+  tables that #957 §6d.1 already grants. Without it the runtime role, which holds
+  `INSERT`, could create an order already `dispatched`, with a fingerprint that matches
+  no snapshot or an execution of another owner, and the update guards would never run.
+- `glovo.order_snapshots_guard()` (`BEFORE INSERT` on `glovo.order_snapshots`, amended
+  (c)) refuses a snapshot unless its order is `open` in the same transaction.
+- `glovo.order_effects_insert_guard()` (`BEFORE INSERT` on `glovo.order_effects`, round 3)
+  refuses an insert unless the order row exists in state `finalized` in the same
+  transaction, and the effect's `tenant`, `owner_principal_id`, `execution_id` and
+  `basket_fingerprint` equal the order's `tenant`, `owner_principal_id`, `execution_id`
+  and `final_basket_fingerprint`. `MarkDispatched` therefore inserts the effect row
+  first, then CASes the order `finalized -> dispatched`, in one transaction.
 - `ApplySchema` runs in one transaction under the migration role with
   `pg_advisory_xact_lock(hashtext('glovo-orders-schema'))`:
   - fails if any existing object in this list is not owned by the migration role;
-  - uses `CREATE OR REPLACE FUNCTION` for both trigger functions, and creates each
-    trigger only if absent in `pg_trigger`;
+  - uses `CREATE OR REPLACE FUNCTION` for every function of the trigger inventory (all
+    five), and creates each trigger of `triggerInventory` only if absent in `pg_trigger`;
   - refuses to run if the stored version is newer than the code's;
   - grants the runtime role (`^[a-z_][a-z0-9_]{0,62}$`): `USAGE` on schema `glovo`;
     `SELECT, INSERT` on `orders` plus column-level
@@ -219,7 +263,10 @@ CREATE TABLE IF NOT EXISTS glovo.orders_schema_version (version INT NOT NULL);
     append-only tables; `USAGE` on the events sequence; `SELECT` on the version table. No
     `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER`.
 - `NewStore` and `Ready` require: the version matches; every table resolves through
-  `to_regclass('glovo.…')`; the three guard triggers exist with `tgenabled = 'O'`; for
+  `to_regclass('glovo.…')`; `Ready` compares `pg_trigger` with `triggerInventory` exactly:
+  every listed trigger is present, `tgenabled = 'O'`, its `tgfoid` is the expected
+  function, the function is owned by the migration role, and no unlisted trigger exists on
+  these tables; for
   every table, trigger function and schema `glovo`,
   `NOT pg_has_role(current_user, <owner>, 'MEMBER')` (amended (c); covers inherited
   membership, not only `relowner <> current_user`); schema `glovo` is owned by the
@@ -299,7 +346,8 @@ from mctl-api#957 design §4.1.
 | idempotency key reused with another request hash | `idempotency_key_reused` | 409 `idempotency_key_reused` |
 | version or state CAS miss, write-once column already set | `invalid_transition` | facade prepare route: invariant, 503 `dependency_unavailable` (#957 §4.2; a replay is answered before any write); #985 control routes: 409 `invalid_transition` |
 | `ExecutionID` bound to another tenant or owner, or not a Glovo `we_` | `not_found` | 404 `not_found` (control) / invariant `unavailable` (prepare) |
-| any collaborator or database error, wrong isolation level | `unavailable` | 503 `dependency_unavailable` (facade) / `unavailable` (control) |
+| `lock_timeout` (SQLSTATE `55P03`) on `LockOrder`, `LockOrderForControl` or any CAS `UPDATE` (round 3) | `tenant_busy` | #957 §4.1: facade 503 `dependency_unavailable`, control 409 `tenant_busy` |
+| any other collaborator or database error, wrong isolation level | `unavailable` | 503 `dependency_unavailable` (facade) / `unavailable` (control) |
 | collaborator nil, schema not ready | `not_ready` | 503 `not_ready` |
 
 `order_finalized`, `order_state_conflict` and `execution_already_bound` are folded into
@@ -313,6 +361,11 @@ from mctl-api#957 design §4.1.
   `MarkDispatched` writes the one `place_order_fake` row of `glovo.order_effects`
   (idempotency key `glovo-dispatch:`+`ordr_`, `execution_id` the order's, the final
   fingerprint) in the same statement group as the state change.
+- `Create` (round 3): `in.OrderRef` is validated and inserted as `order_ref`; #957 calls
+  `LookupByIdempotencyKey` first and `Create` only on a miss. `Create` with an existing
+  key and the same `request_hash` returns the stored order with `replayed=true` and
+  writes nothing (it never mints a second `ordr_`); another hash is
+  `idempotency_key_reused`.
 - `Create`: requires READ COMMITTED; checks `LiveConnectionTx` and
   `ExpectedInstallRevision`; runs `basket.Parse` on `CreateInput.ApprovalBasket`,
   computes the fingerprint of the first snapshot and compares `ExpectedFingerprint`; inserts with

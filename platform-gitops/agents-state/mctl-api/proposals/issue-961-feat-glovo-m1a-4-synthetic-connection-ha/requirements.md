@@ -50,7 +50,7 @@ Feature gate
 - WHILE the feature is disabled THE SYSTEM SHALL issue and verify tokens byte-identically to today, and existing support, DevLoop, Telegram, commerce and MCP routes SHALL behave unchanged.
 
 Versioned schemas and refusals
-- WHEN any Glovo route answers THE SYSTEM SHALL return a body whose `schema` field is exactly the `glovo-connection/v1alpha1` identifier for that message. A refusal body SHALL be `{schema, refusal:{code, message}}`, and `code` SHALL come from the closed refusal enum defined by slices 1-3.
+- WHEN any Glovo route answers with success THE SYSTEM SHALL return a body whose `schema` field is exactly the `glovo-connection/v1alpha1` identifier for that message. A refusal body SHALL be the `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text>}` with no `schema` or `refusal` envelope (joint contract, round 3), and `error` SHALL come from the closed refusal enum of mctl-api#957 design §4.1.
 - WHEN a request body contains an unknown field (including `tenant`, `tenant_id`, `owner`, `owner_principal_id`, `principal_id`, `namespace`, `task_queue`, `install_revision` on facade routes), declares a different `schema`, or is larger than 16 KiB, THE SYSTEM SHALL answer 400 `invalid_request` with no state change.
 - THE SYSTEM SHALL NOT invent a new public refusal code outside the closed M0 contract. A missing or unbound team selection SHALL be `ambiguous_tenant`.
 
@@ -64,7 +64,7 @@ Facade (user)
 - IF `Idempotency-Key` is missing or longer than 128 bytes THEN THE SYSTEM SHALL answer 400 `invalid_request`.
 - WHEN the owner calls `POST .../connections/{id}/handoff` on a `pending` connection THE SYSTEM SHALL return a single-use opaque synthetic handoff reference with a fixed TTL. It SHALL contain no cookie, credential or provider URL, and SHALL be stored only as a hash.
 - WHEN the owner calls `POST .../connections/{id}/revoke` THE SYSTEM SHALL move the connection to `revoked` and append an audit event. Repeating the call SHALL be idempotent.
-- WHEN the owner calls `POST .../connections/{id}/reconnect` on an `expired` or `revoked` connection THE SYSTEM SHALL create a new connection with a new `gcn_` id. It SHALL never reactivate the old one.
+- WHEN the owner calls `POST .../connections/{id}/reconnect` on an `expired`, `failed` or `revoked` connection, or on an `active` one whose `expires_at <= now()` (database clock), THE SYSTEM SHALL create a new connection with a new `gcn_` id. It SHALL never reactivate the old one. IF the prior connection is live THEN THE SYSTEM SHALL refuse with 409 `connection_exists`.
 - IF a connection id belongs to another principal, another tenant, or does not exist THEN THE SYSTEM SHALL answer the same 404 `not_found` body.
 
 Administration (tenant owner)
@@ -76,14 +76,14 @@ Administration (tenant owner)
 Worker
 - WHEN the worker identity calls `POST /api/v1/glovo/worker/check` with `{schema, connection_id, install_revision}` THE SYSTEM SHALL re-derive the owner's live membership and pilot status and the installation's current revision. It SHALL answer `allowed: true` with tenant, owner and state only if the connection is `active` or `pending` (as named by the route) and the revision is current.
 - IF the connection is revoked, expired, failed, on a stale install revision, or its owner lost membership or pilot admission, THEN THE SYSTEM SHALL answer with the matching typed refusal (`connection_revoked`, `connection_expired`, `no_connection` for `failed`, `stale_install`, `no_tenant`, `not_in_pilot`). It SHALL never answer `allowed: true`.
-- WHEN the worker calls `POST /api/v1/glovo/worker/connections/{id}/activate` with a handoff reference that matches, is unused and is unexpired, THE SYSTEM SHALL move `pending` to `active`, set a fixed synthetic expiry and consume the reference, in one transaction that also repeats the check.
+- WHEN the worker calls `POST /api/v1/glovo/worker/connections/{id}/activate` with a handoff reference that matches, is unused and is unexpired, THE SYSTEM SHALL, through #959 `ActivateTx` in one transaction, move `pending_handoff` to `pending_provider` to `active`, set `expires_at`, and consume the reference under the L1/L2/L2b lock order of mctl-api#957 §6b.
 - WHILE an `active` connection is past `expires_at` THE SYSTEM SHALL report it as `expired` on every read and check, and SHALL persist the transition on the next mutation or sweep.
 - IF the worker identity calls any route outside `/api/v1/glovo/worker/*` (including `/api/v1/glovo/facade/*`, `/mcp`, `/api/v1/agents/dev-loop/*` and any Temporal or DevLoop control route) THEN THE SYSTEM SHALL answer 403 before any handler runs.
 - IF any non-worker identity (admin, service token, support or Glovo-audience token, surface or agent principal) calls a worker route THEN THE SYSTEM SHALL answer 403.
 
 Limits, audit and secrets
-- WHEN a principal exceeds 10 connect or reconnect requests per hour in a tenant, or a tenant exceeds 50 non-terminal connections, THE SYSTEM SHALL refuse with 429 `rate_limited`. The counters SHALL be Postgres-backed so the limits hold across both replicas.
-- WHEN any state change or refusal on a mutating route happens THE SYSTEM SHALL append an immutable audit event carrying only ids, states, actor kind and refusal code.
+- WHEN a principal exceeds 10 connect or reconnect requests per hour in a tenant, or a tenant exceeds 50 non-terminal connections, THE SYSTEM SHALL refuse with 429 `rate_limited`. The counters SHALL be Postgres-backed so the limits hold across both replicas, and the tenant limit SHALL be enforced under the L2a tenant mutex row, never by counting under L1 shared alone.
+- WHEN any state change, or any refusal on a mutating route that names an existing install or connection, happens THE SYSTEM SHALL append an immutable audit event carrying only ids, states, actor kind and refusal code. Refusals that arrive before a scope, tenant or entity exists SHALL be logged and counted only.
 - THE SYSTEM SHALL NOT write tokens, handoff references, `Idempotency-Key` values or request bodies to logs, audit rows or responses, apart from the one-time handoff reference returned to its owner.
 
 ## Out of scope

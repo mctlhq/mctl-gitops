@@ -198,6 +198,15 @@ Data hygiene
   `Idempotent-Replayed`? If not, #1044 is amended in the same wave.
 - OPEN-985-4. Who owns `revalidate_scope` and `resolve_connection` from #1044's
   `ControlApiPort`?
+- OPEN-985-9 (new, round 3; X-7; recommendation: remove from #1044). mctl-agents#1044
+  calls an activity `release_reservation` (design 236-238, tasks 7 and T12, requirement
+  109) that no port route provides and that contradicts the receipt machine (`reserved`
+  goes only to `consumed` or `unknown`, and no path returns an `aar_` to `approved`). This
+  slice adds no route for it and no mctl-api slice depends on it: #985 `cancel` already
+  revokes a pending or approved `aar_` and marks a reserved one `unknown`. Recommendation:
+  amend #1044 to drop `release_reservation` (activity, T12 and the requirement line) in
+  the same wave as OPEN-985-3. If the owner prefers to keep it, its semantics must equal
+  `cancel` and it is added to the §2a route table. #1044 is not edited here.
 - OPEN-985-5. Who owns the transition from a completed command result to order `closed`
   (or `unknown` after a timeout)?
 - OPEN-985-6. How the migration role and the one Glovo runtime role of mctl-api#957

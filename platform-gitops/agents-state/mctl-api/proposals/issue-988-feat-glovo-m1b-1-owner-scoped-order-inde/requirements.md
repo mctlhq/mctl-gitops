@@ -77,6 +77,7 @@ Lifecycle
   refused too.
 - THE SYSTEM SHALL have no `approved` order state. Approval state SHALL be read only from
   the #989 `aar_` row.
+- THE SYSTEM SHALL refuse, in `BEFORE INSERT` triggers, an `orders` row that is not `open` with empty fingerprint, approval and command and a tenant-and-owner-matching `execution_id`, and an `order_effects` row whose order is not `finalized` or whose execution, tenant, owner or fingerprint differ from the order's, so raw-SQL inserts by the runtime role are refused too (round 3).
 - THE SYSTEM SHALL make `final_basket_fingerprint`, `final_snapshot_seq`, `approval_ref`,
   `command_id` and `execution_id` write-once, and SHALL allow at most one order per
   `approval_ref` and per `command_id`.
@@ -89,7 +90,8 @@ Effects
 - WHEN `Create` is called THE SYSTEM SHALL require `CreateInput.ExecutionID` to match
   `^we_[A-Za-z0-9]{16,40}$` and its tenant **and** owner principal (#989
   `ExecutionBindingTx`) to equal the order's, else `not_found`, and SHALL write it once
-  at insert. (amended (c); `RecordEffect` is withdrawn)
+  at insert. (amended (c); `RecordEffect` is withdrawn) It SHALL also require `CreateInput.OrderRef` to match `^ordr_[A-Za-z0-9]{16,40}$` and insert it as the order's `order_ref`, so that the workflow id, `engine_ref`, the `aar_` key and the order embed one `ordr_` (round 3).
+- WHEN a caller looks up an idempotency key THE SYSTEM SHALL answer from one read-only statement (`LookupByIdempotencyKey`) so a replay writes nothing.
 - WHEN `MarkDispatched` runs THE SYSTEM SHALL write exactly one `place_order_fake` row
   of `glovo.order_effects` for the order's `we_` in the same transaction.
 - WHEN `basket.Parse` receives bytes THE SYSTEM SHALL run the #1059 raw-bytes pre-check,
@@ -99,7 +101,8 @@ Effects
 Refusals
 - THE SYSTEM SHALL use only `glovo.Code` values, each mapped through mctl-api#957 design
   §4.1 as listed in design §7.
-- IF a collaborator or the database fails THEN THE SYSTEM SHALL return `unavailable`
+- IF a lock wait exceeds `lock_timeout` (SQLSTATE `55P03`) on the order row or a CAS `UPDATE` THEN THE SYSTEM SHALL return `tenant_busy` (round 3).
+- IF any other collaborator or database error occurs THEN THE SYSTEM SHALL return `unavailable`
   (wire `dependency_unavailable` on facade routes). `not_ready` SHALL mean not
   configured. (amended (c))
 

@@ -18,6 +18,7 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 
 | Item | Frozen value | Owner slice |
 |---|---|---|
+| Consent-time team selection, claims `tgr`/`stn`, `User.TeamGrant()`, `scope.Resolver` | `/oauth/consent` selection, the claims `tgr` (grant id) and `stn` (selected tenant), `User.TeamGrant() (grantID, tenant string, ok bool)` and `scope.Resolver.Resolve(ctx, *auth.User) (Scope, *glovo.Error)`. No other slice selects a team, mints a tenant claim or reads a tenant header as input; #957 consumes these (round 3: it mints no `mctl_tenant`). The `scope_ref` binding key of #957 section 2b is the grant's `refresh_family_id` (`oauth_team_grants`), read through `User.TeamGrant()` plus `teamgrant.Check`. Eligibility = membership ∩ allowlist minus `GLOVO_NON_SELECTABLE_TENANTS`; the current install is not part of it (a selected team without a current install is refused at use with `no_install` by #959) | #960 (sole owner) |
 | Go package | extend the existing `internal/glovo` from #977 (`glovo.Code`, `glovo.Error`, `glovo.Gate`, `glovo.WriteError`); no parallel `RefusalCode`/`Refusal` type | #959 adds the codes |
 | Tables | `glovo_installs`, `glovo_connections`, `glovo_connect_requests`, `glovo_audit_events`, `glovo_pilot_allowlist` | #959 (DDL) |
 | | `glovo_handoff_refs`, `glovo_rate_counters` | #961 (DDL) |
@@ -30,7 +31,7 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 | Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
 | Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
 | Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
-| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr, runtimeRole)` with a dedicated migration role that owns the objects; the one Glovo runtime role and its grants are mctl-api#957 design §6d.1 (amended (c)). `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
+| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr, runtimeRole)` with a dedicated migration role that owns the objects; the one Glovo runtime role and its grants are mctl-api#957 design §6d.1 (amended (c)). `NewStore(ctx, pool *pgxpool.Pool, runtimeRole string, opts ...Option)` (round 3) takes the one shared `GLOVO_DB_URL` pool that the wiring slice opened and that the bridge store also uses (#957 §6d.1 R4), opens no pool of its own and runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
 | Worker identity | none exists today: `auth.IsGlovoWorker()` is the reserved stub (`internal/auth/oidc.go`, always false). #961 builds it, default OFF. It is distinct from the #968 bridge provider (`service:bridge-provider:<ref>`, `bridge:provide`): the Glovo worker is refused on `/api/v1/bridge/*` and the bridge provider on `/api/v1/glovo/*`, tested both ways. Its credential is test-only until the issuer decision (mctl-gitops#2506 / #2540) | #961 |
 | Facade routes | `/api/v1/glovo/facade/*` is added to #977's empty `glovoAudienceRoutes` by #961 (the only slice that adds those routes) | #961 |
 | Allowlist routes | `PUT\|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` are defined only in #960 | #960 |
@@ -137,21 +138,48 @@ grant or emits the new claims, and `glovo.Gate` stays closed.
   `refreshstore.PostgresStore` (`OAUTH_DB_URL`, falling back as today). The
   allowlist stays on the Glovo database and is only ever *read* live; it is
   not part of any write below.
-- Consent writes a `pending` grant only. A `pending` grant never passes
-  `Check`. The authorization code is in memory (`OAuthServer.codes`); a crash
+- Consent writes a `pending` grant only. **`Check` and `CheckTx` accept only an
+  `active` grant** (round 3): a `pending` grant is `ErrGrantInvalid` for them, so a
+  pending grant whose code was lost, or whose exchange never committed, never resolves
+  a tenant scope. The only operation that moves a grant out of `pending` is
+  `ActivateTx` (below). The authorization code is in memory (`OAuthServer.codes`); a crash
   after code issue loses the code and leaves only a pending grant that
   expires, which grants nothing.
 - Code exchange: new `refreshstore.PostgresStore.InsertBound(ctx, rawToken,
   clientID, sess, expiresAt, bind func(pgx.Tx) error)` begins one
   transaction, inserts the refresh token, and calls `bind`, which runs
-  `teamgrant.ActivateTx(tx, grantID, familyID)` (`pending -> active`, CAS on
-  state, principal, client and resource). Either both commit or neither does.
-  The access token is signed only after the commit returns.
-- Rotation: `RotateIf`'s `accept` runs inside the existing `rotateTx`
-  transaction; grant checks there use the same `tx` (`teamgrant.CheckTx`).
-- Revocation: `RevokeFamily` and `revokePrincipalTx` gain the grant update
-  (`active|pending -> revoked`) in their existing transaction, so no
-  committed state has a revoked family with a live grant or the reverse.
+  `teamgrant.ActivateTx(tx, grantID, principalID, clientID, resource, familyID)`.
+  `ActivateTx` is **the only gate at exchange** (round 3): one
+  `UPDATE oauth_team_grants SET state='active', refresh_family_id=$family WHERE
+  grant_id=$id AND principal_id=$p AND client_id=$c AND resource=$r AND
+  state='pending' AND expires_at > now()` (database clock). Zero rows updated is
+  `invalid_grant` and `bind` returns an error, so the refresh insert rolls back and
+  nothing commits. The exchange makes no separate `Check` call: a check followed by an
+  activate would be a second, weaker gate, and `Check` never accepts `pending`.
+  Either both writes commit or neither does. The access token is signed only after the
+  commit returns.
+- Rotation (round 3, API change stated outright). The existing
+  `RotateIf(..., accept func(Session) error)` keeps its contract (side-effect free,
+  may run more than once, an error means nothing was written) and is not used for
+  Glovo sessions. `refreshstore.Store` gains `RotateIfTx(ctx, ..., accept func(tx
+  pgx.Tx, s Session) error)`, which runs `accept` inside the existing `rotateTx`
+  transaction; grant reads there use that `tx` (`teamgrant.CheckTx`, which accepts only
+  `active`). `accept` only reads and refuses: any grant or family revocation that
+  follows a refusal is a separate write after `RotateIfTx` returns, the way the
+  downgrade revocation already is (`oauth_server.go:1789-1797`), because a write inside
+  `accept` would roll back with its error. The in-memory store implements the same
+  variant before `loadAndDelete`.
+- Reuse detection (round 3). The stolen-token path revokes the family with its own
+  inline `UPDATE` inside `rotateTx` and never calls `RevokeFamily`. That statement is
+  extended in the same transaction with `UPDATE oauth_team_grants SET state='revoked',
+  revoked_reason='reuse_detected' WHERE refresh_family_id=$family AND state IN
+  ('pending','active')`, so a replayed or stolen Glovo refresh token revokes the grant
+  and the family in one commit and a `tgr`-bearing access token stops passing `Resolve`.
+- Revocation: `RevokeFamily` (rewritten to run in one transaction; today it is a single
+  `pool.Exec`) and `revokePrincipalTx` gain the grant update (`active|pending ->
+  revoked`) in that transaction, so no committed state has a revoked family with a live
+  grant or the reverse. `RevokeRefreshToken` (`oauth_server.go:1920-1932`) returns an
+  error instead of nothing, so a failed grant revoke is surfaced (section 3).
 - With the in-memory refresh store (`OAUTH_DB_URL` unset) the Glovo resource
   is `not_ready`: there is no transaction to bind to.
 
@@ -186,10 +214,12 @@ Operations:
   earlier pending or active grant for the same (principal, client, resource)
   with reason `superseded`, in one transaction. This is how switching teams
   replaces the old team's session.
-- `Activate(ctx, grantID, familyID)` runs on code exchange.
-- `Check(ctx, grantID, principalID, clientID, resource) (Grant, error)`
-  returns `ErrGrantInvalid` for unknown, revoked, expired or mismatched
-  grants, and a wrapped error for a store failure. The two are never conflated.
+- `ActivateTx(ctx, tx, grantID, principalID, clientID, resource, familyID)` runs on
+  code exchange only, as the CAS of section 0 (including `expires_at > now()`).
+- `Check(ctx, grantID, principalID, clientID, resource) (Grant, error)` and
+  `CheckTx(ctx, tx, ...)` return `ErrGrantInvalid` for unknown, `pending`, revoked,
+  expired or mismatched grants (only `active` passes), and a wrapped error for a
+  store failure. The two are never conflated.
 - `RevokeByFamily`, `RevokeByPrincipal` and `Revoke(grantID, reason)`.
 
 The grant is server-owned. The client never sees anything but the opaque
@@ -236,11 +266,11 @@ The grant is server-owned. The client never sees anything but the opaque
   `TeamGrantID string` (and `SelectedTenant` on the code entry). `IssueCode*`
   gets a variant that takes them. Existing signatures stay and pass "".
 - `ExchangeCodeForResource`: if the code has a `TeamGrantID`, it calls
-  `teamgrant.Check` (principal, client, resource must match) inside the
-  exchange, and fails with `invalid_grant` before minting. It then calls
-  `InsertBound` (section 0), which inserts the refresh token and activates
-  the grant in one transaction, and mints the access token with the claims
-  only after that commit. A code for the Glovo resource **without** a
+  `InsertBound` (section 0) directly, with no preceding `Check` (the grant is
+  `pending` by design). `InsertBound` inserts the refresh token and runs the
+  `ActivateTx` CAS (grant id, principal, client, resource, unexpired) in one
+  transaction; zero rows is `invalid_grant` before any minting. The access token with
+  the claims is minted only after that commit. A code for the Glovo resource **without** a
   grant id is refused, so a non-consent code path can never yield a Glovo
   token.
 - `jwtPayload` gains `TeamGrant string json:"tgr,omitempty"` and
@@ -253,22 +283,23 @@ The grant is server-owned. The client never sees anything but the opaque
   `User.TeamGrant() (grantID, tenant string, ok bool)`. `tgr`/`stn` on a
   non-Glovo token are ignored and never surfaced. This mirrors how
   `supportAudience` is never honoured outside its audience.
-- `RefreshAccessTokenForResource`: the `accept` callback (inside `RotateIf`,
+- `RefreshAccessTokenForResource`: the `accept` callback (inside `RotateIfTx`,
   per the 2026-10-17 lesson) adds the step: if `sess.TeamGrantID != ""`, run
-  `teamgrant.Check` plus a live `TeamEligibility.Has(prn, tenant)`. If the
-  grant is invalid, refuse `invalid_grant` and revoke the family. If
-  eligibility is lost, refuse `invalid_grant` and revoke the grant and the
-  family. On a store failure, refuse with `server_error` and spend nothing.
+  `teamgrant.CheckTx(tx, ...)` plus a live `TeamEligibility.Has(prn, tenant)`. If the
+  grant is invalid, accept refuses `invalid_grant`; if eligibility is lost, accept
+  refuses `invalid_grant`. The revocation (the family on an invalid grant, the grant
+  and the family on lost eligibility) is a post-`RotateIfTx` write, as for the
+  downgrade path, never inside `accept`. On a store failure, refuse with `server_error` and spend nothing.
   `RotateIf` carries `team_grant_id` forward like `resource`. The in-memory
   path does the same before `loadAndDelete`.
 - `handleOAuthToken`: on a Glovo session, a `tenant`/`selected_tenant` form
   field returns `invalid_request`. The resource mismatch refusal that exists
   today already blocks retargeting to another audience.
-- Revocation coupling: `RevokeRefreshToken`, the `RevokeFamily` calls (reuse
-  and downgrade) and `RevokePrincipalSessions` each call the matching
-  `teamgrant.Revoke*` **before** revoking the refresh family. The grant is
-  what the per-request `Check` reads, so revoking it first makes access
-  tokens fail immediately. If the grant revoke fails, the operation returns
+- Revocation coupling: `RevokeRefreshToken`, the `RevokeFamily` calls (downgrade
+  and eligibility loss), reuse detection (inline in `rotateTx`, section 0) and
+  `RevokePrincipalSessions` each update the team grant in the same transaction as the
+  family, the grant statement first. The grant is what the per-request `Check` reads,
+  so revoking it makes access tokens fail immediately. If the grant revoke fails, the operation returns
   an error: 503 `temporarily_unavailable` on `/oauth/revoke` (permitted by
   RFC 7009 section 2.2.1) and 503 on the admin path. It is never reported as
   revoked. A test pins the order.
@@ -280,7 +311,7 @@ type GrantChecker interface{ Check(ctx context.Context, grantID, principalID, cl
 type MembershipReader interface{ MemberRolesForPrincipal(tenant, principalID string) ([][]string, error) }
 type AllowlistReader interface{ IsAllowlisted(ctx context.Context, tenant, principalID string) (bool, error) }
 
-func (r *Resolver) Resolve(ctx context.Context, u *auth.User) (Scope, *Refusal)
+func (r *Resolver) Resolve(ctx context.Context, u *auth.User) (Scope, *glovo.Error)
 ```
 
 The resolver takes no other input, so there is nothing a caller can forge.
@@ -358,8 +389,9 @@ in-memory refresh store, or a missing grant store. Docs: `docs/glovo-team-grant.
 - Backward compatibility: with `GLOVO_ENABLED` unset (or `GLOVO_MCP_RESOURCE` unset), nothing changes.
   The API and support audiences, non-CIMD clients and existing refresh
   sessions follow identical paths. New claim fields use `omitempty`.
-  `refreshstore.Store` grows a session field, not a method. `RotateIf` must
-  copy it (two replicas: an old replica during rollout would drop
+  `refreshstore.Store` grows a session field and the `RotateIfTx` variant
+  (section 0); `RotateIf` keeps its signature, and `RevokeRefreshToken` now returns an
+  error. `RotateIf`/`RotateIfTx` must copy it (two replicas: an old replica during rollout would drop
   `team_grant_id` on rotate, so the new code also treats an empty grant id on
   a Glovo-resource session as `invalid_grant`, and the session must
   re-consent).
@@ -369,8 +401,8 @@ in-memory refresh store, or a missing grant store. Docs: `docs/glovo-team-grant.
   - Store outage read as "no grant": typed errors, 503, and tests that
     simulate store failure at each step.
   - Grant and refresh family desync on partial failure: activation happens
-    inside the exchange, and an unactivated `pending` grant never passes
-    `Check`.
+    inside the exchange (`ActivateTx` is the only gate), and a `pending` grant never
+    passes `Check` or `CheckTx`.
   - Refresh refusal spending the token (2026-10-17 class): all grant
     decisions run inside the `RotateIf` `accept` callback.
   - Audience confusion: a Glovo token must carry a single `aud`, and claims

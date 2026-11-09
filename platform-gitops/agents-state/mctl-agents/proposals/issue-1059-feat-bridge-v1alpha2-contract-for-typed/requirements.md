@@ -161,4 +161,9 @@ Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefix
   versions in `BridgeProviderConfig`: #986 (proposed there) or a separate slice. The
   envelope's shape is fixed here (design §Claim response).
 - OPEN-1059-3. mctl-telegram#1262 must vendor these files and pass `must-reject.json`
-  with its Go parser; tracked on that issue.
+  with its Go parser; tracked on that issue. Widened (round 3): the same issue must also
+  implement Provider MUST 1-3 (resolve a `pho_` or `cursor` only inside the command's
+  connection; a foreign or unknown one is `failed_terminal/provider_rejected`) and carry a
+  foreign-`pho_` and a foreign-cursor test against its read path. Consumer duty 10 is
+  implemented and tested in mctl-api#957 (T7a), not here; this item is the provider half and
+  stays open until #1262 lands it.

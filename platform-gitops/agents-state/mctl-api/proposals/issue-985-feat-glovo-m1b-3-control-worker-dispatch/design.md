@@ -247,7 +247,7 @@ type Receipts interface { // provided by #989 (internal/workitems, glovo_approva
     ReserveGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, cmd workitems.ReserveCommand) (replayed bool, err error) // approved -> reserved; idempotent for the same cmd_
     RevokeGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, actor string) error // pending|approved -> refused (cancel before dispatch); already denied for this order = success
     MarkGlovoApprovalUnknownTx(ctx context.Context, tx pgx.Tx, id, commandID string) error // reserved -> unknown; already unknown for this cmd_ = success
-    GlovoApprovalStatus(ctx context.Context, tenants []string, id string) (*workitems.GlovoApprovalStatus, error) // tx-free; ids and enums only; read_approval
+    GlovoApprovalStatus(ctx context.Context, q Querier, tenants []string, id string) (*workitems.GlovoApprovalStatus, error) // round 3 (X-4): read on the glovo_runtime pool (or the caller's tx), never the work-items pool; ids and enums only; read_approval
 }
 type Connections interface { // #959, tx-scoped, on the shared tx
     LockOwnerShared(ctx context.Context, tx pgx.Tx, tenant, principal string) error // L1 shared + L2 shared, the #959 withLocks order
@@ -272,15 +272,18 @@ type Dispatcher struct {
   the #989 `Receipts` implementation exists.
 
 ### 4. One-database proof (owner decision A)
-- Required config: `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL`, each set explicitly. With Glovo enabled the bridge
-  store is `bridge.NewRuntimeStore` on the `GLOVO_DB_URL` pool; `COMMERCE_DB_URL` is
-  not read for the bridge (amended (c)). A missing value is `not_ready`. None of them falls back to `AUDIT_DB_URL`
+- Required config: `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL`, each set explicitly. The bridge
+  store mode is chosen by one selector (round 3, F2): `bridge_schema_version`, created and
+  written by `bridge.ApplySchema`. Row present: `bridge.NewRuntimeStore` on the
+  `GLOVO_DB_URL` pool, whatever any Glovo flag says; `COMMERCE_DB_URL` is not read for the
+  bridge (amended (c)). Row absent: `NewStore` unchanged. Bridge tables created earlier by
+  `NewStore` under another owner make `ApplySchema` refuse (OPEN-957-6). A missing value is `not_ready`. None of them falls back to `AUDIT_DB_URL`
   or to another one.
-- `control.ProveOneDatabase(ctx, bridgePool, workItemsPool, glovoPool)` runs at startup:
+- `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool)` runs at startup (round 3, X-3: it first requires `glovoStore.Pool() == bridgeStore.Pool()`, one pool and one role; the work-items pool is the only other pool):
   1. In one transaction on the bridge pool, insert a fresh 128-bit nonce into
      `bridge_colocation_probe` and commit. The table is created by `bridge.ApplySchema`
      (amended (c)).
-  2. Read the nonce back through the work-items pool and the Glovo pool. If either does
+  2. Read the nonce back through the work-items pool and the shared Glovo pool. If either does
      not find it, the proof fails. This proves one database, not merely one cluster. It
      does not depend on `system_identifier` (physical standbys share it) or on EXECUTE
      rights on `pg_control_system()`.
@@ -293,7 +296,10 @@ type Dispatcher struct {
      beyond it (this covers every DML right dispatch, cancel, prepare and the revoker
      need); the bridge and Glovo pools report the same `current_user`, which owns no
      object in schema `glovo` and no bridge table, is not a member of any owner role,
-     and has `rolsuper` and `rolbypassrls` false; the work-items pool reports another
+     and has `rolsuper`, `rolcreaterole`, `rolcreatedb` and `rolbypassrls` all false
+     (`pg_roles WHERE rolname = current_user`; round 3, F1: CREATEROLE would let a runtime
+     role grant itself `glovo_migrator`); every guard trigger of every slice's inventory is
+     present with `tgenabled = 'O'` (#988 §3 `triggerInventory`, #989 `aar_guard`); the work-items pool reports another
      role, without `USAGE` on `glovo`.
   5. Delete the nonce.
 - Any failure sets `Ready()` to `not_ready` for the life of the process. It logs once,
@@ -400,7 +406,7 @@ The provider claim, result and expiry paths take only L5.
   fence's `PreLock` first applies the same provider and tenants check as `lockOwned`
   (`internal/bridge/store.go:659-668`) to an unlocked read, and answers
   `ErrCommandNotFound` alike for an absent and a foreign id, before taking any lock.
-- #989's `receipt.Fence.PreLock` reads the command's immutable binding without a lock (tenant,
+- #989's `receipt.Fence.PreLock(ctx, tx, c bridge.Caller, commandID)` (round 3, X-6: step 0 is the provider/tenants predicate and the `place_order_fake` kind refusal, #989 §6) reads the command's immutable binding without a lock (tenant,
   owner, order, `aar_`). It then takes L1 shared, L2 shared, L3 and L4.
 - `permitTx` then takes L5 (`lockOwned`). #989's `Check` re-verifies that the binding
   read in `PreLock` is unchanged, recomputes the fingerprint and intent hash from the
@@ -480,10 +486,16 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
     `bridge_colocation_probe` to the work-items role for the proof, and `SELECT`,
     `UPDATE (result)` on `bridge_commands` to the bridge maintenance role
     (`cmd/bridge-scrub`), the "existing consumers" rows of #957 §6d.1.
-  With Glovo enabled the store is opened with the new `bridge.NewRuntimeStore`, which
-  runs no DDL and checks the schema, in the pattern of `OpenExistingStore`
-  (`store.go:381-404`); today `NewStore` runs `bridgeSchema` on every start
-  (`store.go:374`). Bridge use without Glovo keeps `NewStore`. The runtime role is
+  - the table `bridge_schema_version` (single row), written last, which is the mode
+    selector of #957 §6d.1 (round 3, F2).
+  Once the row exists the store is always `bridge.NewRuntimeStore` on the shared
+  `GLOVO_DB_URL` pool, which runs no DDL and checks the schema version and the grants, in
+  the pattern of `OpenExistingStore` (`store.go:381-404`), whatever the Glovo flags say;
+  today `NewStore` runs `bridgeSchema` on every start (`store.go:374`), including an
+  `ALTER TABLE` that needs ownership. Without the row (never migrated) `NewStore` is
+  unchanged. Bridge tables created earlier under another owner make `ApplySchema` refuse
+  with an error naming them (OPEN-957-6, owner decision pending); disabling Glovo after
+  `ApplySchema` therefore never changes the bridge's store or database. The runtime role is
   never given `CREATE`, ownership or any other right to make `NewStore` pass (owner
   decision 2026-11-09, #957 §6d.1). There is no
   `SECURITY DEFINER` function: `bridge.CancelOpenForConnections` is a Go function that

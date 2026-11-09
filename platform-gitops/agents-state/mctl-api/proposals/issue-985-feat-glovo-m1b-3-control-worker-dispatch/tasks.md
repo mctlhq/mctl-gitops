@@ -39,8 +39,10 @@ With any of them missing, the code merges with nil collaborators and answers
   - `to_regclass`;
   - `has_schema_privilege`, `has_table_privilege` and `has_column_privilege` for the
     full grant table of mctl-api#957 design §6d.1, nothing beyond it; one runtime role
-    shared by the bridge and Glovo pools, owning nothing, member of no owner role, not
-    superuser or `BYPASSRLS`; no `glovo` access for the work-items role (amended (c));
+    shared by the bridge and Glovo pools (`glovoStore.Pool() == bridgeStore.Pool()`),
+    owning nothing, member of no owner role, with `rolsuper`, `rolcreaterole`,
+    `rolcreatedb` and `rolbypassrls` all false, and every guard trigger present with
+    `tgenabled = 'O'` (round 3, F1); no `glovo` access for the work-items role (amended (c));
   - explicit `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` with no fallback; the bridge store
     on the `GLOVO_DB_URL` pool (#957 §6d.1 R4).
 
@@ -51,14 +53,16 @@ With any of them missing, the code merges with nil collaborators and answers
     before `lockOwned`, with a no-op on `refusingFence`;
   - (amended (c)) `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole)` under the
     migration role: `bridgeSchema`, the `bridge_commands_mutating_approval` partial
-    unique index, the `bridge_colocation_probe` table, #986's read objects and the grants
+    unique index, the `bridge_colocation_probe` table, `bridge_schema_version` (the mode
+    selector, written last; refuses with an error naming the tables when they exist under
+    another owner, OPEN-957-6), #986's read objects and the grants
     of mctl-api#957 design §6d.1; and `bridge.NewRuntimeStore(ctx, pool)` on the shared
     `GLOVO_DB_URL` pool, which runs no DDL and only checks the schema version and the
-    grants. `cmd/api/main.go` uses it while Glovo is enabled, instead of `NewStore`
+    grants. `cmd/api/main.go` uses it whenever the `bridge_schema_version` row exists (whatever the Glovo flags say, round 3 F2), instead of `NewStore`
     (`internal/bridge/store.go:365-379`, which runs `bridgeSchema` at `:374` on every
     start at origin/main `ceac9ed`). This is the owner-mandated bridge startup AMEND
     (#957 §6d.1): `glovo_runtime` gets no extra right to make the old startup pass, and
-    `NewStore` stays unchanged for deployments without Glovo. `cmd/bridge-scrub` keeps
+    `NewStore` stays unchanged for deployments that never ran the migrator. `cmd/bridge-scrub` keeps
     `OpenExistingStore` under its own maintenance role with the grants #957 §6d.1 lists;
     No `SECURITY DEFINER` function;
   - `bridge.CancelOpenForConnections(ctx, tx, gcnIDs, actor)`, a plain Go function.
@@ -99,8 +103,8 @@ With any of them missing, the code merges with nil collaborators and answers
   - the env `MCTL_GLOVO_CONTROL_ENABLED`;
   - the dispatcher, with #959, #988 and #989 collaborators nil until they land.
 
-  - the #959 store built with `glovo.NewStore(ctx, glovoURL,
-    glovo.WithRevocationHook(bridge.CancelOpenForConnections))` (amended (c)).
+  - the #959 store built with `glovo.NewStore(ctx, pool, runtimeRole,
+    glovo.WithExplicitURL(true), glovo.WithRevocationHook(bridge.CancelOpenForConnections))` (amended (c)).
 
   Call `SetFence(receipt.NewFence(...))` only when all six preconditions of design §7.3
   hold. DoD: the default build mounts no route and keeps `refusingFence`.
@@ -207,7 +211,11 @@ advisory keys are used.
   final snapshot; `workflow_id` equals `glovo.control_starts.workflow_id`; `run_id` is
   `''` before the workflow started and the started run id after.
 - [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09): with a
-  runtime role that has an extra `TRIGGER`, `CREATE` or ownership, or lacks one listed
+  runtime role that has `CREATEROLE`, or `CREATEDB`, or a disabled guard trigger
+  (`tgenabled <> 'O'`), each giving `not_ready` with zero provider writes (round 3, F1);
+  after `bridge.ApplySchema`, with every Glovo flag off, the bridge provider routes still
+  work on the shared pool and no DDL is sent (round 3, F2); with a runtime role that has
+  an extra `TRIGGER`, `CREATE` or ownership, or lacks one listed
   DML right, or a Glovo pool whose `current_user` is not the configured role, the proof
   fails and the dispatcher is `not_ready`; `glovo_runtime` cannot `ALTER TABLE …
   DISABLE TRIGGER`, `CREATE TABLE` or `DROP`; the work-items and commerce roles get
@@ -219,7 +227,10 @@ advisory keys are used.
 
 - Everything is dark by default: the const `controlGateOpen` is false and
   `MCTL_GLOVO_CONTROL_ENABLED` is unset. Unsetting the env var removes the routes and
-  leaves the fence `refusingFence`.
+  leaves the fence `refusingFence`. It does not change the bridge's store: once
+  `bridge.ApplySchema` has run, the bridge stays on `NewRuntimeStore` and the shared pool,
+  so existing bridge consumers keep working; going back to `NewStore` needs an explicit
+  ownership hand-back by an operator (OPEN-957-6).
 - Code rollback is a revert of the PR. The schema artifacts can stay, or be removed
   with `DROP INDEX IF EXISTS bridge_commands_mutating_approval`,
   and `DROP TABLE IF EXISTS bridge_colocation_probe`. Reverting `PreLock` restores the old

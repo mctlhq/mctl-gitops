@@ -14,15 +14,14 @@ and `not_ready`.
   `item_name` field and `quantity: 1.0` are refused by `Parse`; no field is defined
   locally.
 - [ ] 3. `internal/glovo/orders/schema.go` and `ApplySchema` (design §2, §3): schema
-  `glovo`, tables, CHECKs, partial unique indexes, `CREATE OR REPLACE FUNCTION` for both
-  trigger functions, guarded trigger creation, ownership check, version downgrade
+  `glovo`, tables, CHECKs, partial unique indexes, `CREATE OR REPLACE FUNCTION` for all five
+  trigger functions (incl. the two insert guards), guarded trigger creation from the shared `triggerInventory` constant, ownership check, version downgrade
   refusal, column-level grants. DoD: applies twice; fails on a pre-created table owned
   by another role.
-- [ ] 4. `NewStore` and `Ready`: version, `to_regclass`, triggers present with
-  `tgenabled='O'`, `NOT pg_has_role(current_user, owner, 'MEMBER')` for tables, trigger
+- [ ] 4. `NewStore` and `Ready`: version, `to_regclass`, the exact `triggerInventory` set present (`tgenabled='O'`, expected `tgfoid`, function owner), `NOT pg_has_role(current_user, owner, 'MEMBER')` for tables, trigger
   functions and schema `glovo`, the #957 §6d.1 grants, nil collaborators ->
   `not_ready` (amended (c)).
-- [ ] 5. Owner path: `Create` with `CreateInput` (READ COMMITTED check, live connection,
+- [ ] 5. Owner path: `NewOrderRef`, `LookupByIdempotencyKey` and `Create` with `CreateInput` incl. `OrderRef` (READ COMMITTED check, live connection,
   expected install revision, `ExecutionBindingTx` tenant+owner check and write-once
   `execution_id`, `basket.Parse` of the stored preview bytes, fingerprint check,
   idempotent insert, snapshot 1), `AppendSnapshot`, `Finalize`, `Get`, `LockOrder`,
@@ -31,7 +30,7 @@ and `not_ready`.
   by `MarkDispatched`, task 7).
 - [ ] 7. Control path: `PeekOrderScope`, `LockOrderForControl`, `ScopeFromRefs`,
   `MarkDispatched`, `MarkCancelled`, `MarkUnknown`, all with `Actor`.
-- [ ] 8. `MintJoinRefTx` and `LookupJoinRefTx` for `tnr_`, `prr_`, `ordr_` and `irv_`
+- [ ] 8. `MintJoinRefTx` and `LookupJoinRefTx` for `tnr_`, `prr_` and `irv_` (no `ordr_` kind: the ref is the order's own column)
   (single owner of `glovo.join_refs`; amended (c)).
 - [ ] 9. Docs in package comments: the lifecycle table, the refusal map, and a pointer to
   the canonical lock order in #957 design §6b. Run `go fmt`, `go vet`,
@@ -51,7 +50,7 @@ separate runtime role.
 - [ ] T4. Connection: absent `no_connection`, revoked `connection_revoked`, expired
   `connection_expired`, moved revision `stale_install`; reads still work after revoke.
 - [ ] T5. Idempotent create: same key and request replays; same key, other basket gives
-  `idempotency_key_reused`; 20 concurrent creates give one row.
+  `idempotency_key_reused`; 20 concurrent creates give one row, one `ordr_` and (with #957 T5) zero extra `work_items`/`work_item_executions` rows; `LookupByIdempotencyKey` writes nothing; `Create` with a malformed `OrderRef` is `invalid_request`.
 - [ ] T6. Isolation: `Create` inside REPEATABLE READ is refused.
 - [ ] T7. Fingerprint: the #1059 vectors reproduce byte for byte, including the
   permuted-input, price-change and fee-change vectors and every `must_reject` case; a wrong `ExpectedFingerprint` gives
@@ -74,14 +73,15 @@ separate runtime role.
   is rejected; `command_id` without `approval_ref` is rejected.
 - [ ] T13. Shared transaction: #989 `CreateGlovoExecutionTx` + `Create` + `Finalize` +
   `BindApproval`, and `MarkDispatched` + a bridge `Enqueue` in one `pgx.Tx`; a failure
-  after the last statement leaves nothing.
-- [ ] T14. Readiness: a disabled guard trigger, a table owned by the runtime role, a
+  after the last statement leaves nothing. `order_ref` equals the `ordr_` in the workflow id, `engine_ref` and the `aar_` key.
+- [ ] T14. Readiness: for each of the eight triggers of `triggerInventory` in turn, disable it, drop it, and re-point it at another function (each gives `not_ready`, and is wrongly ready with the matching check removed), plus: an unlisted extra trigger, a trigger function not owned by the migration role, a table owned by the runtime role, a
   table owned by a role the runtime role inherits, schema `glovo` owned by the runtime
   role, an extra grant, a version mismatch and a nil collaborator each give `not_ready`;
   with the matching check removed, each case is wrongly reported ready (mutation
   check). `ApplySchema` refuses a downgrade (amended (c)).
 - [ ] T15. Refusal map: each design §7 row produces its code; an injected database error
-  gives `unavailable`, never `not_ready`.
+  gives `unavailable`, never `not_ready`; a held `FOR UPDATE` on the order row plus `SET LOCAL lock_timeout` gives `tenant_busy` (fails with the mapping reverted, mutation check).
+- [ ] T17. Raw-SQL inserts under the runtime role (round 3): an `orders` insert as `dispatched`, with a fingerprint matching no snapshot, with an `aar_`/`cmd_`, or with a `we_` of another owner or tenant, is refused; an `order_effects` insert for an order that is not `finalized`, or with another execution, tenant, owner or fingerprint, is refused; the legitimate `Create` and `MarkDispatched` paths still pass.
 - [ ] T16. Audit: events carry `actor_kind`; #985 calls record `control_worker`; no
   fingerprint or basket bytes appear in events or logs.
 

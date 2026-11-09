@@ -363,7 +363,7 @@ the reference validator. The transport limit is not raised.
 
 ### Consumer duties (normative README section, "Consumer MUST")
 
-A consumer (mctl-api #986/#957/#988/#989) MUST:
+A consumer (mctl-api #986/#957/#988/#989; duty 10 is owned by mctl-api#957, design §5a there, `glovo.join_read_refs`) MUST:
 1. take tenant, principal, connection and install-revision bindings only from its own
    stored command row. The result carries none, and a result that adds any is invalid;
 2. require `result.kind == stored command kind`, and require `command_id` and

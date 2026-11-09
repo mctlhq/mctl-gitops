@@ -79,8 +79,9 @@ Submission
 Fetch (in process only)
 - WHEN `FetchReadResult` is called THE SYSTEM SHALL return the bytes only if the row's
   tenant and owner principal match, the caller holds `glovo:read`, the row is not
-  expired or erased, the connection and install revision match the request, and the
-  #959 live connection read reports the connection active at that revision.
+  expired or erased, the connection and the decimal install revision match the request (round 3: the
+  stored revision is the decimal #959 one; the `irv_` is wire-only), and the #959 live
+  connection read reports the connection active at that revision.
 - IF the row is missing or belongs to another tenant or owner THEN THE SYSTEM SHALL
   return one indistinguishable not-found sentinel.
 - IF `sha256(stored bytes)` differs from the stored digest THEN THE SYSTEM SHALL fail
@@ -118,4 +119,5 @@ Retention and hygiene
 - OPEN-986-2. The mctl-telegram provider must vendor the same #1059 files. That is an
   extension of mctl-telegram#1262, not tracked here.
 - OPEN-986-3. Closed 2026-11-09 (c): `irv_` is the `install_revision` kind of #988
-  `glovo.join_refs`, minted by #957 read routes (#957 design §2a).
+  `glovo.join_refs`, minted by #957 read routes (#957 design §2a). Round 3: wire-only; the
+  decimal revision is what is stored and compared (#957 design §5).

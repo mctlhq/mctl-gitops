@@ -12,7 +12,9 @@ text disagree, this section wins; the older passages are edited.
 | F1 (NULL refs on read rows break every scanner and the expiry sweep) | No NOT NULL is relaxed. Read rows store `''` in `workflow_id`, `execution_id`, `work_item_id` and `order_ref` (`run_id` already defaults to `''`, `internal/bridge/store.go:74`), so `cmdCols`/`scanCmd` (`store.go:284-298`), `claimTx`, `lockOwned`, `Cancel` and `permitTx` keep scanning plain strings. The kind-conditional CHECK requires `''` for read kinds and non-empty values otherwise. `expireTx` (`store.go:868-910`) returns `operation_kind` and skips the `bridge_signal_outbox` insert (`:904`) for read kinds; `permitTx` refuses a read kind. T5b, T7d |
 | F3 (#957 request lacks owner id and scopes) | #957 design §5 now passes the full `ReadRequest` below. `FetchReadResult` is the **authoritative** binding check for reads, not defence in depth; T10b crosses principals through the #957 adapter |
 | P3 F2 (checker bound to a #959 API that does not exist) | `ConnectionChecker` is bound to #959 `LiveConnection(ctx, glovo.Owner)` (#957 §6d.4), which fences `expires_at`; its `no_connection`, revoked and expired answers and a different revision map to the §5 sentinels |
-| X-5 (`irv_` has no owner) | `irv_` is a #988 `glovo.join_refs` kind (`install_revision`), minted by #957 read routes through `MintJoinRefTx` (#957 §2a). `FetchReadResult` compares the stored `install_revision` ref with the request's; OPEN-986-3 is closed |
+| X-5 (`irv_` has no owner) | `irv_` is a #988 `glovo.join_refs` kind (`install_revision`), minted by #957 read routes through `MintJoinRefTx` (#957 §2a). Round 3 (X-2): it is wire-only. `ReadRequest` carries two fields, the decimal `InstallRevision` (stored on `bridge_read_results.install_revision` and compared with #959 `LiveConnection`) and `InstallRevisionRef` (the `irv_`, written only to the command's `install_revision_ref`); OPEN-986-3 is closed |
+| Round 3, N1 (read rows collide on `UNIQUE (execution_id, sequence)`) | §4: `bridge_commands_sequence` becomes a partial unique index that excludes the read kinds; `claimTx` ordering is unchanged and, because every read has `sequence` 1, never serializes reads (T5c) |
+| Round 3, N3 (MUST 10 has no owner) | Assigned to mctl-api#957 (design §5a, `glovo.join_read_refs`); this slice is a transport and validates params only against the #1059 schema. T10b is rewritten |
 | #957 F2, X-4 (DDL by the runtime role) | The §4 changes are part of `bridge.ApplySchema` (#985) under the migration role, not of a runtime `bridgeSchema` run; grants per #957 §6d.1 |
 | X-2 (read TTL vs preview) | Prepare no longer re-reads: #957 stores the approval-basket bytes with the preview. `MCTL_BRIDGE_READ_RESULT_TTL` defaults to 300 s, clamped 1..300 s, and a read command's TTL is at most 300 s (#1059 `ttl_seconds`) |
 | P3 F5 (codes contradict the schema) | §5 lists submission checks in pipeline order with one code each; a non-`none` effect and a read payload on a non-read kind fail the schema first and are `invalid_document`; `ErrPayloadTooLarge` is added to `errors.go` |
@@ -97,7 +99,7 @@ Skipped P3s: none.
   any of them. If #1059 is not merged, the task stops.
 - Read kinds: `read_history`, `read_preview`, `read_basket` (final names from #1059).
   Read commands carry the #1059 read binding set (tenant, principal, connection and
-  install-revision refs (`irv_`), the read idempotency key `request_id` (`rdq_`) and per-kind
+  install-revision ref (`irv_`, wire only) and the decimal revision, the read idempotency key `request_id` (`rdq_`) and per-kind
   `params`) and no `order_ref`,
   `execution_id`, `work_item_id` or workflow fields.
 - The single M1 basket fingerprint is defined in #1059 over the **approval basket**
@@ -134,7 +136,8 @@ type ReadRequest struct {
     Kind ReadKind // history | preview | basket
     Tenant, OwnerPrincipalID string        // private
     TenantRef, PrincipalRef, ConnectionRef string // tnr_, prr_, gcn_
-    InstallRevision string
+    InstallRevision string    // decimal #959 revision: stored on the result row and compared on fetch (round 3, X-2)
+    InstallRevisionRef string // irv_ ref minted by #957: written only to the command's install_revision_ref; EnqueueRead refuses either empty
     Scopes []string                         // from the verified subject token, for the glovo:read re-check
     Params json.RawMessage                  // bounded, validated against the #1059 command schema
     Deadline time.Time
@@ -155,10 +158,10 @@ func (c *ReadClient) Read(ctx context.Context, r ReadRequest) (*ReadResult, erro
 Only #957's handlers call `ReadClient.Read`, through #957's `ReadBridge` interface
 (#957 task A12 owns the adapter). Amended (c): #957 passes every `ReadRequest` field
 (design §5 there): the verified owner principal id, the `tnr_`/`prr_`/`gcn_` refs, the
-`irv_` install-revision ref and the subject token's scopes. `FetchReadResult` is the
+decimal install revision, its `irv_` ref (both from one #959 read) and the subject token's scopes. #986 never resolves an `irv_`. `FetchReadResult` is the
 authoritative binding check for reads. `EnqueueRead` sets the command TTL to
 `min(Deadline - now, 300 s)`, `intent_hash` to the params digest, `operation_key` to
-`"read:"+rdq_`, `sequence` to 1 and `approval_ref` to `''`. No HTTP route, MCP tool, Temporal workflow or
+`"read:"+rdq_`, `sequence` to 1 and `approval_ref` to `''`. `execution_id` is `''` for every read, so the existing non-partial `UNIQUE (execution_id, sequence)` would admit one read in the whole database; §4 replaces it. The `pho_` and cursor origin check (#1059 consumer MUST 10) is not done here: #957 owns it (§5a there). No HTTP route, MCP tool, Temporal workflow or
 signal is involved.
 
 ### 4. Storage (in `bridge.ApplySchema`, idempotent; amended (c))
@@ -180,6 +183,15 @@ second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock:
     non-null `read_request_id` and `''` in workflow/order/`we_`/`wi_`; every other kind
     has all of those non-empty (which `validate()` already guarantees for v1alpha1 rows,
     `store.go:228-256`);
+- (round 3, N1) `bridge_commands_sequence` (origin/main `store.go:115-116`, non-partial
+  `UNIQUE (execution_id, sequence)`) is replaced by the same-named partial index
+  `... WHERE operation_kind NOT IN ('read_history','read_preview','read_basket')`. The guarded
+  step reads `pg_indexes.indexdef`; only when the definition has no such predicate does it
+  `DROP INDEX` and `CREATE UNIQUE INDEX` once. `bridge.ApplySchema`'s copy of `bridgeSchema`
+  carries the partial form, so its `CREATE UNIQUE INDEX IF NOT EXISTS` never re-creates the
+  old one. `claimTx`'s `p.sequence < c.sequence` predicate needs no change: all reads have
+  sequence 1, so reads never wait on each other, and a v1alpha1 execution's ordering is
+  unchanged;
 - `CREATE UNIQUE INDEX IF NOT EXISTS bridge_commands_read_request ON bridge_commands
   (tenant, read_request_id) WHERE read_request_id IS NOT NULL`;
 - table `bridge_read_results` (`CREATE TABLE IF NOT EXISTS`):
@@ -241,8 +253,8 @@ InstallRevision, Scopes})`, in process only, checks in this order:
 
 `ConnectionChecker` is implemented by the #959 store's `LiveConnection` (same database,
 owner decision A; amended (c)). A command whose outcome is not `succeeded` answers
-`ErrReadUnavailable`. The install revision on the row is the `irv_` ref; the checker
-resolves it through #988 `LookupJoinRefTx` and compares with the live revision. Default `DenyConnectionChecker` returns
+`ErrReadUnavailable`. The install revision stored on the result row is the decimal one;
+the checker compares it with the live #959 revision and the request's `InstallRevision`, never an `irv_`. Default `DenyConnectionChecker` returns
 `ErrReadUnavailable`. #957 maps every sentinel through its §4 table (no bridge code
 reaches the Glovo wire); `bridgeStatus` also gains explicit cases for the new sentinels
 so they cannot fall through to 409 if ever exposed.

@@ -251,7 +251,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   then `VALIDATE`), not in the runtime `actionApprovalSchema`.
 - Grants: every Glovo approval write runs on the one Glovo runtime role of #957 §6d.1
   (the bridge pool). Its rights on `glovo.approval_bindings` (`SELECT, INSERT, UPDATE
-  (command_id)`) and on `action_approval_requests` (column-level, no `DELETE`,
+  (command_id)`) and on `action_approval_requests` (the exact column list is the one row of #957 design §6d.1 and is not restated here, round 3; no `DELETE`,
   `TRUNCATE` or `TRIGGER`) are listed in that table and nowhere else; this slice's
   `ApplyGlovoApprovalSchema` issues them. The work-items role keeps its generic rights
   and gets nothing in schema `glovo` (#957 §6d.1 "existing consumers").
@@ -302,7 +302,8 @@ func (s *Store) ConsumeGlovoApprovalTx(ctx, tx pgx.Tx, id, commandID string) err
 func (s *Store) RevokeGlovoApprovalTx(ctx, tx pgx.Tx, id, actor string) error
 func (s *Store) MarkGlovoApprovalUnknownTx(ctx, tx pgx.Tx, id, commandID string) error
 func (s *Store) DecideGlovoApprovalTx(ctx, tx pgx.Tx, in ActionDecisionInput) (*ActionApprovalRequest, error)
-func (s *Store) GlovoApprovalStatus(ctx, tenants []string, id string) (*GlovoApprovalStatus, error)
+func (s *Store) GlovoApprovalStatus(ctx, q Querier, tenants []string, id string) (*GlovoApprovalStatus, error)  // round 3: q is the glovo_runtime pool or the caller's tx, never the work-items pool
+func (s *Store) GlovoApprovalForDecision(ctx, q Querier, id string) (*ActionApprovalRequest, *GlovoBinding, error) // round 3: Glovo-kind pre-read for the decision route and canSeeActionApproval
 ```
 
 ```go
@@ -350,7 +351,7 @@ type ReserveCommand struct { // every field required; an empty field is ErrReser
   A row already `unknown` for the same `command_id` is success.
 - **Decide**: `FOR UPDATE … WHERE state='pending'` on the `aar_` only (L4). It writes no
   order row.
-- **GlovoApprovalStatus** (tx-free, for the #985 `read_approval` route): returns
+- **GlovoApprovalStatus** (round 3: a read on the caller's `Querier`, which is the Glovo pool as `glovo_runtime` or the caller's `pgx.Tx`; the work-items role has no privilege on schema `glovo`, #957 §6d.1 R3, so this read never runs on its pool; used by #985 `read_approval`, `glovo_order_status` and the prepare replay): returns
   `approval_ref`, exposed state, `expires_at`, `order_ref` and `command_id` (ids and
   enums only). Missing, non-Glovo or outside `tenants` is one `not_found`.
 - **Generic paths refuse Glovo kinds.** `CreateActionApproval` refuses any `glovo.`
@@ -362,7 +363,7 @@ type ReserveCommand struct { // every field required; an empty field is ErrReser
 ### 5. Owner decision (`handlers_action_approvals.go`)
 
 `DecideActionApproval` gains one branch before the admin check:
-1. Non-admin caller: pre-read the row. If it is a Glovo kind and every check below
+1. Non-admin caller: pre-read the generic `aar_` row through the work-items pool (kind and state only, as today). Only when it is a Glovo kind, read the binding with `GlovoApprovalForDecision` on the **Glovo pool** (round 3: the owner and tenant live in `glovo.approval_bindings`, which the work-items role cannot read); an absent binding is the same uniform 403. The pre-read is advisory: `DecideGlovoApprovalTx` re-checks the binding and the state under L4. If it is a Glovo kind and every check below
    passes, continue. Otherwise answer the same 403 `approval_decider_forbidden` that a
    non-admin gets today, whether the id is unknown, non-Glovo, someone else's or
    undecidable. No oracle.
@@ -391,7 +392,7 @@ Governance:
 The decision runs as `DecideGlovoApprovalTx` on a transaction from the bridge pool (one
 database). It touches only the `aar_`. The route keeps its existing `writeErrorCode`
 body; owner decision C1 applies to the #957/#985 Glovo routes, not this one. Read
-access (`canSeeActionApproval`) gains the same owner rule for Glovo kinds only.
+access (`canSeeActionApproval`) gains the same owner rule for Glovo kinds only, reading the binding through `GlovoApprovalForDecision` on the Glovo pool (it takes the `aar_` row and a binding looked up by the caller, never from the work-items pool).
 
 ### 6. The fence (`internal/glovo/receipt/fence.go`)
 
@@ -401,7 +402,14 @@ adds to `permitTx`. Collaborators: `Approvals` (this store), `Orders` (#988), `C
 effort, read outside any row lock; the transactional guarantee is #985 §7.3). The lock
 levels are the canonical ones of #957 design §6b.
 
-`PreLock(ctx, tx, commandID)`, before `lockOwned`:
+`PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` (the #957 §6d.4
+signature, round 3), before `lockOwned`:
+0. Scope first. Read the command row **without a lock** and apply the same provider and
+   tenants predicate as `lockOwned` (`internal/bridge/store.go:659-668`, `c.allowsTenant`
+   and the provider). An absent id and a foreign tenant or provider both answer
+   `ErrCommandNotFound`, before any lock and with no order or `aar_` specific error. A
+   command whose kind is not `place_order_fake` (a read, `cancel_order_fake`, an empty
+   `order_ref`) returns nil without any lock; `permitTx`'s own kind refusal then applies.
 1. Read, without a lock, the command's immutable binding columns: `tenant`,
    `owner_principal_id`, `order_ref`, `approval_ref`.
 2. `Conns.LockOwnerShared(tenant, owner)`: L1 shared, L2 shared.

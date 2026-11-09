@@ -16,6 +16,9 @@ section and older text disagree, this section wins; the older passages are edite
 | F5 (`glovo.Status` disagrees with #957 §4) | The joint contract's HTTP status row now equals #957 §4.1 (`no_connection` 404, `stale_install` 403); the enum row lists the codes the sibling slices add. Same edit in #960 and #961, whose joint contract text stays identical |
 | F7 (A11 depends on #985's real hook; dependency cycle) | T17 uses a fake hook only. The end-to-end revoke-then-permit and expiry-then-permit proof is #985 T24, a #985 gate; #959 no longer depends on #985 |
 | F8 (Reconnect conflicts with the #961 route) | `Reconnect` has two branches (below). The #961 route exposes only the terminal branch and refuses a live prior with `connection_exists`; #961 is edited to say so |
+| Round 3 (X-3, N1) | `NewStore(ctx, pool, runtimeRole, opts...)`, `Pool()` and `WithExplicitURL`: #959 opens no second pool, so the R5 same-pool check can pass |
+| Round 3 (N2) | `Ready` gains the role-attribute and `current_user` checks; A12 gets T19, a negative matrix proven both ways |
+| Round 3 (#961 F1, F4, F6) | `ActivateTx`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly` and `AppendRefusal`, so #961 adds no store primitive of its own |
 | P3 F6, F9, F10 | Schema-safety requirement rewritten (`ApplySchema` is the only DDL path); every query is `glovo.`-qualified, with an A10 test under the runtime role's default `search_path`; `*Refusal` replaced by `*glovo.Error`; the lock prose points to #957 §6b; the handoff-refs grant is #961's, to the same runtime role; the explicit-URL check is an input to `Ready` from the wiring slice (#957 A9) |
 
 ## Amendment 2026-11-09 (b) — owner decision A, companion to #985/#988/#989
@@ -73,10 +76,15 @@ func (s *Store) Ready(ctx context.Context) error
 - Without a hook, revokers still work (the M1a store stays usable), but `Ready` reports
   `revocation_hook_missing`. #985 and #989 treat that as `not_ready`, so no Glovo
   write can be dispatched or permitted.
-- `Ready` also checks: `GLOVO_DB_URL` set explicitly (an input from the wiring slice,
-  #957 A9), the schema version, the #959 grants of #957 §6d.1, that `current_user`
-  owns no `glovo` object and is not a member of the owner role, and that the audit and
-  no-delete triggers are enabled.
+- `Ready` also checks (round 3, the full #957 §6d.1 list that #959 owns):
+  - the explicit-URL fact (`WithExplicitURL(true)`, an input from the wiring slice, #957 A9);
+  - `current_user` equals the `runtimeRole` given to `NewStore`;
+  - `rolsuper`, `rolcreaterole`, `rolcreatedb` and `rolbypassrls` of `current_user` are false;
+  - the schema version, and the #959 grants of #957 §6d.1 exactly (nothing beyond them, no
+    `CREATE`, `TRUNCATE`, `TRIGGER` or `REFERENCES`);
+  - `current_user` owns no `glovo` object and is not a member of any owner role;
+  - the audit and no-delete triggers are enabled (`tgenabled = 'O'`);
+  - a `RevocationHook` is installed (`revocation_hook_missing` otherwise).
 
 
 ## Amendment 2026-11-09 — joint 959/960/961 AMEND
@@ -98,6 +106,7 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 
 | Item | Frozen value | Owner slice |
 |---|---|---|
+| Consent-time team selection, claims `tgr`/`stn`, `User.TeamGrant()`, `scope.Resolver` | `/oauth/consent` selection, the claims `tgr` (grant id) and `stn` (selected tenant), `User.TeamGrant() (grantID, tenant string, ok bool)` and `scope.Resolver.Resolve(ctx, *auth.User) (Scope, *glovo.Error)`. No other slice selects a team, mints a tenant claim or reads a tenant header as input; #957 consumes these (round 3: it mints no `mctl_tenant`). The `scope_ref` binding key of #957 section 2b is the grant's `refresh_family_id` (`oauth_team_grants`), read through `User.TeamGrant()` plus `teamgrant.Check`. Eligibility = membership ∩ allowlist minus `GLOVO_NON_SELECTABLE_TENANTS`; the current install is not part of it (a selected team without a current install is refused at use with `no_install` by #959) | #960 (sole owner) |
 | Go package | extend the existing `internal/glovo` from #977 (`glovo.Code`, `glovo.Error`, `glovo.Gate`, `glovo.WriteError`); no parallel `RefusalCode`/`Refusal` type | #959 adds the codes |
 | Tables | `glovo_installs`, `glovo_connections`, `glovo_connect_requests`, `glovo_audit_events`, `glovo_pilot_allowlist` | #959 (DDL) |
 | | `glovo_handoff_refs`, `glovo_rate_counters` | #961 (DDL) |
@@ -110,7 +119,7 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 | Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
 | Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
 | Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
-| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr, runtimeRole)` with a dedicated migration role that owns the objects; the one Glovo runtime role and its grants are mctl-api#957 design §6d.1 (amended (c)). `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
+| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr, runtimeRole)` with a dedicated migration role that owns the objects; the one Glovo runtime role and its grants are mctl-api#957 design §6d.1 (amended (c)). `NewStore(ctx, pool *pgxpool.Pool, runtimeRole string, opts ...Option)` (round 3) takes the one shared `GLOVO_DB_URL` pool that the wiring slice opened and that the bridge store also uses (#957 §6d.1 R4), opens no pool of its own and runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
 | Worker identity | none exists today: `auth.IsGlovoWorker()` is the reserved stub (`internal/auth/oidc.go`, always false). #961 builds it, default OFF. It is distinct from the #968 bridge provider (`service:bridge-provider:<ref>`, `bridge:provide`): the Glovo worker is refused on `/api/v1/bridge/*` and the bridge provider on `/api/v1/glovo/*`, tested both ways. Its credential is test-only until the issuer decision (mctl-gitops#2506 / #2540) | #961 |
 | Facade routes | `/api/v1/glovo/facade/*` is added to #977's empty `glovoAudienceRoutes` by #961 (the only slice that adds those routes) | #961 |
 | Allowlist routes | `PUT\|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` are defined only in #960 | #960 |
@@ -125,7 +134,9 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
   `internal/<name>/store.go`. A `const <name>Schema` string holds idempotent
   DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE ... INDEX IF NOT EXISTS`,
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). `NewStore(ctx, connStr)`
-  opens a pool with `pgshared.Open` (`internal/pgshared/pool.go`), pings,
+  opens a pool with `pgshared.Open` (the Glovo store deliberately departs from this in
+  round 3: the wiring slice opens the one `GLOVO_DB_URL` pool with `pgshared.Open` and
+  passes it in) (`internal/pgshared/pool.go`), pings,
   executes the schema, and returns the store. See
   `internal/commerce/store.go` (`commerceSchema`, `NewStore`, `withTx`)
   and `internal/lifecycle/store.go` (`lifecycleSchema`). There is no
@@ -341,7 +352,7 @@ trigger.
 |---|---|---|
 | connection `expired`, `failed`, `revoked` (any reason, incl. `superseded`, `install_revoked`, `install_reinstalled`) | `secret_ref` set to NULL and returned for release; every unconsumed `glovo_handoff_refs` row of the connection (#961) | connection row (id never reused), audit events |
 | install `uninstalled` / reinstall | the above for every live connection of the old revision | install row, audit events |
-| idempotency rows | not on terminal transition; removed after 24 h by the #961 cleanup restricted to synthetic tables | none |
+| idempotency rows | not on terminal transition; removed after 24 h by the #961 `Sweep` (bounded `DELETE` on `glovo_connect_requests`, `glovo_handoff_refs` and `glovo_rate_counters`; the matching `DELETE` rights are in #957 §6d.1) | none |
 
 Every terminal path goes through one `endConnection` helper, so no path can
 skip the purge (the gap found in the fake worker of mctl-telegram#1258).
@@ -400,18 +411,38 @@ return `*glovo.Error` for domain refusals and wrapped errors for I/O
 
 ```go
 func ApplySchema(ctx context.Context, migrationConnStr, runtimeRole string) error // migration role only; grants per #957 §6d.1
-func NewStore(ctx context.Context, runtimeConnStr string, opts ...Option) (*Store, error) // no DDL
+func NewStore(ctx context.Context, pool *pgxpool.Pool, runtimeRole string, opts ...Option) (*Store, error) // round 3: shared GLOVO_DB_URL pool, no DDL, opens no pool of its own
+func (s *Store) Pool() *pgxpool.Pool // the pool NewStore was given; #985 ProveOneDatabase compares it with bridge.Store.Pool() (same pointer)
+// Option: WithExplicitURL(bool): the wiring slice (#985 task 9) passes true only when GLOVO_DB_URL was set explicitly (never AUDIT_DB_URL); false makes Ready answer not_ready
 // Option: WithClock(func() time.Time); audit retention is a future privileged maintenance slice
-func (s *Store) Close()
+func (s *Store) Close() // releases nothing it does not own: the shared pool is closed by the wiring slice
 
 func (s *Store) Install(ctx, tenantID, actor string) (*Install, error)          // idempotent if already installed
 func (s *Store) RevokeInstall(ctx, tenantID, actor, reason string, expectedRevision int64) (*Install, []Connection, error)
 func (s *Store) Reinstall(ctx, tenantID, actor string, expectedRevision int64) (*Install, []Connection, error)
 func (s *Store) GetInstall(ctx, tenantID string) (*Install, error)               // no_install
 
-type ConnectInput struct{ Owner Owner; ExpectedInstallRevision int64; IdempotencyKey string }
+type ConnectInput struct {
+    Owner Owner; ExpectedInstallRevision int64; IdempotencyKey string
+    TerminalOnly bool                                // Reconnect only (round 3): a live prior is refused connection_exists under L2, no supersede; a prior terminal by state or by expires_at <= now() (database clock) takes the terminal branch
+    AfterLocks func(ctx context.Context, tx pgx.Tx) error // round 3, for #961: runs on the mutation's own tx after L1/L2 and before the insert; an error aborts and is returned as is (e.g. rate_limited)
+}
 func (s *Store) Connect(ctx, in ConnectInput) (*ConnectResult, error)           // {Connection, Replayed}
 func (s *Store) Reconnect(ctx, in ConnectInput, priorConnectionID string) (*ConnectResult, error)
+// ActivateTx (round 3, for #961): on the caller's tx it takes L1 shared then L2 exclusive,
+// runs in.AfterLocks (the handoff-ref consume, level L2b of #957 §6b), then steps
+// pending_handoff -> pending_provider -> active (two audited transitions, the edge table
+// is unchanged) with expires_at = in.ExpiresAt (database clock, never earlier than now()).
+// It checks expectedVersion and ExpectedInstallRevision (stale_version / stale_install).
+// It begins and commits nothing. LiveConnectionTx then reports connection_expired once
+// ExpiresAt has passed.
+type ActivateInput struct { Owner Owner; ConnectionID string; ExpectedVersion, ExpectedInstallRevision int64; ExpiresAt time.Time; Actor string; AfterLocks func(ctx context.Context, tx pgx.Tx) error }
+func (s *Store) ActivateTx(ctx context.Context, tx pgx.Tx, in ActivateInput) (*Connection, error)
+// AppendRefusal (round 3, for #961): appends one glovo_audit_events row (event 'refused',
+// reason_code = the refusal code, to_state = from_state = the entity's current state) for a
+// refusal that names an existing install or connection. Pre-scope refusals have no entity
+// and are not audited here (slog and metrics only).
+func (s *Store) AppendRefusal(ctx context.Context, ev RefusalEvent) error
 func (s *Store) Transition(ctx, owner Owner, connectionID string, to ConnectionState,
                            expectedVersion int64, reason string, ref *SecretRef) (*Connection, error)
 func (s *Store) Revoke(ctx, owner Owner, connectionID, reason string) (*Connection, error)

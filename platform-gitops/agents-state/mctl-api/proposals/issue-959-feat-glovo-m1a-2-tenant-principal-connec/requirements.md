@@ -120,8 +120,9 @@ Revoke and reinstall atomicity
 - WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= now()` (database
   clock) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
   has run. (amended (c))
-- WHILE `GLOVO_DB_URL` is not set explicitly THE SYSTEM SHALL report `not_ready`; it
-  SHALL NOT fall back to `AUDIT_DB_URL`.
+- WHILE `GLOVO_DB_URL` is not set explicitly (the wiring slice passes `WithExplicitURL(false)`) THE SYSTEM SHALL report `not_ready`; it
+  SHALL NOT fall back to `AUDIT_DB_URL`. `NewStore` SHALL take the shared pool and open none of its own (round 3).
+- WHILE `current_user` differs from the configured runtime role, or has `rolsuper`, `rolcreaterole`, `rolcreatedb` or `rolbypassrls`, THE SYSTEM SHALL report `not_ready` from `Ready` (round 3).
 - THE SYSTEM SHALL create every object in the Postgres schema `glovo`, owned by the
   migration role, and SHALL grant the one Glovo runtime role exactly the #959 rows of
   mctl-api#957 design §6d.1 and the work-items role nothing. (amended (c); role

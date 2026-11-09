@@ -42,7 +42,7 @@ owner-confirmed role model of #957 §6d.1.
   `ReserveGlovoApprovalTx` (the one `ReserveCommand` struct, every field required,
   binding equality, idempotent for the same `cmd_`), `ConsumeGlovoApprovalTx`,
   `RevokeGlovoApprovalTx` and `MarkGlovoApprovalUnknownTx` (both idempotent as #985 §3),
-  `DecideGlovoApprovalTx` (aar_ only), `GlovoApprovalStatus`. — DoD: none begins or
+  `DecideGlovoApprovalTx` (aar_ only), `GlovoApprovalStatus(ctx, q Querier, ...)` and `GlovoApprovalForDecision(ctx, q Querier, id)` (both on the Glovo pool, never the work-items pool). — DoD: none begins or
   commits; nil collaborators give `not_ready`.
 - [ ] 4. Generic paths: `CreateActionApproval` refuses `glovo.` kinds; the four generic
   CAS statements add `AND NOT (glovoKindPredicate)` and map a Glovo row to 409
@@ -54,9 +54,9 @@ owner-confirmed role model of #957 §6d.1.
 - [ ] 6. Owner decision (design §5): the non-admin branch with one uniform 403, the
   membership read through `decideWrittenRole` + `PrincipalMembership` without
   `roleGate`, `isGlovoOwnerDecider`, `DecideGlovoApprovalTx` on a bridge-pool
-  transaction, `canSeeActionApproval` owner rule for Glovo kinds, audit without
+  transaction, `canSeeActionApproval` owner rule for Glovo kinds (binding read through `GlovoApprovalForDecision` on the Glovo pool after the generic pre-read), audit without
   `args_digest`. — DoD: existing decide tests pass unchanged.
-- [ ] 7. `internal/glovo/receipt`: `Fence` with `PreLock` and `Check` (design §6),
+- [ ] 7. `internal/glovo/receipt`: `Fence` with `PreLock(ctx, tx, c bridge.Caller, commandID)` (step 0: provider/tenants predicate and kind refusal before any lock) and `Check` (design §6),
   including `basket.Parse` on the whole stored payload, the recompute of fingerprint and
   intent hash (command-row and binding sources of design §6 step 5), the decider and
   `authority_basis` re-check, `LockOrderForControl(..., []string{tenant})`; the
@@ -137,9 +137,11 @@ merge.
   an `authority_basis` other than `resource_owner`.
 - [ ] T15b. Foreign roles and existing consumers (#957 §6d.1 R3/R5): the work-items
   role is refused a Glovo-kind `aar_` insert or update by `glovo.aar_guard()` and gets
-  `permission denied` on `glovo.approval_bindings`; with `glovo_migrator` owning the
+  `permission denied` on `glovo.approval_bindings`; the runtime role's `UPDATE` on `action_approval_requests` is exactly the column list of #957 §6d.1 (`has_column_privilege` per column, startup proof as the oracle; a table-wide `UPDATE` or a missing column makes `ProveOneDatabase` fail and the dispatcher `not_ready`); with `glovo_migrator` owning the
   tables, the existing generic work-items and action-approvals suites pass unchanged
   under the work-items role, and `workitems.NewStore` sends no DDL.
+- [ ] T15c. Foreign permit scope (round 3, X-6): a permit for a `cmd_` of another tenant, another provider or an absent id returns the same `ErrCommandNotFound` and takes no L1-L4 lock (lock-wait probe from a second connection shows none held); a read-kind or `cancel_order_fake` command or an empty `order_ref` takes no lock before `permitTx`'s kind refusal.
+- [ ] T15d. Decision pre-read (round 3, X-4): with the role split in force, the owner's decision on a Glovo `aar_` succeeds (binding read on the Glovo pool) and a non-owner gets the uniform 403; the generic pre-read never selects from `glovo.*` on the work-items pool.
 - [ ] T16. Invariant table of design §7 over every lifecycle path; `consumed` iff a
   permit exists.
 - [ ] T17. Secrecy: logs and audit rows across T1-T16 contain no basket, `args_digest`,
@@ -149,7 +151,7 @@ merge.
   `not_ready`, and `SetFence` is not called.
 - [ ] T19. Governance in strict mode: an owner approve passes `guardDecision` and records
   `authority_basis = resource_owner`; the start-up backfill leaves Glovo rows unchanged.
-- [ ] T20. Control worker: `GlovoApprovalStatus` returns only ids and enums, and
+- [ ] T20. Control worker: run with the real role split (round 3): `GlovoApprovalStatus` and `GlovoApprovalForDecision` on the `glovo_runtime` pool succeed, and the same read on the work-items pool gets `permission denied for schema glovo`, so no code path uses it; `GlovoApprovalStatus` returns only ids and enums, and
   `not_found` outside `tenants`; `RevokeGlovoApprovalTx` moves `pending` and `approved`
   to `denied`, succeeds again on a row already `denied` for that order, and is refused
   on `reserved`; `MarkGlovoApprovalUnknownTx` succeeds again on a row already `unknown`

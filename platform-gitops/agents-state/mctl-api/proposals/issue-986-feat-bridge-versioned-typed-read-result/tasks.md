@@ -48,6 +48,7 @@ merged. Without it no task starts.
 - [ ] T4. v1alpha1 golden projection and result digests are unchanged.
 - [ ] T5. A read command has `''` as `workflow_id`, `order_ref`, `execution_id` and
   `work_item_id`, and its completion writes no `bridge_signal_outbox` row.
+- [ ] T5c. Round 3 (N1): two concurrent reads from two tenants, and two reads from one principal, all enqueue and are claimable together (no `unique_violation`, no read waits on another); after `ApplySchema` the index definition carries the read-kind predicate, a second run is a no-op, and a v1alpha1 execution's `sequence` ordering and duplicate-`sequence` refusal are unchanged.
 - [ ] T5b. An expired read command writes no `bridge_signal_outbox` row, and `ExpireDue`
   in the same batch still expires a v1alpha1 write command and writes its outbox row.
 - [ ] T6. A non-read command with an empty `workflow_id` or `order_ref` is rejected by
@@ -73,11 +74,13 @@ merged. Without it no task starts.
   flipped by raw SQL makes the fetch fail closed.
 - [ ] T10. Fetch scope: another tenant, another owner and an unknown `res_` give the same
   sentinel; missing `glovo:read` gives `ErrReadNotAuthorized`.
-- [ ] T10b. Through the #957 A12 adapter, principal B's id against principal A's result
-  gives `ErrCommandNotFound` (amended (c)).
+- [ ] T10b. Round 3: `FetchReadResult` called directly with principal B's id against
+  principal A's `res_` gives `ErrCommandNotFound` (the cross-owner case; it does not go
+  through the A12 adapter, which always enqueues a new command). The `pho_`/cursor origin
+  check (#1059 MUST 10) is #957 T7a, not a #986 test.
 - [ ] T11. Fetch after expiry or erase gives `ErrCommandExpired`.
 - [ ] T12. Connection: revoked, expired, absent and moved install revision each refuse;
-  a checker error gives `ErrReadUnavailable`; the default checker denies.
+  a checker error gives `ErrReadUnavailable`; the default checker denies. Round 3 (X-2): a row stored at revision N with live revision N+1 is refused `ErrBindingMismatch` (decimal comparison; the `irv_` plays no part), and `EnqueueRead` refuses a request whose `InstallRevision` or `InstallRevisionRef` is empty.
 - [ ] T13. `ReadClient.Read` timeout cancels the command and returns
   `ErrReadUnavailable`; a late result for the cancelled command is refused.
 - [ ] T14. Erase and delete: bytes are NULL after `expires_at`, the row is gone 24 h

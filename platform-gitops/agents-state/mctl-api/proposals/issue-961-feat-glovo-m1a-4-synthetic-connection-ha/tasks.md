@@ -5,6 +5,7 @@
   `glovo.Status`, the refusal enum, connection states and `GLOVO_ENABLED` with the joint
   contract. `IsGlovoWorker` exists only as the reserved stub and `glovoWorkerGate` does not exist:
   both are built in task 5a and are not a STOP condition.
+  Also confirm the #959 primitives this slice consumes exist with these names (round 3): `ActivateTx`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal`, `Ready`.
   DoD: a short mapping note is added to `docs/glovo-connections.md`. If any slice is unmerged or
   a primitive is missing, stop and report it, and add nothing that duplicates it.
 - [ ] 1. Add the feature gate (depends on 0): reuse #960's `GLOVO_ENABLED` (no new switch),
@@ -29,7 +30,7 @@
   check, activate, expire, with per-call re-derivation of membership, allowlist, install
   revision and expiry, and the explicit `IsGlovoWorker` check. DoD: the worker reaches only
   these routes, and no other identity reaches them.
-- [ ] 6. Add the additive handoff and quota DB schema with negative concurrency tests, then add audit and logging (depends on 3, 4, 5): an audit event for every mutation and every
+- [ ] 6. Add the additive handoff and quota DB schema (DDL and grants contributed to `glovo.ApplySchema` under the migration role, tables in schema `glovo`, exact rights of #957 §6d.1; the L2a/L2b lock levels; `Sweep`) with negative concurrency tests, then add audit and logging (depends on 3, 4, 5): an audit event for every mutation and every
   refusal on a mutating route, and `slog` fields limited to ids, states and codes. DoD: covered
   by T5.
 - [ ] 7. Add the end-to-end test harness (depends on 3, 4, 5) in
@@ -71,29 +72,31 @@
   - forged `X-Mctl-Selected-Tenant` header: ignored, scope unchanged;
   - wrong-audience and multi-aud tokens: 401;
   - no `labs` fallback.
-- [ ] T5. Audit and no leak: the expected audit rows exist for each mutation and refusal.
+- [ ] T5. Audit and no leak: the expected audit rows exist for each mutation and for each refusal that names an existing entity (via `AppendRefusal`); pre-scope refusals (`ambiguous_tenant`, `scope_unsupported`, `no_tenant`, `not_in_pilot`, `rate_limited` on connect) write no audit row and appear in `slog` and metrics only.
   `secretscan` and raw-string scans of the `slog` buffer, audit rows and non-handoff responses
   find no token, handoff reference or idempotency key.
+- [ ] T11. Roles and readiness (round 3): a runtime role with an extra or missing right on `glovo_handoff_refs`, `glovo_rate_counters` or `glovo_connect_requests` makes `ProveOneDatabase` and `Ready` give `not_ready`; no DDL runs under the runtime role; with `store.Ready()` failing (wrong `current_user`, extra ownership, a missing trigger, no hook) every `/api/v1/glovo/*` route answers 503 `not_ready`.
 - [ ] T6. Lifecycle:
   - reinstall revokes live connections, and the old revision then returns `stale_install`;
   - DELETE installation revokes all connections;
   - expiry (worker expire, or time past `expires_at`) makes reads and checks return `expired`;
   - reconnect returns a new `gcn_` id with `supersedes_id`, and the old connection stays terminal;
-  - reconnect from `active` returns `invalid_transition`;
+  - reconnect from a live `active` prior returns 409 `connection_exists`; from a `failed` prior and from an `active` prior whose `expires_at` has passed (database clock) it creates a new `gcn_`;
+  - activation sets `expires_at`, and `LiveConnectionTx` reports `connection_expired` once it passes;
   - a handoff reference cannot be reused or used after expiry.
 - [ ] T7. Idempotency and limits: a same-key replay returns `replayed:true`. The same key with a
   different body returns 409 `idempotency_key_reused`. A missing key returns 400. The eleventh
   connect in an hour returns 429. With 50 non-terminal connections in a tenant, the 51st connect
   by any principal returns 429 `rate_limited`, also when two API instances race for the last
-  slot. Concurrent connect and revoke (parallel goroutines against the
+  slot (the L2a tenant mutex row serializes them; with the mutex reverted to `count(*)` under L1 shared the test goes red); a handoff consume racing a revoke commits one or the other, never both. Concurrent connect and revoke (parallel goroutines against the
   real DB) leave no live connection on a stale revision.
 - [ ] T8. Identity confinement: the worker token gets 403 on facade routes, `/mcp`,
   `/api/v1/agents/dev-loop/*`, `/api/v1/bridge/*`, admin installation routes and
   `/api/v1/whoami`. A #968 bridge-provider token gets 403 on every `/api/v1/glovo/*` route. An admin, the
   service token, a support-audience token and a Glovo-audience token each get 403 or 401 on
   worker routes. A Glovo-audience token gets 401 outside `/api/v1/glovo/facade/*`.
-- [ ] T9. Schema contract: every response and refusal validates against
-  `internal/glovo/wire/schema`. Unknown fields, a wrong `schema` or a body over 16 KiB returns
+- [ ] T9. Schema contract: every success response validates against
+  `internal/glovo/wire/schema` and every refusal against the `glovo.WriteError` schema (`{error, error_description}`, no `schema` field). Unknown fields, a wrong `schema` or a body over 16 KiB returns
   400.
 - [ ] T10. Regression: the existing support-audience, DevLoop, commerce and MCP tool-count tests
   are unchanged and pass.
