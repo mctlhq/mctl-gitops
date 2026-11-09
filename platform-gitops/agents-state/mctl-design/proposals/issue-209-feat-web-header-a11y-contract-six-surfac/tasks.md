@@ -15,12 +15,10 @@
       ownership split "site.css owns visuals, consumer owns behavior" stated with a `[CODE]` cite.
 - [ ] 3. Write the states section and requirements HDR-1..HDR-16, each with statement, observable
       outcome, states, and optional `site.css` hook. (depends on 2) — DoD: every requirement is
-      testable by one observable check; none mandates a component, ID, class, attribute or script.
-- [ ] 4. In HDR-6 and the versioning section, explicitly reject DOM adjacency alone as
-      programmatic/AT association; require a verified native mechanism or a pending exception.
-      Treat newly mandatory behavior for existing consumers as MAJOR, not MINOR. (depends on 3)
-      — DoD: semantics and compatibility-versioning caveats are explicit.
-- [ ] 5. Write the breakpoints table: academy and alice 981px (drawer-wide, <= 980px), seerrsense and
+      testable; no runtime-specific component, ID, class or script is mandated. Mere DOM adjacency
+      is not a programmatic/AT association without evidence, and newly mandatory behavior for
+      existing consumers triggers a MAJOR contract revision.
+- [ ] 4. Write the breakpoints table: academy and alice 981px (drawer-wide, <= 980px), seerrsense and
       default `site.css` 768px (<= 767px), others `unknown (not observed)`, each value tagged with its
       source; state that no common breakpoint is mandated. (depends on 3) — DoD: 981px and 768px both
       present and attributed.
