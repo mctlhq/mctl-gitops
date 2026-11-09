@@ -68,7 +68,7 @@ Facade (user)
 - IF a connection id belongs to another principal, another tenant, or does not exist THEN THE SYSTEM SHALL answer the same 404 `not_found` body.
 
 Administration (tenant owner)
-- WHEN a tenant owner (principal-mode role `owner` via `requireTenantRole`) calls `PUT /api/v1/glovo/tenants/{tenant}/installation` THE SYSTEM SHALL create the installation or increment its revision. In the same transaction it SHALL revoke every live connection on the old revision.
+- WHEN a tenant owner (principal-mode role `owner` via the strict `requireGlovoTenantOwner`, which a platform admin without the owner role does not pass) calls `PUT /api/v1/glovo/tenants/{tenant}/installation` THE SYSTEM SHALL create the installation or increment its revision. In the same transaction it SHALL revoke every live connection on the old revision.
 - WHEN a tenant owner calls `DELETE` on the same path THE SYSTEM SHALL mark the installation removed and revoke all its connections atomically.
 - IF the caller is not the owner of that tenant THEN THE SYSTEM SHALL refuse with 403. Admin status SHALL NOT satisfy the owner check on installation routes.
 - WHEN a platform admin calls `PUT|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` THE SYSTEM SHALL add or remove exactly that (tenant, principal) allowlist row. No tenant-wide or wildcard row SHALL be accepted.
@@ -80,7 +80,7 @@ Worker
 - WHEN the worker calls `check`, `activate` or `expire` with only a `gcn_` id THE SYSTEM SHALL read the connection with #959 `GetConnectionForWorker` to learn the owner and the version, and SHALL then use only the locked #959 primitives with them; it SHALL NOT read `glovo_connections` directly. (round 4)
 - WHEN a handoff or activate refusal occurs THE SYSTEM SHALL use only the codes of the round-4 table of design section 4: a wrong, foreign, expired or consumed reference is one `not_found`; a connection not in `pending_handoff` is `invalid_transition`. (round 4)
 - WHEN #957's `GET /connection` or `POST /connections` is called THE SYSTEM SHALL serve it through `connect.Service` of this slice (design 4a), so the same limits, L2a mutex and handoff apply as on the facade connect route; `handoff_url` is `GLOVO_SYNTHETIC_HANDOFF_BASE_URL` plus the raw reference, and an unset base URL is `not_ready`. (round 4)
-- WHILE an `active` connection is past `expires_at` THE SYSTEM SHALL report it as `expired` on every read and check, and SHALL persist the transition on the next mutation or sweep.
+- WHILE an `active` connection is past `expires_at` THE SYSTEM SHALL report it as `expired` on every read and check, and SHALL persist the transition on the next mutation of that owner (the join-path `Connect` ends a lapsed prior through #959 `Reconnect` with `TerminalOnly`, round 5) or sweep; a lapsed row never counts toward the 50-connection limit.
 - IF the worker identity calls any route outside `/api/v1/glovo/worker/*` (including `/api/v1/glovo/facade/*`, `/mcp`, `/api/v1/agents/dev-loop/*` and any Temporal or DevLoop control route) THEN THE SYSTEM SHALL answer 403 before any handler runs.
 - IF any non-worker identity (admin, service token, support or Glovo-audience token, surface or agent principal) calls a worker route THEN THE SYSTEM SHALL answer 403.
 

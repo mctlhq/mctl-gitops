@@ -1,5 +1,16 @@
 # Design: issue-988-feat-glovo-m1b-1-owner-scoped-order-inde
 
+## Amendment 2026-11-09 (c), round 5 of the AMEND PR
+
+Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1, X-1 (types and merge order) | #959 merges first; no fake `Connections`; task 1 adds no `glovo.Code` |
+| F2 (registry rows) | `glovo.RegisterGrants` for the #988 rows; `Ready` reuses the registry; T14 |
+| F3 (`Querier`) | The local `Querier` is deleted; `dbq.Querier` (#957 §6d.4) |
+| F5 (vector vendoring) | Task 2a vendors `jcs-digest.json` and `must-reject.json` from a pinned #1059 commit into `internal/jcs/testdata`; task 2 vendors the other three; no cycle |
+
 ## Amendment 2026-11-09 (c), round 4 of the AMEND PR
 
 Resolves the round-3 findings N1-N4 and the cross-slice finding X-3 (merge order). Where this section and older text disagree, this section wins.
@@ -10,7 +21,7 @@ Resolves the round-3 findings N1-N4 and the cross-slice finding X-3 (merge order
 | N2 (which writes re-read the live connection) | §6, new table "Connection re-check per method": `Create`, `AppendSnapshot`, `Finalize` and `BindApproval` call `LiveConnectionTx` on the caller's transaction; `MarkDispatched`, `MarkCancelled` and `MarkUnknown` never do (cancel must succeed after a revoke; dispatch re-checks the connection in #985 itself). T4 gains the revoke case |
 | N3 (no owner for the Go RFC 8785 implementation) | Owner: this slice, task 2. A neutral package `internal/jcs` (`Canonicalize(raw []byte) ([]byte, error)`, `Precheck(raw []byte) error`) reproduces the #1059 `vectors/` byte for byte, including the UTF-16 key order and number-form vectors. #986 imports it (its `rawcheck.go` becomes a wrapper over `jcs.Precheck`), so this slice depends on #1059 only, never on #986. The #1059 files this slice needs (`approval-basket.schema.json`, `basket-fingerprint.json`, `must-reject.json`, `pattern-parity.json`) are vendored here under `internal/glovo/basket/contract/` by sha256; #986 vendors the read-command and read-result schemas and references this copy for the basket files |
 | N4 (`NewStore`/`Ready` have no role names; surface missing from #957 §6d.4) | §1: `NewStore(ctx, pool, runtimeRole, migrationRole string, conns, execs)`; `Ready` compares the owner of schema `glovo`, every table and every trigger function with exactly `migrationRole`. `Querier`, `JoinKind`, `ActorKind` and `Snapshot` are defined in §1. #957 §6d.4 lists `NewStore`, `Ready`, `ApplySchema`, `AppendSnapshot`, `Get`, `LockOrder`, `ScopeFromRefs` and these types |
-| X-3 (merge order) | Merge order of the Glovo M1 slices, no cycle: #1059, #988 (with `internal/jcs`), #959, #960, #961, #989, #986, #985, then the #957 read routes. This slice has no dependency on #986 or #985 |
+| X-3 (merge order) | Merge order of the Glovo M1 slices, no cycle: #1059, #959, #988 (with `internal/jcs`), #960, #961, #989, #986, #985, then the #957 read routes (round 5: #959 first, #957 §6d.1). This slice has no dependency on #986 or #985 |
 
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
@@ -100,11 +111,7 @@ func ApplySchema(ctx context.Context, migrationConnStr, runtimeRole string) erro
 func NewStore(ctx context.Context, pool *pgxpool.Pool, runtimeRole, migrationRole string, conns Connections, execs Executions) (*Store, error) // no DDL; round 4 (N4): both role names are checked by Ready
 func (s *Store) Ready(ctx context.Context) error
 
-type Querier interface {                                       // round 4 (N4): satisfied by *pgxpool.Pool and by pgx.Tx
-    Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-    Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-    QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
+// Querier below is dbq.Querier (internal/glovo/dbq, created by #959; round 5, F3: one definition, #957 §6d.4). This slice defines no Querier of its own.
 type JoinKind string                                           // JoinTenant "tenant", JoinPrincipal "principal", JoinInstallRevision "install_revision"
 type ActorKind string                                          // ActorOwner "owner", ActorControlWorker "control_worker", ActorSystem "system"
 type Snapshot struct {                                         // one row of order_snapshots
@@ -112,7 +119,7 @@ type Snapshot struct {                                         // one row of ord
 }
 type Scope struct{ Tenant, PrincipalID string }              // owner path: from the verified caller
 type Actor struct{ Kind ActorKind; ID string }               // owner | control_worker | system
-type Connections interface {                                  // #959, tx-scoped (#957 §6d.4)
+type Connections interface {                                  // #959 (merged first, round 5: glovo.Owner and glovo.Connection exist), tx-scoped (#957 §6d.4)
     LiveConnectionTx(ctx context.Context, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)
 }
 type Executions interface {                                   // provided by #989 workitems (#957 §6d.2)
@@ -278,6 +285,7 @@ That is eight triggers and five functions.
   - uses `CREATE OR REPLACE FUNCTION` for every function of the trigger inventory (all
     five), and creates each trigger of `triggerInventory` only if absent in `pg_trigger`;
   - refuses to run if the stored version is newer than the code's;
+  - round 5 (F2): calls `glovo.RegisterGrants` from this package's `init` with exactly the rows below, which are also the #988 rows of `internal/glovo/testdata/grants.golden` (#959 owns the registry, merged first);
   - grants the runtime role (`^[a-z_][a-z0-9_]{0,62}$`): `USAGE` on schema `glovo`;
     `SELECT, INSERT` on `orders` plus column-level
     `UPDATE (state, final_basket_fingerprint, final_snapshot_seq, approval_ref,
@@ -295,7 +303,7 @@ That is eight triggers and five functions.
   membership, not only `relowner <> current_user`); schema `glovo` is owned by exactly
   the `migrationRole` argument (round 4, N4: every table, trigger function and the schema
   are compared with that one name, so an object owned by any other role, including another
-  non-superuser, fails); and the runtime grants equal the #988 rows of #957 §6d.1.
+  non-superuser, fails); and the grants of the #988 tables equal the rows this slice registered with #959's `glovo.RegisterGrants` (round 5, F2: `Ready` reuses the registry, it hand-codes no copy).
   Otherwise `not_ready`.
 
 ### 4. One basket fingerprint (`internal/glovo/basket`)

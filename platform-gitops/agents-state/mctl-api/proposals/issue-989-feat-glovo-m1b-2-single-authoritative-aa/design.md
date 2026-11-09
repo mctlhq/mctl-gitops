@@ -307,7 +307,7 @@ design §3.
 
 ```go
 func (s *Store) CreateGlovoExecutionTx(ctx, tx pgx.Tx, in GlovoExecutionInput) (workItemID, executionID string, err error)
-func (s *Store) ExecutionBindingTx(ctx, q Querier, executionID string) (tenant, ownerPrincipalID, workItemID, workflowID string, err error)
+func (s *Store) ExecutionBindingTx(ctx, q dbq.Querier, executionID string) (tenant, ownerPrincipalID, workItemID, workflowID string, err error)
 func (s *Store) CreateGlovoApprovalTx(ctx, tx pgx.Tx, in GlovoApprovalInput) (*ActionApprovalRequest, bool, error)
 func (s *Store) LockGlovoApprovalTx(ctx, tx pgx.Tx, id string) (*ActionApprovalRequest, *GlovoBinding, error) // L4
 func (s *Store) ReserveGlovoApprovalTx(ctx, tx pgx.Tx, id string, cmd ReserveCommand) (replayed bool, err error)
@@ -315,8 +315,8 @@ func (s *Store) ConsumeGlovoApprovalTx(ctx, tx pgx.Tx, id, commandID string) err
 func (s *Store) RevokeGlovoApprovalTx(ctx, tx pgx.Tx, id, actor string) error
 func (s *Store) MarkGlovoApprovalUnknownTx(ctx, tx pgx.Tx, id, commandID string) error
 func (s *Store) DecideGlovoApprovalTx(ctx, tx pgx.Tx, in ActionDecisionInput) (*ActionApprovalRequest, error)
-func (s *Store) GlovoApprovalStatus(ctx, q Querier, tenants []string, id string) (*GlovoApprovalStatus, error)  // round 3: q is the glovo_runtime pool or the caller's tx, never the work-items pool
-func (s *Store) GlovoApprovalForDecision(ctx, q Querier, id string) (*ActionApprovalRequest, *GlovoBinding, error) // round 3: Glovo-kind pre-read for the decision route and canSeeActionApproval
+func (s *Store) GlovoApprovalStatus(ctx, q dbq.Querier, tenants []string, id string) (*GlovoApprovalStatus, error)  // round 3: q is the glovo_runtime pool or the caller's tx, never the work-items pool
+func (s *Store) GlovoApprovalForDecision(ctx, q dbq.Querier, id string) (*ActionApprovalRequest, *GlovoBinding, error) // round 3: Glovo-kind pre-read for the decision route and canSeeActionApproval
 ```
 
 ```go

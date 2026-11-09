@@ -225,6 +225,7 @@ Data hygiene
   stay `not_ready`. (amended (c): no `SECURITY DEFINER` grantee any more)
 - OPEN-985-7. The live pod env of mctl-api was not observed. The startup proof covers it
   either way.
+- OPEN-985-9 (new, round 5; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
 - OPEN-985-8. The command payload of a Glovo `place_order_fake` is exactly the order's
   final approval-basket bytes, with no wrapper (fixed by mctl-api#957 design §6d.3,
   amended (c)), so #989's fence recomputes the fingerprint from what is written.

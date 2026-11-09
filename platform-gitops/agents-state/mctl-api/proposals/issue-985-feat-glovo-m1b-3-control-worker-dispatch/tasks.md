@@ -95,16 +95,17 @@ With any of them missing, the code merges with nil collaborators and answers
   - `Idempotent-Replayed` on replay;
   - the §2b status table;
   - an `httprate` bucket keyed by (principal, tenant);
-  - an ids-only audit.
+  - an ids-only audit;
+  - round 5 (N4): `internal/glovo/control/contract/*.json` and `SHA256SUMS` (design §2a).
 
-  DoD: no route accepts or returns a payload. The OpenAPI doc is not updated (these are
+  DoD: no route accepts or returns a payload; a test fails when a route, a status code or a body field drifts from the contract files. The OpenAPI doc is not updated (these are
   internal routes); they are listed in `docs/glovo-control.md` instead.
 - [ ] 9. Wire it in `cmd/api/main.go` (depends on 3, 8 and #989's `receipt.Fence`):
   - `const controlGateOpen = false` backing `glovo.ControlDefault`;
   - the env `MCTL_GLOVO_CONTROL_ENABLED`;
   - the dispatcher, with #959, #988 and #989 collaborators nil until they land.
 
-  - the #959 store built with `glovo.NewStore(ctx, pool, runtimeRole,
+  - the #959 store built with `glovo.NewStore(ctx, pool, runtimeRole, migrationRole,
     glovo.WithExplicitURL(true), glovo.WithRevocationHook(bridge.CancelOpenForConnections))` (amended (c)).
 
   Call `SetFence(receipt.NewFence(...))` only when all six preconditions of design §7.3
@@ -205,7 +206,7 @@ advisory keys are used.
   `cmd_` with `Idempotent-Replayed: true`, also when the command completed or was cancelled
   in between (round 4, F2). A `read_command_result` after the crash
   returns the command.
-- [ ] T23. Read routes: `read_command_result` and `read_approval` return only the
+- [ ] T23. Read routes (round 5, X-4: a `cancelled` and an `expired` command return the triples of design §2a over every `effect_state` value): `read_command_result` and `read_approval` return only the
   fields of §2a. A sentinel placed in the stored result never appears in the response.
   A command of another tenant or a non-Glovo kind returns `not_found`.
 - [ ] T24. End-to-end revocation fence (moved here from #959 T17, amended (c)): with the
@@ -214,10 +215,10 @@ advisory keys are used.
   `Reconnect` (`superseded`) and an `expires_at` that passes with no `Transition` are
   each followed by a permit attempt, and none gives a permit. A `PreLock` for a foreign
   or absent command id answers `ErrCommandNotFound` before any lock is taken.
-- [ ] T25. Dispatch payload and refs: the enqueued payload is byte-equal to the order's
+- [ ] T25. Dispatch payload and refs (round 5, N3: assert every `EnqueueInput` field, including `ProviderRef == binding.provider`, `Tenant`, `OwnerPrincipalID`, `InstallRevision` and `TTL` capped at `fresh_until`): the enqueued payload is byte-equal to the order's
   final snapshot; `workflow_id` equals `glovo.control_starts.workflow_id`; `run_id` is
   `''` before the workflow started and the started run id after.
-- [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09). Round 4 (F3), selector outcomes: with `bridge_schema_version` present and `GLOVO_DB_URL` unset, a probe error injected, and a version row older than the compiled level, the bridge is `not_ready` and `NewStore` is never called (a pgx tracer sees no DDL; red with the fallback restored); with the table absent `NewStore` runs unchanged; with the table present and the old `COMMERCE_DB_URL` role, the `to_regclass` probe succeeds although that role has no privilege on the table. With a
+- [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09). Round 5 (#986 F3): with `bridge_read_schema_version` missing or below the compiled read level `NewRuntimeStore` gives `not_ready` (red with the `CheckReadLevel` call removed). Round 4 (F3), selector outcomes: with `bridge_schema_version` present and `GLOVO_DB_URL` unset, a probe error injected, and a version row older than the compiled level, the bridge is `not_ready` and `NewStore` is never called (a pgx tracer sees no DDL; red with the fallback restored); with the table absent `NewStore` runs unchanged; with the table present and the old `COMMERCE_DB_URL` role, the `to_regclass` probe succeeds although that role has no privilege on the table. With a
   runtime role that has `CREATEROLE`, or `CREATEDB`, or a disabled guard trigger
   (`tgenabled <> 'O'`), each giving `not_ready` with zero provider writes (round 3, F1);
   after `bridge.ApplySchema`, with every Glovo flag off, the bridge provider routes still

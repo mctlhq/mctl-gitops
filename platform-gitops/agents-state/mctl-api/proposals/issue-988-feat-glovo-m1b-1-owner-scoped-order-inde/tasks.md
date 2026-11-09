@@ -1,20 +1,23 @@
 # Tasks: issue-988-feat-glovo-m1b-1-owner-scoped-order-inde
 
 Blocking dependencies (amended 2026-11-09 (b); round 4: this slice provides `internal/jcs` and depends on neither #986 nor #985): mctl-agents#1059 merged with the approval
-basket and fingerprint vectors (OPEN-988-1). #959 for the real `Connections`; until then a fake
-and `not_ready`.
+basket and fingerprint vectors (OPEN-988-1). #959 merged first (round 5, F1): it provides `glovo.Owner`, `glovo.Connection`,
+`dbq.Querier` and the grant registry, so this slice uses no fake `Connections` and no local `Querier`.
 
-- [ ] 1. Extend `glovo.Code` (`internal/glovo/errors.go`) with the codes of design §7
-  that are missing. DoD: one table test pins code -> HTTP status -> wire string.
+- [ ] 1. Round 5 (F1): no new `glovo.Code` constants; #959 task 1 is the single owner of the enum. DoD: one table test pins that every code of design §7 is in that enum and its code -> HTTP status -> wire string.
 - [ ] 2a. (round 4, N3) `internal/jcs`: `Canonicalize(raw []byte) ([]byte, error)` (RFC 8785)
   and `Precheck(raw []byte) error` (the #1059 token-level raw-bytes pre-check: duplicate
-  keys, BOM, number forms, nesting depth, size). DoD: every #1059 `vectors/` JCS and
+  keys, BOM, number forms, nesting depth, size). Round 5 (F5): this task vendors
+  `vectors/jcs-digest.json` and `vectors/must-reject.json` from #1059 (merged first, at the
+  commit recorded in `internal/jcs/testdata/PROVENANCE`) into `internal/jcs/testdata/`, each
+  pinned by its #1059 `SHA256SUMS` sha256; there is no cycle. DoD: every #1059 `vectors/` JCS and
   digest vector reproduces byte for byte (UTF-16 key order, number forms, escapes), a
   pinned vector test names the vendored sha256, and `go vet` shows no dependency on
   `internal/bridge`. #986 imports this package.
 - [ ] 2. `internal/glovo/basket` (depends on 2a): vendor the #1059 basket files
-  (`approval-basket.schema.json`, `basket-fingerprint.json`, `must-reject.json`,
-  `pattern-parity.json`) by sha256 into `internal/glovo/basket/contract/`, and run the
+  (`approval-basket.schema.json`, `basket-fingerprint.json`, `pattern-parity.json`) by sha256
+  into `internal/glovo/basket/contract/`; `must-reject.json` is the copy vendored by task 2a, read from
+  `internal/jcs/testdata/`, never copied twice, and run the
   Go leg of the #1059 pattern-parity test over them; `Approval`, `Validate` (sort, uniqueness,
   arithmetic), `Parse(raw []byte) (Approval, []byte, error)` (`jcs.Precheck`, schema
   with no extra fields, `Validate`, JCS bytes) and `Fingerprint(canonical []byte)`
@@ -24,9 +27,9 @@ and `not_ready`.
 - [ ] 3. `internal/glovo/orders/schema.go` and `ApplySchema` (design §2, §3): schema
   `glovo`, tables, CHECKs, partial unique indexes (incl. `orders_execution`, round 4 N1), `CREATE OR REPLACE FUNCTION` for all five
   trigger functions (incl. the two insert guards), guarded trigger creation from the shared `triggerInventory` constant, ownership check, version downgrade
-  refusal, column-level grants. DoD: applies twice; fails on a pre-created table owned
+  refusal, column-level grants, and the `glovo.RegisterGrants` call for the #988 rows (round 5, F2). DoD: applies twice; fails on a pre-created table owned
   by another role.
-- [ ] 4. `NewStore(ctx, pool, runtimeRole, migrationRole, conns, execs)` and `Ready` (round 4, N4: owners compared with exactly `migrationRole`; the `Querier`, `JoinKind`, `ActorKind` and `Snapshot` types of design §1): version, `to_regclass`, the exact `triggerInventory` set present (`tgenabled='O'`, expected `tgfoid`, function owner), `NOT pg_has_role(current_user, owner, 'MEMBER')` for tables, trigger
+- [ ] 4. `NewStore(ctx, pool, runtimeRole, migrationRole, conns, execs)` and `Ready` (round 4, N4: owners compared with exactly `migrationRole`; the `JoinKind`, `ActorKind` and `Snapshot` types of design §1; `Querier` is `dbq.Querier`): version, `to_regclass`, the exact `triggerInventory` set present (`tgenabled='O'`, expected `tgfoid`, function owner), `NOT pg_has_role(current_user, owner, 'MEMBER')` for tables, trigger
   functions and schema `glovo`, the #957 §6d.1 grants, nil collaborators ->
   `not_ready` (amended (c)).
 - [ ] 5. Owner path: `NewOrderRef`, `LookupByIdempotencyKey` and `Create` with `CreateInput` incl. `OrderRef` (READ COMMITTED check, live connection,
@@ -82,7 +85,7 @@ separate runtime role.
 - [ ] T13. Shared transaction: #989 `CreateGlovoExecutionTx` + `Create` + `Finalize` +
   `BindApproval`, and `MarkDispatched` + a bridge `Enqueue` in one `pgx.Tx`; a failure
   after the last statement leaves nothing. `order_ref` equals the `ordr_` in the workflow id, `engine_ref` and the `aar_` key.
-- [ ] T14. Readiness: for each of the eight triggers of `triggerInventory` in turn, disable it, drop it, and re-point it at another function (each gives `not_ready`, and is wrongly ready with the matching check removed), plus: an unlisted extra trigger, a trigger function not owned by the migration role, a table owned by the runtime role, a
+- [ ] T14. Readiness (round 5, F2: the grant check reads the registry; with the #988 rows removed from it `Ready` is red, and a registered row of another slice for an existing table leaves it green): for each of the eight triggers of `triggerInventory` in turn, disable it, drop it, and re-point it at another function (each gives `not_ready`, and is wrongly ready with the matching check removed), plus: an unlisted extra trigger, a trigger function not owned by the migration role, a table owned by the runtime role, a
   table owned by a role the runtime role inherits, schema `glovo` owned by the runtime
   role, an extra grant, a version mismatch and a nil collaborator each give `not_ready`;
   with the matching check removed, each case is wrongly reported ready (mutation

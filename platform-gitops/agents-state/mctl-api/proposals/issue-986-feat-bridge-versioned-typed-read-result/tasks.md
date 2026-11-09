@@ -26,8 +26,10 @@ merged. Without it no task starts.
   table, `bridge_read_schema_version`, the `bridge_commands_read_request` index and their
   grants, plus `bridge.CheckReadLevel`. #985's `bridge.ApplySchema` calls it (amended (c)). DoD: it applies on a database built only from
   today's `bridgeSchema` with no #985 object present; applying it twice,
-  and on a database with v1alpha1 rows, succeeds; the statement log of the second run
-  contains no `ALTER TABLE`; the runtime role cannot run it.
+  and on a database with v1alpha1 rows, succeeds; on the second run, inside the
+  caller's still-open transaction, `pg_locks` shows no `AccessExclusiveLock` held by that
+  backend on any bridge object (round 5, F1; the check runs against `ApplyReadSchemaTx`
+  itself); the runtime role cannot run it.
 - [ ] 3b. `internal/bridge/rawcheck.go`: a thin wrapper over #988 `jcs.Precheck` (token-level pre-check of design §5 step 3; round 4 N3: no second implementation) (depends
   on 1). DoD: every vendored `must-reject.json` entry is rejected; every valid fixture
   passes.
@@ -41,11 +43,11 @@ merged. Without it no task starts.
 - [ ] 6. `bridgeStatus` (`handlers_bridge.go:95-113`) and `codedErrors` (`errors.go:44-48`)
   (round 4, R3-2): `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` are
   registered (`payload_too_large`, `read_unavailable`, `read_not_authorized`) with explicit
-  status cases (413, 503, 403); the result handler maps `*http.MaxBytesError` to 413
-  `payload_too_large`. No new route. DoD: the #1059 `over-cap` fixture (16385 B) gets 413
-  `payload_too_large` from the handler; a `JCS(payload)` of 12289 B gets the same code from
-  the Store path; neither is 500 `bridge_internal` (red with the `codedErrors` entry or the
-  `MaxBytesError` branch removed).
+  status cases (413, 503, 403); the result handler keeps 400 `invalid_document` for
+  `*http.MaxBytesError` (round 5, F2: the #1059 route contract). No new route. DoD: the #1059
+  `over-cap` fixture (16385 B) gets 400 `invalid_document` from the handler; a `JCS(payload)`
+  of 12289 B gets 413 `payload_too_large` from the Store path; neither is 500 `bridge_internal`
+  (red with the `codedErrors` entry removed).
 - [ ] 7. `EraseExpiredReads` in the `Expirer` tick (erase, then delete after 24 h), the
   metric, and `MCTL_BRIDGE_READ_RESULT_TTL` with the clamp.
 - [ ] 8. Docs: `docs/bridge.md` gets a v1alpha2 read section (in-process only, no route,
@@ -60,7 +62,7 @@ merged. Without it no task starts.
 - [ ] T3b. (round 4, #1059 R3-1) Go leg of `pattern-parity.json` over the vendored read schemas (`placed_on`, `issued_at`, `expires_at`, `completed_at`, `item_name`): trailing `\n` and `\r`, Arabic-Indic and fullwidth digits are rejected by Go `regexp`, exactly as by the Python validator.
 - [ ] T4. v1alpha1 golden projection and result digests are unchanged.
 - [ ] T4b. (round 4, R3-1) A read command enqueued through `EnqueueRead` with `InstallRevisionRef` `irv_...` is projected for `Claim` with `install_revision_ref` equal to it, plus every field the vendored `read-command.schema.json` requires, and the projection validates against that schema (red with the column or the projection field removed); `EnqueueRead` with an empty ref is refused; the decimal `install_revision` is never emitted as the ref.
-- [ ] T4c. (round 4, R3-3) On a database built only from today's `bridgeSchema` (no migrator run), on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without `bridge_read_schema_version`: v1alpha1 `Claim`, `SubmitResult`, `Cancel`, `IssueWritePermit` and `ExpireDue` pass unchanged, and a pgx tracer shows no statement mentioning `wire_version`, `read_request_id` or `install_revision_ref` for a write kind; `EnqueueRead` and `ReadClient.Read` on the first and third give `ErrReadUnavailable`, and `NewRuntimeStore` gives `not_ready` on them (red with the level check removed).
+- [ ] T4c. (round 4, R3-3) On a database built only from today's `bridgeSchema` (no migrator run), on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without `bridge_read_schema_version`: v1alpha1 `Claim`, `SubmitResult`, `Cancel`, `IssueWritePermit` and `ExpireDue` pass unchanged, and a pgx tracer shows no statement mentioning `wire_version`, `read_request_id` or `install_revision_ref` for a write kind; `EnqueueRead` and `ReadClient.Read` on the first and third give `ErrReadUnavailable` through `bridge.CheckReadLevel` called directly (red with the level check removed). The `NewRuntimeStore` `not_ready` leg is #985's T26 (round 5, F3).
 - [ ] T4d. (round 4, X-3) `ApplyReadSchemaTx` standalone: run as the migration role on a database holding only today's `bridgeSchema` it succeeds twice; run as the runtime role it fails; it refuses when `bridge_commands` is owned by another role; the grants on `bridge_read_results` equal the #957 §6d.1 row.
 - [ ] T5. A read command has `''` as `workflow_id`, `order_ref`, `execution_id` and
   `work_item_id`, and its completion writes no `bridge_signal_outbox` row.
@@ -74,7 +76,7 @@ merged. Without it no task starts.
   digest mismatch, a result carrying any binding ref, a result of another kind, a result
   after `expires_at`, a different `request_id`, every `must-reject.json` entry,
   `quantity: 1.0`, and a read payload on `place_order_fake`, each with the code of the
-  design §5 pipeline (round 4, R3-2: the 16385-byte fixture is refused by the handler as 413 `payload_too_large`, and the 12289-byte `JCS(payload)` by the Store with the same code). The #1059 `at-cap` fixture is accepted.
+  design §5 pipeline (round 5, F2: the 16385-byte fixture is refused by the handler as 400 `invalid_document`, as in #1059, and the 12289-byte `JCS(payload)` by the Store as 413 `payload_too_large`). The #1059 `at-cap` fixture is accepted.
 - [ ] T7b. `lease_token` never appears in `bridge_commands.result`,
   `bridge_read_results`, `bridge_command_transitions`, logs or audit rows after a read
   round trip (amended (c): `bridge_commands.lease_token` stores it by design).
@@ -105,8 +107,9 @@ merged. Without it no task starts.
   and signal registrations are diffed before and after; nothing is added, and
   `glovoAudienceRoutes` is unchanged.
 - [ ] T16. Schema idempotency: `bridge.ApplySchema` applied twice on an empty database
-  and on a populated v1alpha1 database; the statement log (`log_statement = 'ddl'`) of
-  the second run contains no `ALTER TABLE`.
+  and on a populated v1alpha1 database; the second run, inside its
+  open transaction, holds no `AccessExclusiveLock` in `pg_locks` (round 5, F1: not a statement
+  log; mutation step: remove one catalog guard of `ApplyReadSchemaTx`, expect red).
 - [ ] T17. Log hygiene: captured logs and audit rows across T7-T13 contain no payload
   bytes.
 

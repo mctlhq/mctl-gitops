@@ -1,5 +1,16 @@
 # Design: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
+## Amendment 2026-11-09 (c), round 5 of the AMEND PR
+
+Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| N3 (`Enqueue` field mapping) | §5 step 11 and T25: `ProviderRef`, `Tenant`, `OwnerPrincipalID`, `InstallRevision`, `TTL` mapped |
+| N4 (contract artifact) | §2a and task 8: this slice owns `internal/glovo/control/contract/*.json`; #1044 and #990 are consumers |
+| X-4 (cancelled and expired triple) | §2a: the route returns the triple for them; OPEN-985-9 |
+| #986 F3 (read-level leg) | §4 selector row and T26 for `bridge_read_schema_version` |
+
 ## Amendment 2026-11-09 (c), round 4 of the AMEND PR
 
 Resolves the round-3 findings F2 and F3 and the cross-slice finding X-3. Where this section and older text disagree, this section wins.
@@ -8,7 +19,7 @@ Resolves the round-3 findings F2 and F3 and the cross-slice finding X-3. Where t
 |---|---|
 | F2 (dispatch replay only on `dispatched`; "byte for byte" cannot hold) | §5 step 5: replay on any order state whose `command_id` is non-empty (`dispatched`, `cancelled` after dispatch, `unknown`, `closed`) when the body's `approval_ref` equals the order's and the fingerprint matches. The 200 body carries the same `command_id` with the current `order_state` and `effect_state`, so a late activity retry after a result or a cancel still gets its `cmd_`. §2a is reworded to "the same `command_id`". A different `aar_` on an order with a `command_id` stays `approval_replayed`; an order with no `command_id` that is `cancelled` or `closed` stays `invalid_transition`. T1 and T22 gain the after-result and after-cancel cases |
 | F3 (selector reader and outcomes undefined) | §4: the mode is decided once at startup by a probe, `to_regclass('public.bridge_schema_version') IS NOT NULL`, on the `GLOVO_DB_URL` pool when that is set and otherwise on the legacy bridge DSN (`COMMERCE_DB_URL`, as today). `to_regclass` needs no table privilege, so it works for the old bridge role that no longer owns the tables; the version value is read afterwards by `NewRuntimeStore` as `glovo_runtime` (`SELECT` granted by `ApplySchema`). Outcome table in §4: present and `GLOVO_DB_URL` unset is bridge `not_ready`; any probe or version-read error is bridge `not_ready`; neither ever falls back to `NewStore`. T26 adds both cases. OPEN-985-10 records the legacy-DSN probe |
-| X-3 (read DDL claimed by #985 and #986) | One owner: #986 `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`. `bridge.ApplySchema` calls it inside its own transaction and depends on #986 task 3; #986 tests it standalone. Merge order: #1059, #988, #959, #960, #961, #989, #986, #985 (#957 §6d.1). The blocking list names #986 |
+| X-3 (read DDL claimed by #985 and #986) | One owner: #986 `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`. `bridge.ApplySchema` calls it inside its own transaction and depends on #986 task 3; #986 tests it standalone. Merge order: #1059, #959, #988, #960, #961, #989, #986, #985 (#957 §6d.1, round 5). The blocking list names #986 |
 
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
@@ -193,9 +204,22 @@ Deployed state:
 |---|---|---|---|
 | `dispatch_order(order_ref, approval_ref, fingerprint)` | `POST /api/v1/internal/glovo/orders/{order_ref}/dispatch` | `{"approval_ref":"aar_…","fingerprint":"sha256:…"}` | `{command_id, order_state, effect_state}` |
 | `cancel_order(order_ref)` | `POST /api/v1/internal/glovo/orders/{order_ref}/cancel` | `{}` | `{command_id?, order_state, effect_state}` |
-| `read_command_result(command_id)` | `GET /api/v1/internal/glovo/commands/{command_id}` | none | `{command_id, order_ref, status, effect_state, outcome?, provider_effect?, error_code?, result_digest?}` |
+| `read_command_result(command_id)` | `GET /api/v1/internal/glovo/commands/{command_id}` | none | `{command_id, order_ref, status, effect_state, outcome?, provider_effect?, error_code?, result_digest?}` (round 5, X-4: see the triple rule below) |
 | `read_approval` (poll) | `GET /api/v1/internal/glovo/approvals/{approval_ref}` | none | `{approval_ref, order_ref, state, expires_at}` |
 
+- **Triple for `cancelled` and `expired` commands (round 5, X-4).** The bridge writes no result
+  row for them (`Cancel` and `ExpireDue` set only `status` and `effect_state`), but #1044's M9
+  table is keyed on (`outcome`, `provider_effect`, `error_code`). So for a terminal
+  `cancelled` or `expired` command this route returns the triple itself: `cancelled` gives
+  (`cancelled`, `none`, `none`) and `expired` gives (`failed_terminal`, `none`, `expired`) when
+  `effect_state` is `none` or `not_performed`; any other `effect_state` gives
+  `provider_effect: unknown` (so #1044 maps it to `unknown`). `completed` commands return the
+  stored triple. OPEN-985-9 asks the #1044 AMEND to confirm this mapping.
+- **Contract artifact (round 5, N4; the one owner is this slice).** `internal/glovo/control/contract/*.json`
+  with a `SHA256SUMS`: for each route of this table its request, its 200 body, every §2b
+  refusal body and the `Idempotent-Replayed` header, plus the triple cases above. #1044's
+  `ASSISTANTS_API_CONTRACT` pin and the #990 provenance check are consumers of that file
+  set, not owners of a second copy.
 - No body carries `execution_id` any more. It is derived from the locked order row
   (`Order.ExecutionID`, #988).
 - A replayed dispatch returns the same `command_id`, with the header
@@ -248,7 +272,7 @@ the same wave.
 
 ```go
 type OrderIndex interface { // #988 (M1b/1), tx-scoped, control path
-    PeekOrderScope(ctx context.Context, q orders.Querier, orderRef string, tenants []string) (orders.Scope, error) // unlocked read of write-once columns
+    PeekOrderScope(ctx context.Context, q dbq.Querier, orderRef string, tenants []string) (orders.Scope, error) // unlocked read of write-once columns
     LockOrderForControl(ctx context.Context, tx pgx.Tx, orderRef string, tenants []string) (*orders.Order, error) // L3, FOR UPDATE; scope derived from the row
     MarkDispatched(ctx context.Context, tx pgx.Tx, o *orders.Order, commandID string, actor orders.Actor) error // finalized -> dispatched, command_id write-once
     MarkCancelled(ctx context.Context, tx pgx.Tx, o *orders.Order, actor orders.Actor) error  // only when no effect is possible
@@ -259,7 +283,7 @@ type Receipts interface { // provided by #989 (internal/workitems, glovo_approva
     ReserveGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, cmd workitems.ReserveCommand) (replayed bool, err error) // approved -> reserved; idempotent for the same cmd_
     RevokeGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string, actor string) error // pending|approved -> refused (cancel before dispatch); already denied for this order = success
     MarkGlovoApprovalUnknownTx(ctx context.Context, tx pgx.Tx, id, commandID string) error // reserved -> unknown; already unknown for this cmd_ = success
-    GlovoApprovalStatus(ctx context.Context, q Querier, tenants []string, id string) (*workitems.GlovoApprovalStatus, error) // round 3 (X-4): read on the glovo_runtime pool (or the caller's tx), never the work-items pool; ids and enums only; read_approval
+    GlovoApprovalStatus(ctx context.Context, q dbq.Querier, tenants []string, id string) (*workitems.GlovoApprovalStatus, error) // round 3 (X-4): read on the glovo_runtime pool (or the caller's tx), never the work-items pool; ids and enums only; read_approval
 }
 type Connections interface { // #959, tx-scoped, on the shared tx
     LockOwnerShared(ctx context.Context, tx pgx.Tx, tenant, principal string) error // L1 shared + L2 shared, the #959 withLocks order
@@ -298,6 +322,7 @@ type Dispatcher struct {
   | table present, `GLOVO_DB_URL` set, version row readable and at least the compiled level | `NewRuntimeStore` |
   | table present, `GLOVO_DB_URL` unset | bridge `not_ready` (never `NewStore`) |
   | probe or version-read error, version row missing or older than the compiled level | bridge `not_ready` (never `NewStore`) |
+  | table present, but `bridge_read_schema_version` missing or below the compiled read level (`bridge.ReadSchemaLevel`, owned by #986) (round 5, #986 F3) | bridge `not_ready` (`bridge.CheckReadLevel`, never `NewStore`) |
   | table absent | `NewStore`, unchanged |
 
   Existing bridge consumers therefore never fall into `NewStore`'s `ALTER TABLE` on
@@ -373,7 +398,13 @@ This is the only step order. Task 5 implements exactly this.
     `bridge.Store.Enqueue(ctx, tx, EnqueueInput{Kind: KindPlaceOrderFake,
     OperationKey: "glovo-dispatch:"+order_ref, Sequence: sequence, ApprovalRef: aar,
     IntentHash: <the aar_ row's intent_hash>, Payload: <the snapshot's JCS approval-basket
-    bytes, exactly, no wrapper>, Attempt: 1, …})`. Every field comes from the locked rows
+    bytes, exactly, no wrapper>, Attempt: 1, …})`. Round 5 (N3), the complete mapping of the
+    remaining `EnqueueInput` fields, each also checked by `Enqueue.validate`: `ProviderRef` =
+    `binding.provider` from `LockGlovoApprovalTx` (the value #989's fence compares with
+    `command.provider_ref`); `Tenant` and `OwnerPrincipalID` from the locked order;
+    `InstallRevision` from the binding; `TTL` = the named constant `DispatchCommandTTL`,
+    capped at the time left until the `aar_` row's `fresh_until` (none left: `approval_expired`,
+    nothing enqueued). Every field comes from the locked rows
     (amended (c), #957 §6d.2): `ExecutionID` and `WorkItemID`/`WorkflowID` from
     `Order.ExecutionID` and #989 `ExecutionBindingTx`; `RunID` from #957
     `glovojoin.ControlStartTx` (empty is valid, `bridge_commands.run_id` defaults to

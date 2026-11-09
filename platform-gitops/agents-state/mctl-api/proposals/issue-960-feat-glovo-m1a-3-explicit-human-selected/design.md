@@ -1,5 +1,15 @@
 # Design: issue-960-feat-glovo-m1a-3-explicit-human-selected
 
+## Amendment 2026-11-09 (c), round 5 of the AMEND PR
+
+Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1 (`oauth_team_grants` missing when Glovo is off) | §1: the DDL and the `team_grant_id` column move into `refreshstore`'s own schema constant and always run (additive, inert); task 2 and T12 regression |
+| F3 (eligibility import cycle) | §2 and tasks 4, 9: `auth.TeamEligibility` is defined in `internal/auth`; `scope` implements it, `main.go` wires it |
+| #957 R4-1 | `teamgrant.Grant` is defined here with `RefreshFamilyID` |
+
 ## Amendment 2026-11-09 — joint 959/960/961 AMEND
 
 Independent review of digest `sha256:9be361b79d65b262733aa87e077b4b66e0247ac630bda5379d7f1b26751693a6` (mctl-api#960, comment of 2026-11-09) required one joint amendment across #959, #960 and #961. Finding -> change in this slice:
@@ -186,8 +196,15 @@ grant or emits the new claims, and `glovo.Gate` stays closed.
 ### 1. Team grant store (`internal/auth/teamgrant`)
 
 A new package following the `refreshstore` pattern: a `Store` interface,
-`PostgresStore` with inline DDL, and a `MemoryStore` for tests and
-DB-less runs.
+a `PostgresStore` on the refresh-store pool and a `MemoryStore` for tests and
+DB-less runs. Round 5 (F1): the DDL below (the table, its indexes and the `team_grant_id`
+column) is NOT run by `teamgrant`: it is part of `refreshstore`'s own schema constant, next to
+`oauth_refresh_tokens`, and runs whenever the refresh store starts, Glovo on or off. It is
+additive and inert when Glovo is off (the table stays empty, the column stays `''`). The
+revocation statements of section 0 and section 3 therefore always find the table, and with
+no grant row they update zero rows, so default API and support OAuth behaves as today.
+`TeamGrant` types are defined once here: `teamgrant.Grant{ID, PrincipalID, Tenant,
+ClientID, Resource, RefreshFamilyID, State}` (round 5, #957 R4-1), the type `Check` returns.
 
 ```
 CREATE TABLE IF NOT EXISTS oauth_team_grants (
@@ -229,8 +246,11 @@ The grant is server-owned. The client never sees anything but the opaque
 
 - `finishAuthorization`: when `c.Resource` is the Glovo flow resource, it
   always calls `requestTeamConsent`, for every client kind, not only CIMD.
-- Eligible set = `TeamEligibility.Eligible(ctx, principalID)` (new small
-  interface in `internal/glovo/scope`):
+- Eligible set = `TeamEligibility.Eligible(ctx, principalID)` (implemented in
+  `internal/glovo/scope`; round 5, F3: the interface itself, `auth.TeamEligibility{ Has(ctx,
+  prn, tenant string) (bool, error) }`, is defined in `internal/auth` and is a field of
+  `OAuthServer`, so `internal/auth` imports nothing from `internal/glovo`; `scope` implements
+  it and `cmd/api/main.go` wires it. A nil value with a Glovo session is `not_ready`):
   `TryNamespacesForPrincipal(prn)` -> drop the non-customer/system tenants (default `admins`) and every name in
   `GLOVO_NON_SELECTABLE_TENANTS` (default `admins`) -> keep only tenants
   where `MemberRolesForPrincipal` yields a tenant role -> keep only tenants
@@ -285,7 +305,7 @@ The grant is server-owned. The client never sees anything but the opaque
   `supportAudience` is never honoured outside its audience.
 - `RefreshAccessTokenForResource`: the `accept` callback (inside `RotateIfTx`,
   per the 2026-10-17 lesson) adds the step: if `sess.TeamGrantID != ""`, run
-  `teamgrant.CheckTx(tx, ...)` plus a live `TeamEligibility.Has(prn, tenant)`. If the
+  `teamgrant.CheckTx(tx, ...)` plus a live `auth.TeamEligibility.Has(ctx, prn, tenant)` (round 5, F3: its membership and allowlist reads run inside the 5 s `rotateTx` context; a read error is `server_error` with nothing spent). If the
   grant is invalid, accept refuses `invalid_grant`; if eligibility is lost, accept
   refuses `invalid_grant`. The revocation (the family on an invalid grant, the grant
   and the family on lost eligibility) is a post-`RotateIfTx` write, as for the

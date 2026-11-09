@@ -167,7 +167,9 @@ Schema safety
 - THE SYSTEM SHALL apply its schema only through `ApplySchema(ctx,
   migrationConnStr, runtimeRole)` under the migration role, idempotently under a
   schema advisory lock, creating only objects in schema `glovo` and never altering
-  or dropping any other object. WHEN `NewStore` starts THE SYSTEM SHALL run no DDL,
+  or dropping any other object, refusing a schema or object owned by another role, a
+  recorded version above the compiled one and a runtime role name that fails
+  `^[a-z_][a-z0-9_]{0,62}$` (round 5). WHEN `NewStore` starts THE SYSTEM SHALL run no DDL,
   check the recorded schema version and fail closed on a mismatch. (amended (c))
 
 ## Out of scope

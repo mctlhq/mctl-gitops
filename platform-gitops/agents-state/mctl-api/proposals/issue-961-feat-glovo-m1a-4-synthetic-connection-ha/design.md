@@ -1,5 +1,16 @@
 # Design: issue-961-feat-glovo-m1a-4-synthetic-connection-ha
 
+## Amendment 2026-11-09 (c), round 5 of the AMEND PR
+
+Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1 (owner routes admit platform admins) | §3, requirements, task 4: strict `requireGlovoTenantOwner`; admin-without-owner test |
+| F2 (lapsed connection never persisted) | §4a: join-path `Connect` ends a lapsed prior through #959 `Reconnect` with `TerminalOnly`; the cap counts live rows only; T12 |
+| F3 (lock failure code) | Refusal table: SQLSTATE `55P03` on L1/L2/L2a/L2b is `tenant_busy`; other failures `unavailable` |
+| F4 (replay vs `AfterLocks`) | §4a: replay lookup first; `AfterLocks` only for a new insert; T12 |
+
 ## Amendment 2026-11-09 (c), round 4 of the AMEND PR
 
 Resolves the round-3 findings that land here (N1-N4) and the cross-slice finding X-1. Where this section and older text disagree, this section wins.
@@ -176,7 +187,12 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 ### 3. Admin handlers (`internal/api/handlers_glovo_admin.go`)
 
 - `PUT|DELETE /api/v1/glovo/tenants/{tenant}/installation` use the normal API token and
-  `requireTenantRole(..., "owner")` in principal mode. Admins are not auto-admitted. These
+  the strict owner check `requireGlovoTenantOwner` (round 5, F1; a new Glovo-specific helper,
+  not `requireTenantRole`): it reads the principal-mode role through
+  `MemberRolesForPrincipal(tenant, prn)` and admits only the tenant role `owner`. It never
+  consults `roleGate`, so `user.IsAdmin()` adds nothing: an admin who is not a tenant owner
+  is 403, and an owner who is also an admin is judged by the owner role alone (existing
+  `requireTenantRole` admits platform admins first, so it cannot be reused). These
   routes call slice 2's atomic `Reinstall` and `RevokeInstall`, which bump the revision and
   revoke live connections in one transaction under the L1 install advisory lock (#957 §6b).
 - The pilot allowlist routes are #960's; this slice does not define them.
@@ -239,14 +255,15 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 | Handoff or activate on a `failed` connection | `no_connection` (404) | as `check` |
 | Install revision differs from the install's current one | `stale_install` (403) | |
 | `ExpectedVersion` no longer matches under the locks | `stale_version` (409) | nothing committed |
-| Store or lock failure | `unavailable` (503) | never a refusal that could read as "no" |
+| `lock_timeout` (SQLSTATE `55P03`) on L1, L2, L2a or L2b (round 5, F3) | `tenant_busy` (status from `glovo.Status`, #957 §4.1) | the §6b levels this slice owns |
+| Any other store, role-read or lock failure | `unavailable` (503) | never a refusal that could read as "no" |
 
 ### 4a. Join-route connection seam (round 4, X-1; owner: this slice)
 
 The join API of #957 serves `GET /connection` and `POST /connections`. This slice owns the
 code behind them, so that the 50-per-tenant limit, the hourly limit, the L2a mutex and the
 handoff are enforced on the one route that creates connections, whichever front end calls it.
-`internal/glovo/connect` exports one in-process service. Both the facade handler
+`internal/glovo/connect` exports one in-process service. Round 5 (F2, F4): a connection past `expires_at` stays `active` in storage until something writes it, and the unique index `glovo_connections_one_live` is state-based, so `Connect` first reads the owner's connection (`LiveConnection`); when it answers `connection_expired` it calls #959 `Reconnect` with `TerminalOnly: true` and that prior id, which persists the expiry through #959's existing terminal branch under L2, otherwise it calls #959 `Connect`. The replay lookup (key + request hash under L2) precedes `AfterLocks` (#959 `ConnectInput.AfterLocks` contract): `AfterLocks` (counter increment, L2a, count) runs only when a new connection will be inserted, so a replay never moves a counter. Both the facade handler
 `POST /api/v1/glovo/facade/connections` (section 2) and #957's `glovojoin.Connections`
 adapter call it; there is no second connect path and the join routes never call the
 `/api/v1/glovo/facade/*` HTTP routes.
@@ -299,7 +316,7 @@ func (s *Service) Current(ctx context.Context, sc JoinScope) (*glovo.Connection,
   exactly one such row per tenant) and then `SELECT ... FOR UPDATE` on it. A first connect, and
   a connect after a `Sweep`, therefore always find a row to lock. `Sweep` never deletes
   `scope = 'tenant_mutex'` rows (they are one tiny row per tenant); it deletes only stale
-  `owner_hour` windows. The 50-per-tenant limit is enforced by counting non-terminal connections
+  `owner_hour` windows. The 50-per-tenant limit is enforced by counting live connections (`state` not terminal AND (`expires_at IS NULL` OR `expires_at > clock_timestamp()`), round 5, F2, so lapsed rows never fill the cap)
   **after** L2a is held, never with `count(*)` under L1 shared and L2 alone: two replicas
   connecting for different principals of one tenant would both count 49 and insert, and
   the tenant mutex row serializes them. The hourly owner counter row is incremented

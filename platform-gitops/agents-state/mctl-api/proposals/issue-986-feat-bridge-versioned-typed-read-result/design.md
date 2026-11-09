@@ -1,5 +1,15 @@
 # Design: issue-986-feat-bridge-versioned-typed-read-result
 
+## Amendment 2026-11-09 (c), round 5 of the AMEND PR
+
+Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1 (undetectable idempotency) | §4, task 3, T16: `pg_locks` on the open transaction, not `log_statement`; mutation step |
+| F2 (over-cap code) | §5 step 2, task 6, T7: the handler keeps 400 `invalid_document` as the merged #1059 contract says; 413 only for the in-Store cap |
+| F3 (read-level consumer) | §4a: `bridge.ReadSchemaLevel` is owned here; the `NewRuntimeStore` leg moves to #985 T26; T4c split |
+
 ## Amendment 2026-11-09 (c), round 4 of the AMEND PR
 
 Resolves the round-3 findings R3-1, R3-2 and R3-3 and the cross-slice findings X-3 (one owner of the read DDL) and N3 (the Go JCS implementation). Where this section and older text disagree, this section wins.
@@ -7,9 +17,9 @@ Resolves the round-3 findings R3-1, R3-2 and R3-3 and the cross-slice findings X
 | Finding | Change here |
 |---|---|
 | R3-1 (`irv_` has no storage; the read-command projection cannot emit `install_revision_ref`) | §4: new column `install_revision_ref TEXT` on `bridge_commands`, NULL for write kinds, and `bridge_commands_read_shape_chk` requires it NOT NULL and matching `^irv_[A-Za-z0-9]{16,40}$` for read kinds. `EnqueueRead` writes `ReadRequest.InstallRevisionRef` there. For read kinds `projection()` reads it (through the read-path extras query of §4a) and emits it together with the other fields the #1059 `read-command.schema.json` requires (`issuer`, `audience`, `nonce`, `issued_at`, `expires_at`, `ttl_seconds`), taken from the same sources as the v1alpha1 projection uses for them. New test T4b: the projected read command validates against the vendored `read-command.schema.json` |
-| R3-2 (`payload_too_large` unreachable; sentinels not in `codedErrors`) | §5 step 2: the `bridgeMaxBody` cap belongs to the HTTP handler. The result handler detects `*http.MaxBytesError` and answers 413 `payload_too_large` instead of the generic 400 `invalid_document` ("unreadable body"). The Store owns the `JCS(payload)` over 12288 bytes check, and returns `ErrPayloadTooLarge`. `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` are registered in `codedErrors` (`payload_too_large`, `read_unavailable`, `read_not_authorized`) with explicit `bridgeStatus` cases (413, 503, 403), so none can surface as 500 `bridge_internal`. These are bridge-provider-route codes and in-process sentinels, local to this slice; they are not part of the #957 §4.1 Glovo set and never reach the Glovo wire (#957 maps the sentinels). Tasks 6 and T7 |
+| R3-2 (`payload_too_large` unreachable; sentinels not in `codedErrors`) | §5 step 2: the `bridgeMaxBody` cap belongs to the HTTP handler. Round 5 (F2): the handler keeps today's answer, 400 `invalid_document`, for `*http.MaxBytesError`, which is exactly the merged #1059 contract ("over-cap is `invalid_document` at the mctl-api route and `payload_too_large` in the reference validator"); this slice adds no 413 branch. The Store owns the `JCS(payload)` over 12288 bytes check, and returns `ErrPayloadTooLarge`. `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` are registered in `codedErrors` (`payload_too_large`, `read_unavailable`, `read_not_authorized`) with explicit `bridgeStatus` cases (413, 503, 403), so none can surface as 500 `bridge_internal`. These are bridge-provider-route codes and in-process sentinels, local to this slice; they are not part of the #957 §4.1 Glovo set and never reach the Glovo wire (#957 maps the sentinels). Tasks 6 and T7 |
 | R3-3 (new columns in the shared scan path break v1alpha1 on a database that never ran the migrator) | New §4a. `cmdCols`/`scanCmd` are unchanged, so every v1alpha1 query still works on a database built only from today's `bridgeSchema`. The three new columns (`wire_version`, `read_request_id`, `install_revision_ref`) are read only in read-kind paths, through a separate extras query; the wire version of a write kind is v1alpha1 by definition. A read level (table `bridge_read_schema_version`) is created by `ApplyReadSchemaTx`; `EnqueueRead` and `ReadClient.Read` refuse below it (`ErrReadUnavailable`, #957 `not_ready`), and `bridge.CheckReadLevel` is called by #985 `NewRuntimeStore`. Test: v1alpha1 `Claim`, `SubmitResult`, `Cancel` and `permitTx` pass on a database built only from today's `bridgeSchema`, on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without the read level |
-| X-3 (read DDL claimed by #985 and #986) | One owner: this slice. `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx, runtimeRole string) error` creates all read objects of §4 and the grants on them. #985 `bridge.ApplySchema` calls it inside its own transaction and depends on task 3 here. It is tested standalone on a database built from today's `bridgeSchema` (it needs no #985 object: its version table is its own). Merge order #1059, #988, #959, #960, #961, #989, #986, #985 (#957 §6d.1); no cycle |
+| X-3 (read DDL claimed by #985 and #986) | One owner: this slice. `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx, runtimeRole string) error` creates all read objects of §4 and the grants on them. #985 `bridge.ApplySchema` calls it inside its own transaction and depends on task 3 here. It is tested standalone on a database built from today's `bridgeSchema` (it needs no #985 object: its version table is its own). Merge order #1059, #959, #988, #960, #961, #989, #986, #985 (#957 §6d.1, round 5); no cycle |
 | N3 (nobody owns the Go JCS implementation) | #988 owns `internal/jcs` (`Canonicalize`, `Precheck`). This slice imports it: `internal/bridge/rawcheck.go` is a thin wrapper over `jcs.Precheck`, and `JCS(payload)` is `jcs.Canonicalize`. The #1059 basket files (`approval-basket.schema.json`, `basket-fingerprint.json`, `must-reject.json`, `pattern-parity.json`) are vendored by #988 in `internal/glovo/basket/contract/`; this slice vendors only the read-command and read-result schemas and fixtures, and a test asserts that the `approval-basket.schema.json` it needs by `$ref` is byte-identical (sha256) to #988's copy |
 | Class sweep (#959 F1) | `FetchReadResult` expiry compares use `clock_timestamp()`; the result `expires_at` is set from `clock_timestamp()` |
 
@@ -191,7 +201,7 @@ the migration role, with the grants of mctl-api#957 design §6d.1 for the object
 runtime role never runs them. The function refuses to run unless `bridge_commands` is owned
 by `current_user`, and is tested standalone on a database built from today's `bridgeSchema`. All changes
 run in one `DO $$ … $$` block whose steps each test the catalog first, so a
-second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock:
+second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock (round 5, F1: this is observed through `pg_locks` on the caller's still-open transaction, never through `log_statement`, which does not log statements nested in a `DO` block; an unguarded `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes the lock even when it changes nothing, so the test goes red on it):
 - add `wire_version TEXT NOT NULL DEFAULT 'bridge.mctl.ai/v1alpha1'`,
   `read_request_id TEXT` (holds the #1059 `request_id`) and `install_revision_ref TEXT`
   (the `irv_` wire ref, NULL for write kinds; round 4, R3-1), each `ADD COLUMN IF NOT EXISTS`;
@@ -238,7 +248,7 @@ second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock:
 - `bridge.CheckReadLevel(ctx, q Querier) error` reads `bridge_read_schema_version`. `EnqueueRead`
   and `ReadClient.Read` call it and refuse with `ErrReadUnavailable` (#957 maps it to
   `not_ready`) when the table is missing or its level is below the compiled level (1);
-  #985 `NewRuntimeStore` calls it too and answers `not_ready`. A claim never leases a read kind
+  the compiled level is the constant `bridge.ReadSchemaLevel` (= 1, owned here). #985 `NewRuntimeStore` calls it too and answers `not_ready`; that leg, its test and its selector-table row are #985's (round 5, F3). A claim never leases a read kind
   while the level is missing.
 
 Every path that reads or transitions a `bridge_commands` row was checked (amended (c)):
@@ -260,9 +270,9 @@ pipeline order, one code per check (amended (c)):
    vendored schema in step 4 and are `invalid_document` (the schema makes
    `provider_effect` const `none`). A body over 16384 bytes is refused by
    `bridgeMaxBody` before this pipeline. Round 4 (R3-2): the result handler
-   (`handlers_bridge.go:216-220`) detects `*http.MaxBytesError` and answers 413
-   `payload_too_large` instead of the generic 400 `invalid_document`; the Store never sees
-   that body. The Store's own cap, `JCS(payload)` over 12288 bytes, returns `ErrPayloadTooLarge`
+   (`handlers_bridge.go:216-220`) answers the unchanged 400 `invalid_document` for
+   `*http.MaxBytesError` (round 5, F2: the #1059 route contract; `payload_too_large` is only
+   the code of the in-Store cap below); the Store never sees that body. The Store's own cap, `JCS(payload)` over 12288 bytes, returns `ErrPayloadTooLarge`
    (`errors.go`). `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` are
    entries of `codedErrors` (`payload_too_large`, `read_unavailable`, `read_not_authorized`)
    with `bridgeStatus` cases 413, 503 and 403.
@@ -336,5 +346,5 @@ tenant labels. `MCTL_BRIDGE_READ_RESULT_TTL`: default 300 s, clamped 1..300 s
   24 h.
 - Locks: reads take only L5 of mctl-api#957 design §6b on `bridge_commands`;
   `bridge_read_results` is never locked together with L1-L4.
-- Order (round 4): #1059 approved and merged -> #988 (`internal/jcs`) -> #959, #960, #961, #989 -> this slice -> #985 (`bridge.ApplySchema` calls `bridge.ApplyReadSchemaTx`) -> #957 A12 and the mctl-telegram
+- Order (round 4): #1059 approved and merged -> #959 -> #988 (`internal/jcs`) -> #960, #961, #989 -> this slice -> #985 (`bridge.ApplySchema` calls `bridge.ApplyReadSchemaTx`) -> #957 A12 and the mctl-telegram
   provider read path -> #990 tests. Nothing is enabled by this slice.
