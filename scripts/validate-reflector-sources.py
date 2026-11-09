@@ -324,6 +324,7 @@ def structural(dtext, start, level=0, strict=False, textual=True):
                 if "emberstack" in normalise(n.value).lower(): binary_hit = True
             except (binascii.Error, ValueError):
                 tag_reasons.append(f"line {start + n.start_mark.line + 1}: !!binary scalar that is not valid base64: cannot be read")
+                if b64_hides_key(n.value): binary_hit = True      # a lenient parser (unpadded, urlsafe) may still read it
         elif not tag.startswith("tag:yaml.org,2002:") and not rev("tags"):
             tag_reasons.append(f"line {start + n.start_mark.line + 1}: non-standard YAML tag {esc(tag)[:40]!r}: "
                                "the resolved value cannot be known")
@@ -584,9 +585,14 @@ def scan_text(label, text, ext):
             else:
                 sres = None if rev("structural") else structural(dtext, start, strict=bool(occ and names), textual=textual)
                 if sres is None:
-                    if ext in YAML_EXT and (textual or (tg and b64_hides_key(dtext))):
+                    if tg and b64_hides_key(dtext) and not rev("b64_unparseable"):
+                        # unparseable text (a Helm template, a .tpl, a file without extension) whose base64 decodes to the key
+                        # while it spells YAML tags: the tag cannot be resolved, so the key cannot be ruled out
+                        unreadable.append(f"{label}: document near line {start + 1} spells YAML tags, holds base64 of the Reflector "
+                                          "key and is not parseable YAML: cannot be read")
+                    if ext in YAML_EXT and textual:
                         notes.append(f"{label}:{start + 1}")
-                        if has_tricks(dtext) or not textual:
+                        if has_tricks(dtext):
                             unreadable.append(f"{label}: document near line {start + 1} mentions a Reflector key, is not "
                                               "parseable YAML and uses anchors, aliases, merge or explicit keys, or a "
                                               "trailing backslash: cannot be read")
@@ -660,6 +666,19 @@ class Ctx:
         self.seen, self.bad, self.allowed, self.errs = 0, [], [], []
         self.archives, self.total, self.notes = [], 0, []
 
+def binary_spells_key(b):
+    """A file skipped as binary must still not spell the key: literally (also UTF-16), or as base64 under a tag."""
+    low = b.lower()
+    if b"emberstack" in low or "emberstack".encode("utf-16-le") in low or "emberstack".encode("utf-16-be") in low: return True
+    return len(b) <= MAX_DOC_BYTES and b64_hides_key(b.decode("latin-1"))
+
+def skip_binary(ctx, label, name, b):
+    """True when the file is a recognised binary that can safely be skipped."""
+    if not is_known_binary(name, b): return False
+    if binary_spells_key(b) and not rev("binary_scan"):
+        ctx.errs.append(f"{esc(label)} looks binary but spells the Reflector key (literally or as base64): cannot be read")
+    return True
+
 def process(ctx, label, name, b, depth=0):
     """Scans one file (or archive member): bytes b under the display label and member/file name."""
     ln = name.lower()
@@ -671,13 +690,13 @@ def process(ctx, label, name, b, depth=0):
             if rev("utf16_bom"): return
             text = decode(b)
         elif b"\0" in b:
-            if is_known_binary(name, b): return          # a recognised binary type
+            if skip_binary(ctx, label, name, b): return          # a recognised binary type
             ctx.errs.append(f"NUL byte in {esc(label)} (not a recognised binary type, undecodable without BOM): "
                             "not skipped"); return
         else:
             text = decode(b)
     except UnicodeError as e:
-        if is_known_binary(name, b): return
+        if skip_binary(ctx, label, name, b): return
         ctx.errs.append(f"undecodable {esc(label)}: {e}"); return
     b2, a2, u2, n2 = scan_text(esc(label), text, os.path.splitext(ln)[1])
     ctx.bad += b2; ctx.allowed += a2; ctx.errs += u2; ctx.notes += n2
