@@ -201,6 +201,32 @@ resource "zitadel_application_oidc" "mctl_api_dev" {
   id_token_userinfo_assertion = true
 }
 
+# The DevLoop decide page (mctl-api#964): a Telegram URL button opens
+# api.mctl.ai/devloop/decide/..., and the operator signs in here, fresh, for
+# that one decision (prompt=login, max_age=0). mctl-api reads the ID token
+# only, resolves the person to their principal and lets a human admin approve
+# or reject the grant the link names. The bot never approves anything.
+# A client of its own, not a third redirect on mctl-api-link or
+# mctl-api-oauth: a code issued for one flow is then never accepted by
+# another. Same shape as mctl-api-link: client secret plus PKCE, one
+# redirect, opaque (BEARER) access token, because a JWT access token of any
+# app in this project would pass mctl-api's JWT bearer check. Do not switch
+# it to JWT.
+resource "zitadel_application_oidc" "mctl_api_decide" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-decide"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/devloop/decide/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -244,6 +270,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # OAUTH_UPSTREAM is github, the default.
     OAUTH_ZITADEL_CLIENT_ID     = zitadel_application_oidc.mctl_api_oauth.client_id
     OAUTH_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.mctl_api_oauth.client_secret
+    # The decide-page client (mctl-api#964), read through the chart's
+    # optional devLoopDecideSecret. Nothing reads these keys until that value
+    # is set in bootstrap/templates/mctl-platform/mctl-api.yaml.
+    DEVLOOP_DECIDE_CLIENT_ID     = zitadel_application_oidc.mctl_api_decide.client_id
+    DEVLOOP_DECIDE_CLIENT_SECRET = zitadel_application_oidc.mctl_api_decide.client_secret
     # The development client above, for an operator to copy into a local
     # run. Not read by mctl-api: the chart references keys by name, and these
     # names are none of them.
