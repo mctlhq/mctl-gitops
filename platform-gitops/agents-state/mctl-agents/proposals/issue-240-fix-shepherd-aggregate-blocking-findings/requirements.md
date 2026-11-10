@@ -283,11 +283,12 @@ That is no longer true. Two shapes exist in production and both bind to a head:
 Requirements:
 
 - The actor must be `github-actions[bot]` AND the first line must be the Agy marker (the actor login is shared).
-- Head binding: a 7+ hex `commit` prefix must be a prefix of the current head SHA, or the `sha=` value must equal it. A comment with neither is NOT authoritative for gating (no timestamp inference), so it counts as "missing".
+- Head binding: a `commit` prefix of at least 7 hex must match the current head AND no other head seen on the PR; a multi-head match is ambiguous and counts as missing. A `sha=` value must equal the full 40-hex head; a shorter value is not authoritative. A comment with neither is NOT authoritative (no timestamp inference), so it counts as "missing". A marker quoted inside a finding body is ignored: only the first line of the comment counts.
 - The verdict trailer is the semantic result; the LAST trailer in the comment wins (a finding may quote one). The `agy-review` job conclusion is never the verdict.
 - `FAIL:P1`, `FAIL:P2` or `FAIL:P1,P2` on the current head is a blocker by itself. If findings parse, each becomes a normalized finding. If none parse, the shepherd SHALL synthesize one blocker carrying the verdict, comment URL and head, and route to `address-review`. An unparsed verdict never degrades to `wait` or to clean.
 - `PASS` with parseable P1/P2 items is contradictory; treat the items as blockers.
 - If several Agy comments are bound to the same head (a rerun), the newest by `created_at` then id is authoritative.
+- A `FAIL` verdict naming only P3 is non-blocking.
 - A `failed` marker, a no-verdict "did not produce a review" comment, or no bound comment at all means the required reviewer has not responded: `wait`, then bounded `review-stuck`. Never approval, never merge.
 - A comment bound to an older head is ignored for blocking, and its absence on the new head is a wait, not a pass.
 - Normalized fields: severity, file, message, proposed fix, source (`agy`), URL (`html_url`), reviewed head SHA, comment id.
@@ -306,6 +307,16 @@ Before a merge is attempted, and again in the `merged` status write, record per 
 
 - Mutation-verified definition of done: every regression test below is shown to FAIL with the fix reverted (remove the agy input from `decide()` and watch each fail), and the detector is shown green on a converged input and red on a deliberate mutation.
 - When one instance is found, sweep the whole module for the class: every read in `run_shepherd.py` and `pr_merge.py` that degrades an error to an empty collection.
+
+### Unchanged exceptions
+
+Manual admin merge for `claude-review.yml` pin bumps, release-please PRs, `NEVER_MERGE_SERVICES` and `needs_human_kind` agent-definition PRs are unchanged. This work only adds refusals.
+
+### Capability and rollout
+
+- Agy is required only where the repo has an `agy-review.yml` caller with `blocking: true`. Repos with no Agy workflow or `blocking: false` default to `required=False`; required is opt-in explicit data.
+- Before enabling required gating: list open PRs whose current head has no bound Agy comment and either re-trigger Agy or accept the wait.
+- Reviewer state can change between the last read and the merge call. `--match-head-commit` pins the head, not reviewer state. The merge path re-aggregates and re-decides immediately before merging; the remaining window (a verdict landing after that read) is accepted.
 
 ### Unchanged non-goals
 
