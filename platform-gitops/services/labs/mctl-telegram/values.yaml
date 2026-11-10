@@ -56,6 +56,16 @@ resources:
     # Raised 768Mi -> 2048Mi (2026-11-10): headroom for growing MTProto session
     # pool (>96 live connected sessions, ~3 MB/session) and peak media transfers.
     memory: 2048Mi
+# Shorten rollout 503 window during Recreate rollouts (mctl-telegram#1108).
+# Fast readiness probe catches the listening port (:8080) at ~2-3s instead of
+# waiting up to 15s under the chart default (initialDelay 5s, period 10s).
+probes:
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 2
+    periodSeconds: 2
+    failureThreshold: 3
 env:
   # Per-file download cap for get_media (default 20 MiB). Lowered to 12 MB
   # (2026-10-04): Claude via the MCP portal drops the connection on a
