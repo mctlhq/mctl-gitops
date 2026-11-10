@@ -64,35 +64,42 @@ section wins. Items marked UNVERIFIED could not be confirmed against code and st
    `afb2e8de2fc709e7671deaa821268cc9ca3ba2d8ebceacb272c389c0954d0a06` at `675dff75` and at main
    `081bd6b7`; re-verify when vendoring). `BLOCKED_FOR_INTEGRATION` stays for the runtime only:
    docs/glovo-control.md says no production verifier mints the control principal until
-   mctl-gitops#2506 and no dispatcher is attached on main, so a mounted route answers 503
+   mctl-gitops#2506 (an open ZITADEL-versus-Vault issuer spike; the control-principal verifier is
+   not yet in place) and no dispatcher is attached on main, so a mounted route answers 503
    `not_ready`.
 4. Credentials. The static `MCTL_ASSISTANTS_TOKEN` is replaced by a credential-provider port
    for a bearer whose audience is exactly `mctl-api-glovo-control` (principal
-   `service:glovo-control-worker`, permission `glovo:control-dispatch`; `auth/glovo_control_worker.go`,
+   `service:glovo-control-worker`, permission `glovo:control-dispatch`; `internal/auth/glovo_control_worker.go`,
    docs/glovo-control.md). The issuer source is pending mctl-gitops#2506. The port refuses
    client-side a token that is not a control token (wrong audience). Temporal client auth uses
    the node A names `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE`, `TEMPORAL_TLS_SERVER_NAME`
-   (mctl-agents#1057, OPEN PR at the time of writing; `docs/runbooks/temporal-client-auth.md`
-   is NOT on mctl-agents main, so the names are UNVERIFIED until #1057 merges), inert when
-   unset, never logged, through a neutral shared module that is never imported from
-   `orchestrator.temporal.worker`. This proposal duplicates no #1057 work. The provider holds
+   (VERIFIED_SOURCE: mctl-gitops `docs/runbooks/temporal-client-auth.md`, row "A. Client
+   support": `TEMPORAL_TOKEN_FILE` is re-read at least every 5 minutes; only the mctl-agents
+   implementation is UNVERIFIED, because mctl-agents#1057 is an open issue and no open PR for it
+   was found), inert when unset, never logged, through a neutral shared module.
+   `orchestrator.assistants` must not import `orchestrator.temporal.worker` (T2 enforces it);
+   note that the DevLoop worker owns `Client.connect` today, so decision (c) must be taken with
+   that in view. This proposal duplicates no #1057 work. The provider holds
    no Temporal credential (mctl-telegram#1276).
 5. `orchestrator.action_approvals.intent_hash` import removed: after M10 the workflow never
    computes an intent. The allowed-import list shrinks accordingly.
 6. OPEN-989-5 limit. The basket fingerprint may travel in Temporal history only for the
    synthetic, fake-only M1. A keyed digest is required before any real data; the ADR (task 11)
    states this.
-7. Rate limiting. mctl-api's control handler never sends `Retry-After` (not present in
-   `internal/api/handlers_glovo_control.go` or docs/glovo-control.md; other files unchecked).
+7. Rate limiting. the mctl-api control routes never send `Retry-After` (not present in
+   `internal/api/handlers_glovo_control.go` or docs/glovo-control.md; other mctl-api surfaces do
+   send it: `internal/glovojoin/http.go`, openapi.yaml, docs/principals.md).
    When the header is absent the client uses bounded exponential backoff; when present it is
    honoured within the same bound.
 8. Result enum source. mctl-agents#1059 is merged (#1062, `46ccddce`). `docs/contracts/bridge/v1alpha2/README.md`
    says there is no v1alpha2 write result: the unchanged v1alpha1 `result.schema.json`
    (`docs/spikes/1043/`) stays the result contract of `place_order_fake`, so the M9 enum domain is
    read from it. Prefer reusing the strict parsing of `tools/bridge_contract.py` over a local
-   duplicate. `jsonschema` is in the dev dependency group of pyproject.toml only; the control
-   image installs with `--no-dev`, so its availability in the image is UNVERIFIED (reuse needs
-   it in the runtime group, or the pre-check stays local and stdlib-only).
+   duplicate. `tools/bridge_contract.py` imports `jsonschema`, `referencing` and `jcs`
+   (`tools/jcs.py`); `jsonschema` is in the dev dependency group of pyproject.toml only, the
+   control image installs with `--no-dev`, and `tools/` is outside the image's minimal copy list,
+   so availability in the image is UNVERIFIED (reuse needs the dependencies in the runtime group
+   and `tools/` copied, or the pre-check stays local and stdlib-only).
 9. `not_ready` currently maps to `refused`/`provider_disabled`, which conflates a transient
    not-ready (no dispatcher attached, readiness probe failed) with a disabled provider. See
    OPEN decision (e). The (`status`, `effect_state`) pair-class table stays a local copy
@@ -105,13 +112,30 @@ OPEN owner decisions (recorded, not decided):
 - (b) Image. Recommended: build-only in CI and let mctl-gitops#2576 own the reproducible build
   and digest pinning. Alternative: publish `ghcr.io/mctlhq/glovo-control-worker` (staged name)
   behind an off-by-default repo variable, never in release-deploy `values_path`.
-- (c) Shared Temporal client module. Recommended: land #1057 first, then reuse its module.
-  Alternative: one neutral shared module landed by whichever PR is first.
+- (c) Shared Temporal client module. #1057 is an open issue with no code yet, so "land #1057
+  first" has nothing to wait on today. Recommended: one neutral shared module owned by the first
+  PR that needs it, with `orchestrator.assistants` never importing `orchestrator.temporal.worker`;
+  take the decision with the DevLoop worker's ownership of `Client.connect` in view.
 - (d) Control token source: pending mctl-gitops#2506. Recommended: accept `BLOCKED_FOR_INTEGRATION`
   for the runtime at approval; the code, contract vendoring and tests ship now.
-- (e) `not_ready` mapping. Recommended: a distinct transient handling (bounded retry, then
+- (e) `not_ready` mapping (`provider_disabled` appears nowhere in mctl-api: it is only this
+  workflow's mapping of `not_ready`; task 12's check that every table code exists in the vendored
+  bodies must exclude workflow-only reason codes). Recommended: a distinct transient handling (bounded retry, then
   `unknown`/`dispatch_unconfirmed`, never `refused`) for the not-ready code, with
   `provider_disabled` kept for a genuinely disabled provider, if mctl-api can tell them apart.
+
+Negative matrix (case -> named test):
+
+| Case | Test |
+|---|---|
+| two tenants, two principals | T7 |
+| wrong audience | T20 |
+| missing team | T8 (`no_tenant`) |
+| revoked connection | T8 |
+| stale install | T8 |
+| approval replay | T10 + T11 |
+| foreign order | T21 (+ T7 foreign `command_id`) |
+| ambiguous provider write | T13 + T9 |
 
 UNVERIFIED, image health: probes, readiness endpoint and `readOnlyRootFilesystem` needs of the
 worker image are not verified (no deployment exists; mctl-gitops#2576 decides).
@@ -236,7 +260,7 @@ Resource budgets:
   execution timeout.
 - IF mctl-api answers a dispatch with `tenant_busy` THEN THE SYSTEM SHALL end `refused` with that
   reason (mctl-api#985 §2b) and write nothing. IF it answers `rate_limited` (429, nothing written) THEN THE
-  SYSTEM SHALL retry with bounded backoff honouring `Retry-After` when present and bounded exponential backoff when absent (mctl-api never sends it; amended 2026-11-10), and on exhaustion end `unknown`/`dispatch_unconfirmed` as for `unavailable` (M10b); `rate_limited` is never a `reason_code`.
+  SYSTEM SHALL retry with bounded backoff honouring `Retry-After` when present and bounded exponential backoff when absent (the control routes never send it; amended 2026-11-10), and on exhaustion end `unknown`/`dispatch_unconfirmed` as for `unavailable` (M10b); `rate_limited` is never a `reason_code`.
 
 Safety:
 - THE SYSTEM SHALL contain no Glovo HTTP client, no provider cookie or session
