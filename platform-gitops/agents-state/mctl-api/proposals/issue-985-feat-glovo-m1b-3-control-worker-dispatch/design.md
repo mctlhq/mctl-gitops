@@ -1,5 +1,18 @@
 # Design: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
+## Amendment 2026-11-10 (independent review, AMEND)
+
+Where this section and older text disagree, this section wins. Decisions recorded earlier and the owner-only questions (OPEN-985-2, OPEN-985-11, OPEN-985-13) are unchanged.
+
+| Finding | Change here |
+|---|---|
+| Revocation hook can stay synthetic (`cmd/api/glovo_team_grant.go` installs `syntheticRevocationHook`, a no-op) | §7.3 item 4 and task 9: `main.go` swaps it for `bridge.CancelOpenForConnections`; startup asserts the installed hook IS that function; a test refuses the fence with the synthetic hook; T24 is red with the swap reverted. |
+| `MembershipRevocationWired()` is a non-empty label (`internal/glovo/store.go`: `membershipRevoker != ""`), not evidence | §7.3 item 5 defines the positive signal. Until it exists the interim answer is refusing. OPEN-985-2 (who owns the detector) stays an owner question. |
+| `Membership.IsMember` has no `ctx` and is a network call under L1-L4 (and in `Fence.Check` under L5) | §5 step 9 and §7.2: `ctx` plus a hard timeout `MembershipTimeout` (2 s, below the 5 s `lock_timeout`); timeout is `unavailable`. `Membership` is a gate, fail closed, not best effort. New T15a. |
+| Security tests can pass with the fix reverted | Tasks: a Definition of done clause and one `mutation:` line per security test. |
+| `approval_expired` decided too late | §5 step 11: refused before enqueue when `fresh_until - now <= ReservePermitMargin`; boundary tests at 119 s and 121 s (T4a). |
+| Stale line references | Re-pinned to mctl-api main `dc55930` (see the lines cited below). |
+
 ## Amendment 2026-11-09 (c), round 7 of the AMEND PR
 
 Targeted fixes for two seams the round-6 text left open. Where this section and older text disagree, this section wins.
@@ -115,22 +128,22 @@ review P1).
 
 The bridge (mctl-api#962, #968) lives in `internal/bridge/`:
 - `Store.Enqueue(ctx, tx pgx.Tx, in EnqueueInput) (commandID, created, err)`
-  (`store.go:478`) inserts a `pending` row in the caller's transaction.
+  (`store.go:614`) inserts a `pending` row in the caller's transaction.
   - It is idempotent on `(tenant, execution_id, operation_key)`, and it returns an
-    existing id without comparing fields (`store.go:483-486`).
-  - `validate()` (`store.go:229-256`) requires an `aar_` for `place_order_fake` and
+    existing id without comparing fields (`store.go:614-660`).
+  - `validate()` (`store.go:270`) requires an `aar_` for `place_order_fake` and
     `cancel_order_fake`.
   - `bridge_commands_sequence` is unique on `(execution_id, sequence)`
     (`store.go:115-116`).
-- `Store.Cancel(ctx, tx, commandID, actor)` (`store.go:815-834`) locks the row
+- `Store.Cancel(ctx, tx, commandID, actor)` (`store.go:1009`) locks the row
   `FOR UPDATE`. It sets `cancelled` and `cancel_requested=true`, and moves
   `effect_state` from `permitted` to `unknown`. A repeat on a cancelled row is a no-op.
   A completed or expired row returns `ErrAlreadyCompleted`.
-- `ReadOutcome` (`store.go:847`) reads the status, the effect state and the stored
+- `ReadOutcome` (`store.go:1041`) reads the status, the effect state and the stored
   result. Nothing calls it today.
-- `Store.Pool()` (`store.go:414`) exposes the pool for the caller's transaction. Nothing
+- `Store.Pool()` (`store.go:550`) exposes the pool for the caller's transaction. Nothing
   calls `Enqueue` from a route today.
-- `permitTx` (`permit.go:86`) calls `lockOwned` first (`store.go:659`, `FOR UPDATE`).
+- `permitTx` (`permit.go:98`; `PreLock` is declared at `permit.go:60`, `refusingFence.PreLock` is `:67`) calls `lockOwned` (`store.go:836`; since #989 task 7 it runs after `PreLock`, `FOR UPDATE`).
   It then checks the lease, the kind, `cancel_requested` and `effect_state`, and finally
   calls `currentFence().Check(ctx, tx, FenceBinding{...})` in the same transaction. The
   default `refusingFence` returns `ErrWriteFenceUnavailable`. The `WriteFence` doc names
@@ -341,7 +354,7 @@ type Connections interface { // #959, tx-scoped, on the shared tx
     Ready(ctx context.Context) error // #959; revocation_hook_missing without a hook
 }
 // Every signature above is copied from mctl-api#957 design §6d.4 (amended (c)).
-type Membership interface{ IsMember(tenant, principalID string) (bool, error) } // GitOps, best effort
+type Membership interface{ IsMember(ctx context.Context, tenant, principalID string) (bool, error) } // GitOps; a gate, fail closed; callers bound it with MembershipTimeout (2 s)
 type Dispatcher struct {
     Bridge *bridge.Store; Orders OrderIndex; Receipts Receipts; Conns Connections
     Members Membership; Ready func() error
@@ -438,7 +451,15 @@ This is the only step order. Task 5 implements exactly this.
    - the typed not-live code #959 `LiveConnectionTx` returns (round 8, C-4): `no_connection` (none, or `failed`), `connection_revoked`, `connection_expired`;
    - a live `gcn_` that differs from the order's is `connection_revoked` (decided here, as #988 §6; #959 does not know the order's `gcn_`);
    - an install revision that differs from the order's is `stale_install`.
-9. `Members.IsMember(tenant, owner)`: false is `no_tenant`; an error is `unavailable`.
+9. `Members.IsMember(ctx, tenant, owner)` (amended 2026-11-10: it takes a `ctx`; the
+   call is a network call made while L1 to L4 are held, so it runs under
+   `context.WithTimeout(ctx, MembershipTimeout)`, the named constant `MembershipTimeout`
+   = 2 s, below the 5 s `lock_timeout`). `false` is `no_tenant`; an error, a timeout and a
+   cancelled context are all `unavailable`, never `no_tenant` and never a pass. A hung
+   provider therefore cannot hold L3 or L4 longer than `MembershipTimeout` (T15a).
+   `Membership` is a gate at dispatch, and again in #989 `Check`, not best effort: only
+   the GitOps lag between a removal and the revoker (the §7.3 residual window) is best
+   effort.
 10. Compute `sequence = coalesce(max(sequence), 0) + 1` over `bridge_commands` for this
     `execution_id`, read under L3. Every command of this `we_` is created under this
     order lock.
@@ -452,12 +473,16 @@ This is the only step order. Task 5 implements exactly this.
     `binding.provider` from `LockGlovoApprovalTx` (the value #989's fence compares with
     `command.provider_ref`); `Tenant` and `OwnerPrincipalID` from the locked order;
     `InstallRevision` from the binding; `TTL` = the named constant `DispatchCommandTTL` (900 s, §7.4, OPEN-985-13),
-    capped at the time left until the `aar_` row's `fresh_until` (none left: `approval_expired`,
-    nothing enqueued). Every field comes from the locked rows
+    capped at the time left until the `aar_` row's `fresh_until`. Amended 2026-11-10: this
+    check runs BEFORE `Enqueue`: when `fresh_until - now <= ReservePermitMargin` (the named
+    constant, 120 s, the margin #989 `Check` needs to reserve and issue a permit) the answer is
+    409 `approval_expired` and nothing is enqueued, because a command whose TTL is shorter
+    than the margin can never be permitted (T4a: 119 s refuses, 121 s enqueues with a TTL
+    capped at the time left). Every field comes from the locked rows
     (amended (c), #957 §6d.2): `ExecutionID` and `WorkItemID`/`WorkflowID` from
     `Order.ExecutionID` and #989 `ExecutionBindingTx`; `RunID` from #957
     `glovojoin.ControlStartTx` (empty is valid, `bridge_commands.run_id` defaults to
-    `''`, `internal/bridge/store.go:74`); `TenantRef`/`PrincipalRef` from #988
+    `''`, `internal/bridge/store.go:75`); `TenantRef`/`PrincipalRef` from #988
     `LookupJoinRefTx`; `OrderRef` the `ordr_`; `ConnectionRef` the `gcn_`. The payload
     shape is fixed in #957 §6d.3 and the command is defined once by #1059 §Write command.
     Its wire version (`bridge.mctl.ai/v1alpha2`), projection, validation against the schema, Claim
@@ -513,18 +538,19 @@ The provider claim, result and expiry paths take only L5.
 #### 7.2 Write fence (#989 `receipt.Fence`, a `bridge.WriteFence`)
 - `bridge.WriteFence` gains `PreLock(ctx, tx, c bridge.Caller, commandID) error`.
   `permitTx` calls it **before** `lockOwned`. Since 2026-11-10 the definition, the call
-  in `permit.go:86` and the no-op `refusingFence.PreLock` belong to #989 task 7 (they
+  in `permit.go:98` and the no-op `refusingFence.PreLock` belong to #989 task 7 (they
   break the #985/#989 cycle: #989 merges first and needs nothing from this slice); this
   slice adds no fence code and relies on the hook. Amended (c): the
   fence's `PreLock` first applies the same provider and tenants check as `lockOwned`
-  (`internal/bridge/store.go:659-668`) to an unlocked read, and answers
+  (`internal/bridge/store.go:836-846`, main `dc55930`) to an unlocked read, and answers
   `ErrCommandNotFound` alike for an absent and a foreign id, before taking any lock.
 - #989's `receipt.Fence.PreLock(ctx, tx, c bridge.Caller, commandID)` (round 3, X-6: step 0 is the provider/tenants predicate and the `place_order_fake` kind refusal, #989 §6) reads the command's immutable binding without a lock (tenant,
   owner, order, `aar_`). It then takes L1 shared, L2 shared, L3 and L4.
 - `permitTx` then takes L5 (`lockOwned`). #989's `Check` re-verifies that the binding
   read in `PreLock` is unchanged, recomputes the fingerprint and intent hash from the
-  stored command payload, checks the connection, the install revision, membership and
-  the receipt state (`reserved` for this `cmd_`), and consumes the `aar_` (#989 design
+  stored command payload, checks the connection, the install revision, membership (the
+  same `MembershipTimeout`, unavailable on timeout; a hung provider cannot hold L5 past it)
+  and the receipt state (`reserved` for this `cmd_`), and consumes the `aar_` (#989 design
   §6). That is the single-use point at the physical write.
 - The #959 connection-ending paths are `Revoke` (including reason
   `membership_removed`), `RevokeInstall`, `Reinstall`, `Reconnect` (`superseded`) and
@@ -552,12 +578,29 @@ hold. This is the only copy of the list (amended (c)); the requirements mirror i
 1. `glovo.ControlDefault.Open` is true.
 2. The owner has lifted hold mctl-gitops#2457.
 3. The §4 one-database proof passed.
-4. #959 `Ready()` returns nil, so a `RevocationHook` is installed
-   (`glovo.WithRevocationHook(bridge.CancelOpenForConnections)`, task 9).
-5. #959 `MembershipRevocationWired()` is true: the component that observes a GitOps
-   membership removal revokes the member's connection (`Revoke` with reason
-   `membership_removed`). Who builds that detector is OPEN-985-2. Until it exists, the
-   fence stays `refusingFence`.
+4. #959 `Ready()` returns nil AND the installed revocation hook is
+   `bridge.CancelOpenForConnections` (amended 2026-11-10). Today
+   `cmd/api/glovo_team_grant.go` installs `syntheticRevocationHook`, which returns nil and
+   cancels nothing, and `Ready()` is satisfied by any hook. Task 9 therefore swaps it:
+   `glovo.WithRevocationHook(bridge.CancelOpenForConnections)` replaces
+   `glovo.WithRevocationHook(syntheticRevocationHook)`, and at startup `main.go` asserts the
+   installed hook is that function (the store exposes it for comparison, or the assertion
+   is made on the options list `main.go` built: one of the two, chosen in task 9, tested
+   either way). A different hook, including the synthetic one, leaves the fence
+   `refusingFence` and logs once (T24 cases b and c).
+5. #959 `MembershipRevocationWired()` is true on a positive signal (amended 2026-11-10).
+   The current implementation returns `membershipRevoker != ""`, a configured label, which
+   proves nothing about a running detector. The method must instead be true only when
+   there is evidence that the component that observes a GitOps membership removal
+   revokes the member's connection (`Revoke` with reason `membership_removed`): either a
+   detector heartbeat fresher than a named bound (`MembershipDetectorStale`, default
+   5 min) recorded by the detector in the shared database, or a recorded end-to-end
+   proof "membership removed, then the connection revoked" younger than a named bound.
+   An absent, unreadable or stale signal is false (could not observe is not observed
+   present). Interim, until the detector exists: the method is false and the fence stays
+   `refusingFence`. Who builds and runs the detector is OPEN-985-2 and stays an owner
+   question; this proposal does not decide it. T24 case (d) and T17 cover the two false
+   cases (label set but no signal; signal stale).
 6. #989 `receipt.Ready(ctx)` returns nil.
 
 Activation precondition, not a fence precondition (round 8, OPEN-986-6): the real provider's
@@ -624,7 +667,7 @@ exactly two file pairs, each with a release twin: the gate pair in `internal/glo
 
 - **Migrations (amended (c)).** New `bridge.ApplySchema(ctx, migrationConnStr,
   runtimeRole)`, run under the migration role in the order of mctl-api#957 design
-  §6d.1, applies `bridgeSchema` (`internal/bridge/store.go:66-67` onward), then:
+  §6d.1, applies `bridgeSchema` (`internal/bridge/store.go:67-69` onward), then:
   - the partial unique index `bridge_commands_mutating_approval`;
   - the table `bridge_colocation_probe(nonce TEXT PRIMARY KEY, created_at TIMESTAMPTZ)`;
   - #986's read objects, by calling `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)` (owned and tested standalone by #986; round 4, X-3) inside this transaction;
@@ -636,8 +679,8 @@ exactly two file pairs, each with a release twin: the gate pair in `internal/glo
     selector of #957 §6d.1 (round 3, F2).
   Once the row exists the store is always `bridge.NewRuntimeStore` on the shared
   `GLOVO_DB_URL` pool, which runs no DDL and checks the schema version and the grants, in
-  the pattern of `OpenExistingStore` (`store.go:381-404`), whatever the Glovo flags say;
-  today `NewStore` runs `bridgeSchema` on every start (`store.go:374`), including an
+  the pattern of `OpenExistingStore` (`store.go:520`), whatever the Glovo flags say;
+  today `NewStore` runs `bridgeSchema` on every start (`store.go:510`), including an
   `ALTER TABLE` that needs ownership. Without the row (never migrated) `NewStore` is
   unchanged. Bridge tables created earlier under another owner make `ApplySchema` refuse
   with an error naming them (OPEN-957-6, owner decision pending); disabling Glovo after

@@ -82,6 +82,14 @@ With any of them missing, the code merges with nil collaborators and answers
   second `place_order_fake` row with the same `aar_` fails at insert. `CancelOpenForConnections` locks
   `ORDER BY command_id` and keeps the semantics of `Store.Cancel` (a permitted effect
   becomes `unknown`).
+- [ ] 4b. (2026-11-10, review) Bound the membership call. Change `receipt.Membership` (merged
+  by #989 task 7 as `IsMember(tenant, principalID string)`, `internal/glovo/receipt/fence.go:45`,
+  call at `:265`) and the #985 `control.Membership` to `IsMember(ctx context.Context, tenant,
+  principalID string)`; both callers wrap the call in `context.WithTimeout(ctx,
+  MembershipTimeout)` (one named constant, 2 s, defined once in `receipt` and used by
+  `control`), return `unavailable` on error, timeout or cancellation, and never hold L3, L4
+  or L5 past the bound. Update the merged #989 tests for the new signature. DoD: T15a;
+  mutation: remove the timeout wrapper and T15a fails.
 - [ ] 5. Implement `Dispatcher.Dispatch` exactly as in design §5 (depends on 2, 4),
   including the explicit `Sequence` and the refusal of `created=false`. DoD: every write
   commits or rolls back together. Round 7 (F1): it passes `WireVersion: bridge.WireV1alpha2` and
@@ -119,15 +127,51 @@ With any of them missing, the code merges with nil collaborators and answers
 
   - the #959 store built with `glovo.NewStore(ctx, pool, runtimeRole, migrationRole,
     glovo.WithExplicitURL(true), glovo.WithRevocationHook(bridge.CancelOpenForConnections))` (amended (c)).
+  - Amended 2026-11-10, the hook swap. Today `cmd/api/glovo_team_grant.go` builds the store with
+    `glovo.WithRevocationHook(syntheticRevocationHook)` (a no-op returning nil) in
+    `glovoStoreOptions()`. This task replaces it in that function (the one place the
+    options are built), so no code path of a Glovo-enabled build keeps the synthetic
+    hook. At startup `main.go` asserts that the installed hook IS
+    `bridge.CancelOpenForConnections`; if it is not, the fence stays `refusingFence`,
+    the dispatcher is `not_ready`, and one log line names the reason (no secret).
+  - `MembershipRevocationWired()` is satisfied only by the positive signal of design §7.3
+    item 5. Interim: false, so the fence stays `refusingFence`. OPEN-985-2 is unchanged.
 
   Call `SetFence(receipt.NewFence(...))` only when all six preconditions of design §7.3
-  hold. DoD: the default build mounts no route and keeps `refusingFence`.
+  hold. DoD: the default build mounts no route and keeps `refusingFence`; a test refuses
+  the fence install with the synthetic hook (T24 b), and with a hook that is not
+  `bridge.CancelOpenForConnections` (T24 c); mutation: revert the swap in
+  `glovoStoreOptions()`, or delete the startup assertion, and T24 b fails.
 - [ ] 10. Write `docs/glovo-control.md` and reference it from the "Write fence" section
   of `docs/bridge.md`. It covers the principal, the routes, the code table, the global
   lock order (a pointer to #957 design §6b), the one-database rule and proof, the revoker contract, and the
-  three fence preconditions. DoD: reviewed against the amended #959 and #988.
+  six fence preconditions (design §7.3). DoD: reviewed against the amended #959 and #988.
 - [ ] 11. Run `go fmt`, `go vet`, `golangci-lint` and `go test ./...`. The MCP tool count
   does not change. DoD: CI is green.
+
+## Definition of done for security tests (2026-11-10)
+
+Every security test below, T2/T19 (exactly-one), T12-T14 and T24 (revocation races and the
+end-to-end fence), T21 (deadlock freedom), T17 (missing config), T26 (role model) and T29
+(fixture seam), must fail with its fix reverted, and the PR records the mutation it used. A
+test that cannot be made red is not a test of the control. Each carries one `mutation:`
+line, repeated in the PR description with the red output:
+
+- T2 / T19: mutation: drop the `FOR UPDATE` on the order lock (L3) or the unique index
+  `bridge_commands_mutating_approval`; the exactly-one assertion fails.
+- T12: mutation: take L2 shared after L3 instead of before; the order-A interleaving
+  deadlocks or dispatches over a revoked connection.
+- T13 / T14: mutation: make `CancelOpenForConnections` skip `reserved` commands, or have
+  `receipt.Fence.Check` ignore the connection; a permit is issued after a revoke.
+- T24: mutation: see T24 (hook swap reverted).
+- T21: mutation: call `lockOwned` before `PreLock`; a `40P01` appears at some paused
+  interleaving.
+- T17: mutation: let one precondition of §7.3 default to true; the matching case installs
+  the fence.
+- T26: mutation: grant `glovo_runtime` one extra right (`TRIGGER`), or skip the
+  `CheckReadLevel` call; the proof or the selector case fails.
+- T29: mutation: as listed in T29 (const flipped; fixture file in the release list;
+  `receipt.Ready` skipped).
 
 ## Tests
 
@@ -147,8 +191,14 @@ advisory keys are used.
   and every success returns the same `cmd_`.
 - [ ] T3. A different `aar_` on a dispatched order returns `approval_replayed`, and no
   row is added.
-- [ ] T4. An expired `aar_` and an `aar_` past `fresh_until` both return
+- [ ] T4. (see also T4a) An expired `aar_` and an `aar_` past `fresh_until` both return
   `approval_expired`, and nothing is written.
+- [ ] T4a. (2026-11-10) Reserve-margin boundary: with `fresh_until - now` of 119 s dispatch
+  answers 409 `approval_expired`, writes nothing, and `bridge_commands` has no row; with
+  121 s it enqueues, and the TTL equals the time left (capped at `fresh_until`, below
+  `DispatchCommandTTL`). The check sits before `Enqueue` (a row count of zero proves it,
+  not the rolled-back transaction). mutation: move the check after `Enqueue`, or compare
+  with `< 0` instead of `<= ReservePermitMargin`, and the 119 s case fails.
 - [ ] T5. These all return `approval_invalid`: an `aar_` in each generic work-items
   state (`consumed`, `in_flight`, `executed`), a pending, refused or `unknown` receipt, and
   a non-Glovo-kind `aar_`. A receipt reserved for another command returns
@@ -183,6 +233,15 @@ advisory keys are used.
 - [ ] T14. The same two race orders against #989's `receipt.Fence` inside `IssueWritePermit`.
 - [ ] T15. Membership: a fake `Membership` returning false gives `no_tenant`, and an
   error gives `unavailable`.
+- [ ] T15a. (2026-11-10) Membership is bounded. A fake `Membership` that blocks until its
+  `ctx` is cancelled makes dispatch answer `unavailable` within `MembershipTimeout` plus a
+  small margin; a second connection that asks for the same `tenant`/`owner` L3 or L4 lock
+  during the hang gets it no later than `MembershipTimeout` after the hang began (it does
+  not wait for the provider). The same test in #989 `Check` with L5 held: a hung provider
+  gives `unavailable` and L5 is free after `MembershipTimeout`. A provider that ignores
+  `ctx` is not a case the code can fix; the wrapper must return on `ctx.Done()` and the
+  test uses such a fake. mutation: remove the `context.WithTimeout` (or pass
+  `context.Background()`) and this test fails by timeout.
 - [ ] T16. Wrong principal: each of these is refused with 403 before any store call (a
   fake store records zero calls):
   - a human user, an admin, a Glovo-audience facade token, a bridge-provider token;
@@ -229,6 +288,14 @@ advisory keys are used.
   `Reconnect` (`superseded`) and an `expires_at` that passes with no `Transition` are
   each followed by a permit attempt, and none gives a permit. A `PreLock` for a foreign
   or absent command id answers `ErrCommandNotFound` before any lock is taken.
+  Amended 2026-11-10, four more cases: (b) a store built with `syntheticRevocationHook`
+  never gets a fence (`SetFence` not called; refused with the reason logged); (c) a hook
+  that is neither the synthetic one nor `bridge.CancelOpenForConnections` is refused the
+  same way; (d) `MembershipRevocationWired()` with the label set but no detector signal,
+  and with a stale signal, is false and the fence stays `refusingFence`; with a fresh
+  signal it is true. mutation: swap `bridge.CancelOpenForConnections` back to the
+  synthetic hook in `glovoStoreOptions()` and (b) and the main permit case fail (the permit
+  is issued after a `Revoke`).
 - [ ] T25. Dispatch payload and refs (round 5, N3: assert every `EnqueueInput` field, including `ProviderRef == binding.provider`, `Tenant`, `OwnerPrincipalID`, `InstallRevision` and `TTL` capped at `fresh_until`): the enqueued payload is byte-equal to the order's
   final snapshot; `workflow_id` equals `glovo.control_starts.workflow_id`; `run_id` is
   `''` before the workflow started and the started run id after.

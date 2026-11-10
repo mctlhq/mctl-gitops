@@ -466,8 +466,10 @@ and tests on its own:
   and a nil or absent fence never reaches the hook); `permitTx` calls
   `s.currentFence().PreLock(ctx, tx, c, commandID)` before `lockOwned`.
 - `receipt.Fence.PreLock` (steps 0-4 below) and `Check`.
-- `receipt.Membership`, a one-method interface (`IsMember(tenant, principalID string)
-  (bool, error)`) with the method set of the #985 §3 `Membership`, so that no #989
+- `receipt.Membership`, a one-method interface (`IsMember(ctx context.Context, tenant,
+  principalID string) (bool, error)`; amended 2026-11-10 after review: the merged #998 code
+  (`internal/glovo/receipt/fence.go:45`, call at `:265`) has no `ctx`, and #985 task 4b adds it,
+  with a hard timeout, because the call is a network call under L1-L5) with the method set of the #985 §3 `Membership`, so that no #989
   package imports `internal/glovo/control`; and `receipt.Ready` takes the
   `ProveOneDatabase` result as an injected `func(context.Context) error`.
 #985 task 4 therefore adds no `WriteFence` code: it relies on the hook, proves the lock
@@ -516,8 +518,9 @@ signature, round 3), before `lockOwned`:
    `ih` must equal the `aar_` `intent_hash` and `b.IntentHash`, else `intent_mismatch`.
    The same check covers `b.ExecutionID`, `b.WorkItemID`, `b.Tenant`,
    `b.OwnerPrincipalID`, `b.ConnectionRef` and `b.InstallRevision`.
-6. `Membership.IsMember(tenant, owner)` (#985 §3, best effort): false is `no_tenant`;
-   a read error is `unavailable`.
+6. `Membership.IsMember(ctx, tenant, owner)` (#985 §3; a gate, fail closed, bounded by
+   `MembershipTimeout` = 2 s, amended 2026-11-10): false is `no_tenant`; a read error, a
+   timeout and a cancelled context are `unavailable`.
 7. `Conns.LiveConnectionTx(owner)`: active, same `gcn_`, same install revision (decimal
    string). Else `no_connection`, `connection_revoked`, `connection_expired` or
    `stale_install`: the first three typed codes are the ones #959 `LiveConnectionTx` returns

@@ -33,8 +33,28 @@ using in-test doubles, and do not claim deploy-readiness anywhere.
 - [ ] A10. Pin #977's `invalid_target` for the Glovo resource on `/oauth/authorize` and `/oauth/token` while `GLOVO_ENABLED` admission (#960) is absent. (depends on #960) — DoD: a test asserts `invalid_target` while admission is absent; the picker itself is #960's.
 - [ ] A12. Consume the bridge read extension mctl-api#986 behind `ReadBridge` (owner decision D1), own `glovo.join_read_refs` (design §5a, MUST 10) and fill both `InstallRevision` and `InstallRevisionRef`, with the #1059 read kinds and schemas and the approval-basket fingerprint computed here. (depends on 7, #986 and mctl-agents#1059 merged) — DoD: history, preview, basket and prepare work against the fake provider; a log, span and Temporal-input capture contains no raw read payload.
 - [ ] A13. Add the workflow-start outbox `glovo.control_starts` (with the INSERT-only `input BYTEA` and its digest CHECK, round 4 F2; round 5: vendor #1044's `glovo-control-input.v1alpha1.json` and `SHA256SUMS` into `internal/glovojoin/contract`, validate the stored input of a real prepare against it and against the checked-in golden) and its dispatcher (design §6c, owner decision D5; this slice owns the dispatcher). (depends on 8) — DoD: after a crash between commit and start the dispatcher starts the workflow from the stored `input` alone with every other store stubbed to fail, and a tampered `input` (digest mismatch) is `failed_terminal`, never rebuilt; crash injection between commit and start, and a duplicate start, end with exactly one workflow under the deterministic id; no start happens for a rolled-back prepare; with `GLOVO_CONTROL_START_ENABLED` off rows stay `pending` and `/compatibility` shows `control_worker: not_ready`.
+- [ ] A15. (2026-11-10, gitops deliverable) Open the mctl-gitops PRs of design §6d.1 "Deployment dependency": roles `glovo_runtime` and `glovo_migrator`, their Vault secrets, `GLOVO_DB_URL`, `WORK_ITEMS_DB_URL` and `COMMERCE_DB_URL` in the `mctl-api` values, and the migration job. Blocking for the first Glovo-enabled deploy, not for any code merge. DoD: a read-only check (no Secret data read) shows each env var present in the rendered manifest and each role present with the R1/R2 attributes; the repo validators pass. Gitops is public: no credential, host or customer name in the PRs.
 - [ ] A14. Add `glovojoin.ApplySchema(ctx, migrationConnStr, runtimeRole)` for `glovo.join_previews` (with `consumed_order_ref` and its partial unique index), `glovo.join_scope_refs`, `glovo.join_read_refs` and `glovo.control_starts`, and `glovojoin.ControlStartTx` (design §6d.1, §6d.4; amended (c)). (round 6, G3: depends on #959, #988 and #989 only; it registers its grants through `glovo.RegisterGrants`, and #985 depends on this task, not the reverse) — DoD: `go list -deps ./internal/glovojoin` lists no `internal/glovo/control`; run as the runtime role it fails; run as the migration role it grants exactly the §6d.1 rows; a test reads `workflow_id` and `run_id` for an `ordr_` through `ControlStartTx` before and after the workflow started.
 - [ ] A11. Replace the old A1 wording: a missing or unbound human-selected team grant is 403 `ambiguous_tenant`, a code already in the facade's closed set. — DoD: T4 covers it with a shared fixture.
+
+## Definition of done for security tests (2026-11-10)
+
+Every test of the security-relevant behaviour must fail with its fix reverted, and the PR
+records the mutation and the red output. The tests are: the route matrix per principal (T2),
+the prepare-versus-revoke race (T12), preview single-claim (T5, T16), replay-before-write
+(T11), readiness gating (T15) and the wire-version single caller (T14). One `mutation:` line each:
+
+- T2: mutation: add one principal kind to the confining gate's allow list, or remove the
+  facade's confinement to its nine routes; the matrix cell for that kind turns red.
+- T12: mutation: take the L2 lock after the preview claim, or skip the connection re-read
+  after the lock; the race interleaving prepares an order for a revoked connection.
+- T5 / T16: mutation: drop `AND consumed_order_ref IS NULL` from the claim, or drop the
+  partial unique index `join_previews_consumed`; two orders are created for one preview.
+- T11: mutation: move the replay lookup (step 1b) after the first write; a replay writes a
+  second row.
+- T15: mutation: map an unreadable heartbeat to ready; the not-observed case passes
+  `Readiness`.
+- T14: mutation: call `EnableWireVersions` from `NewStore`; the single-caller test fails.
 
 ## Tests
 
@@ -52,6 +72,9 @@ using in-test doubles, and do not claim deploy-readiness anywhere.
 - [ ] T8. Rate limits: the per-subject and aggregate facade limits return 429 with `Retry-After`. `traceparent` is propagated, and span attributes contain no token.
 - [ ] T12. Lock order and fingerprint (amended (b)): a prepare racing a #959 revoke of the same owner commits either before (the revoker then cancels nothing, the `aar_` is pending and dispatch later refuses) or after (prepare sees the revoked connection and refuses), with no deadlock under deterministic interleaving; the preview, basket and prepare fingerprints reproduce the #1059 vectors; a preview body with a `pho_` in `order_ref` is accepted only if an earlier history read returned it to the same (tenant, principal, connection), and an `ordr_` there is `invalid_arguments`.
 - [ ] T13. (Round 8) `TestGlovoApprovalTTLSeam`: the release build has `GlovoApprovalTTL == 15*time.Minute` and no fixture file in the `go list` file list of `./internal/glovojoin`; under the tag `SetFixtureGlovoApprovalTTL(3*time.Second)` makes prepare return `expires_at` about 3 s ahead. Proven red: a release build that reads the fixture variable fails the first half.
+- [ ] T14. (2026-11-10) `NewStore` leaves `WireVersionsEnabled()` false; `NewRuntimeStore` with the read level present makes it true; the non-test call sites of `EnableWireVersions` are exactly one, inside `NewRuntimeStore`.
+- [ ] T15. (2026-11-10) Readiness gating: `glovojoin.Readiness` returns `not_ready` for the worker dependency when the control or provider heartbeat is unread, unreadable (query error), stale, or never recorded, and ready only when it was read and is fresh. A table-driven test over those four cases and the fresh one. It also asserts the facade's `GET /compatibility` shows `not_ready` in each of the four. mutation: treat an error or an empty read as ready; the four cases fail.
+- [ ] T16. (2026-11-10) Preview claim race with two different idempotency keys for the same preview: two goroutines prepare the same `gpv_` under keys K1 and K2, released together by a barrier, 50 repetitions; exactly one `ordr_`, one `we_` and one `aar_` exist, the loser is 409 `fingerprint_changed` (`preview_consumed`) and leaves no row, and `consumed_order_ref` is set once to the winner's `ordr_`. A second case at SQL level: two concurrent `UPDATE ... WHERE consumed_order_ref IS NULL` on the row, one of them 0 rows. mutation: drop `AND consumed_order_ref IS NULL`, or drop the partial unique index; the test fails (two orders).
 - [ ] T9. With `GLOVO_JOIN_ENABLED` off, all join routes return 404 and the existing router tests are unchanged. The MCP tool count in `server_test.go` is unchanged.
 
 ## Rollback
