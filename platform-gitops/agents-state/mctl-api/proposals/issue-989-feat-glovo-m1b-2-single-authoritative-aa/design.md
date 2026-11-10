@@ -1,5 +1,17 @@
 # Design: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
+## Amendment 2026-11-10 (owner decision and merge order)
+
+- OPEN-989-1 is DECIDED (2026-11-10, owner, in chat): the ownership move of
+  `action_approval_requests`, `work_items`, `work_item_executions` and `work_item_events`
+  and the move of the generic DDL out of `NewStore` (task 2b) are unconditional. The
+  `Ready` predicate of §2 and §8 is unchanged: it still fails while a table is owned by
+  the runtime role. What is gone is the wording that made task 2b wait for a decision.
+- OPEN-989-6 is CLOSED: the write payload is fully determined by the merged #1059
+  schema vendored by #986 (checked on mctl-api main `8096b2b7`; see requirements.md).
+- The #985 mutual dependency is broken by moving the hook definition here (§6, "Merge
+  order and the `PreLock` hand-off"): #989 merges before #985 and needs nothing from it.
+
 ## Amendment 2026-11-09 (c), round 7 of the AMEND PR
 
 Two seams left by round 6. Where this section and older text disagree, this section wins.
@@ -58,7 +70,7 @@ section survives.
 | Review finding | Fix in this proposal |
 |---|---|
 | P1 the fence compares two values mctl-api wrote itself; a command with the approved `intent_hash` and another payload gets a permit | The fence recomputes from what is written. Under the command lock it reads `bridge_commands.payload`, extracts the #1059 **approval basket**, validates it (sort, uniqueness, arithmetic) and computes `basket_fingerprint`. It then recomputes the intent hash with `GlovoIntent` from the command row's own fields and that fingerprint. Both must equal the `aar_` binding, and the command's stored `intent_hash` must equal the recomputed one. Caller-supplied hashes are never trusted (§6). The provider contract (mctl-telegram#1262) is: write exactly the command payload's lines, never a re-read basket (OPEN-989-4). T10 uses a real command whose payload differs from the approved basket while carrying the approved `intent_hash` |
-| P2-2 state machine only in Go; DDL runtime-owned; no `ApplySchema` exists (`workitems/store.go:243`) | `glovo.aar_guard()` (`BEFORE UPDATE OR DELETE` on `action_approval_requests`) allows only `pending→approved|denied`, `approved→reserved|denied`, `reserved→consumed|unknown`; `consumed`, `unknown` and `denied` are final; identity columns are immutable; `DELETE` is refused; no row can move into or out of a Glovo kind. A deferred constraint trigger requires one binding row per Glovo `aar_`. `glovo.approval_bindings` has `UNIQUE (order_ref)`. All of it is created by a new `workitems.ApplyGlovoApprovalSchema` under the migration role; the runtime role gets DML only (column-level `UPDATE (command_id)` on bindings, no `DELETE`, no `TRIGGER`). The ownership of `action_approval_requests` must move to the migration role (OPEN-989-1); until it does, Glovo is `not_ready` (§2) |
+| P2-2 state machine only in Go; DDL runtime-owned; no `ApplySchema` exists (`workitems/store.go:243`) | `glovo.aar_guard()` (`BEFORE UPDATE OR DELETE` on `action_approval_requests`) allows only `pending→approved|denied`, `approved→reserved|denied`, `reserved→consumed|unknown`; `consumed`, `unknown` and `denied` are final; identity columns are immutable; `DELETE` is refused; no row can move into or out of a Glovo kind. A deferred constraint trigger requires one binding row per Glovo `aar_`. `glovo.approval_bindings` has `UNIQUE (order_ref)`. All of it is created by a new `workitems.ApplyGlovoApprovalSchema` under the migration role; the runtime role gets DML only (column-level `UPDATE (command_id)` on bindings, no `DELETE`, no `TRIGGER`). The ownership of `action_approval_requests` moves to the migration role (OPEN-989-1, decided 2026-11-10, task 2b); `Ready` fails while any of these tables is still owned by the runtime role (§2) |
 | P2-3 no single lock order; the permit already holds the command lock | One global order L1..L6, written once in #957 design §6b. `receipt.Fence.PreLock` runs before `lockOwned` and takes L1 sh, L2 sh, L3, L4; the permit then takes L5. Decide takes L4 only. The in-tx `OutcomeRecorder` is dropped (it would have taken L4 after L5); a sweeper and #985 cancel record `unknown` instead (§6, §7). Deadlock tests T21 |
 | P2-4 order `approved` state is a second authority | Dropped. The decision writes only the `aar_`. `CreateGlovoApprovalTx` calls #988 `BindApproval` in the same transaction. A refusal does not cancel the order; an unapproved order is closed by #985 cancel, which calls `RevokeGlovoApprovalTx`, or by expiry of its `aar_` (§4, §5; corrected in (c)) |
 | P2-5 owner decision recorded as `platform_admin`; policy unregistered; context incomplete | `governance.AuthorityBasisResourceOwner = "resource_owner"`, recorded for Glovo kinds. The rule `glovo.order.owner-approval` v1 is registered in `governance.Policies`. `CreateGlovoApprovalTx` writes a complete context (`intent_source = execution:<we_>`, `policy_decision`, `policy_reasons`), so the start-up backfill never touches it. T19 runs strict mode (§5) |
@@ -168,9 +180,9 @@ Clone at `ceac9ed` (Merge #984).
 - #988: no `approved` order state; `BindApproval(tx, …)` sets a write-once
   `approval_ref`; `LockOrderForControl` (L3); `final_basket_fingerprint` over the #1059
   approval basket.
-- #985: dispatch and cancel; `WriteFence.PreLock`; `control.ProveOneDatabase`; the
-  `Receipts` interface this slice implements (#985 design §3); single `SetFence`
-  installer (#985 task 9).
+- #985: dispatch and cancel; `control.ProveOneDatabase`; the `Receipts` interface this
+  slice implements (#985 design §3); single `SetFence` installer (#985 task 9). The
+  `WriteFence.PreLock` hook is defined by this slice (§6), not by #985.
 - #957 §6b: one physical database (owner decision A) and the canonical lock order
   L1..L6.
 - #959: `LockOwnerShared`, `LiveConnectionTx`, revokers that cancel open commands.
@@ -286,11 +298,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   runtime role can be disabled by that role. The table must therefore be owned by the
   migration role, and `actionApprovalSchema` must stop running DDL on the runtime pool
   for it (`workitems/store.go:243`). Because that changes the generic work-items
-  startup, it is an owner decision (OPEN-989-1). This slice plans it as task 2b: move
-  the generic DDL into `workitems.ApplySchema(ctx, migrationConnStr, runtimeRole string)` under the migration role, and have
-  `NewStore` only verify the schema version when the table is not owned by
-  `current_user`. Until the move happens, Glovo `Ready` fails and every Glovo approval
-  method answers `not_ready`; generic work items are unchanged.
+  startup, it was an owner decision (OPEN-989-1, DECIDED 2026-11-10: yes). This slice
+  does it in task 2b: move the whole generic DDL block (`schema`, `snapshotSchema`,
+  `actionApprovalSchema`, `executionRequestSchema`, `agentRunTokenSchema`; the later
+  tables `REFERENCES work_items (id)` and `ALTER TABLE work_items`, which only the owner
+  can run) into `workitems.ApplySchema(ctx, migrationConnStr, runtimeRole string)` under
+  the migration role, which grants the work-items role its existing DML explicitly, and
+  have `NewStore` only verify the schema version when the table is not owned by
+  `current_user`. `ApplySchema` runs on an empty database and twice in a row, and refuses
+  an object owned by another role. On an existing database the ownership transfer is an
+  operator step of the migration job. While a table is still owned by the runtime role,
+  `Ready` fails and every Glovo approval method answers `not_ready` (the predicate is
+  unchanged); generic work items are unchanged. T15e proves that every other consumer
+  keeps working under the explicit grants.
 - `Ready` checks: schema version; both guard triggers and the constraint trigger exist
   with `tgenabled = 'O'`; `NOT pg_has_role(current_user, relowner, 'MEMBER')` for
   `action_approval_requests` and `glovo.approval_bindings`; the runtime role's
@@ -428,11 +448,33 @@ access (`canSeeActionApproval`) gains the same owner rule for Glovo kinds only, 
 
 ### 6. The fence (`internal/glovo/receipt/fence.go`)
 
-`receipt.Fence` implements `bridge.WriteFence`, including the `PreLock` hook that #985
-adds to `permitTx`. Collaborators: `Approvals` (this store), `Orders` (#988), `Conns`
+`receipt.Fence` implements `bridge.WriteFence`, including the `PreLock` hook that this
+slice defines on it (below). Collaborators: `Approvals` (this store), `Orders` (#988), `Conns`
 (#959 `LockOwnerShared`, `LiveConnectionTx`) and `Membership` (#985 §3: GitOps, best
 effort, read outside any row lock; the transactional guarantee is #985 §7.3). The lock
 levels are the canonical ones of #957 design §6b.
+
+**Merge order and the `PreLock` hand-off (2026-11-10; no cycle).** #989 merges before
+#985, as the one merge order of #957 §6d.1 already says; mctl-agents#1059, #959, #988,
+#960, #961 and #986 are merged (mctl-api main `8096b2b7`). The old wording had #989's
+fence implement a `PreLock` that #985 would add, while #985 needed #989's
+`receipt.Fence`. The break is that #989 task 7 owns all of the following, so #989 builds
+and tests on its own:
+- `internal/bridge/permit.go`: `WriteFence` gains
+  `PreLock(ctx context.Context, tx pgx.Tx, c Caller, commandID string) error`;
+  `refusingFence.PreLock` is a no-op returning nil (the default permit path is unchanged,
+  and a nil or absent fence never reaches the hook); `permitTx` calls
+  `s.currentFence().PreLock(ctx, tx, c, commandID)` before `lockOwned`.
+- `receipt.Fence.PreLock` (steps 0-4 below) and `Check`.
+- `receipt.Membership`, a one-method interface (`IsMember(tenant, principalID string)
+  (bool, error)`) with the method set of the #985 §3 `Membership`, so that no #989
+  package imports `internal/glovo/control`; and `receipt.Ready` takes the
+  `ProveOneDatabase` result as an injected `func(context.Context) error`.
+#985 task 4 therefore adds no `WriteFence` code: it relies on the hook, proves the lock
+order with the real fence (T14, T21) and wires the fence in `main.go` (task 9, the only
+`SetFence` caller, after all six #985 §7.3 preconditions). If #985 were somehow to merge
+first, it would have to carry this same hook definition verbatim; the two slices never
+define it twice.
 
 `PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` (the #957 §6d.4
 signature, round 3), before `lockOwned`:
@@ -605,17 +647,21 @@ all six #985 §7.3 preconditions hold, among them `glovo.ControlDefault.Open` an
 - **Migrations:** additive, only through `ApplyGlovoApprovalSchema` under
   `glovo_migrator`: the bindings table, three triggers, two CHECKs, the widened state
   CHECK and the #957 §6d.1 grants. No backfill. The ownership move of
-  `action_approval_requests` and `work_items*` is OPEN-989-1 (extended).
+  `action_approval_requests` and `work_items*` is OPEN-989-1 (extended; decided
+  2026-11-10, task 2b).
 - **Backward compatibility:** non-Glovo kinds keep their decision, consume, reserve and
   settle behaviour; the generic CAS statements gain one predicate that is always true
   for them. A non-admin on a non-Glovo id still gets the same 403.
-- **Bridge:** no new interface beyond #985's `PreLock`. No call sites added to
-  `submitTx`, `Cancel` or `ExpireDue`.
+- **Bridge:** one new method, `WriteFence.PreLock` (defined by this slice, no-op on
+  `refusingFence`, called once by `permitTx`). No call sites added to `submitTx`,
+  `Cancel` or `ExpireDue`.
 - **Resources:** one binding row per order, a few indexed lookups per permit, one
   bounded sweep per `Expirer` tick.
 - **Risks:**
   - Deadlocks: one global order (#957 §6b), deterministic tests T21.
   - Trigger bypass by the table owner: Glovo stays `not_ready` until the owner move
-    (OPEN-989-1).
+    (OPEN-989-1, decided 2026-11-10, task 2b) has been applied in that environment.
+  - The ownership move breaks another consumer of the work-items tables: T15e, with a
+    mutation (a missing grant) that must turn it red.
   - Admins lose the ability to decide Glovo kinds: intended.
   - Sibling slices not merged: interfaces only, nil collaborators keep `not_ready`.

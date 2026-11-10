@@ -85,7 +85,7 @@ disagree, this section wins. Every older passage that contradicted it has been r
 | P2-1 `AUDIT_DB_URL` fallback (old `design.md:147`) | No fallback anywhere. `Ready()` requires `GLOVO_DB_URL`, `COMMERCE_DB_URL` and `WORK_ITEMS_DB_URL` to be set explicitly, plus the §4 proof. The #957 §6b failure-injection test is T20. #987 (drop the bridge fallback) is a listed dependency |
 | P2-2 Duplicates the #989 `aar_` machine; the generic `consumed` state is re-armable (`action_approvals.go:1044-1066`) | Old task 2 (`ConsumeActionApprovalTx`) is dropped. §3 consumes #989's tx-scoped methods: reserve at dispatch, consume inside #989's `WriteFence.Check`, revoke on cancel before dispatch, mark `unknown` when a reserved command ends without a permit. Dispatch is `not_ready` until the interface exists. The fence refuses any `aar_` in a generic work-items receipt state |
 | P2-3 Route body and codes do not match the merged #1044; there is no `read_command_result` route | The dispatch body is `{approval_ref, fingerprint}`, and a fingerprint mismatch is `basket_changed`. One closed refusal table (§2b) maps to #1044 M10 and the #959 enum. Absent or foreign orders are `not_found`. `read_command_result` and `read_approval` routes are added under the same gate (§2a) |
-| P2-4 Lock-order inversion between the permit and the revoker (`lockOwned` runs first, `permit.go:87`) | One global lock order, canonical in #957 design §6b (§7.1 here). `WriteFence` gains `PreLock`, which `permitTx` calls **before** `lockOwned` (`store.go:659`). The #959 revokers take their advisory keys before any command lock and cancel commands `ORDER BY command_id`. Deterministic deadlock test: T21 |
+| P2-4 Lock-order inversion between the permit and the revoker (`lockOwned` runs first, `permit.go:87`) | One global lock order, canonical in #957 design §6b (§7.1 here). `WriteFence` gains `PreLock` (defined by #989 task 7 since 2026-11-10), which `permitTx` calls **before** `lockOwned` (`store.go:659`). The #959 revokers take their advisory keys before any command lock and cancel commands `ORDER BY command_id`. Deterministic deadlock test: T21 |
 | P2-5 The fence can be installed without the membership precondition | `SetFence` has three explicit preconditions (§7.3). The third is the capability of a hook that turns a membership removal into a connection revocation. T17 asserts that `SetFence` is not called without it. The owner's acceptance of the residual risk is an OPEN item |
 | P2-6 The connection-store topology conflicts with #957 §6b and #959 | Owner decision A. #959 and #957 §6b are amended in the same PR: the store lives in the one database, and the #959 revokers cancel open bridge commands in the same transaction (§7.2). It is listed as a blocking dependency in `tasks.md` |
 | P2-7 Cancel records `cancelled` while the effect is `unknown` | The order becomes `cancelled` only when the bridge effect is `none`. Otherwise it becomes `unknown`, and the response carries `effect_state` (§6). T7 asserts this |
@@ -104,8 +104,9 @@ Skipped P3s: none.
 
 **Alignment with the #989 amendment (same PR, coordinator scope extension).** The
 receipt interface of §3 now uses #989's method names and states. The write fence is
-#989's `receipt.Fence`; this slice keeps only the bridge hook (`PreLock`), the revoker
-function and the `SetFence` wiring. The canonical lock order moved to #957 design §6b;
+#989's `receipt.Fence`; this slice keeps only the revoker function and the `SetFence`
+wiring (the `PreLock` hook definition moved to #989 task 7 on 2026-11-10, so #989
+merges first). The canonical lock order moved to #957 design §6b;
 §7.1 references it. Dispatch enqueues the order's final approval basket as the command
 payload, so the fence can recompute the fingerprint from what is actually written (#989
 review P1).
@@ -511,8 +512,10 @@ The provider claim, result and expiry paths take only L5.
 
 #### 7.2 Write fence (#989 `receipt.Fence`, a `bridge.WriteFence`)
 - `bridge.WriteFence` gains `PreLock(ctx, tx, c bridge.Caller, commandID) error`.
-  `permitTx` calls it **before** `lockOwned`. This is a change to `permit.go:86`, owned
-  by this slice. The default `refusingFence.PreLock` is a no-op. Amended (c): the
+  `permitTx` calls it **before** `lockOwned`. Since 2026-11-10 the definition, the call
+  in `permit.go:86` and the no-op `refusingFence.PreLock` belong to #989 task 7 (they
+  break the #985/#989 cycle: #989 merges first and needs nothing from this slice); this
+  slice adds no fence code and relies on the hook. Amended (c): the
   fence's `PreLock` first applies the same provider and tenants check as `lockOwned`
   (`internal/bridge/store.go:659-668`) to an unlocked read, and answers
   `ErrCommandNotFound` alike for an absent and a foreign id, before taking any lock.
@@ -662,7 +665,8 @@ exactly two file pairs, each with a release twin: the gate pair in `internal/glo
   - the amended #959 store (one database, tx-scoped reads, revokers that cancel
     commands);
   - the #988 order index;
-  - the #989 methods of §3 and its `receipt.Fence`;
+  - the #989 methods of §3 and its `receipt.Fence` (#989 merges first; it also defines
+    `WriteFence.PreLock`, 2026-11-10);
   - the #1059 `command-place-order-fake.schema.json` as vendored by #986 §2a, and the approval basket as vendored by #988 (OPEN-985-8, closed: #1059 owns the schema);
   - #987, the fallback removal;
   - mctl-gitops#2506, for a production verifier.

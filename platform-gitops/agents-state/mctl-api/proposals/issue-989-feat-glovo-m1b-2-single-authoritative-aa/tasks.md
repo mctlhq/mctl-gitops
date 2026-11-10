@@ -1,9 +1,15 @@
 # Tasks: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
 Amended 2026-11-09 (b); design.md has the finding -> fix table. Blocking dependencies:
-mctl-agents#1059 merged (approval basket and vectors); the write payload contract
-(OPEN-989-6); the ownership move (OPEN-989-1). Until then the code lands dark and
-`Ready` fails.
+mctl-agents#1059 merged (approval basket and vectors) and #986 merged (the write
+payload contract is therefore settled, OPEN-989-6 closed 2026-11-10). The ownership move
+(OPEN-989-1) is decided (2026-11-10, owner, in chat) and is task 2b, unconditional. The
+code lands dark: `Ready` fails in an environment until `ApplyGlovoApprovalSchema` and the
+ownership transfer have run there.
+
+Merge order (2026-11-10): #959, #988, #960, #961 and #986 are merged; #989 merges
+before #985 and needs nothing from it. #989 task 7 defines `WriteFence.PreLock` (no-op
+on `refusingFence`, called by `permitTx`), so #985 task 4 adds no fence code.
 
 Amended 2026-11-09 (c): new task 0 (execution binding, #957 §6d.2); kind list is
 `glovo.place_order_fake` only; guard covers INSERT and foreign roles; grants follow the
@@ -30,11 +36,15 @@ owner-confirmed role model of #957 §6d.1.
   `glovoKindPredicate`, `ApprovalReserved`, `ApprovalUnknown`, `GlovoBinding`,
   `GlovoIntent`, `GlovoReceiptState` (expiry precedence of design §1), errors. — DoD:
   golden hash for a binding; any field change changes the hash.
-- [ ] 2b. (OPEN-989-1, after the owner decides) `workitems.ApplySchema` runs the generic
-  `actionApprovalSchema` and the `work_items*` DDL under `glovo_migrator`, which grants
-  the work-items role its existing DML explicitly (#957 §6d.1 "existing consumers"), and
-  `NewStore` only verifies the version when it does not own the tables. — DoD: generic
-  work-items tests pass with both owners; T15b.
+- [ ] 2b. (OPEN-989-1, DECIDED 2026-11-10) `workitems.ApplySchema(ctx,
+  migrationConnStr, runtimeRole string)` runs every statement `NewStore` runs today
+  (`schema`, `snapshotSchema`, `actionApprovalSchema`, `executionRequestSchema`,
+  `agentRunTokenSchema`) under `glovo_migrator`, which grants the work-items role its
+  existing DML explicitly (#957 §6d.1 "existing consumers"), and `NewStore` only
+  verifies the version when it does not own the tables and sends no DDL then. —
+  DoD: applies on an empty database and twice in a row (the second run changes
+  nothing), refuses an object owned by another role; generic work-items tests pass with
+  both owners; T15b, T15e.
 - [ ] 3. Store methods of design §4: `CreateGlovoApprovalTx` (binding row, complete
   governance context, `idempotency_key = "glovo-prepare:" + order_ref`, kinds other than
   `glovo.place_order_fake` refused, #988 `BindApproval` with the §4 Scope and Actor in
@@ -62,7 +72,13 @@ owner-confirmed role model of #957 §6d.1.
   `authority_basis` re-check, `LockOrderForControl(..., []string{tenant})`; the
   refusal codes of design §10 wrapping `bridge.ErrWriteFenceRefused`; `afr_` ref;
   `Audit(ctx)` for the joint-state table; `Sweeper` (design §7) in the `Expirer` tick.
-  `PreLock` itself is added to `bridge.WriteFence` by #985.
+  This task also defines the hook (design §6, "Merge order and the `PreLock`
+  hand-off"): `WriteFence.PreLock(ctx, tx pgx.Tx, c Caller, commandID string) error` in
+  `internal/bridge/permit.go`, a no-op on `refusingFence`, called by `permitTx` before
+  `lockOwned`; and `receipt.Membership` (one method, the #985 §3 method set) so that no
+  #989 package imports #985's package. — DoD: with the default fence the permit path is
+  byte for byte unchanged (existing bridge tests pass); T15c and T21 run on #989 alone,
+  with fakes for `Orders` and `Conns`.
 - [ ] 8. `receipt.Ready(ctx)` with every condition of design §8. #985 task 9 is the only
   `SetFence` caller, after all six #985 §7.3 preconditions. — DoD: with today's closed gate and unset URLs, startup is
   unchanged and the fence stays `refusingFence`.
@@ -144,6 +160,17 @@ merge.
   `permission denied` on `glovo.approval_bindings`; the runtime role's `UPDATE` on `action_approval_requests` is exactly the column list of #957 §6d.1 (`has_column_privilege` per column, startup proof as the oracle; a table-wide `UPDATE` or a missing column makes `ProveOneDatabase` fail and the dispatcher `not_ready`); with `glovo_migrator` owning the
   tables, the existing generic work-items and action-approvals suites pass unchanged
   under the work-items role, and `workitems.NewStore` sends no DDL.
+- [ ] T15e. Other consumers after the ownership move (OPEN-989-1, 2026-11-10): with
+  `glovo_migrator` owning the tables and the work-items role holding only the explicit
+  grants, each consumer of requirements.md "WHEN the ownership has moved" runs its
+  existing happy path: the `internal/workitems` suites, one `internal/api` route per
+  family (work item create and read, intent append, snapshot, execution request claim,
+  action approval create, decide and reserve/settle, approval grant), `mctl_get_ready_work_items`,
+  a `delegation` grant projection of an `aar_` and of a `wi_`, and the #988 readiness
+  probe `SELECT` as `glovo_runtime` (`work_items_select_missing` absent). Mutation: with
+  one grant removed at a time (`SELECT`, `INSERT`, `UPDATE` on each of the four tables
+  and on `work_item_execution_requests`), the matching consumer test goes red, and the
+  suite is green again with the grant restored. A test that cannot go red does not count.
 - [ ] T15c. Foreign permit scope (round 3, X-6): a permit for a `cmd_` of another tenant, another provider or an absent id returns the same `ErrCommandNotFound` and takes no L1-L4 lock (lock-wait probe from a second connection shows none held); a read-kind or `cancel_order_fake` command or an empty `order_ref` takes no lock before `permitTx`'s kind refusal.
 - [ ] T15d. Decision pre-read (round 3, X-4): with the role split in force, the owner's decision on a Glovo `aar_` succeeds (binding read on the Glovo pool) and a non-owner gets the uniform 403; the generic pre-read never selects from `glovo.*` on the work-items pool.
 - [ ] T16. Invariant table of design §7 over every lifecycle path; `consumed` iff a

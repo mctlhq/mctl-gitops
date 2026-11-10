@@ -156,6 +156,30 @@ Readiness
   owned by the runtime role, the policy is unregistered, or a collaborator is nil, THE
   SYSTEM SHALL keep `refusingFence` and answer `not_ready` from every Glovo approval
   method.
+- THE SYSTEM SHALL apply every statement `workitems.NewStore` runs today
+  (`workitems.ApplySchema`, task 2b) under `glovo_migrator`, so that the migrator owns
+  `action_approval_requests`, `work_items`, `work_item_executions` and
+  `work_item_events` (and the other tables of that block), SHALL apply it on an empty
+  database and twice in a row (the second run changes nothing), SHALL refuse an object
+  owned by another role, and SHALL make `NewStore` send no DDL when it does not own the
+  tables. On an existing database the ownership transfer is an operator step of the
+  migration job; until it has run, the Ready predicate above fails.
+- WHEN the ownership has moved THE SYSTEM SHALL keep every other consumer of these
+  tables working under the work-items role's explicit DML grants. Consumers, found by
+  grepping mctl-api main `8096b2b7` for `work_items`, `work_item_executions`,
+  `work_item_events` and `action_approval_requests`: `internal/workitems` (`store.go`,
+  `action_approvals.go`, `execution_requests.go`, `snapshots.go`,
+  `delegation_grants.go`) as the only SQL author; its callers through `workitems.Store`
+  in `internal/api` (handlers for work items, intents, snapshots, execution requests,
+  action approvals, approval grant and governance, dev-loop, commerce, submit-execution,
+  agent run tokens, provenance, the execution-orphan reconciler, the receipt gate),
+  `internal/mcp/workitems.go`, `internal/governance`, `internal/decisions`,
+  `internal/evidence`, `internal/reviewstore` and `internal/securityfindings`;
+  `internal/delegation` (reads `action_approval_requests` and `work_items` through the
+  `workitems/delegation_grants.go` projections); and `internal/glovo/orders`
+  (`schema.go:152`, `store.go:353`: `SELECT` on `work_items` and `work_item_executions`
+  as `glovo_runtime`, readiness code `work_items_select_missing`). Test T15e proves it
+  and is mutation-verified.
 - THE SYSTEM SHALL create its schema objects and grants only through
   `ApplyGlovoApprovalSchema` under `glovo_migrator`, and SHALL run every Glovo approval
   write as `glovo_runtime` with exactly the grants of #957 §6d.1. SQL grants SHALL NOT
@@ -184,12 +208,17 @@ Closed by the amendment: the `consumed`/`unknown` reading (kept: `consumed` = sp
 permit; provider outcome in `effect_state`), expired versus `unknown` (`unknown` wins),
 and refused stored as `denied` (kept).
 
-- OPEN-989-1 (extended (c)). Ownership of `action_approval_requests`, `work_items`,
-  `work_item_executions` and `work_item_events` moves to `glovo_migrator`, and the
-  generic work-items DDL moves out of `NewStore` (task 2b); the work-items role keeps
-  explicit DML (#957 §6d.1 "existing consumers"). The role model is owner-confirmed; the
-  move of these generic tables is the remaining owner decision. Until then Glovo stays
-  `not_ready`.
+- OPEN-989-1 (extended (c)). DECIDED 2026-11-10 (owner, in chat): YES, as written.
+  Ownership of `action_approval_requests`, `work_items`, `work_item_executions` and
+  `work_item_events` moves to `glovo_migrator`, and the generic work-items DDL moves out
+  of `NewStore` (task 2b, unconditional); the work-items role keeps explicit DML (#957
+  §6d.1 "existing consumers"). Clarification that follows from the decision, not a new
+  one: `NewStore` runs one DDL block today (`schema`, `snapshotSchema`,
+  `actionApprovalSchema`, `executionRequestSchema`, `agentRunTokenSchema`,
+  `workitems/store.go:233-251`), and several of its statements are `ALTER TABLE
+  work_items ...` or `REFERENCES work_items (id)`, which a role that does not own the
+  table cannot run. The whole block therefore moves, so the other work-items tables are
+  created by `glovo_migrator` too, with the same explicit DML grants.
 - OPEN-989-2. Provisioning of `glovo_runtime` and `glovo_migrator` (shared with
   OPEN-985-6 and OPEN-988-3); the role model itself is decided (#957 §6d.1).
 - OPEN-989-3. Minimum live tenant role for the owner-decider: `developer` is proposed.
@@ -199,8 +228,13 @@ and refused stored as `denied` (kept).
   `GlovoControlInput` (Temporal history), as the merged #957/#1044 contracts say. The
   owner accepts this for fake-only M1, or asks for a keyed digest before real data.
 - OPEN-989-7 (new, round 4; recommendation: 120 s). `ReservePermitMargin`, the minimum remaining `fresh_until` that Reserve requires so that a reserved approval is not stranded by a freshness window that closes before the permit. A longer margin refuses more late dispatches; a shorter one leaves more rows to the sweeper.
-- OPEN-989-6. The `place_order_fake` command payload is exactly the approval basket
-  (#957 §6d.3, fixed in (c)); the schema is owned by mctl-agents#1059
-  (`command-place-order-fake.schema.json`, round 6 G1) and, from round 7, vendored and gated by
-  mctl-api#986 §2a (not #985; closed; OPEN-985-8 = OPEN-1059-1).
+- OPEN-989-6. CLOSED 2026-11-10. The `place_order_fake` command payload is exactly the
+  approval basket (#957 §6d.3, fixed in (c)). Verified on mctl-api main `8096b2b7`:
+  `internal/bridge/schema/v1alpha2/command-place-order-fake.schema.json` (vendored from
+  mctl-agents#1059 by the merged #986, pinned by `SHA256SUMS`) has `payload` as
+  `{"$ref": "approval-basket.schema.json"}` and `additionalProperties: false`;
+  `approval-basket.schema.json` is #988's one vendored copy
+  (`internal/glovo/basket/contract/`), whose digest `TestApprovalBasketRefResolves`
+  checks against `SHA256SUMS`; the fixture `command-place-order-fake.wrapped-payload.json`
+  rejects a wrapped payload. Nothing about the payload shape is left to decide.
 - OPEN-989-8 (round 6; recommendation: a Sweeper started from `main.go` by #985 task 9, as a second collaborator, not a change to `bridge.Expirer`). `receipt.Sweeper` has no bridge-side hook and no owner, and design section 5 says "no new interface beyond PreLock" while saying it runs in the Expirer tick. Name the hook and its owner, add it to #985 tasks and #957 section 6d.4, and remove the contradicting sentence. (Round 7: the order-side transition is not part of this item; it is #985 §2a `reconcileOrder`. Still OPEN: only the Sweeper hook and its owner.)

@@ -7,7 +7,8 @@ provides `bridge.ApplyReadSchemaTx`):
   `Ready`, `MembershipRevocationWired`, and connection-ending paths that call the hook
   in the same tx (mctl-api#957 design §6d.4);
 - the #988 order index (control-path methods);
-- the amended #989 methods and `receipt.Fence`;
+- the amended #989 methods and `receipt.Fence`, merged first (#989 task 7 also defines
+  `WriteFence.PreLock`, so there is no cycle, 2026-11-10);
 - the #1059 `command-place-order-fake.schema.json` and approval basket as vendored by #986 (write schema, wire version, Claim gating) and #988 (basket) (OPEN-985-8, closed);
 - #987, which drops the bridge's `AUDIT_DB_URL` fallback.
 
@@ -51,8 +52,10 @@ With any of them missing, the code merges with nil collaborators and answers
   DoD: a missing env var, a nonce not found, a missing table or a wrong privilege makes
   the dispatcher `not_ready` permanently, and no URL is logged.
 - [ ] 4. Bridge changes in `internal/bridge` (depends on 2):
-  - `WriteFence.PreLock(ctx, tx, c bridge.Caller, commandID)`, called by `permitTx`
-    before `lockOwned`, with a no-op on `refusingFence`;
+  - (2026-11-10) no `WriteFence` code here: `WriteFence.PreLock(ctx, tx, c bridge.Caller,
+    commandID)`, its call in `permitTx` before `lockOwned` and the no-op on
+    `refusingFence` are defined by #989 task 7, which merges before this slice. This task
+    only relies on the hook; T14 and T21 prove the lock order with the real fence;
   - (round 7, F2) `bridge.Store.CommandEffect(ctx, q, tenants, commandID) (status, effectState
     string, err error)`: read-only; a foreign tenant, a non-`place_order_fake` kind and an absent
     id are all `not_found`;
@@ -94,8 +97,8 @@ With any of them missing, the code merges with nil collaborators and answers
 
   DoD: covered by T6-T8.
 - [ ] 7. (Moved to #989.) The fence implementation (`PreLock` body and `Check`) is #989's
-  `receipt.Fence`. This slice keeps the `PreLock` hook in `permitTx` (task 4) and the
-  wiring (task 9). DoD: none here.
+  `receipt.Fence`, and since 2026-11-10 so is the `PreLock` hook definition and its call
+  in `permitTx` (#989 task 7). This slice keeps only the wiring (task 9). DoD: none here.
 - [ ] 8. Add the HTTP layer in `internal/api/handlers_glovo_control.go` and `router.go`
   (depends on 1, 5, 6):
   - the four routes of design §2a, including the round 7 result-to-order table (design §2a, `reconcileOrder`) and, in task 4, `bridge.Store.CommandEffect` (read-only, `(status, effectState)`, for #957 §3a);
@@ -260,7 +263,7 @@ advisory keys are used.
   ownership hand-back by an operator (OPEN-957-6).
 - Code rollback is a revert of the PR. The schema artifacts can stay, or be removed
   with `DROP INDEX IF EXISTS bridge_commands_mutating_approval`,
-  and `DROP TABLE IF EXISTS bridge_colocation_probe`. Reverting `PreLock` restores the old
+  and `DROP TABLE IF EXISTS bridge_colocation_probe`. Reverting the `PreLock` hook (#989 task 7) restores the old
   permit path, which only ever ran with `refusingFence` in production.
 - If commands were enqueued before the rollback, cancel the open ones with the existing
   procedure in `docs/bridge.md`. Hold mctl-gitops#2457 stays ON throughout, so no
