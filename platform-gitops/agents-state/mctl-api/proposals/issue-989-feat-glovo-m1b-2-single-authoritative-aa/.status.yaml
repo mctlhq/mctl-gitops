@@ -29,3 +29,20 @@ blocked:
   message: 'execution not authorized: approved with no verifiable approval grant'
   remedy: Approve the proposal through its DevLoop (mctl-api POST /api/v1/agents/dev-loop/<workflow>/approve),
     which records a human decision bound to this proposal's current content.
+reconciliation:
+  recorded_at: '2026-11-10'
+  recorded_by: owner-approved docs-only reconciliation; not a system write
+  devloop:
+    id: dev-loop-mctlhq-mctl-api-989
+    outcome: Failed
+    workflow: mctl-agents-implement-9fc5a135
+    ended_at: '2026-11-10T08:01Z'
+    detail: 'implementer exit 45, ''execution not authorized: approved with no verifiable approval grant''. The DevLoop did not succeed; the blocked block above is the system''s record and is kept unchanged.'
+  implementation:
+    path: 'owner-authorised direct implementation under the lead''s review gate, not through the DevLoop'
+    pull_request: mctlhq/mctl-api#998
+    merge_commit: 0e8d46d0fa5dcace6ea377ce09701e09fae5127a
+    merged_on: '2026-11-10'
+    proposal_digest: sha256:ed0a3408b42fb2b4960a4ed3c6521efef834aa27aa439eab8aac484f66d5bc92
+    tasks: 0-9
+  approval_grant: none recorded; no approval_ref exists for this digest
