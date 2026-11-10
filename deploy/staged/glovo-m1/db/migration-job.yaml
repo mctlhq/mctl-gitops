@@ -1,9 +1,17 @@
-# Staged, NOT reconciled. The migration job of design 6d.1 (4): runs the
-# ApplySchema chain of R2 as glovo_migrator, once per schema version.
+# Staged, NOT reconciled. The migration job of design 6d.1 (4): runs
+# cmd/glovo-migrate (mctl-api#1004 task 1) as glovo_migrator, once per schema
+# version, AFTER the separately authorized operator step (roles, transitional
+# grants, ownership transfer; see roles.patch.md) has been done and verified.
 #
 # Inert three ways: suspend: true, a placeholder image tag, and a command that
-# fails closed (/bin/false) until #985 task 4 ships the real entry point. The
-# pending values are set at activation, never guessed here.
+# fails closed (/bin/false) until cmd/glovo-migrate ships in an image and a
+# separately authorized activation PR sets the real command and tag and
+# unsuspends. Binary contract (mctl-api#1004 design section 1):
+# GLOVO_MIGRATION_DB_URL (one full DSN, required, no fallback),
+# -work-items-role (required), -glovo-runtime-role (default glovo_runtime),
+# -confirm (exact value, required, not settable from env). It never transfers
+# ownership; a foreign-owned object makes it exit 2 before any DDL. The args
+# below are inert while command is /bin/false.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -29,14 +37,22 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          image: ghcr.io/mctlhq/mctl-api:PENDING-985-TASK-4
-          command: ["/bin/false"]
+          image: ghcr.io/mctlhq/mctl-api:PENDING-1004-GLOVO-MIGRATE
+          command: ["/bin/false"]   # activation PR: the cmd/glovo-migrate entry point
+          args:
+            - -confirm=apply-glovo-approval-schema
+            - -work-items-role=mctl_api_workitems
+            - -glovo-runtime-role=glovo_runtime
           envFrom:
             - secretRef:
                 name: mctl-api-glovo-migrator-db
           env:
-            - name: GLOVO_RUNTIME_ROLE
-              value: glovo_runtime
+            # One DSN as glovo_migrator on database mctl-api. $(VAR) expands the
+            # envFrom keys above. UNVERIFIED: the password must be URL-safe
+            # (no reserved characters) or the activation PR must compose the
+            # DSN another way.
+            - name: GLOVO_MIGRATION_DB_URL
+              value: "postgresql://$(GLOVO_MIGRATOR_DB_USER):$(GLOVO_MIGRATOR_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
