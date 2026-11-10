@@ -37,9 +37,9 @@ reconciliation:
     outcome: Failed
     workflow: mctl-agents-implement-9fc5a135
     ended_at: '2026-11-10T08:01Z'
-    detail: implementer exit 45, 'execution not authorized: approved with no verifiable approval grant'. The DevLoop did not succeed; the blocked block above is the system's record and is kept unchanged.
+    detail: 'implementer exit 45, ''execution not authorized: approved with no verifiable approval grant''. The DevLoop did not succeed; the blocked block above is the system''s record and is kept unchanged.'
   implementation:
-    path: owner-authorised direct implementation under the lead's review gate, not through the DevLoop
+    path: 'owner-authorised direct implementation under the lead''s review gate, not through the DevLoop'
     pull_request: mctlhq/mctl-api#998
     merge_commit: 0e8d46d0fa5dcace6ea377ce09701e09fae5127a
     merged_on: '2026-11-10'
