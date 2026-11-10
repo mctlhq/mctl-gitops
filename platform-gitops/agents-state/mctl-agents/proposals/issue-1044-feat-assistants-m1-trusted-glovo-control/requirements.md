@@ -39,6 +39,83 @@ Crosswalk M6-M10 and M1 (consumer side); design.md "Amendment 2026-11-09" has th
 - THE SYSTEM SHALL carry refs and digests only: no read payload (history, preview, basket; mctl-api#986) SHALL appear in its input, activity results, signals or logs. (owner decision D1)
 - THE SYSTEM SHALL accept `install_ref` as an M1a `gin_` id and `connection_ref` as an M1a `gcn_` id, and `tenant_ref`, `principal_ref`, `order_ref` only in the `tnr_`/`prr_`/`ordr_` forms minted by mctl-api.
 
+## AMEND 2026-11-10 (independent review, AMEND): contract reconciliation against current main
+
+Sources re-read on default branches: mctl-api `081bd6b7` (control routes #985 merged earlier,
+#1001 merged as `675dff75`), mctl-agents main (#1062 merged as `46ccddce`), mctl-gitops main.
+These items replace the text they name below; where this section and older text disagree, this
+section wins. Items marked UNVERIFIED could not be confirmed against code and stay assumptions.
+
+1. Contract names. mctl-api `internal/glovojoin/prepare.go` (`ControlInputSchemaVersion`) and
+   `internal/glovojoin/contract/testdata/control-input.golden.json` use
+   `glovo-control-input/v1alpha1` for the input. The result is `glovo-control-result/v1alpha1`
+   (no mctl-api code reads it; owned here). `assistants.mctl.ai/glovo-control/v1alpha1` is dropped.
+   prepare.go marks the version and `ControlLimits` (currently `{}`) as provisional until this
+   schema is vendored, so `limits` members are all optional with defaults and bounds, and
+   `limits: {}` is valid; unknown members are still rejected.
+2. Start contract. Workflow type `GlovoControlWorkflow`, task queue `mctl-assistants-control`,
+   exactly one argument of type bytes: the RFC 8785 bytes (as stored in
+   `glovo.control_starts.input`). The strict raw-text pre-check (duplicate keys, non-integer
+   numbers) runs first on those bytes, before any decode: a decoded dict would already have lost
+   duplicate keys. How the mctl-api starter encodes the argument is UNVERIFIED on the mctl-api
+   side (no starter was found on main); the golden consumer test of task 13 pins it once it exists.
+3. Gating. mctl-api#985 control routes and #989 (mctl-api#1001, `675dff75`) are merged:
+   vendoring `internal/glovo/control/contract/` is no longer blocked (`SHA256SUMS` digest
+   `afb2e8de2fc709e7671deaa821268cc9ca3ba2d8ebceacb272c389c0954d0a06` at `675dff75` and at main
+   `081bd6b7`; re-verify when vendoring). `BLOCKED_FOR_INTEGRATION` stays for the runtime only:
+   docs/glovo-control.md says no production verifier mints the control principal until
+   mctl-gitops#2506 and no dispatcher is attached on main, so a mounted route answers 503
+   `not_ready`.
+4. Credentials. The static `MCTL_ASSISTANTS_TOKEN` is replaced by a credential-provider port
+   for a bearer whose audience is exactly `mctl-api-glovo-control` (principal
+   `service:glovo-control-worker`, permission `glovo:control-dispatch`; `auth/glovo_control_worker.go`,
+   docs/glovo-control.md). The issuer source is pending mctl-gitops#2506. The port refuses
+   client-side a token that is not a control token (wrong audience). Temporal client auth uses
+   the node A names `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE`, `TEMPORAL_TLS_SERVER_NAME`
+   (mctl-agents#1057, OPEN PR at the time of writing; `docs/runbooks/temporal-client-auth.md`
+   is NOT on mctl-agents main, so the names are UNVERIFIED until #1057 merges), inert when
+   unset, never logged, through a neutral shared module that is never imported from
+   `orchestrator.temporal.worker`. This proposal duplicates no #1057 work. The provider holds
+   no Temporal credential (mctl-telegram#1276).
+5. `orchestrator.action_approvals.intent_hash` import removed: after M10 the workflow never
+   computes an intent. The allowed-import list shrinks accordingly.
+6. OPEN-989-5 limit. The basket fingerprint may travel in Temporal history only for the
+   synthetic, fake-only M1. A keyed digest is required before any real data; the ADR (task 11)
+   states this.
+7. Rate limiting. mctl-api's control handler never sends `Retry-After` (not present in
+   `internal/api/handlers_glovo_control.go` or docs/glovo-control.md; other files unchecked).
+   When the header is absent the client uses bounded exponential backoff; when present it is
+   honoured within the same bound.
+8. Result enum source. mctl-agents#1059 is merged (#1062, `46ccddce`). `docs/contracts/bridge/v1alpha2/README.md`
+   says there is no v1alpha2 write result: the unchanged v1alpha1 `result.schema.json`
+   (`docs/spikes/1043/`) stays the result contract of `place_order_fake`, so the M9 enum domain is
+   read from it. Prefer reusing the strict parsing of `tools/bridge_contract.py` over a local
+   duplicate. `jsonschema` is in the dev dependency group of pyproject.toml only; the control
+   image installs with `--no-dev`, so its availability in the image is UNVERIFIED (reuse needs
+   it in the runtime group, or the pre-check stays local and stdlib-only).
+9. `not_ready` currently maps to `refused`/`provider_disabled`, which conflates a transient
+   not-ready (no dispatcher attached, readiness probe failed) with a disabled provider. See
+   OPEN decision (e). The (`status`, `effect_state`) pair-class table stays a local copy
+   (existing open item, unchanged).
+
+OPEN owner decisions (recorded, not decided):
+
+- (a) Schema version. Recommended: #1044 adopts `glovo-control-input/v1alpha1` (no mctl-api
+  change). Alternative: mctl-api switches to the old `assistants.mctl.ai/...` string.
+- (b) Image. Recommended: build-only in CI and let mctl-gitops#2576 own the reproducible build
+  and digest pinning. Alternative: publish `ghcr.io/mctlhq/glovo-control-worker` (staged name)
+  behind an off-by-default repo variable, never in release-deploy `values_path`.
+- (c) Shared Temporal client module. Recommended: land #1057 first, then reuse its module.
+  Alternative: one neutral shared module landed by whichever PR is first.
+- (d) Control token source: pending mctl-gitops#2506. Recommended: accept `BLOCKED_FOR_INTEGRATION`
+  for the runtime at approval; the code, contract vendoring and tests ship now.
+- (e) `not_ready` mapping. Recommended: a distinct transient handling (bounded retry, then
+  `unknown`/`dispatch_unconfirmed`, never `refused`) for the not-ready code, with
+  `provider_disabled` kept for a genuinely disabled provider, if mctl-api can tell them apart.
+
+UNVERIFIED, image health: probes, readiness endpoint and `readOnlyRootFilesystem` needs of the
+worker image are not verified (no deployment exists; mctl-gitops#2576 decides).
+
 ## User stories
 
 - AS mctl-api (sole authenticated Temporal caller for `mctl-assistants`) I WANT
@@ -64,8 +141,10 @@ Crosswalk M6-M10 and M1 (consumer side); design.md "Amendment 2026-11-09" has th
 Contracts and build:
 - THE SYSTEM SHALL define `GlovoControlInput` and `GlovoControlResult` in
   `orchestrator/assistants/contracts.py` with `schema_version`
-  `assistants.mctl.ai/glovo-control/v1alpha1`, every string length-bounded,
-  every collection size-bounded, and unknown fields rejected; a JSON Schema
+  `glovo-control-input/v1alpha1` (input) and `glovo-control-result/v1alpha1` (result; amended
+  2026-11-10, matching mctl-api prepare.go), every string length-bounded,
+  every collection size-bounded, and unknown fields rejected, with the three `limits` members
+  optional (defaults and bounds stated, `limits: {}` valid, unknown members rejected); a JSON Schema
   generated from them SHALL be committed under
   `orchestrator/assistants/schemas/` and a test SHALL fail when the code and the
   committed schema (and its recorded sha256) diverge.
@@ -139,7 +218,7 @@ Approval and dispatch:
   and no provider payload, cookie, token or free text over 256 characters.
 
 Integration gate (amended 2026-11-09):
-- THE SYSTEM SHALL vendor the mctl-api#985 contract set (`internal/glovo/control/contract/*.json`
+- (Amended 2026-11-10: mctl-api#985/#989 are merged, mctl-api#1001 `675dff75`, so vendoring is unblocked; only the runtime stays `BLOCKED_FOR_INTEGRATION` until the control-principal verifier of mctl-gitops#2506 exists and a dispatcher is attached.) THE SYSTEM SHALL vendor the mctl-api#985 contract set (`internal/glovo/control/contract/*.json`
   and `SHA256SUMS`) under `orchestrator/assistants/api_contract/` with a `PROVENANCE` file, and
   `ASSISTANTS_API_CONTRACT` SHALL be `<commit>:<sha256 of SHA256SUMS>`; a test SHALL prove every
   refusal code of the vendored bodies has a row in the M10b table.
@@ -157,7 +236,7 @@ Resource budgets:
   execution timeout.
 - IF mctl-api answers a dispatch with `tenant_busy` THEN THE SYSTEM SHALL end `refused` with that
   reason (mctl-api#985 §2b) and write nothing. IF it answers `rate_limited` (429, nothing written) THEN THE
-  SYSTEM SHALL retry with bounded backoff honouring `Retry-After`, and on exhaustion end `unknown`/`dispatch_unconfirmed` as for `unavailable` (M10b); `rate_limited` is never a `reason_code`.
+  SYSTEM SHALL retry with bounded backoff honouring `Retry-After` when present and bounded exponential backoff when absent (mctl-api never sends it; amended 2026-11-10), and on exhaustion end `unknown`/`dispatch_unconfirmed` as for `unavailable` (M10b); `rate_limited` is never a `reason_code`.
 
 Safety:
 - THE SYSTEM SHALL contain no Glovo HTTP client, no provider cookie or session
@@ -184,7 +263,7 @@ Safety:
   dispatch/cancel route contract of mctl-api#985 (owner decision D3, 2026-11-09).
 - Round 7: the mctl-api#985 control routes are proposals until merged; the vendored contract
   set and its pin make any change there a visible contract update here.
-- Image publishing: should CI push `ghcr.io/mctlhq/mctl-agents-assistants-control`
+- Image publishing (amended 2026-11-10: see OPEN decision (b); staged name `ghcr.io/mctlhq/glovo-control-worker`): should CI push `ghcr.io/mctlhq/mctl-agents-assistants-control`
   on release (proposed: only behind a repo variable that defaults off, never
   wired into release-deploy `values_path`), or only build it as a CI smoke until
   #2457 is approved? Proposal assumes build-only by default.
@@ -193,6 +272,7 @@ Safety:
 - Live Temporal denial of DevLoop-namespace calls (start, signal, query, list,
   terminate) cannot be proven locally: the dev server has no authorizer. Local
   tests prove it structurally; the live matrix depends on #2456 enforcement.
+- OPEN decisions (a)-(e) of "AMEND 2026-11-10" above are owner decisions, recommended but undecided.
 - Open for mctl-api#985: add the (command `status`, `effect_state`) -> order wire state rows of §2a to the contract file set, so the pair class of design "Result mapping (M9)" is pinned by the vendored files and not by a copy kept here. Until then the class table is a labelled local copy and its test is the only drift check.
 - Concurrency caps; proposed defaults are 20 activities and 20 workflow tasks, to be tuned
   with real numbers. The `limits` defaults (15 s, 15 s, 900 s) are an owner decision.

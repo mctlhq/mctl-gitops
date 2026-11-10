@@ -1,5 +1,82 @@
 # Design: issue-1044-feat-assistants-m1-trusted-glovo-control
 
+## Amendment 2026-11-10 (independent review, AMEND): contract reconciliation against current main
+
+Sources re-read on default branches: mctl-api `081bd6b7` (control routes #985 merged earlier,
+#1001 merged as `675dff75`), mctl-agents main (#1062 merged as `46ccddce`), mctl-gitops main.
+These items replace the text they name below; where this section and older text disagree, this
+section wins. Items marked UNVERIFIED could not be confirmed against code and stay assumptions.
+
+1. Contract names. mctl-api `internal/glovojoin/prepare.go` (`ControlInputSchemaVersion`) and
+   `internal/glovojoin/contract/testdata/control-input.golden.json` use
+   `glovo-control-input/v1alpha1` for the input. The result is `glovo-control-result/v1alpha1`
+   (no mctl-api code reads it; owned here). `assistants.mctl.ai/glovo-control/v1alpha1` is dropped.
+   prepare.go marks the version and `ControlLimits` (currently `{}`) as provisional until this
+   schema is vendored, so `limits` members are all optional with defaults and bounds, and
+   `limits: {}` is valid; unknown members are still rejected.
+2. Start contract. Workflow type `GlovoControlWorkflow`, task queue `mctl-assistants-control`,
+   exactly one argument of type bytes: the RFC 8785 bytes (as stored in
+   `glovo.control_starts.input`). The strict raw-text pre-check (duplicate keys, non-integer
+   numbers) runs first on those bytes, before any decode: a decoded dict would already have lost
+   duplicate keys. How the mctl-api starter encodes the argument is UNVERIFIED on the mctl-api
+   side (no starter was found on main); the golden consumer test of task 13 pins it once it exists.
+3. Gating. mctl-api#985 control routes and #989 (mctl-api#1001, `675dff75`) are merged:
+   vendoring `internal/glovo/control/contract/` is no longer blocked (`SHA256SUMS` digest
+   `afb2e8de2fc709e7671deaa821268cc9ca3ba2d8ebceacb272c389c0954d0a06` at `675dff75` and at main
+   `081bd6b7`; re-verify when vendoring). `BLOCKED_FOR_INTEGRATION` stays for the runtime only:
+   docs/glovo-control.md says no production verifier mints the control principal until
+   mctl-gitops#2506 and no dispatcher is attached on main, so a mounted route answers 503
+   `not_ready`.
+4. Credentials. The static `MCTL_ASSISTANTS_TOKEN` is replaced by a credential-provider port
+   for a bearer whose audience is exactly `mctl-api-glovo-control` (principal
+   `service:glovo-control-worker`, permission `glovo:control-dispatch`; `auth/glovo_control_worker.go`,
+   docs/glovo-control.md). The issuer source is pending mctl-gitops#2506. The port refuses
+   client-side a token that is not a control token (wrong audience). Temporal client auth uses
+   the node A names `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE`, `TEMPORAL_TLS_SERVER_NAME`
+   (mctl-agents#1057, OPEN PR at the time of writing; `docs/runbooks/temporal-client-auth.md`
+   is NOT on mctl-agents main, so the names are UNVERIFIED until #1057 merges), inert when
+   unset, never logged, through a neutral shared module that is never imported from
+   `orchestrator.temporal.worker`. This proposal duplicates no #1057 work. The provider holds
+   no Temporal credential (mctl-telegram#1276).
+5. `orchestrator.action_approvals.intent_hash` import removed: after M10 the workflow never
+   computes an intent. The allowed-import list shrinks accordingly.
+6. OPEN-989-5 limit. The basket fingerprint may travel in Temporal history only for the
+   synthetic, fake-only M1. A keyed digest is required before any real data; the ADR (task 11)
+   states this.
+7. Rate limiting. mctl-api's control handler never sends `Retry-After` (not present in
+   `internal/api/handlers_glovo_control.go` or docs/glovo-control.md; other files unchecked).
+   When the header is absent the client uses bounded exponential backoff; when present it is
+   honoured within the same bound.
+8. Result enum source. mctl-agents#1059 is merged (#1062, `46ccddce`). `docs/contracts/bridge/v1alpha2/README.md`
+   says there is no v1alpha2 write result: the unchanged v1alpha1 `result.schema.json`
+   (`docs/spikes/1043/`) stays the result contract of `place_order_fake`, so the M9 enum domain is
+   read from it. Prefer reusing the strict parsing of `tools/bridge_contract.py` over a local
+   duplicate. `jsonschema` is in the dev dependency group of pyproject.toml only; the control
+   image installs with `--no-dev`, so its availability in the image is UNVERIFIED (reuse needs
+   it in the runtime group, or the pre-check stays local and stdlib-only).
+9. `not_ready` currently maps to `refused`/`provider_disabled`, which conflates a transient
+   not-ready (no dispatcher attached, readiness probe failed) with a disabled provider. See
+   OPEN decision (e). The (`status`, `effect_state`) pair-class table stays a local copy
+   (existing open item, unchanged).
+
+OPEN owner decisions (recorded, not decided):
+
+- (a) Schema version. Recommended: #1044 adopts `glovo-control-input/v1alpha1` (no mctl-api
+  change). Alternative: mctl-api switches to the old `assistants.mctl.ai/...` string.
+- (b) Image. Recommended: build-only in CI and let mctl-gitops#2576 own the reproducible build
+  and digest pinning. Alternative: publish `ghcr.io/mctlhq/glovo-control-worker` (staged name)
+  behind an off-by-default repo variable, never in release-deploy `values_path`.
+- (c) Shared Temporal client module. Recommended: land #1057 first, then reuse its module.
+  Alternative: one neutral shared module landed by whichever PR is first.
+- (d) Control token source: pending mctl-gitops#2506. Recommended: accept `BLOCKED_FOR_INTEGRATION`
+  for the runtime at approval; the code, contract vendoring and tests ship now.
+- (e) `not_ready` mapping. Recommended: a distinct transient handling (bounded retry, then
+  `unknown`/`dispatch_unconfirmed`, never `refused`) for the not-ready code, with
+  `provider_disabled` kept for a genuinely disabled provider, if mctl-api can tell them apart.
+
+UNVERIFIED, image health: probes, readiness endpoint and `readOnlyRootFilesystem` needs of the
+worker image are not verified (no deployment exists; mctl-gitops#2576 decides).
+
 ## Amendment 2026-11-09
 
 Resolves the crosswalk mismatches assigned to this slice (M6-M10 in mctl-gitops
@@ -63,9 +140,9 @@ control call. A code outside the closed set, or a body that does not parse, is
 
 | Code(s) | Disposition | `order_status` | `reason_code` |
 |---|---|---|---|
-| `unavailable`, `rate_limited` | retryable (#957 §4.1 and #985 §2b: 429 `rate_limited` is admission pressure with nothing written, and the code is not a terminal refusal): bounded backoff (honour `Retry-After`); on exhaustion in `dispatching`, attempt `cancel_order` once and end as shown. `rate_limited` is never a `reason_code`: the exhausted outcome is `dispatch_unconfirmed` | `unknown` | `dispatch_unconfirmed` |
+| `unavailable`, `rate_limited` | retryable (#957 §4.1 and #985 §2b: 429 `rate_limited` is admission pressure with nothing written, and the code is not a terminal refusal): bounded backoff (honour `Retry-After` when present, bounded exponential backoff when absent: mctl-api never sends it); on exhaustion in `dispatching`, attempt `cancel_order` once and end as shown. `rate_limited` is never a `reason_code`: the exhausted outcome is `dispatch_unconfirmed` | `unknown` | `dispatch_unconfirmed` |
 | `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `basket_changed`, `tenant_busy` | refusal, no retry | `refused` | the code |
-| `not_ready` | refusal, no retry | `refused` | `provider_disabled` |
+| `not_ready` | refusal, no retry (OPEN decision (e), 2026-11-10: this conflates a transient not-ready, such as no dispatcher attached or a failed readiness probe, with a disabled provider; recommended: bounded retry then `unknown`/`dispatch_unconfirmed` for the transient case) | `refused` | `provider_disabled` |
 | `no_tenant`, `no_connection`, `connection_revoked`, `connection_expired`, `stale_install` | refusal (scope not live), no retry | `refused` | the code |
 | `not_authorized`, `invalid_request`, `not_found`, `invalid_transition` | terminal | `failed` | the code |
 
@@ -77,7 +154,7 @@ control call. A code outside the closed set, or a body that does not parse, is
 
 ### Vendored contracts (OPEN-985-12, OPEN-957-11)
 
-- `orchestrator/assistants/api_contract/` is a verbatim copy of mctl-api#985's `internal/glovo/control/contract/*.json` with its `SHA256SUMS`, plus a `PROVENANCE` naming the mctl-api commit. `ASSISTANTS_API_CONTRACT` is `<commit>:<sha256 of that SHA256SUMS file>`; the worker compares it with the `PROVENANCE`, and a missing or different pin keeps `BLOCKED_FOR_INTEGRATION`. Route constants in `api_client.py` are generated from these files, never typed by hand. The directory is not created until #985 is merged.
+- `orchestrator/assistants/api_contract/` is a verbatim copy of mctl-api#985's `internal/glovo/control/contract/*.json` with its `SHA256SUMS`, plus a `PROVENANCE` naming the mctl-api commit. `ASSISTANTS_API_CONTRACT` is `<commit>:<sha256 of that SHA256SUMS file>`; the worker compares it with the `PROVENANCE`, and a missing or different pin keeps `BLOCKED_FOR_INTEGRATION`. Route constants in `api_client.py` are generated from these files, never typed by hand. Amended 2026-11-10: #985 is merged (mctl-api#1001, `675dff75`), so the directory may be created now; `SHA256SUMS` digest `afb2e8de2fc709e7671deaa821268cc9ca3ba2d8ebceacb272c389c0954d0a06` observed at `675dff75` and main `081bd6b7`, re-verify when vendoring.
 - `tests/fixtures/mctl-api/control-input.golden.json` is a verbatim copy of mctl-api#957's `internal/glovojoin/contract/testdata/control-input.golden.json`, with provenance. It is added in a follow-up PR after #957 A13 has merged, because #957 vendors this slice's schema first.
 - No bridge schema is vendored here (no bridge port). The v1alpha1 and v1alpha2 bridge files stay owned by mctl-agents#1043/#1045 history and mctl-agents#1059 in this repository: this repository is the origin of #1059's published set, not one of its consumers (#1059 §Vendoring lists mctl-api#986, #988 and mctl-telegram#1262 as the consumers), so there is no vendored copy of it here to drift.
 
@@ -154,7 +231,7 @@ pair alone and does not read the triple (#985 §2a states this itself).
 - Domain. The triple is the body of mctl-api#985 `read_command_result` (§2a), whose members are the result enums of the Glovo write command plus the two synthesised triples for terminal `cancelled` and `expired` commands (`cancelled`/`none`/`none` is row 7, `failed_terminal`/`none`/`expired` is row 8; a terminal command whose `effect_state` is anything but `none` or `not_performed` arrives with `provider_effect: unknown`, row 1). The workflow reads `status`, `effect_state` and the triple; a `completed` status without a triple or without `result_digest`, or a triple that contradicts `effect_state` (for example `succeeded` with an `effect_state` other than `succeeded`), is `unknown`/`result_inconsistent`. A terminal `cancelled` or `expired` status has no `result_digest` and needs none. A pair outside the #985 §2a table arrives as a 503 `unavailable` with no state body (no information, retried) when the order is `dispatched`; on an order that is not `dispatched` (after the workflow's own `cancel_order`, say) the route answers 200 from the stored order state, and the pair it carries is then classed `possible`: `unknown`/`result_inconsistent`, never `none`.
 - Seam (the result contract of `place_order_fake`, owned by mctl-agents#1059 `command-place-order-fake`, and the total mapping of `(status, effect_state)` to an order state, owned by mctl-api#985 §2a and #957 §3a): the table above depends on them only through the enum domain, the triples and the wire column; the wire column states a correspondence and owns nothing. If either owner changes an enum or a synthesised triple, the test below fails on the count and the per-row counts must be recomputed in the same wave.
 - A test enumerates every (`outcome`, `provider_effect`, `error_code`) triple of the
-  enums read from the in-repo result schema that owns the `place_order_fake` result (today `docs/spikes/1043/result.schema.json`; mctl-agents#1059 once it defines the write result) (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
+  enums read from the in-repo result schema that owns the `place_order_fake` result (`docs/spikes/1043/result.schema.json`: mctl-agents#1059 is merged, #1062 `46ccddce`, and `docs/contracts/bridge/v1alpha2/README.md` says there is no v1alpha2 write result, so the v1alpha1 file stays the source) (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
   with `provider_effect=unknown` yields anything but `unknown`. Per-row counts, top to
   bottom: 35, 1, 6, 7, 28, 7, 7, 1, 1, 5, 7 (total 105, none unmatched). Re-checked
   2026-11-09 (round 7) by enumerating the three enums of `docs/spikes/1043/result.schema.json`
@@ -253,9 +330,7 @@ Deployed state checked:
 New package `orchestrator/assistants/` with no import of
 `orchestrator.temporal.workflows`, `orchestrator.temporal.worker`,
 `orchestrator.temporal.mctl_client`, `orchestrator.auth` or
-`claude_agent_sdk`. Allowed imports: `temporalio`, stdlib, and the pure
-helpers `orchestrator.action_approvals.ActionIntent/intent_hash` (verified
-side-effect free in the isolation test). Adding a fifth `--role` to
+`claude_agent_sdk`. Allowed imports: `temporalio`, stdlib, and the neutral shared Temporal client-auth module shared with mctl-agents#1057 (amended 2026-11-10: the `intent_hash` import is removed, the workflow never computes an intent after M10; the shared module is never imported from `orchestrator.temporal.worker`). Adding a fifth `--role` to
 `orchestrator/temporal/worker.py` was rejected because that module owns
 schedules, the dispatcher and the DevLoop namespace default; the issue requires
 DevLoop to stay unchanged.
@@ -273,24 +348,23 @@ Files:
   "Control refusal mapping (M10b)"), `approval_ref`, `fingerprint`, `command_id`; round 7:
   no `handoff_ref`), plus activity I/O types. Refs use the opaque-handle patterns from #1043
   (`^(tnr|prr|ordr|gcn|gin)_[A-Za-z0-9]{16,40}$`, amended 2026-11-09), lengths <= 64, no free text
-  > 256. `SCHEMA_VERSION = "assistants.mctl.ai/glovo-control/v1alpha1"`. Member formats
+  > 256. `INPUT_SCHEMA_VERSION = "glovo-control-input/v1alpha1"` and `RESULT_SCHEMA_VERSION = "glovo-control-result/v1alpha1"` (amended 2026-11-10; the old single `assistants.mctl.ai/glovo-control/v1alpha1` is dropped). Member formats
   (round 7): `execution_id` `^we_[A-Za-z0-9]{16,40}$`, `work_item_id`
   `^wi_[A-Za-z0-9]{16,40}$`, `approval_ref` `^aar_[A-Za-z0-9]{16,40}$`,
   `install_revision` an integer from 1 to 9007199254740991 (the `int64` of mctl-api#959, kept
   inside the exact range of RFC 8785 numbers), `fingerprint` `^sha256:[0-9a-f]{64}$` (the
   one basket fingerprint of mctl-agents#1059 and #988, `"sha256:" + hex(sha256(JCS(approval_basket)))`;
   the workflow carries and compares it and never receives a basket). `limits` is an object with
-  `additionalProperties: false` and exactly these required integer members, each published
+  `additionalProperties: false` and exactly these optional integer members (amended 2026-11-10: none required, `limits: {}` is valid and takes every default; an unknown member is rejected), each published
   with its default and bounds in the schema, and copied verbatim by mctl-api#957 §6c:
   `approval_poll_interval_s` (default 15, 5-60), `settle_poll_interval_s` (default 15, 5-60)
   and `settle_timeout_s` (default 900, 60-900; 900 is the `ttl_seconds` maximum of the bridge
   command schema, and the real command TTL, the named constant `DispatchCommandTTL`, is
   owned by mctl-api#985). There is no member for an overall timeout: the lifetime is bounded
   by the approval wait (the `aar_` expiry, `GlovoApprovalTTL`, mctl-api#957 OPEN-957-10) plus
-  `settle_timeout_s`. The input arrives as RFC 8785 canonical JSON (mctl-api#957 §6c); the
+  `settle_timeout_s`. The workflow is started as type `GlovoControlWorkflow` on queue `mctl-assistants-control` with a single argument of type bytes (the RFC 8785 bytes of `glovo.control_starts.input`; the starter's encoding is UNVERIFIED on the mctl-api side), and the raw-text pre-check runs on those bytes before anything else. The input arrives as RFC 8785 canonical JSON (mctl-api#957 §6c); the
   validator rejects duplicate keys and any non-integer number in an integer position, using
-  the raw-text pre-check of mctl-agents#1059 once it exists and an equivalent local one with
-  the same must-reject cases until then.
+  the strict parse of `tools/bridge_contract.py` / `vectors/must-reject.json` (mctl-agents#1059, merged) where possible, else an equivalent stdlib-only local one with the same must-reject cases (`jsonschema` is a dev-group dependency only: availability in the `--no-dev` image is UNVERIFIED).
 - `orchestrator/assistants/schemas/glovo-control-{input,result}.v1alpha1.json`
   plus `SHA256SUMS` — generated by `tools/assistants_schema.py`; a test
   regenerates and compares (source-pinned contract).
@@ -307,7 +381,7 @@ Files:
   `ProviderBridgePort`, and no `revalidate_scope`, `resolve_connection` or
   `release_reservation`.
 - `orchestrator/assistants/api_client.py` — HTTP `ControlApiPort` using
-  `MCTL_ASSISTANTS_TOKEN` (distinct from `MCTL_TOKEN`), base URL from env,
+  a credential-provider port (amended 2026-11-10; replaces the static `MCTL_ASSISTANTS_TOKEN`) that yields a bearer whose audience is exactly `mctl-api-glovo-control` (`service:glovo-control-worker`, `glovo:control-dispatch`); a token that is not a control token is refused client-side, and a 403 `not_authorized` is terminal with no retry. Never `MCTL_TOKEN`. Base URL from env,
   no redirects (same pattern as `action_approvals._no_redirect_opener`).
   Route paths and body shapes are generated from the vendored mctl-api#985 contract
   files and gated by the `ASSISTANTS_API_CONTRACT` pin (design "Vendored contracts");
@@ -390,7 +464,7 @@ Rules:
   (`SystemExit`) unless it equals `ASSISTANTS_NAMESPACE`; refuses
   `MCTL_TOKEN` being set (wrong identity) and any provider credential env
   (`GLOVO_*`, `PROVIDER_*`). Temporal auth is passed through only as
-  `TEMPORAL_API_KEY`/TLS paths when present; credentials are a #2457 concern.
+  `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE` and `TEMPORAL_TLS_SERVER_NAME` (node A names of mctl-agents#1057, inert when unset, never logged; amended 2026-11-10, names UNVERIFIED until #1057 merges); deployment credentials are a #2457 concern.
 - Registers exactly `GlovoControlWorkflow` and the assistants activities.
   No schedules, no dispatcher.
 - Explicit limits from bounded env: `ASSISTANTS_MAX_CONCURRENT_ACTIVITIES`
@@ -436,7 +510,7 @@ poll and wait timers.
   calls the DevLoop policy-checkpoint gated activities and its registration
   would pull DevLoop workflow modules into the assistants worker. Rejected;
   the control workflow reimplements the bounded signal+poll wait and reuses
-  only the pure `intent_hash`.
+  nothing from `orchestrator.action_approvals` (amended 2026-11-10).
 - **Wire a Nexus operation or a cross-namespace Activity now.** Rejected by
   the issue and by #1043: Nexus gates N2/N5 are unverified on OSS 1.31.0 and a
   raw cross-namespace Activity would require the provider to hold control
@@ -458,7 +532,7 @@ poll and wait timers.
   - Contracts drift from the mctl-api#985 control routes, which are unmerged.
     Mitigation: the vendored contract set with its pinned `SHA256SUMS`, the generated route
     constants and the fake validated against them; integration stays
-    `BLOCKED_FOR_INTEGRATION` until #985 is merged and pinned.
+    `BLOCKED_FOR_INTEGRATION` for the runtime until the control-principal verifier (mctl-gitops#2506) exists and a dispatcher is attached (#985 is merged; vendoring is unblocked, amended 2026-11-10).
   - Local tests overstate isolation (dev server has no authorizer). Mitigation:
     tests are labelled structural; the live denial matrix (#1043 D1-D6) is a
     precondition of #2457 activation.
