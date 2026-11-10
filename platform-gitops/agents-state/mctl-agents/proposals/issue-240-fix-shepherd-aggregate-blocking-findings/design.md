@@ -365,3 +365,50 @@ Marker comments remain required, human-readable exact-head/run evidence, but the
 Persist a proposal-scoped monotonic authority_generation and lifecycle-event watermark under one serialized state update. Dispatch creation first refreshes the lifecycle timeline, records its watermark, then allocates the next generation to the intent. Each newly observed reopened/ready_for_review event identity advances the generation and supersedes earlier intents/runs; duplicates or events already covered by the watermark do not. A correlated run inherits its parent intent/event generation. This defines both overlap orders deterministically and keeps the newest generation pending until its own trusted result is available.
 
 Finding history uses (source, exact_finding_identity) as the record key and stores heads/runs as deduplicated observations. Clearance is derived once per stable blocker identity. Rollback is coordinated: turn off required caller/check policy, stop dispatch creation, drain or supersede pending authorities, persist terminal evidence, and only then revert the reader/pin. Re-enable only after fresh current-head backfill.
+
+## Amendment 2026-11-10: minimal head-pinned design (authoritative)
+
+### Current code on `origin/main` `46ccddc`
+
+- Reviewer identity: `REVIEW_BOT` `run_shepherd.py:150`, `CODEX_CONNECTOR_BOT` `:156`, `GATING_BOTS` `:157`.
+- Aggregation: `read_codex_review` `:2217`; it filters on `GATING_BOTS` (`:2254`, `:2313`) and sets `has_responded` from Claude only (`:2259`, `:2316`, `:2357`, `:2420`). Read failures degrade to `[]` at `:2251`, `:2310`, `:2344`, `:2418`.
+- Decision: `decide` `:2764`. `if not codex_review.has_responded: return wait` at `:2803`; findings from `fresh_findings_p1_p2` at `:2825`; merge at `:2894`. No Agy input exists anywhere in it.
+- Agy is read only as ADVISORY, and only on the address-review path (`:4252`): `AGY_REVIEW_BOT` `:2483`, marker `:2484`, `_AGY_COMMIT_RE` `:2486`, `_AGY_VERDICT_RE` `:2490`, `_parse_agy_findings` `:2594`, `_read_agy_advisory` `:2656`, and an explicit "Owner policy: agy is informational" header at `:2474-2481`. That header contradicts the owner decision on this issue and must be rewritten.
+- Operator log: `:3961-3963` prints `codex_*`, `connector_*`, `copilot_*` and no Agy field.
+- Merge paths: `process_one` `:3878`, merge branch `:4496` (defensive re-check, then `merge_pr` `:3779`); the gated activity re-runs `decide()` at `pr_merge.py:127-132`. Both depend only on `decide()`.
+- Related guards that stay: `NEVER_MERGE_SERVICES` `:656`, `_merge_gate_delegated` `:607`.
+
+### Why the earlier heavy design is no longer on the critical path
+
+The original premise was that an Agy comment cannot be bound to a head. The
+`commit` line and the verdict trailer (mctlhq) and the `sha=` marker (Livri)
+now bind it, and the reader for them is already in the module. So head pinning
+needs no change to `mctlhq/.github` and no Actions-run lookup.
+
+Proposed (pending owner decision D3): the corrections that assume otherwise
+(C1, C2, P8 to P41: dispatch intents, correlation IDs, run-authority ordering,
+lifecycle generations, semantic artifacts, coordinated rollback) become a
+separate hardening backlog and are NOT prerequisites for required gating.
+They remain valid text, to be taken up only if the owner wants cryptographic
+authority rather than marker authority.
+
+### Design
+
+1. Registry. Replace `GATING_BOTS` with a small tuple of `ReviewerSource(name, login, marker, required)` entries: `claude` (required), `agy` (required, login `github-actions[bot]`, marker per the evidence contract), `codex-connector` (not required; findings only). No Copilot entry. `required` is per source; per-service overrides are an owner decision (D1).
+2. One normalized read. `read_codex_review` (renamed or wrapped as `read_gating_reviews`) returns, per source, a state in `{responded-clean, responded-findings, missing, unknown}` plus normalized findings carrying source, url, reviewed head and comment id. Agy parsing reuses `_parse_agy_findings`/`_agy_verdict` (promoted from advisory to gating) and adds the Livri `sha=` and `failed` forms.
+3. `decide()` stays pure. Order: merged, closed, draft; then any required source `unknown` -> `review-unknown` (bounded); then findings from ANY source on the current head -> `address-review` (this precedes the "required reviewer silent" wait so a blocker is never hidden by a missing response from another source); then any required source `missing` -> `wait` (bounded into `review-stuck`); then the existing verdict, CI, merge-state and settle gates. With `ci=None` the pre-#411 payload shape is unchanged.
+4. Dedupe: exact path+line+normalized message, or exact normalized-message hash when unlocated; keep the highest severity and the list of sources. No fuzzy collapse. Findings from other heads are dropped by the existing head and time filters; for Agy the bound head is the filter.
+5. Bundle: the address-review bundle holds every current-head blocker from every required source, with source attribution, in the blocking section. `advisory_findings` stays only for non-blocking P3/P4 items. Cap and neutralization (`_cap_finding_body`, `_neutralize_findings_tags`) apply unchanged, because reviewer text is untrusted input.
+6. Wait counters: reuse the `review_attempts` counter pattern; persist `reviewer_wait_head_sha` and per-source counters, reset atomically on head change. No new timeout constant family.
+7. Merge guard: just before the merge call, rebuild the evidence (responders, verdicts, head) and refuse if any required source lacks a bound verdict on `pr.head_sha`. This is a second check in the same module, not a second source of truth: it consumes the same aggregated state.
+8. Operator log: add `agy_state`, `agy_verdict`, `agy_head_bound` and `blockers_by_source` to the per-tick line; drop the Copilot fields if the Copilot read is removed.
+
+### Risks
+
+- Flipping Agy from advisory to required changes the cost model for repos whose caller sets `blocking: false`. Mitigation: `required` is data, per source and (if D1 says so) per service.
+- A mis-parsed layout would otherwise read as clean. Mitigation: the verdict trailer is authoritative and synthesizes a blocker when items do not parse.
+- Marker spoofing by another workflow posting as `github-actions[bot]`: the first-line marker plus bound commit raises the bar but is not authentication. Treated as accepted residual risk unless D3 enables the artifact-based hardening.
+
+### Rollback
+
+Revert the module change. No status migration is needed: new `.status.yaml` keys are additive and ignored by old code. A one-line mitigation short of a revert is `required=False` on the `agy` entry, which demotes it to findings-only, never to silent approval of a FAIL verdict.

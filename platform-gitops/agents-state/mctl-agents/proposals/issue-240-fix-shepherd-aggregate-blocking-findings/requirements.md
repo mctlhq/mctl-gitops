@@ -216,3 +216,101 @@ PR #234 proves Agy currently posts a top-level `github-actions[bot]` comment wit
 - Authority SHALL have one durable total order across lifecycle generations, dispatch intents, and correlated runs. Before allocating a dispatch intent, synchronize and persist the latest PR lifecycle watermark; the new intent is allocated in the next serialized generation. A subsequently observed reopened/ready_for_review event with a new event identity advances the generation and supersedes that intent even if Actions indexing is delayed. A delayed duplicate or event at/below the persisted watermark cannot supersede newer authority. Correlated runs inherit, never invent, their intent/event generation.
 - Blocking-finding history SHALL be keyed by stable source plus exact finding identity, independent of head. Reviewed heads/run identities are an idempotent observation set on that record. Repeated observations of one unresolved blocker across heads produce one history/clearance record; genuinely distinct exact identities remain separate.
 - Rollback SHALL first disable repository-level Agy required gating, stop new backfill dispatches, settle or explicitly supersede all pending intents/runs, and persist their terminal evidence. Only after that drain may the parser/aggregator and reusable-workflow pin be reverted. Re-enabling gating requires a new verified current-head backfill; stale pre-rollback authority is never revived.
+
+## Amendment 2026-11-10: owner-required behaviour and current facts (authoritative)
+
+This amendment supersedes any conflicting text above. Code references are to
+`mctlhq/mctl-agents` `origin/main` at `46ccddc`; the line numbers in the
+original text above are stale (the module is now about 5,400 lines).
+
+### Owner-required invariant
+
+A P1 or P2 from ANY required reviewer on the CURRENT head blocks merge, no
+matter how green CI is and no matter what another reviewer concluded. The
+decision lives in `decide()`, which both the shepherd tick and the gated merge
+activity (`orchestrator/temporal/activities/pr_merge.py`) call, so one fix
+covers both merge paths.
+
+### Reviewers that exist today
+
+- Required reviewers: Claude (`claude[bot]`) and Agy (`github-actions[bot]`
+  plus an Agy marker).
+- Copilot review is gone (subscription cancelled 2026-10-01). It must not be
+  waited on and must not gate. Its observe-only read may be deleted.
+- The Codex connector is silent and is not a gate (last review in the org on
+  2026-09-22; Auto review is off). The declarative config SHALL NOT wait on it
+  and SHALL NOT list it as required. If it does post a P1/P2 on the current
+  head, that finding still counts like any bot finding (existing #67
+  behaviour), but its silence is never a wait.
+
+### Reproductions the tests must encode (live evidence)
+
+| Case | Head | What happened | Required outcome |
+|---|---|---|---|
+| mctl-agents#234 | n/a | Agy alone had the P1 (path traversal) and three P2; the fix bundle followed Claude only | Agy-only P1 produces `address-review`; the bundle carries every current-head blocker |
+| mctl-agents#409 | `143312e4` | Claude APPROVED with 0 P1/P2; Agy alone had a P2; shepherd logged `codex_*`, `connector_*`, `copilot_*` inputs, no `agy_*`, and chose `wait` | `address-review` pinned to that head |
+| mctl-api#968 | `48405b17` | Claude APPROVED 20:25:58Z; Agy `<!-- VERDICT: FAIL:P1,P2 -->` 20:37:07Z on the same head; CI green; merged 20:44:36Z by the mctl-agents app | never `merge`; blocked while the verdict stands |
+| mctl-api#995 | `6884e9a2` | see the exact sequence below | never `merge`; blocked while the verdict stands |
+
+Exact mctl-api#995 sequence (UTC, 2026-11-10), head `6884e9a2844458eccb4bd768ceb7801242b562ce`:
+
+1. 05:04:47 first commit `dd7d02ca`; 05:05:23 PR opened.
+2. 05:08:05 Claude CHANGES_REQUESTED on `dd7d02ca` (2 P2). 05:12:22 Agy PASS on `dd7d02c`.
+3. 05:25:04 fix commit `4998ef15`. 05:26:25 Claude CHANGES_REQUESTED (1 P2). 05:34:12 Agy `FAIL:P2` on `4998ef1`.
+4. 05:40:14 fix commit `6884e9a2` (the final head). 05:41:44 Claude APPROVED, 0 P1/P2, 2 P3.
+5. 05:40:30 to 05:44:53 every required check green on the final head (`claude-review / gate`, `claude-review / review`, `lint`, `test`, `agent-trailer / check`, CodeQL, Trivy, govulncheck).
+6. 05:48:53 Agy review on the SAME head: `_Model: ... commit \`6884e9a\`._`, one P2 (`Store.EnableWireVersions` never invoked at startup, so reads fail closed), trailer `<!-- VERDICT: FAIL:P2 -->`. The `agy-review / review` job nevertheless concluded `success` at 05:48:58.
+7. No later push, no later reply and no human comment on the PR. 06:07:38 merged by the mctl-agents app, 19 minutes after the Agy FAIL.
+
+The regression scenario for #995 is therefore: the blocking verdict arrives AFTER
+the Claude approval and AFTER required checks are green, on the same head, and
+the merge must still not happen. The scenario also covers the settle window
+(the Agy comment landed 8 minutes after the push) and the next tick after it.
+
+### Agy evidence contract (what counts as a current-head Agy review)
+
+The "contract corrections" above assumed Agy comments carry no reviewed head.
+That is no longer true. Two shapes exist in production and both bind to a head:
+
+- mctlhq shared workflow: first line `<!-- agy-review -->`, header line
+  `_Model: <model> . commit \`<7 hex>\`._`, ends with one
+  `<!-- VERDICT: PASS|FAIL:P1|FAIL:P2|FAIL:P1,P2 -->` trailer. The reader
+  already exists (`_AGY_COMMIT_RE`, `_AGY_VERDICT_RE`, `_parse_agy_findings`).
+- Livri shared workflow (`Livri-app/.github`): first line
+  `<!-- agy-review sha=<40 hex> -->`, and a `... failed -->` variant for a
+  reviewer failure. Exact full-SHA equality.
+
+Requirements:
+
+- The actor must be `github-actions[bot]` AND the first line must be the Agy marker (the actor login is shared).
+- Head binding: a 7+ hex `commit` prefix must be a prefix of the current head SHA, or the `sha=` value must equal it. A comment with neither is NOT authoritative for gating (no timestamp inference), so it counts as "missing".
+- The verdict trailer is the semantic result; the LAST trailer in the comment wins (a finding may quote one). The `agy-review` job conclusion is never the verdict.
+- `FAIL:P1`, `FAIL:P2` or `FAIL:P1,P2` on the current head is a blocker by itself. If findings parse, each becomes a normalized finding. If none parse, the shepherd SHALL synthesize one blocker carrying the verdict, comment URL and head, and route to `address-review`. An unparsed verdict never degrades to `wait` or to clean.
+- `PASS` with parseable P1/P2 items is contradictory; treat the items as blockers.
+- If several Agy comments are bound to the same head (a rerun), the newest by `created_at` then id is authoritative.
+- A `failed` marker, a no-verdict "did not produce a review" comment, or no bound comment at all means the required reviewer has not responded: `wait`, then bounded `review-stuck`. Never approval, never merge.
+- A comment bound to an older head is ignored for blocking, and its absence on the new head is a wait, not a pass.
+- Normalized fields: severity, file, message, proposed fix, source (`agy`), URL (`html_url`), reviewed head SHA, comment id.
+
+### Reads: could not observe is not observed absent
+
+- A failed, partial or malformed read of reviews, inline comments, issue comments or reactions SHALL yield an explicit unknown state for the affected reviewer, not an empty list. Today `read_codex_review` and `_read_agy_advisory`-style reads degrade failures to `[]` (`run_shepherd.py:2251`, `2310`, `2344`, `2418`).
+- With any gating read unknown, `decide()` returns a distinct non-merge outcome (for example `review-unknown`), bounded by the existing counter pattern into `review-stuck`. A later page failing after earlier pages succeeded is a failed read.
+- Pagination: every list read goes through the list-aware helper (`_gh_api_list`), never concatenated `--paginate` output.
+
+### Merge evidence
+
+Before a merge is attempted, and again in the `merged` status write, record per required reviewer: responded or not, the bound comment id or URL, the verdict, the head SHA it was bound to, and which findings were cleared. A merge whose evidence lacks a bound verdict for every required reviewer SHALL be refused.
+
+### Acceptance additions
+
+- Mutation-verified definition of done: every regression test below is shown to FAIL with the fix reverted (remove the agy input from `decide()` and watch each fail), and the detector is shown green on a converged input and red on a deliberate mutation.
+- When one instance is found, sweep the whole module for the class: every read in `run_shepherd.py` and `pr_merge.py` that degrades an error to an empty collection.
+
+### Unchanged non-goals
+
+Required-check normalization stays in #411. `MAX_REVIEW_ATTEMPTS` and the settle window are untouched.
+
+### Owner decisions (not decided by this amendment)
+
+See the PR description. They are D1 to D6 and the draft deliberately leaves each open.

@@ -212,3 +212,40 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P39. Test dispatch-before-event and event-before-dispatch overlap, delayed Actions/timeline indexing, duplicate events, stale intent, and restart; only the newest generation may gate.
 - [ ] P40. Key blocking history by stable source/finding identity and retain heads/runs as observation sets; test one blocker repeated across heads clears once while distinct exact blockers remain distinct.
 - [ ] P41. Implement coordinated rollback: disable required caller/check policy, stop dispatch, drain/supersede intents and runs, persist terminal evidence, then revert parser/pin. Test rollback with pending and completed authorities and require fresh backfill before re-enable.
+
+## Amendment 2026-11-10: implementation and test tasks (authoritative)
+
+Implementation order matters: tests first, each shown red, then the fix.
+
+- [ ] A1. Write the four regression tests below against the CURRENT code and record that each fails (this proves the detector can fail). DoD: output of the red run in the PR description.
+- [ ] A2. Introduce the declarative `ReviewerSource` registry (`claude` and `agy` required, `codex-connector` not required, no Copilot). DoD: `grep -n GATING_BOTS orchestrator tests` is empty and nothing waits on a non-required source.
+- [ ] A3. Promote the Agy reader from advisory to gating: bind to head via the mctlhq `commit` line or the Livri `sha=` marker, require actor plus first-line marker, take the last verdict trailer, newest comment per head wins, `failed` or no-verdict means missing. DoD: unit tests on real bodies from mctl-api#968 and #995 and a Livri sample.
+- [ ] A4. Synthesize a blocker when a `FAIL:*` verdict has no parseable item; treat `PASS` with parseable P1/P2 as blocking. DoD: tests for both, plus a layout the parser does not know.
+- [ ] A5. Feed Agy state and findings into `decide()` so a current-head Agy P1/P2 yields `address-review` before any wait, and so a missing required reviewer waits and is bounded into `review-stuck`. DoD: `decide()` stays pure; tests for each branch and for ordering (blocker beats silence).
+- [ ] A6. Replace every swallowed read failure in the gating readers with an explicit unknown state and the `review-unknown` outcome; use `_gh_api_list` for all list reads. DoD: tests for a failed first page, a failed later page, malformed JSON and a failed reactions read, each asserting no merge and no "clean".
+- [ ] A7. Merge guard and evidence: refuse a merge without a bound verdict for every required reviewer on the head; record reviewers, verdicts, comment ids and cleared findings in `.status.yaml` at merge. DoD: test through BOTH `process_one` and `pr_merge._sync_merge_pull_request_gated`.
+- [ ] A8. Rewrite the "Owner policy: agy is informational" comments and the shepherd sub-agent prompt (`agents/_shepherd/.claude/agents/shepherd.md`) to describe Agy as a blocking source with its marker format. DoD: no remaining text that says Agy never blocks.
+- [ ] A9. Sweep the module (and `pr_merge.py`, `pr_adoption.py`) for the class "error becomes empty collection" and fix or list each instance. DoD: sweep result in the PR.
+- [ ] A10. Remove or stop calling the observe-only Copilot read; ensure no code path waits on the Codex connector. DoD: a test where Claude and Agy are clean and Copilot and the connector are silent merges (subject to the other gates).
+- [ ] A11. Mutation verification. DoD: revert A5 (drop the Agy input) and show T1 to T4 fail; revert A6 and show T8 to T9 fail; revert the head binding and show T6 fails. Record each run.
+- [ ] A12. Rollout note: list the services whose caller sets agy `blocking: false`, so the owner can decide D1 before `required` is enabled for them.
+
+### Tests
+
+- [ ] T1 (#234). Claude and Agy disagree on severity; Agy has the only P1. Expect `address-review`; the bundle holds the P1 with source `agy`.
+- [ ] T2 (#409). Claude APPROVED with 0 P1/P2 on head `143312e4`; Agy alone P2 on that head. Expect `address-review` pinned to that head, never `wait`.
+- [ ] T3 (#968). Claude APPROVED, required checks green, Agy `<!-- VERDICT: FAIL:P1,P2 -->` on the same head. Expect `address-review`, never `merge`.
+- [ ] T4 (#995). Head `6884e9a2`: Claude APPROVED 05:41:44, checks green, Agy `FAIL:P2` posted 8 minutes after the push and after the approval, `agy-review` job concluded `success`. Expect no `merge` on the tick the verdict lands, none on every later tick, and none inside or after the settle window. Also assert the same through the gated merge activity.
+- [ ] T5. Findings dedupe across Claude and Agy keeps both sources and the higher severity; different paths never merge; unlocated findings merge only on an exact normalized message.
+- [ ] T6. Head pinning: an Agy FAIL bound to an older commit is ignored after a push, and the new head with no Agy comment is `wait` then `review-stuck`, never merge. A comment with neither `commit` nor `sha=` is missing. Livri `sha=` variant and `failed` variant covered. A non-Agy `github-actions[bot]` comment is ignored.
+- [ ] T7. Rerun on the same head: PASS then newer FAIL blocks; FAIL then newer PASS clears.
+- [ ] T8. Read failure of reviews, inline comments, issue comments or reactions is an unknown state: no merge, bounded to `review-stuck`, never "no findings".
+- [ ] T9. Pagination: Agy comment on page 2 is seen; page 2 failing after page 1 succeeded is unknown, not a shorter list.
+- [ ] T10. Required reviewer missing or failed (no verdict) never approves, with Claude clean.
+- [ ] T11. The bundle passed to the implementer holds all current-head blockers from all required reviewers exactly once per finding per head.
+- [ ] T12. Merge evidence recorded at merge, and the merge refused when a required verdict is unbound.
+- [ ] T13. All pre-existing `tests/test_run_shepherd.py` and `tests/test_pr_merge_activity.py` cases pass unchanged in behaviour.
+
+### Status of earlier task groups
+
+Tasks 1 to 10 and T1 to T7 above are superseded by A1 to A12 and T1 to T13 where they conflict. C1, C2 and P8 to P41 are held as a hardening backlog pending owner decision D3.
