@@ -58,9 +58,13 @@ D2 (order). Four steps, each its own gate; no step is implied by the previous on
 3. `cmd/glovo-migrate` applies the schemas as `glovo_migrator`, after a read-only ownership
    pre-check and only with an explicit `-confirm`.
 4. Wiring is enabled only after the migrations, roles and readiness are confirmed, with the
-   feature flags closed and the write fence on (the bridge keeps its default refusing fence;
-   `bridge.Store.SetFence` is never called; `glovoWriteFenceHoldLifted` stays `false`).
-   Merging dark wiring code earlier is allowed only because every path is behind closed flags.
+   feature flags closed and the write fence on. Owner-confirmed terminology (2026-11-10):
+   P0/P1 = `glovoWriteFenceHoldLifted` stays `false`, `bridge.Store.SetFence` is NOT called
+   (the bridge keeps its default refusing fence), flags OFF, zero fake effects; P2 = a
+   separately authorized activation of a real, ready, fail-closed `receipt.NewFence` that
+   permits only owner-approved, single-use fake `aar_` writes. "Write fence on" means P0/P1;
+   this proposal covers P0/P1 only. Merging dark wiring code earlier is allowed only because
+   every path is behind closed flags.
 
 ## User stories
 
@@ -92,8 +96,13 @@ Migrations
 - IF the pre-check finds any foreign-owned object, or cannot complete (connection, catalog
   read or malformed result), or the connecting role is not the expected migration role, or a
   named role (`glovo_runtime`, `mctl_api_workitems`) does not exist, THEN THE SYSTEM SHALL
-  exit non-zero (2 for a foreign-owned object, 1 for a read failure) before issuing any DDL.
-  A failed read is never treated as "nothing foreign-owned".
+  exit non-zero before issuing any DDL: 1 for a read failure, 3 for a wrong connecting role,
+  a missing named role or a missing CREATE privilege, 2 for a foreign-owned object. When
+  several apply, 1 outranks 3 outranks 2: a failed read is never treated as "nothing
+  foreign-owned". The expected migrator role comes from the flag `-migrator-role` (default
+  `glovo_migrator`), not from the environment.
+- THE SYSTEM SHALL provide `cmd/glovo-migrate -verify`, which runs the pre-check and the
+  grants verifier in a `READ ONLY` transaction, issues no DDL and needs no `-confirm`.
 - IF the migration reports that a relation of the block is owned by another role THEN THE
   SYSTEM SHALL exit non-zero and print the operator ownership-transfer step, and SHALL NOT
   attempt the transfer itself, now or in any later change: no code path of this proposal
@@ -165,10 +174,28 @@ Roles, grants and compatibility (D1)
   by a runtime role, and any superuser/CREATEROLE/CREATEDB/BYPASSRLS/replication attribute.
   A role or object that cannot be read is reported unknown, never absent or clean.
 - THE SYSTEM SHALL keep every existing WorkItems and DevLoop path working through each step
-  of D2: before any ownership transfer the legacy role `mctl-api` holds the same DML on the
-  affected tables as a transitional grant (design section 7), so a pod still running on
-  `AUDIT_DB_URL` neither loses access nor attempts DDL.
-- THE SYSTEM SHALL provide a rollback for each D2 step (design section 9).
+  of D2. A pod still running on `AUDIT_DB_URL` as `mctl-api` becomes a non-owner after the
+  transfer and its restart runs `verifySchemaVersion`. Only `ApplySchema` creates
+  `public.work_items_schema_version`, so production has at most 12 of the 13 generic
+  relations until it exists (UNVERIFIED which exist). Therefore, before any transfer, the
+  operator pre-creates the version table (one row, version 1) as the legacy owner and grants
+  the legacy role the transitional DML, SELECT on that table and USAGE on
+  `work_item_intents_id_seq` (design section 7). This choice, versus a post-migration grant
+  with a restart-freeze window, REQUIRES owner/operator confirmation.
+- THE SYSTEM SHALL treat the bridge step of the migration (with
+  `bridge.WithWorkItemsRole(mctl_api_workitems)`) and the glovo, orders and join steps as
+  required for activation, not optional: `control.ProveOneDatabase` reads
+  `bridge_colocation_probe` through the work-items pool and `receipt.Ready` needs
+  `GlovoStoreReady` and the orders store. Ownership transfer for bridge and commerce objects
+  covers only objects that exist; which exist in production is UNVERIFIED and needs read-only
+  owner/ACL evidence before the deployment gate.
+- THE SYSTEM SHALL require `glovo_migrator` to hold CREATE on the database and on schema
+  `public`, and the operator performing `ALTER ... OWNER TO` to be a member of the old and the
+  new owner role (UNVERIFIED against the server version; the pre-check observes the CREATE
+  privileges).
+- THE SYSTEM SHALL provide a rollback for each D2 step (design section 9) that restores the
+  RECORDED pre-change owner and ACL, never revokes from a role that owns the object, and
+  lists the objects the migration step leaves behind with their disposition.
 
 ## Out of scope
 
@@ -192,12 +219,13 @@ Decided (2026-11-10, owner):
 - One database: the existing `mctl-api` database on `shared-pg` for Glovo, bridge, orders
   and work-items (D1). `GLOVO_DB_URL` points at it, not at a new database.
 - Order: A15 staging, separate deployment gate, migration, then wiring (D2).
+- "Write fence on" = P0/P1 (see D2 step 4), owner clarification 2026-11-10.
 
 Still open (not decided here):
-- Whether the migration entry point should also run `glovo.ApplySchema`,
-  `orders.ApplySchema`, `glovojoin.ApplySchema` and `bridge.ApplySchema` (none has a
-  production caller either). This proposal adds them as optional, ordered steps behind
-  separate flags but only the two work-items functions are mandatory here.
+- Decided in this amendment: the glovo, bridge, orders and join `ApplySchema` steps are
+  required for activation (see Roles, grants and compatibility); they remain separate flags
+  so a partial run is possible, and only the two work-items functions are mandatory for a
+  first run.
 - Membership detector source of truth: membership is a GitOps read (`gitReader`), so the
   detector polls owners of live connections; the scan interval (proposed 60 s, bounded well
   below the 5 minute heartbeat) is a recommendation.
@@ -207,6 +235,3 @@ Still open (not decided here):
   all in production (the bridge is off). The operator inventory of D2 step 2 answers it.
 - Whether other consumers use the work-items tables under a role other than `mctl-api`.
   UNVERIFIED; the inventory in design section 7 must list them before any ownership change.
-- Meaning of "write fence on" in D2 step 4 is read here as: the bridge keeps its default
-  refusing fence (`bridge.Store.SetFence` is not called, `glovoWriteFenceHoldLifted` stays
-  `false`). Confirm with the owner when implementation approval is requested.

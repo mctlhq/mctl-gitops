@@ -18,7 +18,9 @@ existing DoD lines.
   -with-orders/-with-join` steps; print the operator ownership-transfer step on an
   ownership refusal; add the binary to the Dockerfile. The binary refuses to run without
   the exact `-confirm` (checked before any connection) and without the read-only ownership
-  pre-check (design 1, stage 2) passing; it never issues `ALTER ... OWNER TO`; the work-items
+  pre-check (design 1, stage 2) passing (expected migrator from `-migrator-role`; exit codes
+  1 read failure, 3 wrong role / missing role / missing CREATE privilege, 2 foreign-owned
+  objects, precedence 1 then 3 then 2; also add the read-only `-verify` mode of task 12); it never issues `ALTER ... OWNER TO`; the work-items
   role is `mctl_api_workitems`, no `roleNameRE` is changed. — DoD: `run()` is unit-tested for
   flag validation (no DB connection on bad input), for exit 2 on a foreign-owned object and
   exit 1 on a failed catalog read, in both cases with no DDL issued (assert by statement
@@ -73,29 +75,44 @@ existing DoD lines.
 - [ ] 11. (D2 step 1, mctl-gitops, separate PR, staged and inert) Extend the A15 staging
   with `mctl_api_workitems` (managed role, credential ExternalSecret, `WORK_ITEMS_DB_URL`
   fragment, connection limit sized from the work-items pool times replicas, UNVERIFIED),
-  `GLOVO_DB_RUNTIME_ROLE` / `GLOVO_DB_MIGRATION_ROLE`, the database name `mctl-api`, the job
-  inputs of task 1, and the operator text for the transitional grant and ownership transfer.
+  `GLOVO_DB_RUNTIME_ROLE` / `GLOVO_DB_MIGRATION_ROLE`, the pg_hba line for
+  `mctl_api_workitems` (the existing lines are role-specific), the database name `mctl-api`,
+  the CREATE privileges of `glovo_migrator`, the job inputs of task 1, the Job command and
+  image tag pointing at `cmd/glovo-migrate` (replacing `/bin/false` and
+  `PENDING-985-TASK-4`), and the operator text for the pre-created version table, the
+  transitional grant and the ownership transfer.
   Not edited by this proposal's PR. — DoD: `scripts/validate-glovo-m1-staging.py` and its
   selftest pass; nothing reconciled; the migration Job keeps `suspend: true`.
-- [ ] 12. Grants and ownership verifier (design section 8): read-only, per role, returns
-  `ok`/`diverged`/`unknown`; covers ownership, table and column privileges, sequence
+- [ ] 12. Grants and ownership verifier (design section 8), exposed as
+  `cmd/glovo-migrate -verify` with credential `GLOVO_MIGRATION_DB_URL` (operator-held
+  `glovo_migrator` login, never mounted into the API pod), `READ ONLY` transaction, no
+  `-confirm`: read-only, per role, returns `ok`/`diverged`/`unknown`; covers ownership, table and column privileges, sequence
   privileges, role attributes, and no right of `mctl_api_workitems` in schema `glovo`.
   — DoD: green on a database migrated with task 1; red, each confirmed by reverting the
   check, for an extra grant, a missing grant, a runtime-owned table and a superuser role;
-  `unknown` on a failed read and never counted as ok.
+  `unknown` on a failed read and never counted as ok; a test asserts `-verify` issues no
+  write statement.
 - [ ] 13. Compatibility proof for existing WorkItems and DevLoop (`TEST_DATABASE_URL`): on a
-  database created by the legacy owner path (`NewStore` as the owner), apply the
-  transitional grant, transfer ownership to the migrator in the test, then assert that the
-  legacy role still passes `NewStore` (verify branch) and the work-items DML, and that
-  `mctl_api_workitems` does the same with exactly `genericGrants`. — DoD: passes; mutation:
-  dropping the transitional grant makes the legacy-role assertion fail.
+  database created by the legacy owner path (`NewStore` as the owner, so WITHOUT
+  `work_items_schema_version`, modelling images before `d2cca35`), run the operator steps in
+  the chosen order: pre-create the version table with row 1 as the legacy owner, apply the
+  transitional grant (table DML, SELECT on the version table, USAGE on
+  `work_item_intents_id_seq`), transfer ownership to the migrator in the test; then assert that
+  the legacy role still passes `NewStore` (verify branch) and the work-items DML including the
+  intents sequence BEFORE and AFTER the migration, that `ApplySchema` passes, and that
+  `mctl_api_workitems` does the same with exactly `genericGrants`. Also assert the rollback
+  of design section 9 restores the recorded owner and ACL and does not strip the owner's
+  privileges. — DoD: passes; mutations, each red: skip the pre-created version table (restart
+  fails with a missing relation), skip its SELECT grant (permission denied), drop the sequence
+  USAGE, rollback by `REVOKE` instead of the recorded ACL.
 - [ ] 14. Operator runbook (in the gitops runbooks, text only) for the deployment gate: the
   read-only inventory of owners and grantees (including any other consumers of the 13
-  relations, UNVERIFIED today), the transitional grant, the transfer limited to design
-  section 7, the verifier run, the pre-change catalog record, and the rollback of design
+  relations, UNVERIFIED today), the CREATE privileges of `glovo_migrator` and the
+  `SET ROLE` membership needed for `ALTER ... OWNER TO`, the pre-created version table, the
+  transitional grant, the transfer limited to design section 7 (owner/ACL evidence for bridge
+  and commerce objects first), the verifier run, the pre-change catalog record, and the rollback of design
   section 9. — DoD: reviewed; contains no secret and no personal data (public repo).
-- [ ] 15. Gate guard: a test that `cmd/api` neither reads nor requires `-confirm`, that no
-  wiring path is active with `GLOVO_ENABLED`, `MCTL_BRIDGE_ENABLED` and
+- [ ] 15. Gate guard: a test that no wiring path is active with `GLOVO_ENABLED`, `MCTL_BRIDGE_ENABLED` and
   `MCTL_GLOVO_CONTROL_ENABLED` unset, and that `bridge.Store.SetFence` is not called while
   `glovoWriteFenceHoldLifted` is false. — DoD: passes; mutation: flipping any of them makes it
   fail.
@@ -119,14 +136,20 @@ existing DoD lines.
   at 5 min + 1 s; non-member owner triggers `RevokeForMembership`; nil detector probe false.
 - [ ] T8. Payload single-writer test and dispatcher fingerprint-mismatch test.
 - [ ] T9. Activation proof under real roles (task 8).
-- [ ] T11. Pre-check: foreign-owned object -> exit 2, zero DDL; catalog read error -> exit 1,
-  zero DDL; missing `mctl_api_workitems` or `glovo_runtime` -> non-zero before DDL.
-- [ ] T12. Verifier mutations of task 12 (each red when the check is reverted).
-- [ ] T13. Legacy-role compatibility across the ownership transfer (task 13).
-- [ ] T14. Role names: `mctl-api` is rejected by every `roleNameRE` unchanged; the regexes
-  are byte-identical to `main` (guard against widening).
 - [ ] T10. Existing `TestFenceEndToEndRevocation`, `TestVendoredContractMatchesProvenance`
   and `cmd/api` tests still pass.
+- [ ] T11 (task 1). Pre-check: foreign-owned object -> exit 2, zero DDL; catalog read error
+  -> exit 1, zero DDL; missing role, wrong connecting role or missing CREATE privilege -> exit
+  3; read failure plus foreign owner -> exit 1 (precedence); `-confirm` absent -> no
+  connection.
+- [ ] T12 (task 12). Verifier mutations (each red when the check is reverted); `-verify`
+  issues no write.
+- [ ] T13 (task 13). Legacy-role compatibility across the ownership transfer, before and
+  after the migration, and the recorded-ACL rollback.
+- [ ] T14 (task 1). Role names: `mctl-api` is rejected by every `roleNameRE` unchanged; the regexes
+  are byte-identical to `main` (guard against widening).
+- [ ] T15 (task 15). Gate guard (task 15); tasks 11 and 14 are text deliverables with no
+  test, reviewed only.
 
 ## Rollback
 

@@ -104,11 +104,19 @@ Control flow, in this order, each stage a hard gate for the next:
 1. Validate flags and role names (`roleNameRE`, distinct roles). No connection is opened.
    Wrong or missing `-confirm` exits non-zero here.
 2. Connect as the migration role and run the read-only ownership pre-check in a
-   `READ ONLY` transaction: for the selected steps, list every relation, sequence,
-   function and the schema `glovo` whose owner is not `current_user`; check the named roles
-   exist; check `current_user` is not a superuser and is the expected migrator. Any
-   foreign-owned object exits 2 and prints the operator step (an `ALTER ... OWNER TO` text
-   for the operator to run by hand); any read error exits 1. Neither issues DDL.
+   `READ ONLY` transaction. It observes, for the selected steps: every relation, sequence,
+   function and the schema `glovo` whose owner is not `current_user`; that the named roles
+   (`glovo_runtime`, the work-items role) exist; that `current_user` equals the expected
+   migrator and is not a superuser; that `current_user` holds CREATE on the database (needed
+   for `CREATE SCHEMA glovo`) and CREATE on schema `public` (needed to create
+   `work_items_schema_version` and the bridge tables). The expected migrator comes from the
+   flag `-migrator-role` (default `glovo_migrator`, validated by `roleNameRE`; no env
+   override). Exit codes: 1 = any read failed or returned a malformed result (outranks
+   everything else: a state that could not be observed is never reported as a foreign owner
+   or as clean); 3 = observed but wrong: connecting role is not the expected migrator, a named
+   role is missing, or a CREATE privilege is absent; 2 = observed foreign-owned objects (the
+   operator transfer text is printed). Precedence when several apply: 1, then 3, then 2.
+   None issues DDL.
    Because the pre-check needs the object lists, `internal/workitems` and
    `internal/bridge` gain small exported read-only helpers (for example
    `workitems.ForeignOwnedObjects(ctx, q)`) built on the same unexported lists
@@ -120,16 +128,24 @@ Control flow, in this order, each stage a hard gate for the next:
 3. Only then call `workitems.ApplyGlovoApprovalSchema(ctx, dsn, glovoRuntimeRole,
    workitems.WithWorkItemsRole(workItemsRole))`, which runs `workitems.ApplySchema` first.
 
-The binary never performs an ownership transfer and no flag exists to do so. Optional flags
+The binary never performs an ownership transfer and no flag exists to do so. Steps
 `-with-glovo`, `-with-bridge`, `-with-orders`, `-with-join` run the other `ApplySchema`
 functions in dependency order (glovo, bridge, orders, join, then approval schema; the bridge
-step passes `bridge.WithWorkItemsRole`); they default off and the pre-check covers whatever is
-selected. The Dockerfile gains the binary next to `bridge-scrub`. Nothing is applied by this
-change.
+step passes `bridge.WithWorkItemsRole(<work-items role>)`). They default off so that a
+partial run is possible, but they are NOT optional for activation (D2 step 4): verified in
+`internal/glovo/control/prove.go` (L39, L78-88) that `ProveOneDatabase` inserts a nonce into
+`bridge_colocation_probe` on the bridge pool and reads it back through the work-items pool, so
+the bridge step with the work-items grant on that table is required, and `receipt.Ready`
+needs `GlovoStoreReady` and the orders store (`ready.go`, see Current state), hence the glovo
+and orders steps. The activation checklist therefore requires a run with all four flags, and
+the verifier (section 8) must report the full set `ok` before step 4. The pre-check covers
+whatever is selected.
 
-Role name (D1, decided): the work-items role is `mctl_api_workitems`, a new login role
-created at the deployment gate, used through an explicit `WORK_ITEMS_DB_URL` on database
-`mctl-api`. The code takes the role as a flag and no role-name rule is widened.
+Read-only mode. `cmd/glovo-migrate -verify` runs the section 8 verifier and the pre-check
+in a `READ ONLY` transaction, issues no DDL and needs no `-confirm` (it changes nothing).
+Its credential is `GLOVO_MIGRATION_DB_URL`, the operator-held `glovo_migrator` login (the
+catalog reads it needs are available to any login; it is never mounted into the API pod).
+The Dockerfile gains the binary next to `bridge-scrub`. Nothing is applied by this change.
 
 ### 2. Collaborator construction in `cmd/api` (new file `cmd/api/glovo_receipt.go`)
 
@@ -216,102 +232,180 @@ Roles (names are defaults and flags; all match `roleNameRE`):
 
 | Role | Purpose | May hold | Must not hold |
 | --- | --- | --- | --- |
-| `glovo_migrator` | runs `cmd/glovo-migrate` | owner of the migrated objects, DDL | superuser, CREATEROLE, CREATEDB, BYPASSRLS, replication; no use by the API pod |
+| `glovo_migrator` | runs `cmd/glovo-migrate` | owner of the migrated objects; CREATE on the database (for `CREATE SCHEMA glovo`) and CREATE on schema `public` (for the version table and bridge tables) | superuser, CREATEROLE, CREATEDB, BYPASSRLS, replication; no use by the API pod |
 | `glovo_runtime` | Glovo and bridge runtime | the rows of `RuntimeGrants()` and `glovoPublicGrants`, column-level UPDATE on `action_approval_requests` | DDL, ownership |
 | `mctl_api_workitems` | work-items store (`WORK_ITEMS_DB_URL`) | exactly `genericGrants`, USAGE on `work_item_intents_id_seq`, SELECT on `bridge_colocation_probe` | DDL, ownership, any right in schema `glovo`, the attributes above |
 
 Verified in code: `ApplySchema` grants the work-items role exactly `genericGrants` (SELECT,
 INSERT, UPDATE per table; DELETE only on `agent_run_tokens`) with revoke-then-grant, and
-`work_item_intents_id_seq` USAGE; `bridge.WithWorkItemsRole` gives SELECT on
+`work_item_intents_id_seq` USAGE (`grantGeneric`); `bridge.WithWorkItemsRole` gives SELECT on
 `bridge_colocation_probe`; `ApplyGlovoApprovalSchema` refuses `runtimeRole == workItemsRole`
 and gives the work-items role nothing in schema `glovo`. The role-creation SQL itself
 (CNPG managed role in #2563, or an operator `CREATE ROLE`) is outside the code.
+The CREATE-privilege needs of `glovo_migrator` follow from the DDL the code runs
+(`CREATE SCHEMA IF NOT EXISTS glovo`; `CREATE TABLE` in `public`). The PostgreSQL rule that
+`ALTER TABLE ... OWNER TO` needs the new owner to hold CREATE on the table's schema and the
+operator to be a member of both the current and the new owner role is documented PostgreSQL
+behaviour, UNVERIFIED against this server's version here; the runbook (task 14) states it and
+the pre-check observes the CREATE privileges. The operator runs the transfer after `SET ROLE`
+to a role that is a member of both owners, never as the API's runtime role.
 
-Ownership. `ApplySchema` refuses to run unless the migration role owns every relation in
-`genericRelations` (13 tables) and both functions in `genericFunctions`, so for the existing
-production database the transfer is strictly necessary for those objects, and only for them
-plus whatever the selected optional steps check:
-- always: the 13 `genericRelations` and the 2 `genericFunctions` in schema `public`;
-- with `-with-bridge`: the bridge `ownedRelations` and `bridge_command_transitions_id_seq`,
-  only if they exist (UNVERIFIED whether any bridge table exists in production; the bridge
-  is off and `COMMERCE_DB_URL` is unset in the deployed Application);
-- with the approval schema: schema `glovo` and its relations and functions, only if they
-  exist (UNVERIFIED; expected absent, in which case the migrator creates them and owns them).
+Ownership scope ("strictly necessary"). `ApplySchema` refuses to run unless the migration
+role owns every relation in `genericRelations` (13 names) and both functions in
+`genericFunctions`. Not all 13 exist in an existing production database: only `ApplySchema`
+creates `public.work_items_schema_version` (`CREATE TABLE IF NOT EXISTS`, `apply_schema.go`);
+it is not in `genericSchemaBlocks`, and owner-mode `NewStore` runs only those blocks, so
+production has at most 12 of the 13 until the version table exists. UNVERIFIED: which of the
+13 exist in production and which image version runs (images before `d2cca35` never create the
+version table). The scope is therefore the generic relations and functions that already exist
+in `public` (read-only evidence: a `pg_class`/`pg_proc` owner listing) plus, per selected
+step, only objects that already exist:
+- bridge step (required for activation, see section 1): the bridge `ownedRelations`
+  (including `bridge_colocation_probe`) and `bridge_command_transitions_id_seq`, only those
+  that exist;
+- commerce tables: not owned by the migration steps of this proposal. UNVERIFIED which
+  commerce or bridge objects exist and who owns them. Required read-only evidence before the
+  gate: owner and ACL listing of the relations named in `ownedRelations` and of every table
+  the `COMMERCE_DB_URL` store creates. Nothing is guessed; objects that do not exist are
+  created by the migrator and owned by it;
+- approval schema: schema `glovo` and its objects, only if they exist (UNVERIFIED, expected
+  absent).
 The transfer is an operator step with its own approval (D2 step 2), run by hand from the
-printed pre-check output, never by code. UNVERIFIED: whether sequences owned by a table
-move with `ALTER TABLE ... OWNER TO`; the operator runbook must check
-`pg_class.relowner` of `work_item_intents_id_seq` afterwards (the pre-check covers it).
+printed pre-check output, never by code. UNVERIFIED: whether a sequence owned by a table
+moves with `ALTER TABLE ... OWNER TO`; the pre-check and verifier read `relowner` of
+`work_item_intents_id_seq` afterwards, and the transfer text transfers it explicitly when it
+did not move.
 
 Compatibility with existing WorkItems and DevLoop. Production today runs the work-items
 store as role `mctl-api` through the `AUDIT_DB_URL` fallback (verified in the deployed
 Application and `workItemsStoreSource()`). `NewStore` runs DDL only when it owns
-`public.work_items` (`ownsTables`); otherwise it only reads `work_items_schema_version`
-(`verifySchemaVersion`). After an ownership transfer that pod would be a non-owner and
-would lose every owner privilege, including SELECT on the version table, so a pod restart
-would fail. Therefore, before any transfer, the operator step first grants the legacy role
-`mctl-api` the same DML as `genericGrants` and SELECT on `work_items_schema_version` (a
-transitional grant), so the unchanged production DSN keeps working across the transfer
-without a deploy and without a DSN change. The switch of production to `WORK_ITEMS_DB_URL`
-as `mctl_api_workitems` is a separate later action under its own approval and happens after
-grants verification (section 8). The transitional grant is revoked only after that switch is
-confirmed healthy. UNVERIFIED: that no other service or role reads or writes these tables
-(DevLoop, agents, other pods); the operator inventory (a read-only `pg_class`/`aclexplode`
-listing of grantees on the 13 relations) must precede the transfer and any unexpected grantee
-stops the step. UNVERIFIED: which image version production runs, so the transitional-grant
-reasoning above is stated for the `NewStore` logic on `main` at `081bd6b7`.
+`public.work_items` (`ownsTables`); otherwise it reads `work_items_schema_version`
+(`verifySchemaVersion`). After an ownership transfer the legacy pod is a non-owner, loses
+every owner privilege, and a restart runs `verifySchemaVersion`. Two things must hold before
+the transfer or a restart fails: the legacy role keeps its DML, and the version table exists,
+holds exactly one row equal to the compiled version (1) and is readable by it. Because only
+`ApplySchema` creates that table, a transfer alone leaves two failing windows: before the
+migration the relation is missing, and after the migration it exists but is owned by the
+migrator with no SELECT for the legacy role.
+
+Chosen approach (REQUIRES owner/operator confirmation; not yet decided by the owner):
+pre-create the version table as the legacy owner BEFORE the transfer, in the same operator
+step: `CREATE TABLE IF NOT EXISTS public.work_items_schema_version (version INT NOT NULL)`
+plus one row `1`, run as `mctl-api`. It then (a) is one of the 13 relations the transfer
+moves, so `ApplySchema`'s ownership check passes, (b) is granted SELECT to the legacy role
+before the transfer, so there is no window, and (c) is rewritten by `ApplySchema` as the owner
+(`DELETE` then `INSERT` of the same version). Rejected alternative: grant SELECT to the legacy
+role only right after the migration and define a maintenance window in which no legacy pod
+may restart; it leaves a failing window and needs a freeze of restarts and rollouts. If the
+operator prefers the window variant, the runbook must state the window and the freeze.
+Residual risk of the chosen approach: the pre-created row asserts version 1 before
+`ApplySchema` has run; this is harmless because the generic DDL block is what `NewStore`
+already ran as owner, and the migration re-records the same value.
+
+Transitional grant to the legacy role `mctl-api`, executed BEFORE the transfer, mirrors what
+`grantGeneric` gives the work-items role, without any REVOKE: the `genericGrants` privileges
+on each existing generic table (SELECT, INSERT, UPDATE; DELETE on `agent_run_tokens`), SELECT
+on `work_items_schema_version`, and USAGE on `public.work_item_intents_id_seq`. UNVERIFIED:
+whether the legacy role needs more than `genericGrants` for DevLoop paths (the table is "read
+off the statements in this package"); the inventory below must confirm. With this grant and
+the pre-created version table the unchanged production DSN keeps working across the transfer
+without a deploy. The switch of production to `WORK_ITEMS_DB_URL` as `mctl_api_workitems` is
+a separate later action under its own approval, after grants verification (section 8); the
+transitional grant is revoked only after that switch is confirmed healthy and only while the
+legacy role owns none of the objects. UNVERIFIED: that no other service or role reads or
+writes these tables; the read-only inventory (`pg_class` owner and `aclexplode` grantees on
+the relations) must precede the transfer, and any unexpected grantee stops the step.
 
 ### 8. Grants and ownership verification (read-only)
 
-A verifier (library function in `internal/workitems` plus a read-only mode usable by the
-operator; it opens no write transaction) reports, per role, the live state against the
-in-code tables: ownership of every object of the selected steps, table and column
-privileges via `has_table_privilege`/`aclexplode`, sequence privileges, role attributes
-(`pg_roles`), and that `mctl_api_workitems` has no privilege in schema `glovo`. Output is
-`ok`, `diverged` (with each extra or missing item) or `unknown` (any failed read); `unknown`
-never satisfies a check. It runs: after the deployment gate (step 2), after the migration
-(step 3), and before wiring is enabled (step 4). It is accepted only when proven both ways:
-green on a converged database and red after deliberate mutations (an extra `GRANT`, a
-missing grant, a runtime-owned table, a superuser role), each mutation confirmed by
-reverting the check and watching the test fail.
+A verifier (library function in `internal/workitems` and `cmd/glovo-migrate -verify`, which
+opens only a `READ ONLY` transaction) reports, per role, the live state against the in-code
+tables: ownership of every object of the selected steps, table and column privileges via
+`has_table_privilege`/`aclexplode`, sequence privileges, role attributes (`pg_roles`), the
+CREATE privileges of `glovo_migrator`, and that `mctl_api_workitems` has no privilege in
+schema `glovo`. Output is `ok`, `diverged` (each extra or missing item) or `unknown` (any
+failed read); `unknown` never satisfies a check and outranks `diverged`. Entry point and
+credential: `cmd/glovo-migrate -verify` with `GLOVO_MIGRATION_DB_URL`, run by the operator or
+as a job of the same image; any login can read the catalogs, and the migrator credential is
+used only because it is the operator-held one. It runs after the deployment gate (step 2),
+after the migration (step 3), and before wiring is enabled (step 4). It is accepted only when
+proven both ways: green on a converged database and red after deliberate mutations (an extra
+`GRANT`, a missing grant, a runtime-owned table, a superuser role, a missing CREATE
+privilege), each mutation confirmed by reverting the check and watching the test fail.
 
 ### 9. Rollback per step
 
 - Step 1 (#2563 staging): close the PR or revert; nothing was reconciled.
-- Step 2 (roles, grants, transfer): record, before the step, the catalog state it changes
-  (owner and ACL of the objects, existence of the roles). Roll back by transferring the
-  transferred objects back to `mctl-api` by hand and revoking the new grants; the legacy
-  role's transitional grant makes this safe in any order. Created roles are inert without
-  grants and may stay; dropping one needs `DROP OWNED`/`REASSIGN OWNED` and is a separate
-  operator decision.
-- Step 3 (migration): the schemas are additive and idempotent; they can stay in place when
-  code is reverted (see Rollback in tasks.md). The ownership pre-check makes a refused run
-  change nothing (the apply is one transaction per function under advisory locks).
+- Step 2 (roles, grants, version table, transfer): BEFORE the step the operator records the
+  catalog state it will change: owner and full ACL (`relacl`, column ACLs, sequence ACL) of
+  every object in scope, role existence and attributes, and whether
+  `public.work_items_schema_version` and schema `glovo` existed. Rollback restores that
+  RECORDED owner and ACL; it is NOT "revoke what was granted". It never runs `REVOKE` against
+  a role that is the (restored) owner of the object: if `mctl-api` owns the tables again,
+  revoking its transitional grant would strip its owner privileges. Order: restore ownership
+  first (`ALTER ... OWNER TO mctl-api`, as an operator with the needed memberships), then reset
+  each ACL to the recorded one (`REVOKE ALL ... FROM <grantee>` only for non-owner grantees
+  that were absent in the record, then re-`GRANT` the recorded rows). No order is claimed
+  safe without the record. Created roles are inert without grants and may stay; dropping one
+  needs `DROP OWNED`/`REASSIGN OWNED` and is a separate operator decision.
+  If step 3 has already run, rolling back step 2 leaves behind the objects the migration
+  created. Disposition (the exact list is produced from the pre-change record plus the
+  migration's object lists):
+  - `public.work_items_schema_version`: if it did not exist before step 2, keep it (harmless to
+    the legacy code, which then reads version 1); drop only after the legacy image no longer
+    needs it.
+  - schema `glovo`, `glovo.approval_bindings`, `glovo.approval_schema_version`, the three
+    trigger functions and the triggers `aar_guard` and `aar_binding_required` on
+    `public.action_approval_requests`: the operator drops or disables them BEFORE ownership
+    returns to `mctl-api`, because `aar_guard` rejects glovo-kind rows for any role but the
+    runtime role and a migrator-owned trigger would otherwise stay on a table `mctl-api` owns.
+  - the widened state and kind CHECK constraints on `action_approval_requests`: keep (a
+    superset for generic rows); UNVERIFIED that the legacy code never writes `reserved` or
+    `unknown`.
+  - bridge tables, `bridge_colocation_probe` and `bridge_schema_version` created by the bridge
+    step: keep, inert while the bridge flags are off; the `bridge_schema_version` row selects
+    `NewRuntimeStore`, so it must be removed if the old `NewStore` path must be restored
+    (UNVERIFIED).
+- Step 3 (migration): the schemas are additive and idempotent and can stay in place when code
+  is reverted. The pre-check makes a refused run change nothing (each apply is one
+  transaction under advisory locks).
 - Step 4 (wiring enabled): unset the flags (`GLOVO_ENABLED`, `MCTL_BRIDGE_ENABLED`,
   `MCTL_GLOVO_CONTROL_ENABLED`) and the new env; the pod returns to today's path. The write
   fence was never lifted, so no write can have been permitted.
-- Production DSN: never changed by this proposal; its later switch rolls back by restoring
-  the previous `WORK_ITEMS_DB_URL`/`AUDIT_DB_URL` value.
+- Production DSN: never changed by this proposal; its later switch rolls back by restoring the
+  previous `WORK_ITEMS_DB_URL`/`AUDIT_DB_URL` value.
 
 ### 10. Sequence and dependency on mctl-gitops#2563 (D2)
 
+Terminology (owner clarification 2026-11-10). P0/P1: `glovoWriteFenceHoldLifted` stays
+`false`, `bridge.Store.SetFence` is NOT called (the bridge keeps its default refusing fence),
+all flags are OFF, zero fake effects. P2: a separately authorized activation of a real, ready,
+fail-closed `receipt.NewFence` that permits only owner-approved, single-use fake `aar_`
+writes. "Write fence on" in D2 step 4 means the P0/P1 state. This proposal covers P0/P1 only.
+
 Each gate is an explicit approval, not a side effect of the previous step.
 
-1. A15 mctl-gitops#2563 (draft). On its branch it stages, inert and outside any Argo CD
-   match: ExternalSecrets for `glovo_runtime` and `glovo_migrator`, a suspended migration
-   Job, CNPG managed-role fragments (connection limits 16 and 2), and env fragments with
-   `GLOVO_DB_URL`. This design needs it extended (it is not edited by this proposal):
-   `mctl_api_workitems` (managed role, credential ExternalSecret, `WORK_ITEMS_DB_URL`),
-   `GLOVO_DB_RUNTIME_ROLE` and `GLOVO_DB_MIGRATION_ROLE` (required by
-   `configureGlovoTeamGrants` when `GLOVO_ENABLED`), the `mctl-api` database name, the
-   transitional-grant and ownership plan as operator text, and the job inputs of the
-   `cmd/glovo-migrate` binary (`GLOVO_MIGRATION_DB_URL`, `-work-items-role`, `-confirm`).
+1. A15 mctl-gitops#2563 (draft). On its branch it stages, inert and outside any Argo CD match:
+   ExternalSecrets for `glovo_runtime` and `glovo_migrator`, a suspended migration Job, CNPG
+   managed-role fragments (connection limits 16 and 2) with role-specific pg_hba lines for
+   those two roles, and env fragments with `GLOVO_DB_URL`. This design needs it extended (it
+   is not edited by this proposal): `mctl_api_workitems` (managed role, credential
+   ExternalSecret, its own pg_hba line `host mctl-api mctl_api_workitems all scram-sha-256`,
+   `WORK_ITEMS_DB_URL`), `GLOVO_DB_RUNTIME_ROLE` and `GLOVO_DB_MIGRATION_ROLE` (required by
+   `configureGlovoTeamGrants` when `GLOVO_ENABLED`), the `mctl-api` database name, the CREATE
+   privileges of `glovo_migrator`, the pre-created version table, the transitional grant and
+   ownership plan as operator text, and the job inputs of `cmd/glovo-migrate`
+   (`GLOVO_MIGRATION_DB_URL`, `-work-items-role`, `-migrator-role`, `-with-*`, `-confirm`).
+   The Job's `/bin/false` command and `PENDING-985-TASK-4` image tag are to point at this
+   proposal's `cmd/glovo-migrate` (mctl-api#1004) once it ships, not at #985 task 4.
    Mismatches are listed in the pull request that carries this amendment.
-2. Deployment gate (operator, separate approval): role creation, grants (including the
-   transitional grant), ownership transfer limited to section 7, then section 8 verification.
-3. `cmd/glovo-migrate` as `glovo_migrator` with the pre-check and explicit `-confirm`. The
-   suspended Job in #2563 stays `suspend: true` until this step is approved; the `/bin/false`
-   command and placeholder image tag are replaced only by the activation change.
-4. Wiring enabled after steps 2 and 3 are verified, flags closed, write fence on. Code that
+2. Deployment gate (operator, separate approval): role creation, CREATE privileges, grants
+   (including the transitional grant and the pre-created version table), ownership transfer
+   limited to section 7, then section 8 verification.
+3. `cmd/glovo-migrate` as `glovo_migrator` with the pre-check and explicit `-confirm`, all four
+   `-with-*` steps for the activation run. The suspended Job in #2563 stays `suspend: true`
+   until this step is approved.
+4. Wiring enabled after steps 2 and 3 are verified, flags closed (P0/P1 state). Code that
    implements the wiring may be merged dark earlier (every path is behind the closed flags).
 
 ## Alternatives
