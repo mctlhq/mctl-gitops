@@ -9,7 +9,7 @@ else.
 | --- | --- |
 | ZITADEL project, roles, grants, OIDC client | `platform-gitops/helm-charts/zitadel-iac/iac/vault.tf` |
 | `groups` claim (shared with Argo CD) | `platform-gitops/helm-charts/zitadel-iac/iac/argocd.tf`, action `argocdGroups` |
-| Vault mount, role, groups, tenant policies | `platform-gitops/helm-charts/vault-human-auth-iac/iac/` |
+| Vault mount, roles `zitadel` and `zitadel-admin`, groups, tenant policies | `platform-gitops/helm-charts/vault-human-auth-iac/iac/` |
 | Job, CronJob, guard | `platform-gitops/helm-charts/vault-human-auth-iac/` |
 | Argo CD Application, namespace `vault-human-auth-iac` | `platform-gitops/bootstrap/templates/core-infra/vault-human-auth-iac.yaml` |
 | Hand-off Secret, NetworkPolicies, pull secret | `platform-gitops/infra-components/identity/vault-human-auth-iac/` |
@@ -29,7 +29,8 @@ zitadel-iac Job ── ZITADEL: project "Vault", roles admins + <tenant>, grants
 Secret vault-human-auth-iac/vault-oidc-zitadel   (client_id, client_secret, tenants)
         |
         v
-vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
+vault-human-auth-iac Job ── Vault: auth/mctl, roles `zitadel` (default, 1h)
+                           and `zitadel-admin` (admins only, 8h),
                            groups human-admins / human-tenant-<tenant>,
                            policies human-tenant-<tenant>
 ```
@@ -73,7 +74,7 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
   tenant. Only tenant folders belong there; platform-owned secrets go under
   `secret/platform/`. Per-tenant mounts, which would remove the shared listing
   altogether, are tracked in #1670.
-- **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
+- **Token lifetime.** Human tokens from the default role `zitadel` live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. An admin may instead sign in with role `zitadel-admin` for an 8h token; see [Admin 8h tokens](#admin-8h-tokens-role-zitadel-admin). Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
 these roots with the bootstrap policy as the Job's only credential. Full code
@@ -119,6 +120,96 @@ rules, listing `secret/metadata/` and `secret/metadata/teams/` returned 403,
 which was the reported bug. With `secret/metadata/teams/*` in place of the
 exact path, the tenant could list `other/` and its subfolders.
 
+## Admin 8h tokens (role `zitadel-admin`)
+
+Owner request 2026-11-11. Long unattended agent sessions that run with an
+admin token lost it mid-task when the 1h token expired. The mount now allows
+up to 8h, and a second role hands that lifetime to admins only:
+
+| Role | Who can sign in | `token_ttl` / `token_max_ttl` | Default |
+| --- | --- | --- | --- |
+| `zitadel` | everyone with a role on the Vault project | 1h / 1h | yes |
+| `zitadel-admin` | only a `groups` claim containing `admins` | 8h / 8h | no |
+
+The mount's `max_lease_ttl` is 8h and its `default_lease_ttl` stays 1h. The
+mount value is a ceiling only, so the 1h role is unchanged: tenant users, and
+admins who do not name a role, still get 1h tokens.
+
+**Login.**
+
+```bash
+export VAULT_ADDR=https://secrets.mctl.ai
+vault login -method=oidc -path=mctl role=zitadel-admin
+vault token lookup   # ttl ~8h, meta role=zitadel-admin, identity_policies [admin]
+```
+
+In the UI, choose the **mctl** tab and type `zitadel-admin` as the role.
+
+**Who can get it.** The role has `bound_claims = { groups = "admins" }`
+(`bound_claims_type = "string"`, exact match). The `groups` claim is a list,
+and Vault accepts the login when any element equals `admins`. Anyone else,
+for example a tenant user, a user without the claim or a user whose claim is
+`Admins`, completes the ZITADEL sign-in and is then refused by Vault with
+`claim "groups" does not match any associated bound claim values`. No token
+is issued. The policy still comes only from the `human-admins` group, the same
+as with `zitadel`: this role changes the lifetime and nothing else.
+
+**Risk.** An admin token from this role is usable for up to 8h instead of 1h.
+If it leaks, or the admin is removed from `admins` in ZITADEL, it stays valid
+until it expires, because group membership is re-evaluated only at login.
+Revoke it early:
+
+```bash
+export VAULT_ADDR=https://secrets.mctl.ai
+vault token revoke -accessor <accessor>   # accessor from `vault token lookup`, or the audit log
+```
+
+Use the 1h default for interactive work. Use `zitadel-admin` only for
+sessions that really run for hours, and revoke the token
+(`vault token revoke -self`) when the session ends.
+
+**Proof (before merge, local Vault 1.17.2).**
+- The root from `origin/main` was applied first. The branch then planned
+  exactly `~ vault_jwt_auth_backend.oidc` (`max_lease_ttl` "1h" -> "8h") and
+  `+ vault_jwt_auth_backend_role.zitadel_admin`, an update and a create, both
+  allowed by the Job's guard. After apply, a second plan showed no changes.
+- An OIDC login needs ZITADEL, so the claim check was proven on a `jwt`
+  mount with the same tune. Its two roles were copied field by field from the
+  applied `auth/mctl` roles, with `role_type` set to `jwt`; Vault validates
+  `bound_claims` the same way for both role types. The tokens were signed
+  locally:
+
+| Role | `groups` | Result |
+| --- | --- | --- |
+| `zitadel-admin` | `["admins"]`, `["erpact","admins"]` | token, TTL 28800, `identity_policies` include `admin`; renewing by 24h stays at 8h |
+| `zitadel-admin` | `["erpact"]`, `["admins-x"]`, `["Admins"]`, `[]` | refused, `claim "groups" does not match any associated bound claim values` |
+| `zitadel-admin` | no `groups` claim | refused, `claim not found in token` |
+| `zitadel` | `["admins"]` / `["erpact"]` | token, TTL 3600 (`admin` / `human-tenant-erpact`) |
+
+- Two mutations turned the proof red, as expected. Without `bound_claims`,
+  the `["erpact"]` tenant got an 8h token. With the mount ceiling back at 1h,
+  the admin token was capped at 3600.
+
+**Live check after the Job applies (owner).**
+
+```bash
+export VAULT_ADDR=https://secrets.mctl.ai
+vault read sys/auth/mctl/tune             # default_lease_ttl 1h, max_lease_ttl 8h
+vault read auth/mctl/role/zitadel         # token_ttl/token_max_ttl 1h (unchanged)
+vault read auth/mctl/role/zitadel-admin   # 8h, bound_claims map[groups:[admins]]
+vault login -method=oidc -path=mctl role=zitadel-admin && vault token lookup   # ttl ~8h
+```
+
+To check the refusal live, sign in as an opted-in tenant user with
+`role=zitadel-admin`. Vault must refuse the login, and the same user with the
+default role must get a 1h token.
+
+**Rollback.** Revert the PR. The next Job run then plans the role's destroy,
+which the guard refuses, so the rollback PR also lists
+`vault_jwt_auth_backend_role.zitadel_admin` in `allowedDeletes`. Empty the list
+again once the role is gone. Tokens already issued by the role stay valid
+until they expire, or until they are revoked.
+
 ## Rollout order
 
 1. The owner applies the Job's Vault policy and Kubernetes auth role once
@@ -158,6 +249,9 @@ break-glass, when the personal account cannot sign in.
    - `policies [default]` and `identity_policies [admin]`
    - `ttl` of at most 1h
    - `meta` with `role=zitadel` and your `username`
+
+   For an 8h admin token, add `role=zitadel-admin` to the login (see
+   [Admin 8h tokens](#admin-8h-tokens-role-zitadel-admin)).
 3. **UI login.** Open `https://secrets.mctl.ai/ui/`, choose the **mctl** tab,
    leave the role empty and sign in. You land on the dashboard and can open
    `secret/`. A tenant user sees `teams/` there, and inside it every tenant
@@ -194,7 +288,8 @@ break-glass, when the personal account cannot sign in.
   `secret/platform/zitadel/users/<tenant>`. zitadel-iac grants the role within
   the hour. Nothing changes in Vault, because the group already exists.
 - **Revoke.** Remove the flag. The user's next login gets no token. A token
-  already issued lives at most until its TTL, or revoke it at once with
+  already issued lives at most until its TTL (1h, or 8h for an admin token
+  from `zitadel-admin`), or revoke it at once with
   `vault token revoke -accessor <accessor>`.
 - **New tenant.** A new `secret/platform/zitadel/users/<tenant>` makes
   zitadel-iac create the tenant's role and add it to `tenants`. The next
@@ -206,7 +301,7 @@ break-glass, when the personal account cannot sign in.
 - **Rotate the client secret.** Regenerate the client in ZITADEL by replacing
   `zitadel_application_oidc.vault` through zitadel-iac. The Secret updates,
   and the next vault-human-auth-iac run updates `auth/mctl/config`.
-- **Drift.** A change made by hand to the mount, the role, a `human-*` group or
+- **Drift.** A change made by hand to the mount, either role, a `human-*` group or
   a `human-tenant-*` policy shows up as an update in the next hourly plan, and
   the run reverts it.
 

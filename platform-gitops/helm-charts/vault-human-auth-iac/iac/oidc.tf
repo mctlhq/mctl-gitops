@@ -38,8 +38,12 @@ resource "vault_jwt_auth_backend" "oidc" {
     # Shown in the UI's method list before sign-in.
     listing_visibility = "unauth"
     default_lease_ttl  = "1h"
-    max_lease_ttl      = "1h"
-    token_type         = "default-service"
+    # A ceiling, not a lifetime: no token from this mount may outlive it.
+    # Raised from 1h to 8h for the `zitadel-admin` role below; the default
+    # role `zitadel` still sets 1h on its own tokens, so tenant users and an
+    # admin who signs in without naming a role keep the 1h lifetime.
+    max_lease_ttl = "8h"
+    token_type    = "default-service"
   }
 }
 
@@ -75,5 +79,52 @@ resource "vault_jwt_auth_backend_role" "zitadel" {
   # policy of its own beyond `default`; everything comes from the groups.
   token_ttl      = 3600
   token_max_ttl  = 3600
+  token_policies = []
+}
+
+# The same sign-in, for admins only, with an 8h token (owner request
+# 2026-11-11): long unattended agent sessions that hold an admin token
+# outlived the 1h one mid-task. Opt in by naming the role:
+#   vault login -method=oidc -path=mctl role=zitadel-admin
+# `zitadel` stays the default role, so nobody gets 8h without asking for it.
+#
+# Only an admin can complete this login: bound_claims requires `admins` in
+# the groups claim (exact match; the claim is a list, and Vault accepts the
+# login when any element matches). Anyone else, a tenant user included, is
+# refused by Vault after ZITADEL sign-in, with no token issued. The policy
+# still comes from the human-admins group, as with `zitadel`; this role
+# changes the lifetime and nothing else.
+#
+# The trade-off: an admin token leaked from such a session is usable for up
+# to 8h instead of 1h. Revoke it early with
+# `vault token revoke -accessor <accessor>` (runbook, "Operations").
+resource "vault_jwt_auth_backend_role" "zitadel_admin" {
+  backend   = vault_jwt_auth_backend.oidc.path
+  role_name = "zitadel-admin"
+  role_type = "oidc"
+
+  user_claim = "sub"
+  claim_mappings = {
+    email              = "email"
+    preferred_username = "username"
+  }
+
+  groups_claim    = "groups"
+  bound_audiences = [var.oidc_client_id]
+  oidc_scopes     = ["openid", "profile", "email"]
+
+  bound_claims_type = "string"
+  bound_claims = {
+    groups = local.admin_group
+  }
+
+  allowed_redirect_uris = [
+    "${local.vault_url}/ui/vault/auth/${vault_jwt_auth_backend.oidc.path}/oidc/callback",
+    "http://localhost:8250/oidc/callback",
+  ]
+
+  # 8h, not renewable past that. Must not exceed the mount's max_lease_ttl.
+  token_ttl      = 28800
+  token_max_ttl  = 28800
   token_policies = []
 }
