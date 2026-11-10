@@ -90,26 +90,38 @@ existing DoD lines.
   privileges, role attributes, and no right of `mctl_api_workitems` in schema `glovo`.
   — DoD: green on a database migrated with task 1; red, each confirmed by reverting the
   check, for an extra grant, a missing grant, a runtime-owned table and a superuser role;
-  `unknown` on a failed read and never counted as ok; a test asserts `-verify` issues no
-  write statement.
+  `unknown` on a failed read and never counted as ok; it also reports the legacy role's
+  effective privileges after the transfer (`has_*_privilege`, `-legacy-role` as a bound
+  value, no identifier, no `roleNameRE` change), `diverged` when the legacy role has
+  nothing; a test asserts `-verify` issues no write.
 - [ ] 13. Compatibility proof for existing WorkItems and DevLoop (`TEST_DATABASE_URL`): on a
   database created by the legacy owner path (`NewStore` as the owner, so WITHOUT
   `work_items_schema_version`, modelling images before `d2cca35`), run the operator steps in
-  the chosen order: pre-create the version table with row 1 as the legacy owner, apply the
-  transitional grant (table DML, SELECT on the version table, USAGE on
-  `work_item_intents_id_seq`), transfer ownership to the migrator in the test; then assert that
-  the legacy role still passes `NewStore` (verify branch) and the work-items DML including the
-  intents sequence BEFORE and AFTER the migration, that `ApplySchema` passes, and that
-  `mctl_api_workitems` does the same with exactly `genericGrants`. Also assert the rollback
-  of design section 9 restores the recorded owner and ACL and does not strip the owner's
-  privileges. — DoD: passes; mutations, each red: skip the pre-created version table (restart
-  fails with a missing relation), skip its SELECT grant (permission denied), drop the sequence
-  USAGE, rollback by `REVOKE` instead of the recorded ACL.
+  the chosen order: pre-create the version table with row 1 as the legacy owner; then ONE
+  transaction that transfers the tables, the version table, the sequences (explicitly, they
+  do not follow their table) and the two functions to the migrator and THEN grants the legacy
+  role the transitional privileges (table DML, SELECT on the version table, USAGE on
+  `work_item_intents_id_seq`, EXECUTE as needed). Assert that, as the legacy role, `NewStore`
+  (verify branch) and the work-items DML including the intents sequence and a generic
+  approval write succeed AFTER the transfer, BEFORE the migration and AFTER the migration,
+  that `ApplySchema` passes, that the migration does not remove the legacy grants, that
+  `mctl_api_workitems` does the same with exactly `genericGrants`, and that the rollback of
+  design section 9 restores the recorded owner and ACL without stripping the owner's
+  privileges. — DoD: passes; mutations, each red: skip the pre-created version table
+  (missing relation), skip its SELECT grant (permission denied), grant issued BEFORE the
+  transfer (the legacy role loses access), grant missing for sequences (intents sequence
+  permission denied), sequence left with the old owner and not verified, rollback by
+  `REVOKE` instead of the recorded ACL. The transaction shape (one transaction versus a
+  defined window) REQUIRES owner/operator confirmation.
 - [ ] 14. Operator runbook (in the gitops runbooks, text only) for the deployment gate: the
   read-only inventory of owners and grantees (including any other consumers of the 13
-  relations, UNVERIFIED today), the CREATE privileges of `glovo_migrator` and the
+  relations, UNVERIFIED today), distinguishing the OWNER (`pg_class.relowner`) from a
+  GRANTEE (`aclexplode(relacl)`): an owner's rights are implicit and a grant to the owner is
+  a no-op, so a grant issued before the transfer proves nothing and must be re-issued after
+  the owner changes, in the same transaction as the transfer, the CREATE privileges of `glovo_migrator` and the
   `SET ROLE` membership needed for `ALTER ... OWNER TO`, the pre-created version table, the
-  transitional grant, the transfer limited to design section 7 (owner/ACL evidence for bridge
+  transitional grant issued after the transfer (tables, version table, sequences,
+  functions), the transfer limited to design section 7 (owner/ACL evidence for bridge
   and commerce objects first), the verifier run, the pre-change catalog record, and the rollback of design
   section 9. — DoD: reviewed; contains no secret and no personal data (public repo).
 - [ ] 15. Gate guard: a test that no wiring path is active with `GLOVO_ENABLED`, `MCTL_BRIDGE_ENABLED` and
@@ -164,6 +176,8 @@ detector and sweeper stop with the pod; reverting removes them with no persisted
 besides revoked connections and `unknown` approvals, both of which are correct outcomes.
 
 Per D2 step the rollbacks are in design section 9: step 1 close or revert #2563; step 2
-transfer objects back and revoke grants by hand (the legacy role keeps its transitional
-grant, so production keeps working in any order); step 3 leave the additive schemas; step 4
-unset the flags and env. The working production DSN is not changed by any step here.
+restore the RECORDED pre-change owner and ACL of every object in scope (owner first, then the
+ACLs); never `REVOKE` from a role that owns the object, and no order is claimed safe without
+the record; objects the migration created are handled per the disposition list in section 9;
+step 3 leave the additive schemas; step 4 unset the flags and env. The working production DSN
+is not changed by any step here.

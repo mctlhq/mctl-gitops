@@ -175,13 +175,22 @@ Roles, grants and compatibility (D1)
   A role or object that cannot be read is reported unknown, never absent or clean.
 - THE SYSTEM SHALL keep every existing WorkItems and DevLoop path working through each step
   of D2. A pod still running on `AUDIT_DB_URL` as `mctl-api` becomes a non-owner after the
-  transfer and its restart runs `verifySchemaVersion`. Only `ApplySchema` creates
-  `public.work_items_schema_version`, so production has at most 12 of the 13 generic
-  relations until it exists (UNVERIFIED which exist). Therefore, before any transfer, the
-  operator pre-creates the version table (one row, version 1) as the legacy owner and grants
-  the legacy role the transitional DML, SELECT on that table and USAGE on
-  `work_item_intents_id_seq` (design section 7). This choice, versus a post-migration grant
-  with a restart-freeze window, REQUIRES owner/operator confirmation.
+  transfer, and its restart runs `verifySchemaVersion`. A grant to `mctl-api` issued before the
+  transfer is a no-op while it owns the objects, and the transfer then leaves it with nothing
+  (reported by cross-review on PostgreSQL 16; UNVERIFIED by this proposal), so the transitional
+  grants (the `genericGrants` DML, SELECT on `work_items_schema_version`, USAGE on
+  `work_item_intents_id_seq` and every other sequence in scope, EXECUTE as needed) SHALL be
+  issued AFTER the owner changes, by the new owner or a member of it, in ONE transaction with
+  the `ALTER ... OWNER TO` statements (including an explicit transfer of the sequences, which
+  do not follow their table), or the failing window SHALL be defined with a freeze. Only
+  `ApplySchema` creates `public.work_items_schema_version`, so production has at most 12 of
+  the 13 generic relations until it exists (UNVERIFIED which exist); the operator pre-creates
+  it (one row, version 1) as the legacy owner before the transfer as preparation. This
+  procedure REQUIRES owner/operator confirmation and is not decided here.
+- WHEN `cmd/glovo-migrate -verify` runs after the transfer THE SYSTEM SHALL check the
+  EFFECTIVE privileges of the legacy role (table, sequence, function and version-table
+  readability, via `has_*_privilege`, read-only) and report `diverged` when the legacy role
+  has less than the transitional grant.
 - THE SYSTEM SHALL treat the bridge step of the migration (with
   `bridge.WithWorkItemsRole(mctl_api_workitems)`) and the glovo, orders and join steps as
   required for activation, not optional: `control.ProveOneDatabase` reads
@@ -219,13 +228,12 @@ Decided (2026-11-10, owner):
 - One database: the existing `mctl-api` database on `shared-pg` for Glovo, bridge, orders
   and work-items (D1). `GLOVO_DB_URL` points at it, not at a new database.
 - Order: A15 staging, separate deployment gate, migration, then wiring (D2).
+- The glovo, bridge, orders and join `ApplySchema` steps are required for activation (see
+  Roles, grants and compatibility); they stay separate flags so a partial run is possible, and
+  only the two work-items functions are mandatory for a first run.
 - "Write fence on" = P0/P1 (see D2 step 4), owner clarification 2026-11-10.
 
 Still open (not decided here):
-- Decided in this amendment: the glovo, bridge, orders and join `ApplySchema` steps are
-  required for activation (see Roles, grants and compatibility); they remain separate flags
-  so a partial run is possible, and only the two work-items functions are mandatory for a
-  first run.
 - Membership detector source of truth: membership is a GitOps read (`gitReader`), so the
   detector polls owners of live connections; the scan interval (proposed 60 s, bounded well
   below the 5 minute heartbeat) is a recommendation.
