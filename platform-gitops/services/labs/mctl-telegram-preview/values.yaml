@@ -294,14 +294,7 @@ env:
   # replicaCount 0, revoke the pool jti, then this flag back to "false".
   MANAGED_RUNTIME_ENABLED: "true"
   MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
-  # Third managed soak, 24 h window 2026-11-10T00:00Z to 2026-11-11T00:00Z
-  # (mctlhq/mctl-telegram#889, owner decision 2026-11-09). Month cap = the
-  # November ledger at start (settled 2.4354 + 1.00 held = 3.4354) + 3.00. Day
-  # cap 1.50 because ~100 turns can pass 1.00. The month cap and the claim
-  # cutoff are removed, and the day cap restored to 1.00, in a PR after the window.
-  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.50"
-  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "6.44"
-  MANAGED_CLAIM_NOT_AFTER: "2026-11-11T00:30:00Z"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
