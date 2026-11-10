@@ -98,6 +98,12 @@ Negative matrix (case -> named test):
 | foreign order | T21 (+ T7 foreign `command_id`) |
 | ambiguous provider write | T13 + T9 |
 
+Cross-PR notes (OPEN / UNVERIFIED, not decisions; follow-ups for mctl-gitops#2457 and #2567). Staged values in mctl-gitops `deploy/staged/glovo-m1/control-worker/values.yaml` do not yet match this proposal:
+- They mount `TEMPORAL_CLIENT_CREDENTIAL` (secret `glovo-control-temporal`), while the worker reads `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE` and `TEMPORAL_TLS_SERVER_NAME`.
+- Nothing is staged for the control-audience bearer (audience `mctl-api-glovo-control`), the mctl-api base URL, `ASSISTANTS_API` / `ASSISTANTS_API_CONTRACT`, or control-worker egress to mctl-api.
+- `service.port: 8080` versus the worker's health endpoint and probes is UNVERIFIED (the worker proposed here exposes none).
+- The staged image name `ghcr.io/mctlhq/glovo-control-worker` is only a staged name: see OPEN decision (b).
+
 UNVERIFIED, image health: probes, readiness endpoint and `readOnlyRootFilesystem` needs of the
 worker image are not verified (no deployment exists; mctl-gitops#2576 decides).
 
@@ -490,7 +496,7 @@ Rules:
   (`SystemExit`) unless it equals `ASSISTANTS_NAMESPACE`; refuses
   `MCTL_TOKEN` being set (wrong identity) and any provider credential env
   (`GLOVO_*`, `PROVIDER_*`). Temporal auth is passed through only as
-  `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE` and `TEMPORAL_TLS_SERVER_NAME` (node A names of mctl-agents#1057, inert when unset, never logged; amended 2026-11-10, names UNVERIFIED until #1057 merges); deployment credentials are a #2457 concern.
+  `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE` and `TEMPORAL_TLS_SERVER_NAME` (node A names, VERIFIED_SOURCE in mctl-gitops `docs/runbooks/temporal-client-auth.md` row A; inert when unset, never logged; amended 2026-11-10: only the mctl-agents implementation, mctl-agents#1057, is UNVERIFIED); deployment credentials are a #2457 concern.
 - Registers exactly `GlovoControlWorkflow` and the assistants activities.
   No schedules, no dispatcher.
 - Explicit limits from bounded env: `ASSISTANTS_MAX_CONCURRENT_ACTIVITIES`

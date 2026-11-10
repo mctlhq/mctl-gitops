@@ -137,6 +137,12 @@ Negative matrix (case -> named test):
 | foreign order | T21 (+ T7 foreign `command_id`) |
 | ambiguous provider write | T13 + T9 |
 
+Cross-PR notes (OPEN / UNVERIFIED, not decisions; follow-ups for mctl-gitops#2457 and #2567). Staged values in mctl-gitops `deploy/staged/glovo-m1/control-worker/values.yaml` do not yet match this proposal:
+- They mount `TEMPORAL_CLIENT_CREDENTIAL` (secret `glovo-control-temporal`), while the worker reads `TEMPORAL_TOKEN_FILE`, `TEMPORAL_TLS_CA_FILE` and `TEMPORAL_TLS_SERVER_NAME`.
+- Nothing is staged for the control-audience bearer (audience `mctl-api-glovo-control`), the mctl-api base URL, `ASSISTANTS_API` / `ASSISTANTS_API_CONTRACT`, or control-worker egress to mctl-api.
+- `service.port: 8080` versus the worker's health endpoint and probes is UNVERIFIED (the worker proposed here exposes none).
+- The staged image name `ghcr.io/mctlhq/glovo-control-worker` is only a staged name: see OPEN decision (b).
+
 UNVERIFIED, image health: probes, readiness endpoint and `readOnlyRootFilesystem` needs of the
 worker image are not verified (no deployment exists; mctl-gitops#2576 decides).
 
@@ -285,9 +291,9 @@ Safety:
 - Resolved 2026-11-09 (owner): mctl-api#968 is the canonical bridge; the
   workflow reaches it through mctl-api APIs only. The remaining gate is the
   dispatch/cancel route contract of mctl-api#985 (owner decision D3, 2026-11-09).
-- Round 7: the mctl-api#985 control routes are proposals until merged; the vendored contract
+- Amended 2026-11-10: the mctl-api#985 control routes are merged (mctl-api#1001, `675dff75`); the vendored contract
   set and its pin make any change there a visible contract update here.
-- Image publishing (amended 2026-11-10: see OPEN decision (b); staged name `ghcr.io/mctlhq/glovo-control-worker`): should CI push `ghcr.io/mctlhq/mctl-agents-assistants-control`
+- Image publishing (amended 2026-11-10: the image name appears only in OPEN decision (b)): should CI push the control image
   on release (proposed: only behind a repo variable that defaults off, never
   wired into release-deploy `values_path`), or only build it as a CI smoke until
   #2457 is approved? Proposal assumes build-only by default.
