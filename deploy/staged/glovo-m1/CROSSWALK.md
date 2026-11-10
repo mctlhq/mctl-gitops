@@ -181,4 +181,11 @@ Amendment content digest `sha256:ed73eb05d441c5d5f4320068c576733c16824957124dfe8
 | 3 | `GLOVO_MIGRATION_DB_URL`, `-work-items-role`, `-migrator-role`, `-with-*`, `-confirm`; exit codes 1/3/2 (precedence 1, 3, 2); read-only `-verify` | suspended Job, `/bin/false`, placeholder image |
 | 4 | database `mctl-api` | pg_hba lines and DSNs |
 | 5 | `COMMERCE_DB_URL` role, connection limits | UNVERIFIED, activation blockers |
-| 6 | transitional grants, operator ownership transfer | `roles.patch.md`, plan only, not applied; version-table pre-create approach needs operator confirmation |
+| 6 | transitional grants, operator ownership transfer | `roles.patch.md`, plan only, not applied; grants follow the owner change in one transaction with the transfer; version-table pre-create is "chosen" in #1004 and needs operator confirmation |
+
+Recorded, not fixed here (follow-up for #2567 / #2457, not part of A15): the
+staged control-worker values differ from the #1044 amendment (#2578). They use
+`TEMPORAL_CLIENT_CREDENTIAL`, port 8080 and image
+`ghcr.io/mctlhq/glovo-control-worker:0.0.0`, and stage no control-audience
+bearer, no mctl-api base URL and no egress, where #2578 names
+`TEMPORAL_TOKEN_FILE` and related settings.

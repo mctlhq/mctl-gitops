@@ -106,7 +106,8 @@ Two prerequisites sit outside the code:
 Separately authorized deployment gate (#1004 design section 10, step 2). This
 text is a plan, not a manifest; no script or Job in this PR performs it, and no
 `ALTER ... OWNER TO` is ever automatic (`cmd/glovo-migrate` only prints the text
-for the operator and exits 2 on a foreign-owned object).
+for the operator and exits 2 on a foreign-owned object; exit codes 1 and 3
+are described in "Migrator exit codes and flags" above).
 
 0. Assume nothing about existing production objects or owners. Make a complete,
    source-backed catalogue inventory, read-only: for every object that
@@ -117,21 +118,43 @@ for the operator and exits 2 on a foreign-owned object).
    `pg_namespace.nspowner`) and the full ACL (`aclexplode`) with every grantee.
    An unexpected grantee or owner stops the step.
 1. Record the pre-change ACL and owner of each object (rollback needs it).
-2. Transitional grants to the legacy `mctl-api` role, BEFORE any transfer, so
-   the unchanged production DSN keeps working across it without a deploy:
-   DML equal to `genericGrants` on the tables (DELETE only on
-   `agent_run_tokens`), USAGE on `work_item_intents_id_seq` (and any other
-   sequence old pods or DevLoop use), EXECUTE on the 2 functions, USAGE on
-   schema `public`, and SELECT on `public.work_items_schema_version`.
-   OPEN OPERATOR DECISION (not decided here): `work_items_schema_version` may
-   not exist in production (UNVERIFIED; it depends on the running image).
-   Either pre-create it as the legacy owner before the transfer, or grant
-   SELECT right after the migration inside a maintenance window. Without it the
-   old pod fails `verifySchemaVersion` once it is a non-owner.
-3. Ownership transfer limited to the inventory of step 0, by hand, by the
-   operator. Afterwards check `pg_class.relowner` of `work_item_intents_id_seq`
-   (UNVERIFIED whether it follows its table).
-4. Run the read-only verifier: `cmd/glovo-migrate -verify` with
+2. Pre-create the version table (approach proposed by #1004, "chosen", still
+   REQUIRES owner/operator confirmation; the operator has not confirmed it).
+   Only `ApplySchema` creates `public.work_items_schema_version`, so production
+   may have at most 12 of the 13 generic relations (UNVERIFIED; it depends on
+   the running image, images before `d2cca35` never create it). The legacy pod,
+   once a non-owner, needs the table to exist with exactly one row equal to the
+   compiled version (1), readable by it, or a restart fails. As `mctl-api`,
+   before the transfer: `CREATE TABLE IF NOT EXISTS
+   public.work_items_schema_version (version INT NOT NULL)` plus one row `1`.
+   It then moves with the other relations and `ApplySchema`'s ownership check
+   passes. Residual risk: the row asserts version 1 before `ApplySchema` ran
+   (the migration re-records the same value). Rejected alternative: grant
+   SELECT only after the migration, inside a stated maintenance window with a
+   freeze of legacy pod restarts and rollouts; if the operator prefers it, the
+   runbook must state the window and the freeze.
+3. Ownership transfer and transitional grants, in ONE transaction, by hand, by
+   the operator, limited to the inventory of step 0. The order matters: a grant
+   to the current owner is a no-op, and `ALTER ... OWNER TO` re-keys the old
+   owner's ACL entry to the new owner, which would leave the legacy `mctl-api`
+   role with nothing. So the grants follow the owner change:
+   a. `ALTER ... OWNER TO glovo_migrator` for each object in scope, run by a
+      role that is a member of both owners (see the prerequisites above).
+   b. Then, still in the same transaction and as the new owner or a member of
+      it, `GRANT ... TO "mctl-api"` without any REVOKE: the `genericGrants`
+      privileges on each existing generic table (SELECT, INSERT, UPDATE; DELETE
+      only on `agent_run_tokens`), SELECT on `work_items_schema_version`,
+      USAGE on `work_item_intents_id_seq` (and any other sequence old pods or
+      DevLoop use), EXECUTE on the functions they need, USAGE on schema
+      `public`. Whether the legacy role needs more than `genericGrants` for
+      DevLoop is UNVERIFIED; the inventory must confirm it.
+   c. A sequence owned by a table does not move automatically with it
+      (UNVERIFIED on this server): transfer and verify `work_item_intents_id_seq`
+      explicitly (`pg_class.relowner`).
+   If anything fails the transaction rolls back and the legacy role is
+   unchanged.
+4. Run the read-only verifier, which also probes the legacy role's EFFECTIVE
+   privileges after the transfer: `cmd/glovo-migrate -verify` with
    `GLOVO_MIGRATION_DB_URL` (the operator-held `glovo_migrator` login; no
    `-confirm`, READ ONLY transaction, never mounted into the API pod). Output is
    `ok`, `diverged` or `unknown`; `unknown` outranks `diverged` and never

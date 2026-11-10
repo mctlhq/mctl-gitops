@@ -14,9 +14,9 @@
 # read failed (outranks all), 3 = observed but wrong (not the expected migrator,
 # role missing, CREATE absent), 2 = foreign-owned objects; precedence 1, 3, 2.
 # A read-only `-verify` mode (no -confirm, same GLOVO_MIGRATION_DB_URL) is run
-# by the operator, not by this Job. It never transfers
-# ownership; a foreign-owned object makes it exit 2 before any DDL. The args
-# below are inert while command is /bin/false.
+# by the operator, not by this Job. It never transfers ownership and issues no
+# DDL on exit 1, 2 or 3 (see roles.patch.md, "Migrator exit codes and flags").
+# The args below are inert while command is /bin/false.
 apiVersion: batch/v1
 kind: Job
 metadata:
