@@ -305,6 +305,17 @@ env:
   # A job nobody claimed for this long is routed to the operator stream
   # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
   AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
+  # Managed runtime budget for PRODUCTION (owner decision 2026-11-09 on
+  # mctlhq/mctl-telegram#334, W6). INERT: MANAGED_RUNTIME_ENABLED stays "false",
+  # so no account can switch to `managed` and no pool worker exists here. The
+  # server has no global monthly cap, so worst-case spend is bounded by
+  # GLOBAL_DAY x 30, not by the 10 USD per-account month figure. Turning the
+  # runtime on is a separate rollout PR after #889 and #334 close.
+  MANAGED_RUNTIME_ENABLED: "false"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "0.50"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "10.00"
+  MANAGED_BUDGET_USD_GLOBAL_DAY: "2.00"
+  MANAGED_MAX_JOB_COST_USD: "0.25"
   # Assistant registry (mctl-telegram#1020, #1049): installs fetch the
   # materialized definition from mctl-api's assistant catalog (4.142.0+),
   # verify its digest and store it next to the install revision; claims read
