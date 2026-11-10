@@ -51,7 +51,7 @@ Two further facts the owner should have in front of them when deciding:
    `sha256:ed0a3408b42fb2b4960a4ed3c6521efef834aa27aa439eab8aac484f66d5bc92`. The
    proposal text on mctl-gitops `main` now hashes to
    `sha256:9bd4b0c27ffb35b70472dae1898c25e1347d1bc9ff63e7b305e1c9f5a60740fd`
-   (`scripts/proposal-content-digest.py`), because commit `3d33c949d` amended `design.md`
+   (`scripts/proposal-content-digest.py`), because commit `3d33c949d` (mctl-gitops#2562) amended `design.md`
    after the approval and after the merge (it describes the `Membership.IsMember(ctx, ...)`
    change that mctl-api #1001 made). The approval therefore no longer binds the bytes on
    `main`. The amendment is a documentation catch-up, not a scope change, but the binding is
@@ -89,7 +89,7 @@ the owner's call rather than a defect. Paths are relative to the mctl-api reposi
 | 3 | Tx-aware store methods (create, lock, reserve, consume, revoke, mark-unknown, decide, status, for-decision); none begins or commits; nil collaborators give `not_ready` | DONE | `internal/workitems/glovo_approvals.go:177,186,268,337,367,400,424,478,506`; `TestGlovoApprovalLifecycle`, `TestGlovoNilCollaboratorIsNotReady`, `TestGlovoDecisionsTypedNilDependenciesAreNotReady` |
 | 4 | Generic paths refuse `glovo.` kinds; generic CAS statements map a Glovo row to `approval_kind_not_spendable_here` | DONE | `internal/workitems/action_approvals.go:803,889,944,1037,1097`; `internal/api/handlers_action_approvals.go:241`; `TestGenericPathsRefuseGlovoKinds`; the pre-existing work-items and receipt-gate suites pass unchanged (HTTP-level test gap is under T9) |
 | 5 | `AuthorityBasisResourceOwner`; `glovo.order.owner-approval` v1 registered; `decisionCapture` records `resource_owner` | DONE | `internal/governance/governance.go:60,91`; `internal/api/handlers_approval_governance.go:123-131`; `TestGlovoOwnerApprovalPolicyRegistered`, `TestDecisionCaptureForGlovoKind` |
-| 6 | Owner decision: uniform 403, membership through `decideWrittenRole` without `roleGate`, `isGlovoOwnerDecider`, bridge-pool-free decide tx, owner read rule, audit without `args_digest` | DONE | `internal/api/handlers_action_approvals.go:699,717`; `internal/workitems/glovo_decisions.go:49`; `TestGlovoOwnerDecision`, `TestGlovoOwnerSeesTheApproval`, `TestGlovoOwnerDecisionBarsGlovoTokens`; existing decide tests pass unchanged |
+| 6 | Owner decision: uniform 403, membership through `decideWrittenRole` without `roleGate`, `isGlovoOwnerCandidate` (`handlers_action_approvals.go:687`) and `isGlovoOwnerDecider` (`:700`), bridge-pool-free decide tx, owner read rule, audit without `args_digest` | DONE | `internal/api/handlers_action_approvals.go:687,700,717`; `internal/workitems/glovo_decisions.go:49`; `TestGlovoOwnerDecision`, `TestGlovoOwnerSeesTheApproval`, `TestGlovoOwnerDecisionBarsGlovoTokens`; existing decide tests pass unchanged |
 | 7 | `receipt.Fence` with `PreLock` and `Check`; `WriteFence.PreLock` hook, no-op on `refusingFence`; `receipt.Membership`; `Audit`; `Sweeper` | DONE | `internal/glovo/receipt/fence.go:93,177`; `internal/bridge/permit.go:51-107`; `internal/glovo/receipt/audit.go`, `sweeper.go:35`; `TestFence*` (receipt), bridge suite unchanged (default fence byte for byte) |
 | 8 | `receipt.Ready` with every design section 8 condition; startup unchanged with the closed gate and the fence stays `refusingFence` | DONE | `internal/glovo/receipt/ready.go:63`; `TestReady` (12 subtests), `cmd/api/glovo_bridge_test.go:132` `TestInstallWriteFenceNeedsAllSixPreconditions` |
 | 9 | Cross-slice package comments; fmt, vet, lint, tests | DONE | `internal/glovo/receipt/doc.go`; `gofmt -l` and `go vet` clean on the touched packages in this run; `golangci-lint` was not re-run here (CI of #998 is the record for lint) |
@@ -99,7 +99,7 @@ the owner's call rather than a defect. Paths are relative to the mctl-api reposi
 | ID | Requirement (short) | Status | Evidence and gap |
 |---|---|---|---|
 | T1 | A `hir_` answer alone changes no `aar_`, order or bridge row; `IssueWritePermit` refused | PARTIAL | No test names `hir_`; the string does not occur in mctl-api `main`. The property holds structurally (only the owner decision moves `pending`, `TestGlovoOwnerDecision`; a permit needs a `reserved` `aar_`, `TestFenceReplayAndForeignCommand`), but no test drives a clarification answer. |
-| T2 | Wrong decider refused: other member, non-owner admin, Glovo-audience token, agent, service, CI, relayed, surface | PARTIAL | non-owner, non-owner admin, service, agent, nobody, audience and worker tokens are tested (`TestGlovoOwnerDecision`, `TestGlovoOwnerDecisionBarsGlovoTokens`). CI, relayed and surface callers are excluded by `isGlovoOwnerCandidate` (`handlers_action_approvals.go:699`) but have no test case. |
+| T2 | Wrong decider refused: other member, non-owner admin, Glovo-audience token, agent, service, CI, relayed, surface | PARTIAL | non-owner, non-owner admin, service, agent, nobody, audience and worker tokens are tested (`TestGlovoOwnerDecision`, `TestGlovoOwnerDecisionBarsGlovoTokens`). CI, relayed and surface callers are excluded by `isGlovoOwnerCandidate` (`handlers_action_approvals.go:687`) but have no test case. |
 | T3 | Owner cannot decide a non-Glovo `aar_`; `mctl-agents-approve` stays admin-only | DONE | `TestGlovoOwnerDecision` (generic row by the owner: 403; by an admin: 200); the admin-only operation is covered by the existing suites, unchanged. |
 | T4 | Byte-identical 403 for unknown, non-Glovo and someone else's id | DONE | `TestGlovoOwnerDecision` compares `res.raw` for all three. |
 | T5 | 20 concurrent approve/refuse pairs, one winner | DONE | `TestGlovoConcurrentDecisions` (`glovo_approvals_test.go:600`). |
@@ -133,7 +133,7 @@ the owner's call rather than a defect. Paths are relative to the mctl-api reposi
 | OPEN-989-1 | Ownership of the four tables moves to `glovo_migrator` | DONE | Decided 2026-11-10; implemented as task 2b. |
 | OPEN-989-2 | Provisioning of `glovo_runtime` and `glovo_migrator` | NOT DONE | Staged only, in the draft mctl-gitops#2563 (`deploy/staged/glovo-m1/db/`, `suspend: true`, inert). No role, secret or env var exists live. Owner GO 2026-11-10 to PREPARE the two roles; applying is a separate step and nothing is applied. |
 | OPEN-989-3 | Minimum live tenant role for the owner-decider | OWNER-DECISION | Implemented as the proposal said: `glovoMinDeciderRole = operations.RoleDeveloper` (`handlers_action_approvals.go`, constant above `isGlovoOwnerCandidate`). Decided by the owner 2026-11-10: `developer`, and only the order owner with current membership. |
-| OPEN-989-4 | Who writes the basket payload into `bridge_commands.payload` | PARTIAL | In mctl-api the #985 dispatcher writes the order's final snapshot canonical bytes as the payload and refuses a fingerprint mismatch (`internal/glovo/control/dispatcher.go:353-394`), and the fence recomputes from the stored payload (`fence.go:226-243`). The Telegram side (mctl-telegram#1262: write exactly the payload's lines, vendor #1059) is tracked in that repository and was not verified here. |
+| OPEN-989-4 | Who writes the basket payload into `bridge_commands.payload` | PARTIAL | In mctl-api the #985 dispatcher writes the order's final snapshot canonical bytes as the payload and refuses a fingerprint mismatch (`internal/glovo/control/dispatcher.go:353-394`), and the fence recomputes from the stored payload (`fence.go:226-243`). The client-side half (write exactly the payload's lines, vendor #1059) was tracked in mctl-telegram#1262, which is CLOSED (completed 2026-11-10T01:55Z) and whose body does not carry the obligation; it was not verified here and is not shown to be met, so the row stays PARTIAL and the obligation now lives in mctl-api#1004 (F2), added 2026-11-10. |
 | OPEN-989-5 | Fingerprint of a low-entropy fake basket travels through Temporal history | OWNER-DECISION | Implemented as the merged #957/#1044 contracts say (`GlovoControlInput` carries `approval_ref` and the fingerprint). Decided by the owner 2026-11-10: allowed ONLY for the synthetic fake-only M1; a keyed digest is required before any real data. |
 | OPEN-989-6 | Payload shape | DONE | Closed 2026-11-10 in the proposal; the vendored schema and `TestApprovalBasketRefResolves` (basket package) were not re-run individually but `internal/glovo/basket` passed. |
 | OPEN-989-7 | `ReservePermitMargin` | OWNER-DECISION | Implemented at the recommended 120 s (`internal/workitems/glovo_kinds.go:72`), enforced in Reserve (`glovo_approvals.go:305`) and in dispatch (`control/dispatcher.go:315-318`). Decided by the owner 2026-11-10: 120 s. |
@@ -172,7 +172,7 @@ outcome = T13, T16; readiness = tasks 1, 2b, 8 and T15b, T15e, T18; secrecy = T1
 | C9 | T21 forced barriers for permit vs decide, dispatch vs decide, sweeper vs permit; `Sweeper.Run` test (P3) | test | F1 mctl-api#1003 |
 | C10 | OPEN-989-8 Sweeper hook location and owner; start the sweeper | design + code | F2 mctl-api#1004 (decided: separate sweeper started from `main.go`) |
 | C11 | OPEN-989-2 role and secret provisioning | deployment | F2 mctl-api#1004 + mctl-gitops#2563 (draft) |
-| C12 | OPEN-989-4 Telegram side writes exactly the payload lines | cross-repo | mctl-telegram#1262 (verify there) |
+| C12 | OPEN-989-4 whoever enqueues the command writes exactly the approved payload lines (client half was mctl-telegram#1262, closed, obligation not in its body) | cross-repo | F2 mctl-api#1004 (explicit item, added 2026-11-10) |
 | C13 | `glovo.cancel_order_fake` refusal: the fence refuses it permanently with `approval_invalid` and takes no lock (`TestFenceUnfencedCommandsAreRefusedPermanently/cancel_order_fake`); M1 has no cancel approval, so a cancel has no write path. Decide whether M1 surfaces a clearer refusal or defers to an M2 cancel-approval design (P3) | design | F3 mctl-api#1005 |
 
 The 13 PARTIAL or NOT DONE matrix rows map to entries C1-C12 (C4 covers two rows, T9 and
@@ -199,7 +199,7 @@ independent reason.
 
 ## 5. Decision and follow-ups
 
-> **Proposed, and approved in form by the owner on 2026-11-10 with an ordering condition:**
+> **Proposed; the owner agreed to it on 2026-11-10 on the ordering condition below:**
 > the #989 implementation slice is closed as **DELIVERED-BY-DIRECT-PRS**, with **13
 > partial or not-done matrix rows carried to named follow-ups**, **only after** the
 > follow-ups exist and are linked and this pull request is updated. The DevLoop run
@@ -212,13 +212,16 @@ The follow-ups were created on 2026-11-10, all in mctlhq/mctl-api, each carrying
 | Follow-up | Issue | Scope | Carries |
 |---|---|---|---|
 | F1 | mctl-api#1003 | tests only: authorization, isolation, secrecy, races | T1, T2, T6, T9, T22, T15d, T15e, T17, T19, T21 (10 PARTIAL rows), plus the `Sweeper.Run` test |
-| F2 | mctl-api#1004 | P1 wiring, migrations, sweeper started from `main.go`, readiness, membership detector slice, activation-time hook proof, gitops roles; the hold flag stays `false` | OPEN-989-8 and OPEN-989-2 (the 2 NOT DONE rows), activation blockers A2-A6 (section 4.2) |
+| F2 | mctl-api#1004 | P1 wiring, migrations, sweeper started from `main.go`, readiness, membership detector slice, activation-time hook proof, gitops roles; the hold flag stays `false` | OPEN-989-8 and OPEN-989-2 (the 2 NOT DONE rows), OPEN-989-4 (PARTIAL, payload ownership item), activation blockers A2-A6 (section 4.2) |
 | F3 | mctl-api#1005 | docs only, non-blocking for M1: the `cancel_order_fake` refusal decision | item C13 |
-| existing | mctl-telegram#1262 | the Telegram side writes exactly the payload lines | OPEN-989-4 (1 PARTIAL row) |
 | existing | mctl-gitops#2563 | staged roles, secrets, migration job (draft, inert) | OPEN-989-2 deployment half, A6 |
 
-All 13 PARTIAL or NOT DONE matrix rows are bound: 10 to F1, 2 to F2, 1 to
-mctl-telegram#1262. A4 (membership detector) is a separate slice inside F2, with a
+All 13 PARTIAL or NOT DONE matrix rows are bound: 10 to F1 and 3 to F2 (OPEN-989-2,
+-4 and -8). mctl-telegram#1262, which the earlier text named for OPEN-989-4, is closed
+(completed 2026-11-10T01:55Z) and its body does not carry the obligation, so it is not a
+home; the obligation is an explicit item of mctl-api#1004. The carried count stays 13 rows,
+now 10 in F1 and 3 in F2 with nothing left outside mctl-api (plus the staged gitops
+work in mctl-gitops#2563 for OPEN-989-2). A4 (membership detector) is a separate slice inside F2, with a
 heartbeat of at most 5 minutes that fails closed. A1 (the hold flag) is carried nowhere: it
 stays an owner decision for the activation PR.
 
@@ -289,3 +292,16 @@ those, so adding it does not change the content digest of the proposal
 after), and it therefore does not alter what any approval binds. It lives beside the
 proposal it records rather than in `_mentor/` (which holds weekly digests) because it is
 about this proposal only.
+
+Validators run on this branch (2026-11-10), from the repository root:
+
+- `scripts/proposal-content-digest.py <proposal-dir>`: prints
+  `sha256:9bd4b0c27ffb35b70472dae1898c25e1347d1bc9ff63e7b305e1c9f5a60740fd`, unchanged.
+- `scripts/proposal-content-digest.py --selftest`: pass.
+- `scripts/validate-agents-state-approval.py`: 936 proposals checked, none unrunnable. Pass.
+- `scripts/validate-agents-state-approval.py --selftest`: pass.
+- `scripts/validate-glovo-m1-staging.py`: FAILS locally, only because kubeconform has no
+  schema for the `ExternalSecret` CRD in this environment ("could not find schema for
+  ExternalSecret"). That is environmental, and the script excludes `agents-state/` from its
+  leak guard and reads nothing this change touches. Not run to a pass here; CI's CRD
+  catalog is the check for it.
