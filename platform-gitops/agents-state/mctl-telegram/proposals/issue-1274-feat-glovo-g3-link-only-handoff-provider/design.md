@@ -2,7 +2,7 @@
 
 ## Current state
 
-In this repository (`main` at `641ce02`):
+In this repository (`main` at `976afa32`, which contains #1262 and #1276):
 
 - **Facade.** `cmd/glovo-mcp/main.go` with `internal/glovo/{authn,config,contract,facade,mctlapi,tools}`.
   - `internal/glovo/tools/tools.go` registers exactly the contract tools through one handler
@@ -36,13 +36,23 @@ In this repository (`main` at `641ce02`):
   TM1-TM16. None of them has a link-only provider.
 - **Redaction.** `internal/audit/redact.go` (line 138) already redacts the facade's forwarded
   token and scope handle. `internal/netsafe/netsafe.go` exists for outbound safety.
-- **No provider module.** There is no `provider/` directory on `main` (`ls provider` fails). The
-  provider worker is designed in #1262 and exists only as a draft (#1258 branch). #1262 places it
-  at `provider/glovo/` with `internal/protocol/v1alpha1`, `internal/bridgeclient` (an
+- **Provider module (on `main`).** `provider/glovo/` is merged (#1262, #1276), so this slice no
+  longer waits for it. It holds `internal/protocol/v1alpha1`, `internal/bridgeclient` (an
   origin-pinned RoundTripper, no proxy, no redirects), `internal/executor` (a single outcome
   table), `internal/fakestore` (effects keyed by `command_id`), `internal/fakeonly` (a
-  `GLOVO_*TOKEN*`/`SESSION`/`COOKIE`/`PASSWORD`, `GLOVO_API_*`, `GLOVO_BASE_URL` deny list) and a
-  `BRIDGE_WORKER_IDENTITY` such as `provider:glovo`.
+  `GLOVO_*TOKEN*`/`SESSION`/`COOKIE`/`PASSWORD`, `GLOVO_API_*`, `GLOVO_BASE_URL` deny list), a
+  `BRIDGE_WORKER_IDENTITY` such as `provider:glovo` and `internal/poller`. Facts this design depends
+  on, read from `origin/main`:
+  - `wire.go:27-30`: `Version` v1alpha1, `VersionV2` v1alpha2, `ClaimVersion` v1alpha1, `ClaimV2`
+    `bridge.mctl.ai/claim/v1alpha2`; `wire.go:201,212` embed only the v1alpha2 command schema
+    `command-place-order-fake` (`urlCommandV2`); `ParseCommand` (`wire.go:315`) switches on
+    `Version` and `VersionV2`, and v1alpha2 accepts `place_order_fake` only; `ParseClaimResponse`
+    (`wire.go:389`) accepts the two claim envelopes above and nothing else.
+  - `wire.go:124`: `Mutating(kind)` is `kind == KindPlaceOrder || kind == KindCancelOrder`. It
+    decides, in `poller.go:285`, whether the permit path runs (`!cmd.Mutating()` goes to
+    `RunRead` and returns), and in `bridgefake.go:427`.
+  - `poller.go:252`: a command whose `Audience` differs from `Cfg.WorkerIdentity` is dropped as
+    `schema_invalid`/`audience_mismatch`.
 
 Seam texts read (mctl-gitops `agents-state`, as mounted 2026-11-10):
 
@@ -75,7 +85,7 @@ Deployed state checked:
   - #960 is `accepted`;
   - #988 and #1236 are `implemented`;
   - #959, #1059, #1184, #1227, #1235 and mctl-gitops#2470 are `merged`;
-  - #1262 is `proposed`.
+  - #1262 is merged (mctl-telegram `976afa32`, with #1276).
 - Not observed: whether the amendment branches `docs/amend-glovo-r7-regressions` and
   `docs/amend-glovo-1044-990` have merged (no branch view in this checkout), and the mctl-api
   deployed values. Both are recorded under Open questions in requirements.md. Neither is assumed
@@ -164,8 +174,28 @@ Test matrix T2/T3: there is one negative test per rule. With the rule's check re
 test must go red.
 
 `ItemsText(lines) string` renders the approved lines as `"<quantity> x <name>"`, one per line.
-The input has already been validated: NFC, no control or format characters (`unicode.Cc`/`Cf`),
-1..80 runes, and no `://`, `www.`, `<` or `>`. Free text never reaches `Build`.
+The input has already been validated against the item-name allowlist, which is a closed set and
+not a denylist: 1..80 runes, NFC, and every rune one of
+- a Unicode letter (`unicode.L`);
+- an ASCII digit;
+- `U+0020` space;
+- one of `-` `'` `,` `&`.
+
+The first and last rune is a letter or a digit, and two spaces never follow each other. The set
+forbids `.` `/` `:` `@` `[` `]` `(` `)` `*` `_`, the backtick and `\`, so a name cannot carry a
+bare domain, a `t.me/` address, an `@handle`, a Markdown link, emphasis or code, and the old
+substring checks (`://`, `www.`, `<`, `>`) are subsumed. Combining marks and format
+characters are outside the set, which is why the name must be NFC (precomposed letters pass). The
+rule lives in `handoff-link.json` beside the vectors, with accept and `must_reject` name
+vectors, so mctl-api, the worker and the facade apply the same rule. Free text never reaches
+`Build`.
+
+What the allowlist does not do: a name made only of letters, such as an instruction sentence,
+passes. The control for that case is rendering. Restated text travels only in the data field
+`handoff_items_text` (and in the approval text), the facade output schema constrains each line to
+`<quantity> x <name>` with the same character set, the tool description tells the model to show
+the field verbatim as plain text or in a code block, and the `notice` says the text is the user's
+own words. The text is never placed in the URL, in the `notice`, or in an error.
 
 ### 2. Handoff basket and command (contract text for mctl-agents, follow-up task 10)
 
@@ -178,19 +208,57 @@ except the two optionals:
 - `city`;
 - `category?`;
 - `store?`;
-- `lines[1..30]`, each `{name, quantity 1..100}`.
+- `link_spec`: `"sha256:" + hex(SHA-256(bytes of handoff-link.json))`, set by mctl-api at prepare
+  from its vendored copy (see "Pinning the link rules" below);
+- `lines[1..30]`, each `{name, quantity 1..100}`; `name` follows the item-name allowlist of
+  section 1.
 
 It has no price, fee, total, store ref or availability field. The patterns equal
 `handoff-link.json`. The fingerprint is `"sha256:" + hex(SHA-256(JCS(basket)))`, using the #1059
-JCS implementation and its vectors. Lines keep the user's order, and both the order and
-duplicates are part of what the user approves.
+JCS implementation and its vectors.
+
+Deliberate difference from #1059. The #1059 approval basket is normalised: lines sorted
+ascending by a unique `item_code`, duplicates refused (the merged `checkBasketRules`
+in `wire.go` refuses unsorted and duplicate input and never re-sorts). The handoff basket has no
+item code and no normalisation. Lines keep the user's order, and both the order and duplicates
+are part of what the user approves: restated text is read by a person, and "2 x Agua" is not
+"1 x Agua, 1 x Agua". The vectors below use the method of #1059 (JCS, SHA-256), computed here with
+a placeholder `link_spec` of `sha256:` followed by 64 zeros; task 10 regenerates them with the real
+file digest and a JCS implementation, and they are the contract once vendored:
+
+| id | lines, in order | fingerprint (placeholder `link_spec`) |
+|---|---|---|
+| A | `Tortilla` x1, `Agua` x2 | `sha256:7f1166755743217ad2cdc829ad53878eee693d947227f92416bc6468daedac7d` |
+| B | `Agua` x2, `Tortilla` x1 | `sha256:6b49099540660f44ca79218d46f801fafe1b94c6e4b693bb45612a8e5ec222f2` |
+| C | `Agua` x1, `Agua` x1 | `sha256:99159b3ade30b0544510f69039bbc7a53de865dcf6d43f270ec3812ac59b02c2` |
+| D | `Agua` x2 | `sha256:78749403e394450a98908eef04e640dbf9d25badafe465d5a10ac1b9e195c706` |
+
+A and B differ, so order is bound. C and D differ, so duplicates are not merged. Common fields:
+`v` `mctl-handoff-basket/v1`, `lang` `en`, `cc` `es`, `city` `madrid`, no `category` or `store`.
+
+Pinning the link rules. The link is a function of the basket and of `handoff-link.json`. Without a
+pin, an approval could be given for one version of the allowlist and dispatched under another.
+So the basket carries `link_spec`, the fingerprint and the `aar_` cover it, and both consumers
+check it: the provider worker compares it with the digest of its vendored file and answers
+`failed_terminal`/`provider_rejected`/`none` before any permit on a mismatch; mctl-api keeps the
+vendored files of every version it has issued, recomputes the link with the file whose digest
+equals `link_spec`, and refuses the dispatch as `intent_mismatch` (#985 §2b) when it holds no such
+file. The approval text shows the same deterministic link, computed by mctl-api from that file,
+next to the restated items, so the owner of the approval sees where the user will be sent
+(owner decision 4).
 
 The command schema is `command-issue-handoff-link.schema.json` with `schema_version`
 `bridge.mctl.ai/v1alpha3` and `kind` const `issue_handoff_link`. The envelope is the #1059
 v1alpha2 write envelope field by field: `approval_ref` required, no `install_revision_ref`, and
 `payload` is the handoff basket exactly. It is a new version, not an edit of v1alpha2, because
 of the #1059 rule "any byte change is a new `schema_version`". mctl-api leases it only to a
-provider whose `BridgeProviderConfig` declares v1alpha3. In M1 that is only
+provider whose `BridgeProviderConfig` declares v1alpha3 (#986 `supported_versions`, `Caller.Versions`).
+How the command reaches the worker is not verified end to end: the merged worker accepts the claim
+envelopes `bridge.mctl.ai/v1alpha1` and `bridge.mctl.ai/claim/v1alpha2` only (`wire.go:29-30,389`) and
+embeds no v1alpha3 schema, so the worker needs a `VersionV3` constant, the embedded schema, one new
+`ParseCommand` case and, if mctl-api uses a new `claim/v1alpha3` envelope instead of carrying the
+command inside `claim/v1alpha2`, one more accepted claim value. Which of the two mctl-api does is
+OPEN (requirements, open questions). In M1 that is only
 `provider:glovo-handoff`. The fake provider is never handed it, and the handoff provider is
 never handed `place_order_fake`.
 
@@ -242,6 +310,12 @@ The §3a body gains, **only** for `state=handoff_issued`:
 
 This reverses the §3a line "`handoff_url` is never part of this body" for this kind only.
 
+`unknown` for this kind (a reclaim after a permit, a revocation between permit and result, a
+rejected result) is never shown as success or failure: no link, no items text, `OUTCOME_UNKNOWN`,
+and the description of section 5 tells the user what happened. A revocation after `handoff_issued`
+cannot recall a link that was already issued, and `handoff_url` has no TTL: it is a public page
+address, and the status keeps returning the stored link (retention follows the order record).
+
 ### 4. Consent record, not account binding (seam text for #959/#961)
 
 The `link_handoff` connection kind has states `active`, `revoked` and `expired`. It stores
@@ -263,7 +337,13 @@ immediately `active`. Revoke and expiry reuse #959 `LiveConnection` and the #985
   - `glovo_order_status`: output
     `{state: enum[open,awaiting_approval,approved,refused,expired,cancelled,dispatched,handoff_issued,failed,unknown], outcome: const OUTCOME_UNKNOWN, handoff_url?(pattern = templates), handoff_items_text?, notice?}`.
 
-  Every description ends with the not-affiliated notice. There are no order-history, preview or
+  Each state value of the `state` enum is a wire state of mctl-api#957 §3a, checked against its
+  tables: `open`, `awaiting_approval`, `approved`, `refused`, `expired`, `cancelled`, `dispatched`,
+  `failed`, `unknown` all appear there; `handoff_issued` is the new value of section 3 and `placed`
+  is deliberately absent. `handoff_items_text` is constrained line by line (`<quantity> x <name>`,
+  the item-name character set). Every description ends with the not-affiliated notice. The
+  `unknown` description says that MCTL cannot confirm whether a link was issued, that MCTL placed no
+  order, and that a new request and a new approval is the way to get a link. There are no order-history, preview or
   basket tools, because there is no catalogue.
 - `internal/glovo/config`: new `GLOVO_MCP_PROVIDER_KIND` = `fake` (default) | `link_handoff`.
   It selects the contract and the `impls` map. One process serves exactly one contract, and the
@@ -304,6 +384,17 @@ immediately `active`. Revoke and expiry reuse #959 `LiveConnection` and the #985
   Errors from `Build` give `failed_terminal`/`provider_rejected`/`none` with no permit
   requested. The builder runs before the permit, as a pre-flight check. The outcome table gains
   these rows in the single `executor` table.
+- **`Mutating(kind)` (fail-open if forgotten).** `provider/glovo/internal/protocol/v1alpha1/wire.go:124`
+  today returns true for `place_order_fake` and `cancel_order_fake` only. `poller.go:285` sends every
+  other kind to `RunRead` and returns before the permit path, so an `issue_handoff_link` command
+  would be answered without a write permit, the single-use `aar_` would never be consumed and the
+  link could be re-issued on every approval replay. The change adds `KindIssueHandoffLink` to
+  `Mutating`, and also makes the function exhaustive: a test walks the closed list of kinds and
+  requires each to be mutating or in an explicit read set, so a future kind cannot default to a
+  read. The `bridgefake` check at `bridgefake.go:427` uses the same function. A mutation test
+  removes the kind from `Mutating` and must go red twice: the unit table, and an end-to-end run
+  through `poller` and `bridgefake` that expects exactly one permit request and a consumed `aar_`
+  (tasks 7a and T13).
 - Egress: the #1262 origin-pinned RoundTripper is the only HTTP client in the module. A test
   installs a recording `DialContext` and runs the full link-handoff path against `bridgefake`. It
   asserts that every dial goes to the mctl-api origin, and no dial goes to any other host, `glovoapp.com`
@@ -366,6 +457,11 @@ immediately `active`. Revoke and expiry reuse #959 `LiveConnection` and the #985
     approved.
   - Seam drift across four repos: the canonical data file and schemas live in mctl-agents and are
     vendored with sha256 pins, the same mechanism as #1059.
-  - #1262 not merged: the provider tasks (1, 5-7) need its `provider/glovo` module and wait for
-    it. The facade, contract and docs tasks (2-4, 8) do not depend on it and can be reviewed first,
-    behind the default `fake` kind.
+  - Forgotten `Mutating` entry: the permit is skipped and the `aar_` is never consumed. A new kind
+    in the exhaustive table and an end-to-end permit assertion, both mutation-verified.
+  - Allowlist drift between approval and dispatch: `link_spec` in the basket, checked by the worker
+    and by mctl-api.
+  - v1alpha3 claim envelope: not verified in mctl-api (OPEN); the worker side is one constant, one
+    schema and one `ParseCommand` case.
+  - The provider tasks no longer wait for #1262 (merged). They do wait for task 10 (the contract
+    files) and for the mctl-api lease of v1alpha3.

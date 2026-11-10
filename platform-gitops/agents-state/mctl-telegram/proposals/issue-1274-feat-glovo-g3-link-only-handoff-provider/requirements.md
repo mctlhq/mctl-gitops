@@ -15,8 +15,8 @@ This is a new scope with its own approval. No approval of the M1 slices carries 
 repository the proposal owns four things:
 
 - a pure, allowlisted link builder;
-- a second, link-only provider kind in the provider worker of #1262 (`provider/glovo/`, not yet
-  on `main`);
+- a second, link-only provider kind in the provider worker of #1262 (`provider/glovo/`, on
+  `main` since #1262 and #1276, `976afa32`);
 - a separate tool contract for the facade (`cmd/glovo-mcp`, `internal/glovo/*`);
 - the canonical seam document that the owning slices amend: mctl-api#957 §3a, mctl-api#985 §2a,
   mctl-agents#1059 and mctl-api#989.
@@ -62,11 +62,27 @@ Prepare and approval
   `{name, quantity}`. It holds no price, fee, total, availability or delivery time. THE SYSTEM
   SHALL bind `basket_fingerprint = "sha256:" + hex(SHA-256(JCS(basket)))` to the order and the
   `aar_` exactly as the M1 path does.
-- IF an item name is empty, has more than 80 characters, is not NFC, contains a control or
-  format character, or contains `://`, `www.` or `<`/`>` THEN THE SYSTEM SHALL refuse the
-  prepare with `invalid_arguments`.
+- IF an item name is empty, has more than 80 characters, is not NFC, or contains any character
+  outside the item-name allowlist THEN THE SYSTEM SHALL refuse the prepare with
+  `invalid_arguments`. The allowlist is closed: Unicode letters (category `L*`, NFC), the digits
+  `0-9`, the space `U+0020` and the four marks `-` `'` `,` `&`. The first and last character is
+  a letter or a digit, and two spaces never follow each other. It forbids, among others,
+  `.` `/` `:` `@` `[` `]` `(` `)` `*` `_`, the backtick, `\`, `<`, `>`, `#`, `%` and every control,
+  format and combining character. A denylist of substrings is not used.
+- WHEN restated item text is shown (the facade output field, the approval text, the status
+  `notice`) THE SYSTEM SHALL carry it as a data field and SHALL tell the model to show it
+  verbatim as plain text or in a code block. The text is the user's own words, never an
+  instruction. The allowlist cannot make prose harmless (a name made only of letters can still
+  read like an instruction), so this rendering rule is the control for that case.
 - WHILE an order has no `approved` `aar_` that matches its fingerprint THE SYSTEM SHALL issue no
   handoff record and no link.
+- THE SYSTEM SHALL bind the version of the link rules to the approval. The basket carries
+  `link_spec = "sha256:" + hex(SHA-256(handoff-link.json))`, so the fingerprint and the `aar_`
+  cover it. IF the `link_spec` of a command is not the digest of the file the provider worker or
+  mctl-api holds THEN THE SYSTEM SHALL refuse it (the worker as `failed_terminal`/`provider_rejected`/`none`
+  before any permit, mctl-api at dispatch as `intent_mismatch`) and SHALL issue no link.
+- THE SYSTEM SHALL show the deterministic link, computed by mctl-api from the pinned file, in the
+  approval text next to the restated items.
 - WHEN the approval is refused, expires or is revoked, or the consent record is revoked, before
   the command completes THE SYSTEM SHALL end the order as in M1 (`refused`, `expired`,
   `cancelled` or `unknown`) and SHALL issue no link.
@@ -75,7 +91,18 @@ Handoff effect
 - WHEN an approved handoff command is executed THE SYSTEM SHALL create exactly one handoff
   record per order. The record holds the link, the template id and the restated item text.
 - WHEN the same command is redelivered or its result is replayed THE SYSTEM SHALL return the
-  same record and SHALL NOT create a second link or a second record.
+  same record and SHALL NOT create a second link or a second record. WHEN an `aar_` that has been
+  consumed is presented again THE SYSTEM SHALL answer `approval_replayed` (#989 fence) and create
+  no second record.
+- THE SYSTEM SHALL treat `issue_handoff_link` as a mutating command in the provider worker
+  (`Mutating(kind)` in `provider/glovo/internal/protocol/v1alpha1/wire.go`), so the write permit
+  is always requested and the single-use `aar_` is consumed. A kind that is neither mutating nor
+  in an explicit read set SHALL fail a test.
+- WHILE the effect of a handoff command is `unknown` (a reclaim after a permit, a revocation
+  between permit and result, a rejected result) THE SYSTEM SHALL report `unknown` and SHALL NOT
+  show a link, a success or a failure. The user is told that MCTL cannot confirm whether a link
+  was issued, that MCTL placed no order, and that a new request with a new approval is the way to
+  get a link.
 - IF the link in the provider's result differs by even one byte from the link that mctl-api
   recomputes from the stored, approved basket THEN THE SYSTEM SHALL reject the result as
   `result_inconsistent`, store no link, and report the order as `unknown`.
@@ -86,7 +113,10 @@ Status
   the not-affiliated notice.
 - WHILE an order belongs to the link-handoff kind THE SYSTEM SHALL NOT report `placed`, `paid`,
   `delivered` or `observed_placed` in any state, in any row of the status tables.
-- THE SYSTEM SHALL return `handoff_url` only in the `handoff_issued` state.
+- THE SYSTEM SHALL return `handoff_url` only in the `handoff_issued` state. The link is a plain
+  public page address with no expiry of its own: a revocation after `handoff_issued` stops later
+  commands, but it cannot recall a link that was already issued, and the status keeps returning
+  the stored link.
 
 No account binding and no Glovo egress
 - WHEN a user connects the link-handoff provider THE SYSTEM SHALL record only consent, country
@@ -101,6 +131,11 @@ No account binding and no Glovo egress
 Fences
 - WHILE serving the link-handoff kind THE SYSTEM SHALL enforce the M1 fences unchanged: two
   tenants, two principals in one tenant, a foreign `order_id` (`not_found`) and approval replay.
+- IF a command's `audience` is not the worker's own identity THEN THE SYSTEM SHALL refuse it
+  locally (the handoff worker refuses a `provider:glovo` command), and mctl-api SHALL lease
+  `issue_handoff_link` only to a provider that declares v1alpha3 and `place_order_fake` never to
+  the handoff provider. IF a facade token's `aud` is not the facade resource THEN THE SYSTEM SHALL
+  refuse the call, for both contracts.
 - THE SYSTEM SHALL keep the fake provider as the default kind and as the test fixture, and every
   existing fake test SHALL pass unchanged.
 
@@ -139,6 +174,17 @@ Every negative criterion has a test that goes red when its check is removed (see
 - Initial country, language and city allowlists: only `en` / `es` / `madrid` were observed.
   The proposal ships `en` and `es`, with the city pattern open to any slug that matches the
   character set. The owner may want an explicit city list instead.
+- Owner decision 4: the link is pinned into the basket (`link_spec`) and shown in the approval
+  text. Proposed: yes to both, because a pin without sight lets the owner approve text that
+  does not show where the user will be sent, and showing the link costs one line.
+- Claim envelope for v1alpha3: the merged worker (`wire.go`) knows the claim envelopes
+  `bridge.mctl.ai/v1alpha1` and `bridge.mctl.ai/claim/v1alpha2` only. Whether mctl-api carries a
+  v1alpha3 command inside `claim/v1alpha2` or in a new `claim/v1alpha3` envelope was not verified
+  in mctl-api (#986). OPEN until it is; the worker change is one accepted value either way.
+- Revoke between permit and result: the expected order is `unknown` (a command cancelled after its
+  permit has `effect_state` `unknown`, #985 §2a) with no link. Whether mctl-api accepts a result
+  that arrives after the cancel was not verified in #985/#986; the test asserts only that
+  `handoff_issued` is never shown for it. OPEN.
 - Reclaim behaviour: under M1, a command redelivered after a reclaim reports
   `applied_prior_lease` and the order becomes `unknown` (#1262). The handoff has no external side
   effect, so this is safe but pessimistic. Relaxing it for this kind is left to the owner and is
