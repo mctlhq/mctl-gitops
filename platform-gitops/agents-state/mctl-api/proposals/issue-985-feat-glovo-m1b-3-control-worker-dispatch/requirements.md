@@ -161,9 +161,16 @@ Revocation race and the write fence
   becomes `unknown`.
 - THE SYSTEM SHALL install the write fence only when all six hold (design §7.3, the
   only list; amended (c)): `glovo.ControlDefault.Open` is true; the owner has lifted hold
-  mctl-gitops#2457; the one-database proof passed; #959 `Ready()` returns nil (a
-  `RevocationHook` is installed); #959 `MembershipRevocationWired()` is true; #989
-  `receipt.Ready(ctx)` returns nil.
+  mctl-gitops#2457; the one-database proof passed; #959 `Ready()` returns nil AND the
+  installed `RevocationHook` is `bridge.CancelOpenForConnections` (not the synthetic no-op;
+  amended 2026-11-10); #959 `MembershipRevocationWired()` is true on a positive signal, a
+  fresh detector heartbeat or end-to-end proof, never a configured label (amended
+  2026-11-10; refusing until the detector exists); #989 `receipt.Ready(ctx)` returns nil.
+- WHEN dispatch calls the membership provider THE SYSTEM SHALL bound the call by
+  `MembershipTimeout` and treat a timeout or error as `unavailable`; a hung provider SHALL
+  NOT hold the order or receipt locks past that bound (amended 2026-11-10).
+- WHEN `fresh_until - now <= ReservePermitMargin` (120 s) THE SYSTEM SHALL refuse with 409
+  `approval_expired` before enqueueing (amended 2026-11-10).
 - WHEN a `lock_timeout` (SQLSTATE `55P03`) occurs on any lock of the #957 §6b order THE
   SYSTEM SHALL answer 409 `tenant_busy`; any other store I/O error SHALL be 503
   `unavailable`. (amended (c))

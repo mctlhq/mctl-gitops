@@ -1,5 +1,18 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-10 (independent review, AMEND)
+
+Where this section and older text disagree, this section wins. Recorded decisions and the owner-only questions (OPEN-957-6, OPEN-957-10) are unchanged.
+
+| Finding | Change here |
+|---|---|
+| `EnableWireVersions` could be called by the wrong store | §6d.1: one sentence and one test, `NewRuntimeStore` is its only caller; `WireVersionsEnabled()` is false on `NewStore` (task T14). |
+| Security tests could pass with the fix reverted | Tasks: a Definition of done clause with a `mutation:` line per test (route matrix per principal, prepare-vs-revoke race, preview single-claim, replay-before-write, readiness gating). |
+| An unobservable worker heartbeat could read as "no worker, fine" | §9: unobserved or unreadable maps to `not_ready` (T15). |
+| No gitops deliverable for the roles and URLs | §6d.1 merge order and task A15: roles `glovo_runtime` and `glovo_migrator`, `GLOVO_DB_URL`, `WORK_ITEMS_DB_URL`, secrets, and the `mctl-api` env, as a dependency of the first Glovo-enabled deploy. |
+| One claim of a preview by two idempotency keys | T16 tests the claim itself (partial unique index and `consumed_order_ref IS NULL`), beside T5. |
+| Stale line references | Re-pinned to mctl-api main `dc55930`. |
+
 ## Amendment 2026-11-09 (c), round 7 of the AMEND PR
 
 Two seams that round 6 left open. Where this section and older text disagree, this section wins.
@@ -767,7 +780,7 @@ does not satisfy readiness.
 - Dispatch and cancel of an approved order belong to mctl-api#985 (M1b/3): its routes, the
   control-worker principal, the `aar_` reserve plus revocation re-check, the order
   transition and `Enqueue`, in one transaction. `cmd_` ids come from `Enqueue`
-  (`store.go:490`), idempotent on `(tenant, execution_id, operation_key)`.
+  (`store.go:614`), idempotent on `(tenant, execution_id, operation_key)`.
 - What this slice guarantees to #985, and checks in integration tests against #985's
   merged code (corrected (c)): the #988 order row carries its `ordr_`, the `we_`
   (`ExecutionID`, set at `Create`), the bound fingerprint and the pending `aar_`. The
@@ -789,7 +802,7 @@ Rewritten 2026-11-09 (b); this replaces the D2 text. Decision A supersedes D2.
 - **Explicit URLs, no fallback.** `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL` must each be set explicitly while Glovo
   is enabled. None falls back to `AUDIT_DB_URL` or to the other. `COMMERCE_DB_URL`
   stays the commerce ledger's and is not a Glovo pool (amended (c)). A missing value is `provider_orders:
-  not_ready`. Removing #968's generic bridge fallback (`main.go:1019-1021`) is
+  not_ready`. Removing #968's generic bridge fallback (`main.go:1064-1066`) is
   mctl-api#987.
 - **Proof of one database, not URL equality.** #985 `control.ProveOneDatabase` writes a
   random nonce through the bridge pool and reads it back through the work-items and Glovo
@@ -799,7 +812,7 @@ Rewritten 2026-11-09 (b); this replaces the D2 text. Decision A supersedes D2.
 - **One transaction.** Every write of the prepare transaction (join tables, #988 order
   and join refs, the `we_`, the pending `aar_`, the workflow-start record) and every write
   of #985's dispatch transaction (including `bridge_commands`) runs on one `pgx.Tx`
-  opened from `bridge.Store.Pool()` (`store.go:414`). The connection read is on the same
+  opened from `bridge.Store.Pool()` (`store.go:550`). The connection read is on the same
   transaction (#959 `LiveConnectionTx`), so revocation is no longer a separate-database
   TOCTOU case. No participant opens its own transaction inside the shared one (the
   work-item store has only its private `withTx`, `internal/workitems/store.go:266`; the
@@ -937,9 +950,15 @@ One transaction is one session and therefore one role. In every Glovo M1 proposa
   cancel, dispatch and the fence run on one `pgx.Tx` from one pool connected as
   `glovo_runtime`. With Glovo enabled that pool is opened from `GLOVO_DB_URL`, and both
   the #959 store and the bridge store use it (`bridge.NewRuntimeStore(ctx, pool)`).
-  `COMMERCE_DB_URL` stays the commerce ledger's URL and role (`cmd/api/main.go:563`)
-  and is never `glovo_runtime`; the bridge reads it (`main.go:1019`) only while Glovo
+  `COMMERCE_DB_URL` stays the commerce ledger's URL and role (`cmd/api/main.go:608`)
+  and is never `glovo_runtime`; the bridge reads it (`main.go:1064`) only while Glovo
   is disabled. Equal URLs, or one physical database, are not proof: the proof below is.
+- **`EnableWireVersions` has one caller (amended 2026-11-10).** `bridge.NewRuntimeStore` is
+  the ONLY caller of `bridge.Store.EnableWireVersions` (#986). `NewStore` never calls it, so
+  `WireVersionsEnabled()` is false on a `NewStore` store, and `Enqueue` of a v1alpha2
+  write there answers `ErrReadUnavailable`. A test (T14) asserts it both ways: false on
+  `NewStore`, true after `NewRuntimeStore` with the read level present; a grep-style test
+  lists the non-test call sites of `EnableWireVersions` and requires exactly one.
 - **R5 startup checks and negative tests**, below. Any mismatch is `not_ready` with zero
   provider writes.
 
@@ -952,10 +971,25 @@ standalone on a database built from today's `bridgeSchema`), #985 (`bridge.Apply
 the #986 function; it consumes `glovojoin.ControlStartTx`), then this slice's read routes. (2026-11-10: #989 task 7 defines `bridge.WriteFence.PreLock` itself, so #989 needs nothing from #985 and #985 adds no fence code; #959, #988, #960, #961 and #986 are already merged.) Package direction: `internal/glovo/control` imports `glovojoin`, never the reverse; `glovojoin.Readiness` takes the `control.ProveOneDatabase` result as a `func(context.Context) error` that `main.go` injects, so `glovojoin` does not import `control`. A slice that lists another slice as a
 dependency uses a test double until that slice merges, and answers `not_ready` meanwhile.
 
+**Deployment dependency in the same order (amended 2026-11-10, task A15).** The code merges
+in the order above, but nothing Glovo-enabled can start until the gitops side exists, and
+today it does not: `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml` sets only
+`AUDIT_DB_URL` (no `GLOVO_DB_URL`, `WORK_ITEMS_DB_URL` or `COMMERCE_DB_URL`), and
+`bridgeStoreDSN` (`cmd/api/main.go:1970`) reads only `COMMERCE_DB_URL`. A gitops change set
+(own PRs, mctl-gitops, not part of this proposal's code) must land before the first
+`GLOVO_*` flag is turned on: (1) the roles `glovo_runtime` and `glovo_migrator` with the
+attributes of R1 and R2 and no `CREATEROLE`; (2) the secrets for both roles in Vault, the
+migrator's credential mounted only into the migration job; (3) `GLOVO_DB_URL` (runtime role)
+and `WORK_ITEMS_DB_URL` and `COMMERCE_DB_URL` set explicitly to the one physical database,
+each with its own role; (4) the migration job that runs the `ApplySchema` chain of R2;
+(5) the `mctl-api` env for all of it. Until then the deployment keeps today's `NewStore`
+path (row absent in `bridge_schema_version`) and every Glovo flag stays off. Whether to put
+the owner-only hold on this is OPEN-957-6's territory and is not decided here.
+
 **Bridge startup DDL (mandatory AMEND, owned by #985).** At `ceac9ed` (= origin/main)
-`bridge.NewStore` runs `bridgeSchema` on every start (`internal/bridge/store.go:365-379`,
-the `Exec` at `:374`), and `cmd/api/main.go:1027` is its only runtime caller.
-`OpenExistingStore` (`:381-404`) already opens without DDL, for `cmd/bridge-scrub`.
+`bridge.NewStore` runs `bridgeSchema` on every start (`internal/bridge/store.go:501-512`,
+the `Exec` at `:510`), and `cmd/api/main.go:1069` is its only runtime caller.
+`OpenExistingStore` (`:520`) already opens without DDL, for `cmd/bridge-scrub`.
 #985 tasks 3a and 4 split them: `bridge.ApplySchema(ctx, migrationConnStr,
 runtimeRole)` under `glovo_migrator`, and `bridge.NewRuntimeStore` that only checks the
 schema version and the grants. `glovo_runtime` is never given `CREATE`, ownership or any
@@ -1083,7 +1117,7 @@ log); in every case the fake provider sees zero writes.
   `glovo.control_starts.workflow_id`; a difference is `unavailable`), `RunID` from
   `glovojoin.ControlStartTx(ctx, q, orderRef) (workflowID, runID string, err error)`.
   An empty run id is valid (`bridge_commands.run_id` defaults to `''`,
-  `internal/bridge/store.go:74`): the result signal then goes to the workflow id's
+  `internal/bridge/store.go:75`): the result signal then goes to the workflow id's
   current run, and the "reject duplicate" id reuse policy (§6c) allows only one.
   `TenantRef`/`PrincipalRef` from #988 `LookupJoinRefTx`; `OrderRef` is the order's
   `ordr_`; `ConnectionRef` its `gcn_`.
@@ -1207,7 +1241,11 @@ needs no override variable (#985 §7.4). The tag never skips a precondition of #
 
 ### 9. Readiness and launch matrix
 
-`glovojoin.Readiness` probes each dependency: the M1a store is configured and has its
+`glovojoin.Readiness` probes each dependency (amended 2026-11-10: a probe that could not
+observe its dependency is `not_ready`. A worker heartbeat that is unread, unreadable, stale
+past its named bound, or never recorded maps to `not_ready` for that dependency; it is never
+"no worker, fine", never an empty set and never a pass. Only a heartbeat actually read and
+fresh is ready; T15): the M1a store is configured and has its
 schema version, the #988 and #989 stores are present and #985 `ProveOneDatabase` passed
 (amended (b)), the bridge is not
 `NotReadyBridge`, and the control and provider worker heartbeats are seen through the
