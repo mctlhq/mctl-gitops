@@ -51,5 +51,8 @@ it holds no Temporal credential. Until a P1 prep PR replaces them:
 
 See CROSSWALK.md M14-M16.
 
+Database roles, secret references, the suspended migration job and the mctl-api
+env for #957 task A15 are staged under [`db/`](db/) (also not reconciled).
+
 Runbook: `docs/runbooks/glovo-m1.md`. Validator:
 `scripts/validate-glovo-m1-staging.py`.

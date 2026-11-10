@@ -1,0 +1,50 @@
+# Staged, NOT reconciled. The migration job of design 6d.1 (4): runs the
+# ApplySchema chain of R2 as glovo_migrator, once per schema version.
+#
+# Inert three ways: suspend: true, a placeholder image tag, and a command that
+# fails closed (/bin/false) until #985 task 4 ships the real entry point. The
+# pending values are set at activation, never guessed here.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glovo-schema-migrate
+  namespace: mctl-api
+  labels:
+    app.kubernetes.io/name: glovo-schema-migrate
+spec:
+  suspend: true
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: glovo-schema-migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/mctlhq/mctl-api:PENDING-985-TASK-4
+          command: ["/bin/false"]
+          envFrom:
+            - secretRef:
+                name: mctl-api-glovo-migrator-db
+          env:
+            - name: GLOVO_RUNTIME_ROLE
+              value: glovo_runtime
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
