@@ -170,8 +170,8 @@ login, basket mutation, checkout or payment.
 
 ## A15 DB staging vs the mctl-api#1004 amendment (mctl-gitops#2579)
 
-Amendment content digest `sha256:ed73eb05d441c5d5f4320068c576733c16824957124dfe8bcaf1401454b03576`
-(#2579 head `96e2398c`; it may still change, recheck the digest before completion; the earlier `2aea7693...` is superseded). Staged under
+Amendment content digest `sha256:e1d02b3a61e9a803966360873287506652968fca7f3c87ad1c9417b13202236a`
+(#2579 head `ca414193`; it may still change, recheck the digest before completion; earlier digests `2aea7693...` and `ed73eb05...` are superseded). Staged under
 `db/`, inert.
 
 | # | #1004 contract | Staged in `db/` |

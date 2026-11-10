@@ -129,16 +129,20 @@ are described in "Migrator exit codes and flags" above).
    public.work_items_schema_version (version INT NOT NULL)` plus one row `1`.
    It then moves with the other relations and `ApplySchema`'s ownership check
    passes. Residual risk: the row asserts version 1 before `ApplySchema` ran
-   (the migration re-records the same value). Rejected alternative: grant
-   SELECT only after the migration, inside a stated maintenance window with a
-   freeze of legacy pod restarts and rollouts; if the operator prefers it, the
-   runbook must state the window and the freeze.
+   (the migration re-records the same value). This is a preparation only, not
+   a grant: a grant to the owner is a no-op (see step 3). Rejected alternative:
+   a post-migration grant inside a maintenance window; it widens the failing
+   window and needs a freeze of legacy pod restarts and rollouts.
 3. Ownership transfer and transitional grants, in ONE transaction, by hand, by
    the operator, limited to the inventory of step 0. The order matters: a grant
    to the current owner is a no-op, and `ALTER ... OWNER TO` re-keys the old
    owner's ACL entry to the new owner, which would leave the legacy `mctl-api`
    role with nothing. So the grants follow the owner change:
-   a. `ALTER ... OWNER TO glovo_migrator` for each object in scope, run by a
+   a. `ALTER TABLE ... OWNER TO glovo_migrator` for each existing generic
+      relation including the version table, `ALTER SEQUENCE
+      public.work_item_intents_id_seq OWNER TO glovo_migrator` explicitly (and
+      any other sequence the inventory finds), and `ALTER FUNCTION ... OWNER TO
+      glovo_migrator` for the two generic functions, run via `SET ROLE` by a
       role that is a member of both owners (see the prerequisites above).
    b. Then, still in the same transaction and as the new owner or a member of
       it, `GRANT ... TO "mctl-api"` without any REVOKE: the `genericGrants`
@@ -152,9 +156,16 @@ are described in "Migrator exit codes and flags" above).
       (UNVERIFIED on this server): transfer and verify `work_item_intents_id_seq`
       explicitly (`pg_class.relowner`).
    If anything fails the transaction rolls back and the legacy role is
-   unchanged.
+   unchanged. The ALTER statements take locks that briefly block legacy queries
+   (duration UNVERIFIED): the runbook states a quiet period. If one transaction
+   cannot be used, the failing window between transfer and grant must be
+   defined, with a freeze of restarts and rollouts. The migration itself never
+   revokes from the legacy role (`ApplySchema` revokes only from the work-items
+   and runtime roles). The reproduction of the no-op grant and of the sequence
+   not moving was done in cross-review on PostgreSQL 16 and is UNVERIFIED here.
 4. Run the read-only verifier, which also probes the legacy role's EFFECTIVE
-   privileges after the transfer: `cmd/glovo-migrate -verify` with
+   privileges after the transfer: `cmd/glovo-migrate -verify` (flag `-legacy-role`, default `mctl-api`, passed to
+   the `has_*_privilege` calls as a bound value) with
    `GLOVO_MIGRATION_DB_URL` (the operator-held `glovo_migrator` login; no
    `-confirm`, READ ONLY transaction, never mounted into the API pod). Output is
    `ok`, `diverged` or `unknown`; `unknown` outranks `diverged` and never
