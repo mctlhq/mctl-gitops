@@ -53,7 +53,9 @@ resources:
     # baseline; it OOM-killed the pod on 2026-09-28 19:55 UTC. The request
     # stays at 128Mi, so nothing extra is reserved on the node; the code-side
     # fix that removes the amplification is tracked in mctl-telegram.
-    memory: 768Mi
+    # Raised 768Mi -> 2048Mi (2026-11-10): headroom for growing MTProto session
+    # pool (>96 live connected sessions, ~3 MB/session) and peak media transfers.
+    memory: 2048Mi
 env:
   # Per-file download cap for get_media (default 20 MiB). Lowered to 12 MB
   # (2026-10-04): Claude via the MCP portal drops the connection on a
@@ -67,9 +69,9 @@ env:
   # fine; 11 MiB encodes to ~15.4M chars, inside the tested range.
   MEDIA_DOWNLOAD_MAX_BYTES: "11534336"
   APP_ENV: production
-  # Soft heap target below the 768Mi limit so the Go GC works harder before
+  # Soft heap target below the 2048Mi limit so the Go GC works harder before
   # the kernel OOM-kills the container.
-  GOMEMLIMIT: 600MiB
+  GOMEMLIMIT: 1800MiB
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
