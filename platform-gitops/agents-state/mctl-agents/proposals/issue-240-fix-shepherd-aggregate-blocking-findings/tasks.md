@@ -81,35 +81,35 @@
 
 ## Tests
 
-- [ ] T1. Reproduce #234: Claude posts a P2 review at `head_sha`; Agy posts
+- [ ] [superseded] H-T1. Reproduce #234: Claude posts a P2 review at `head_sha`; Agy posts
       a top-level comment with the only P1 plus additional P2s at the same
       head. Assert `read_gating_reviews()` returns findings from both
       sources, `decide()` returns `address-review` with the P1 present, and
       the bundle passed to `apply_followup`/the shepherd sub-agent contains
       every current-head blocker from both reviewers (per
       requirements.md's "Tests reproduce #234" criterion).
-- [ ] T2. Claude and Agy disagree on severity for the *same* underlying
+- [ ] [superseded] H-T2. Claude and Agy disagree on severity for the *same* underlying
       finding (Claude: P2, Agy: P1, same path/line) — assert
       `_dedupe_findings()` keeps the higher severity (P1) and both names
       survive in `sources`, and `decide()` treats it as a P1 blocker.
-- [ ] T3. Agy reports a finding anchored to an older head; a follow-up push
+- [ ] [superseded] H-T3. Agy reports a finding anchored to an older head; a follow-up push
       lands; assert `findings_p1_p2(at=new_head_sha)` drops it, mirroring
       `test_connector_stale_commit_finding_does_not_gate`.
-- [ ] T4. Agy's workflow never posts anything on the current head while
+- [ ] [superseded] H-T4. Agy's workflow never posts anything on the current head while
       Claude has approved cleanly: assert `decide()` returns `wait` for the
       first `REVIEWER_RESPONSE_TIMEOUT_TICKS - 1` ticks and a decision that
       flips to `review-stuck` (never `merge`) once the timeout is exceeded
       — this is the direct regression test for "never silently treat it as
       approval."
-- [ ] T5. Both `sources[]`-merged and single-source findings round-trip
+- [ ] [superseded] H-T5. Both `sources[]`-merged and single-source findings round-trip
       through `_format_bundle_via_sdk`'s fallback path
       (`_fallback_bundle`) without the SDK, asserting the summaries mention
       every contributing source.
-- [ ] T6. Merge-path test asserting `review_evidence` lands in
+- [ ] [superseded] H-T6. Merge-path test asserting `review_evidence` lands in
       `.status.yaml` with entries for `claude`, `agy`, and
       `codex-connector`, each recording whether it responded and how many
       of its findings were cleared by the time of merge.
-- [ ] T7. Regression: all pre-existing tests in `tests/test_run_shepherd.py`
+- [ ] [superseded] H-T7. Regression: all pre-existing tests in `tests/test_run_shepherd.py`
       (including the full `#67` connector suite at lines 896-1028 and the
       Claude-only fixtures earlier in the file) continue to pass unmodified
       in behavior against the refactored `read_gating_reviews`/`decide()`.
@@ -212,3 +212,44 @@ in production and starts flipping healthy PRs to `review-stuck`:
 - [ ] P39. Test dispatch-before-event and event-before-dispatch overlap, delayed Actions/timeline indexing, duplicate events, stale intent, and restart; only the newest generation may gate.
 - [ ] P40. Key blocking history by stable source/finding identity and retain heads/runs as observation sets; test one blocker repeated across heads clears once while distinct exact blockers remain distinct.
 - [ ] P41. Implement coordinated rollback: disable required caller/check policy, stop dispatch, drain/supersede intents and runs, persist terminal evidence, then revert parser/pin. Test rollback with pending and completed authorities and require fresh backfill before re-enable.
+
+## Amendment 2026-11-10: implementation and test tasks (authoritative)
+
+Implementation order matters: tests first, each shown red, then the fix.
+
+- [ ] A1. Write the regression tests T1 to T4 and T14 below against current `origin/main` and record that each fails; for T4, `decide()` returns `merge` today. DoD: output of the red run in the PR description.
+- [ ] A2. Introduce the declarative `ReviewerSource` registry (`claude` and `agy` required, `codex-connector` not required, no Copilot). DoD: `grep -n GATING_BOTS orchestrator tests` is empty and nothing waits on a non-required source.
+- [ ] A3. Promote the Agy reader from advisory to gating: bind to head via the mctlhq `commit` line or the Livri `sha=` marker, require actor plus first-line marker, take the last verdict trailer, newest comment per head wins, `failed` or no-verdict means missing. DoD: unit tests on real bodies from mctl-api#968 and #995 and a Livri sample.
+- [ ] A4. Synthesize a blocker when a `FAIL:*` verdict has no parseable item; treat `PASS` with parseable P1/P2 as blocking. DoD: tests for both, plus a layout the parser does not know.
+- [ ] A5. Feed Agy state and findings into `decide()` so a current-head Agy P1/P2 yields `address-review` before any wait, and so a missing required reviewer waits and is bounded into `review-stuck`. DoD: `decide()` stays pure; tests for each branch and for ordering (blocker beats silence).
+- [ ] A6. Replace every swallowed read failure in the gating readers with an explicit unknown state and the `review-unknown` outcome; use `_gh_api_list` for all list reads. DoD: tests for a failed first page, a failed later page, malformed JSON and a failed reactions read, each asserting no merge and no "clean".
+- [ ] A7. Merge guard and evidence: immediately before `merge_pr`, re-run the full aggregation and `decide()` on a fresh snapshot and refuse on ANY current-head blocker, unknown, or required source without a bound verdict; record reviewers, verdicts, comment ids and cleared findings at merge. `--match-head-commit` pins the head only; the window after the last read is accepted. DoD: tests through BOTH `process_one` (`run_shepherd.py` ~`:4496`) and `pr_merge.py:127-132`.
+- [ ] A7a. Thread the new Agy input through `pr_merge.py` itself (it calls `read_codex_review` then `decide()`), so the gated path uses the same aggregated reader. DoD: T14 and T4 pass through the activity.
+- [ ] A8. Rewrite the "Owner policy: agy is informational" comments and the shepherd sub-agent prompt (`agents/_shepherd/.claude/agents/shepherd.md`) to describe Agy as a blocking source with its marker format. DoD: no remaining text that says Agy never blocks.
+- [ ] A9. Sweep the module (and `pr_merge.py`, `pr_adoption.py`) for the class "error becomes empty collection" and fix or list each instance. DoD: sweep result in the PR.
+- [ ] A10. Remove or stop calling the observe-only Copilot read; ensure no code path waits on the Codex connector. DoD: a test where Claude and Agy are clean and Copilot and the connector are silent merges (subject to the other gates).
+- [ ] A11. Mutation verification. DoD, each with the exact mutation named and a recorded red run: drop the Agy input from `decide()` -> T1 to T4 fail; make findings dedupe drop the second source or merge unlocated findings fuzzily -> T5 fails; remove the head binding (accept any Agy comment) -> T6 fails; pick the oldest instead of the newest comment per head -> T7 fails; treat a missing required reviewer as clean -> T10 fails; drop the pre-merge re-aggregation -> T12 and T14 fail; turn a swallowed read error back into `[]` -> T8 and T9 fail.
+- [ ] A12. Capability check: enumerate every repo the shepherd serves and record whether it has an `agy-review.yml` caller and whether `blocking` is true. Default `required=False` where there is no workflow or `blocking: false`; required is opt-in explicit data. DoD: the enumeration in the PR, and a test that a repo with no Agy workflow never waits on Agy.
+- [ ] A13. Rollout safety: before enabling required gating, list open PRs whose current head has no bound Agy comment and re-trigger Agy for each or accept the resulting wait. A P3-only `FAIL` verdict stays non-blocking. DoD: the list and the chosen action per PR recorded in the PR.
+- [ ] A14. Human-hold preservation is deferred to D4 (no hold-marker test in this change). If D4 is accepted, add a test that a hold marker blocks merge with all reviewers clean.
+
+### Tests
+
+- [ ] T1 (#234). Claude and Agy disagree on severity; Agy has the only P1. Expect `address-review`; the bundle holds the P1 with source `agy`.
+- [ ] T2 (#409). Claude APPROVED with 0 P1/P2 on head `143312e4`; Agy alone P2 on that head. Expect `address-review` pinned to that head, never `wait`.
+- [ ] T3 (#968). Claude APPROVED, required checks green, Agy `<!-- VERDICT: FAIL:P1,P2 -->` on the same head. Expect `address-review`, never `merge`.
+- [ ] T4 (#995). Fixtures checked in with sanitized bodies and the real comment ids and `created_at`: Claude APPROVED review at 05:41:44 on `6884e9a2`, Agy comment at 05:48:53 with `commit \`6884e9a\`` and `<!-- VERDICT: FAIL:P2 -->`, and a check-runs fixture with `agy-review / review` = success and all required checks green. Assert the decision is not `merge` at ticks 05:49, 05:55 and 06:07, through BOTH `process_one` and the gated activity.
+- [ ] T5. Findings dedupe across Claude and Agy keeps both sources and the higher severity; different paths never merge; unlocated findings merge only on an exact normalized message.
+- [ ] T6. Head pinning: an Agy FAIL bound to an older commit is ignored after a push, and the new head with no Agy comment is `wait` then `review-stuck`, never merge. A comment with neither `commit` nor `sha=` is missing. A 7-hex prefix matching two heads seen on the PR is ambiguous and missing. A Livri `sha=` shorter than 40 hex is not authoritative. Livri full `sha=` and `failed` variants covered. A non-Agy `github-actions[bot]` comment is ignored, and an Agy marker quoted inside a finding body is ignored.
+- [ ] T7. Rerun on the same head: PASS then newer FAIL blocks; FAIL then newer PASS clears.
+- [ ] T8. Read failure of reviews, inline comments, issue comments or reactions is an unknown state: no merge, bounded to `review-stuck`, never "no findings".
+- [ ] T9. Pagination: Agy comment on page 2 is seen; page 2 failing after page 1 succeeded is unknown, not a shorter list.
+- [ ] T10. Required reviewer missing or failed (no verdict) never approves, with Claude clean.
+- [ ] T11. The bundle passed to the implementer holds all current-head blockers from all required reviewers exactly once per finding per head.
+- [ ] T12. Merge evidence recorded at merge, and the merge refused when a required verdict is unbound or any blocker or unknown exists on a fresh re-aggregation.
+- [ ] T14. TOCTOU: `decide()` says merge on the first read; an Agy `FAIL:P2` on the current head appears before the merge call. The merge is refused, through BOTH `process_one` (`run_shepherd.py` ~`:4496`) and `pr_merge.py:127-132`.
+- [ ] T13. All pre-existing `tests/test_run_shepherd.py` and `tests/test_pr_merge_activity.py` cases pass unchanged in behaviour.
+
+### Status of earlier task groups
+
+[superseded] Tasks 1 to 10 and the original tests, renamed H-T1 to H-T7 to avoid collision with the new T1 to T14, are superseded by A1 to A14 and T1 to T14 where they conflict. C1, C2 and P8 to P41 are held as a hardening backlog pending owner decision D3.
