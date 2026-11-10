@@ -170,15 +170,15 @@ login, basket mutation, checkout or payment.
 
 ## A15 DB staging vs the mctl-api#1004 amendment (mctl-gitops#2579)
 
-Amendment content digest `sha256:2aea76933eda79b535ca8b406f4c31ec2e92a4888928871d1cbd6b4cddd22db2`
-(#2579 may still change; recheck the digest before completion). Staged under
+Amendment content digest `sha256:ed73eb05d441c5d5f4320068c576733c16824957124dfe8bcaf1401454b03576`
+(#2579 head `96e2398c`; it may still change, recheck the digest before completion; the earlier `2aea7693...` is superseded). Staged under
 `db/`, inert.
 
 | # | #1004 contract | Staged in `db/` |
 | --- | --- | --- |
 | 1 | `mctl_api_workitems`, explicit `WORK_ITEMS_DB_URL` | managed role, credential ExternalSecrets, env text |
 | 2 | `GLOVO_DB_RUNTIME_ROLE`, `GLOVO_DB_MIGRATION_ROLE` | env text, flags stay off |
-| 3 | `GLOVO_MIGRATION_DB_URL`, `-work-items-role`, `-confirm` | suspended Job, `/bin/false`, placeholder image |
+| 3 | `GLOVO_MIGRATION_DB_URL`, `-work-items-role`, `-migrator-role`, `-with-*`, `-confirm`; exit codes 1/3/2 (precedence 1, 3, 2); read-only `-verify` | suspended Job, `/bin/false`, placeholder image |
 | 4 | database `mctl-api` | pg_hba lines and DSNs |
 | 5 | `COMMERCE_DB_URL` role, connection limits | UNVERIFIED, activation blockers |
-| 6 | transitional grants, operator ownership transfer | `roles.patch.md`, plan only, not applied |
+| 6 | transitional grants, operator ownership transfer | `roles.patch.md`, plan only, not applied; version-table pre-create approach needs operator confirmation |

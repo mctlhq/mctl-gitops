@@ -79,6 +79,16 @@ evidence before activation: deployed `replicaCount` and surge, the
 current `rolconnlimit` of the legacy role (`SELECT rolname, rolconnlimit FROM
 pg_roles`).
 
+## Migrator exit codes and flags (mctl-api#1004 design section 1)
+
+`cmd/glovo-migrate` exits 1 when any read failed or returned a malformed result
+(outranks everything: an unobserved state is never reported as clean or as a
+foreign owner), 3 when observed but wrong (connecting role is not the expected
+migrator, a named role is missing, a CREATE privilege is absent), 2 when
+foreign-owned objects were observed (it prints the operator transfer text and
+issues no DDL). Precedence: 1, then 3, then 2. `-migrator-role` (default
+`glovo_migrator`) names the expected migrator; there is no env override.
+
 ## Privileges the roles themselves need (operator step, un-applied)
 
 CNPG managed roles carry attributes only; `ApplySchema` owns the table grants.
@@ -121,12 +131,26 @@ for the operator and exits 2 on a foreign-owned object).
 3. Ownership transfer limited to the inventory of step 0, by hand, by the
    operator. Afterwards check `pg_class.relowner` of `work_item_intents_id_seq`
    (UNVERIFIED whether it follows its table).
-4. Run the read-only grants verifier (design section 8); `unknown` never counts
-   as a pass.
+4. Run the read-only verifier: `cmd/glovo-migrate -verify` with
+   `GLOVO_MIGRATION_DB_URL` (the operator-held `glovo_migrator` login; no
+   `-confirm`, READ ONLY transaction, never mounted into the API pod). Output is
+   `ok`, `diverged` or `unknown`; `unknown` outranks `diverged` and never
+   counts as a pass. It runs after this gate, after the migration, and before
+   wiring.
 5. Only then may a separately authorized activation PR unsuspend the Job.
 
-Rollback restores the RECORDED pre-change ACL and owner of step 1, object by
-object. It never issues a blanket `REVOKE` against an owner, and created roles
+Rollback restores the RECORDED pre-change owner and full ACL (`relacl`, column
+ACLs, sequence ACL) of step 1, object by object, owner first
+(`ALTER ... OWNER TO mctl-api` by an operator with the needed memberships), then
+the ACLs. It is not "revoke what was granted": it never issues `REVOKE` against
+a role that is the restored owner (that would strip its owner privileges), and
+no order is claimed safe without the record. Step 1 must also record whether
+`public.work_items_schema_version` and schema `glovo` existed. If the migration
+already ran, the operator drops or disables the `aar_guard` and
+`aar_binding_required` triggers and the `glovo` objects BEFORE ownership returns
+to `mctl-api` (a migrator-owned trigger would otherwise stay on a table it
+owns); the version table, widened CHECK constraints and bridge tables are kept
+(dispositions and UNVERIFIED points are in #1004 design section 9). Created roles
 stay in place (dropping one needs `DROP OWNED` / `REASSIGN OWNED`, a separate
 operator decision). The transitional grant is revoked only after the later
 switch to `mctl_api_workitems` is confirmed healthy.
@@ -140,6 +164,8 @@ activation, because `control.ProveOneDatabase` uses the work-items pool.
 | --- | --- |
 | Which bridge tables or schema `glovo` exist in production, and their owners | the inventory of step 0 |
 | Other work-items consumers (DevLoop, agents, other pods) under a role other than `mctl-api` | grantees of the 13 relations (`aclexplode`) and `pg_stat_activity` by `usename` |
+| Which of the 13 generic relations exist (version table at most 12 of 13 on older images) | `pg_class` owner listing |
+| Whether the legacy role needs more than `genericGrants` for DevLoop | the inventory of step 0 |
 | Sequence ownership after `ALTER TABLE ... OWNER TO` | `pg_class.relowner` of `work_item_intents_id_seq` after the transfer |
 | `COMMERCE_DB_URL` role | see mctl-api-env.patch.md |
 | Connection limits | see above |
