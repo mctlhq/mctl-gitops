@@ -6,6 +6,10 @@ Preconditions:
   digest-bound owner approval.
 - No task releases, tags, builds, bumps or syncs mctl-api, and none issues a grant.
 - Every PR below touches paths in the new `protected_re` and is merged by a human.
+- (Amended 2026-11-11) The bootstrap-aware values reader comes from the separate gate PR. Task 3 imports it
+  and adds the T-cases it needs; it does not write a second reader.
+- (Amended 2026-11-11) Ruleset, App and environment changes (tasks 14-16) are owner actions (D1, D2). An
+  agent prepares the exact JSON and evidence, and never applies it.
 
 - [ ] 1. Write the write-path inventory as a versioned document,
   `docs/runbooks/mctl-api-release-hold.md`, using the P1-P10 table in design.md. Each row cites file and
@@ -42,14 +46,18 @@ Preconditions:
   and after. (depends on 3) — DoD: `release-hold.py verify` passes on the pinned tree and refuses `main`.
   The rendered manifests differ only by what mctl-api `main` has changed since 4.154.0; list any such
   difference in the PR body.
-- [ ] 7. Wire the merge path (depends on 3):
-  - add the `release-hold.py` selftest, `verify` and `diff --channel pull-request` (base = merge-base) to
-    `.github/workflows/validate-manifests.yml`;
+- [ ] 7. Wire the merge path (amended 2026-11-11; depends on 3):
+  - `validate-manifests.yml` gets only the `release-hold.py` selftest and unit tests (not a gate);
+  - add `.github/workflows/release-hold-pr.yml` (`pull_request_target`, base checkout, head read as data,
+    result posted as check `release-hold` by the checker App; design.md §4);
+  - add `.github/workflows/release-hold-merge.yml` (`workflow_dispatch` on `main`, environment
+    `release-hold-merge`, re-verify, then merge with `sha=<head>`; design.md §4);
   - extend `protected_re` in `.github/workflows/auto-merge.yml` with the paths in design.md section 4;
   - update `tests/test_auto_merge_protected_paths.py`.
 
-  — DoD: a `claude/*` PR fixture touching `mctl-api.yaml` is classified as protected, and the diff job is
-  required.
+  — DoD: a `claude/*` PR fixture touching `mctl-api.yaml` is classified as protected. A static test
+  asserts that `release-hold-pr.yml` never checks out, runs or imports head content (no `ref:
+  ${{ github.event.pull_request.head.* }}` checkout, head read only via `git show`). T23-T28 pass.
 - [ ] 8. Add `diff --channel direct` and `verify` steps for `release-hold.py` to
   `.github/workflows/release-gate-watch.yml`, using the existing violated/unknown Telegram split. (depends
   on 3) — DoD: `tests/test_release_gate_watch.py` covers a hold violation and an unknown result.
@@ -70,6 +78,29 @@ Preconditions:
   mctl-agents#1007 B4, mctl-api#935 drain, #1040 and #1292, and how each feeds `grant.prerequisites` or
   coordinates. (depends on 1) — DoD: each link is present, with "machine-checked: no" where the owner
   judges it.
+
+- [ ] 13. (Amended 2026-11-11) In `build-image.yaml`, stamp `org.opencontainers.image.revision` with the
+  resolved 40-hex SHA of the source checkout (`git rev-parse HEAD` after checkout, never the input ref).
+  Extend `release-hold.py` check 8 to read it from the image config. (Independent of 3) — DoD: a test build
+  in a fixture shows the label, and T20 passes. The task must be live before #934 merges. Otherwise
+  4.155.0 needs a new release (D4).
+- [ ] 14. (Owner action, D1/D2) Prepare the ruleset 18465404 change: add the required context
+  `release-hold` bound to the checker App's integration id, and set `strict_required_status_checks_policy:
+  true`. Prepare:
+  - the checker App and environment `release-hold-checker` (branch policy `main`);
+  - the merger App, whose key is only in environment `release-hold-merge` (branch policy `main`, required
+    reviewer = owner, `can_admins_bypass: false`), with the checker key also in that environment.
+
+  Neither App is a bypass actor. (depends on 7) — DoD: exact JSON in the runbook, and a dry run in a
+  disposable repository (T24, T26, T31). Applied by the
+  owner, never by an agent.
+- [ ] 15. Add the post-sync digest verifier (read-only CronJob in `mctl-api`, ServiceAccount allowed only
+  `get`/`list` on pods; alert on mismatch or unknown). Make `release-gate-watch.yml` run `release-hold.py`
+  from the parent commit's tree. (depends on 3, 8) — DoD: T29 and T22 pass.
+- [ ] 16. Coordinate with mctl-gitops#2543. Record in the runbook which #2543 remediation turns P5b/P6 from
+  BLOCKING-UNKNOWN into enforced: a broker running `release-hold.py verify`, or a no-bypass path
+  restriction proven in a disposable repository. Until then, the decision packet carries D3. (depends on 1)
+  — DoD: the runbook rows for P5b/P6 link the #2543 evidence, or the owner's written acceptance.
 
 ## Tests
 
@@ -124,8 +155,54 @@ test asserts that the bare repository's `main` SHA is unchanged and that no file
   only `tag: "4.155.0"` and the chart SHA to `source_commit` passes `diff --channel pull-request`. The same
   tree with `ROLLOUT_MARKER` also changed still passes (env change allowed), and with
   `MCTL_BRIDGE_ENABLED: "true"` it is refused.
-- [ ] T17. Mutation check: removing each layer's call (check in the bump script, verify in the push loop,
-  `--since`) makes at least one of T1-T8 fail. The guard_test pattern from `tests/test_release_gate_guard.py`
+- [ ] T18. Release PR head versus source commit: in a fixture mctl-api repository, release head H is merged
+  with a merge commit M and tagged. If `main` gained commit X between H and the merge, `tree(M) != tree(H)`
+  and the bump is refused with no write. Without X, the trees are equal and the check passes. The fixture
+  also proves which commit release-please tags.
+- [ ] T19. Stale grant: a grant whose `reviewed_release_head` is an earlier #934-style head (different tree),
+  or whose `source_commit` is not the tag commit, is refused through both direct workflows and through
+  `release-hold-merge`, with no write.
+- [ ] T20. Revision label absent gives exit 7; a label different from `source_commit` gives exit 6; no write
+  in either case.
+- [ ] T21. Bump from a different workflow: a fixture workflow file other than the two allowed ones that names
+  `environment: gitops-bump` or `GITOPS_BUMP_DEPLOY_KEY` fails the static test. A simulated push from such a
+  workflow (no `release-hold.py` call) to the bare repository is reported by the L5 `diff` as a violation.
+- [ ] T22. Direct push through the deploy-key bypass (P5b/P6, simulated on the bare repository): one commit
+  sets the tag to 4.155.0, adds a grant and extends the allowlist, with no PR. `release-hold.py diff --base
+  <parent>` exits 6, because the grant has no owner-merged PR. The detector, run from the parent's script,
+  alerts. A variant where the same commit also edits `scripts/release-hold.py` to `exit 0` still alerts. The
+  test is named as detection, not prevention, until #2543 lands.
+- [ ] T23. PR-controlled guard: a fixture PR edits `scripts/release-hold.py` (or the reader, or a hold
+  workflow, or a hold test) together with a tag bump. `release-hold-pr` refuses (`HOLD_POLICY_CHANGED`). A
+  canary in the head's script (it writes a file when run) proves that the head script was never executed.
+- [ ] T24. Spoofed check (disposable repository with synthetic identities, no production credentials): a
+  PR-defined job named `release-hold` posts a success check as GitHub Actions. The ruleset that requires
+  `release-hold` from the checker App still blocks the merge.
+- [ ] T25. Expiry at merge: a grant that expires between the PR-time check and `release-hold-merge`, or that
+  expires within the 15-minute margin, is refused. The PR stays open and `main` is unchanged.
+- [ ] T26. `main` moved: a commit tightening the hold (or adding a forbidden key) lands after the PR check.
+  `release-hold-merge` refuses. In the disposable repository, `strict` makes a manual merge of the now
+  out-of-date PR fail.
+- [ ] T27. Head moved: a push to the PR after dispatch makes `release-hold-merge` refuse (`head_sha`
+  mismatch), and the merge API with `sha=` refuses. No merge.
+- [ ] T28. Identity: the dispatcher or the environment approver is not in `owners`, or is a Bot. Refused,
+  no merge.
+- [ ] T29. Digest drift: the GHCR digest of the tag differs from the grant at push or at merge time. Refused,
+  no write. A fixture pod `imageID` that differs from the allowlist makes the post-sync verifier alert, and
+  an unreadable pod list is reported as unknown, never as clean.
+- [ ] T30. An allowlist file naming 4.155.0 without a valid grant in the same tree is refused by `verify`
+  and by `diff`.
+- [ ] T31. Merger identity (disposable repository): a merger-App merge with `sha=` succeeds only when every
+  ruleset rule is met, including `require_extra_approval_for_unattributed_changes`. It fails, with no write,
+  when `release-hold` is missing or comes from another integration. If an App merge cannot satisfy the rules,
+  the runbook records the owner-merge fallback, and the test asserts that the fallback is refused once the
+  expiry margin has passed. A fork-PR fixture proves that `release-hold-pr` fetches `refs/pull/<n>/head` and
+  refuses a head that does not match `head_sha`.
+- [ ] T17. Mutation check: removing each layer's call makes at least one of T1-T8 or T18-T31 fail. The
+  calls are: check in the bump script, verify in the push loop, `--since`, the per-attempt re-read, the
+  expiry margin, the base-only checkout in `release-hold-pr`, the `sha=` and up-to-date checks in
+  `release-hold-merge`, the tree equality, check 4 for direct-pushed grants, the merger-App-only key
+  placement, and the `refs/pull/<n>/head` == `head_sha` check. The guard_test pattern from `tests/test_release_gate_guard.py`
   is reused.
 
 ## Rollback
@@ -133,6 +210,13 @@ test asserts that the bare repository's `main` SHA is unchanged and that no file
 Every change is a reviewed PR to mctl-gitops, so rollback is `git revert` of that PR through another
 reviewed PR, in reverse order:
 
+0. **Ruleset and Apps (task 14; amended 2026-11-11).** If the checker App or its environment fails, every PR
+   is blocked (fail-closed). Break-glass: the owner removes the `release-hold` required context from ruleset
+   18465404, which is recorded as an incident. While the context is removed, keep #934 Draft and dispatch no
+   mctl-api bump. Restore the context before the next guarded merge. `strict` can be turned off
+   independently. Remove the required context **before** deleting `release-hold-pr.yml`, never after.
+   Reverting `release-hold-merge.yml` returns guarded PRs to a plain human merge, without merge-time
+   re-verification.
 1. **Admission.** Revert the Deny switch (task 11) to return to Warn/Audit. If mctl-api pods are blocked,
    revert task 10, and root-app prunes the policy and binding. The emergency path is a cluster-admin
    deleting the `mctl-api-release-hold` binding, recorded as an incident, and is followed by the revert PR
@@ -145,4 +229,5 @@ reviewed PR, in reverse order:
 4. **Policy files (tasks 2, 3).** Remove only after the workflows no longer call `release-hold.py`; a
    missing script is exit non-zero, so a refusal, not a silent pass.
 
-No rollback step touches mctl-api releases, images, credentials or Bridge state.
+No rollback step touches mctl-api releases, images, credentials or Bridge state. No step deletes or
+rotates a deploy key; that belongs to #2543.
