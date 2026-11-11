@@ -38,6 +38,11 @@ HEADER_REFUSE = re.compile(
 )
 
 
+def _semver(tag: str):
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", tag)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 def shape(line: str):
     """(identity, tag) of a tag line, or None. Identity is everything but the tag value."""
     m = TAG_LINE.match(line)
@@ -56,6 +61,7 @@ def judge(diff: str) -> list:
     cur = None
     removed = added = None
     changed = 0
+    in_header = False  # between `diff --git` and the first `@@`
 
     def close():
         if cur is None:
@@ -68,6 +74,11 @@ def judge(diff: str) -> list:
                 problems.append(f"{cur}: a changed line moves more than the tag ({ri} -> {ai})")
             elif rt == at:
                 problems.append(f"{cur}: a changed line keeps the same tag")
+            elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):
+                # A re-run of an older release must not roll a newer tag back.
+                # Tags that are not plain MAJOR.MINOR.PATCH cannot be ordered
+                # and are not judged here.
+                problems.append(f"{cur}: tag moves backwards ({rt} -> {at})")
 
     for raw in diff.split("\n"):
         line = raw
@@ -81,17 +92,30 @@ def judge(diff: str) -> list:
             cur = m.group(1)
             files.append(cur)
             removed, added = [], []
+            in_header = True
             if ".." in cur.split("/") or not cur.startswith(ALLOWED_PREFIXES) or not cur.endswith((".yaml", ".yml")):
                 problems.append(f"{cur}: not a values or manifest file under an allowed prefix")
             continue
         if cur is None:
             continue
-        if HEADER_REFUSE.match(line):
-            problems.append(f"{cur}: {line[:60]}")
+        if in_header:
+            # File-level lines exist only before the first hunk. After it, every
+            # line starting with + or - is content, also `+++ b/x` and `--- a/x`.
+            if HEADER_REFUSE.match(line):
+                problems.append(f"{cur}: {line[:60]}")
+                continue
+            if line.startswith("@@"):
+                in_header = False
+                continue
+            if line.startswith(("--- ", "+++ ")):
+                if not re.fullmatch(r"(---|\+\+\+) (a|b)/\S+", line):
+                    problems.append(f"{cur}: unexpected file marker {line[:80]}")
+                continue
+            if line.startswith("index ") or line == "":
+                continue
+            problems.append(f"{cur}: unrecognised header line {line[:80]}")
             continue
-        if line.startswith(("--- ", "+++ ", "index ", "@@", "\\ ", " ")) or line == "":
-            if line.startswith(("--- ", "+++ ")) and not re.fullmatch(r"(---|\+\+\+) (a|b)/\S+", line):
-                problems.append(f"{cur}: unexpected file marker {line[:80]}")
+        if line.startswith("@@") or line.startswith("\\ ") or line.startswith(" ") or line == "":
             continue
         if line[0] in "+-":
             changed += 1

@@ -38,6 +38,8 @@ GOOD = {
     "tag inside the bootstrap values block": diff(API, [('        tag: "4.154.0"', '        tag: "4.155.1"')]),
     "inline image reference": diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]),
     "workflow parameter value": diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]),
+    "non-semver tags are not ordered": diff(SVC, [("  tag: sha-aaa", "  tag: sha-bbb")]),
+    "a prerelease-free upgrade across digits": diff(SVC, [("  tag: 1.9.0", "  tag: 1.10.0")]),
     "two files": diff(SVC, TAGS) + diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]),
 }
 BAD = {
@@ -64,6 +66,13 @@ BAD = {
     "rename": "diff --git a/" + SVC + " b/platform-gitops/services/x/y/values.yaml\nsimilarity index 90%\n",
     "binary patch": diff(SVC, TAGS, extra="GIT binary patch\n"),
     "header without a changed line": f"diff --git a/{SVC} b/{SVC}\nindex 1..2 100644\n--- a/{SVC}\n+++ b/{SVC}\n@@ -1 +1 @@\n ctx\n",
+    "tag moves backwards": diff(SVC, [("  tag: 1.2.0", "  tag: 1.1.0")]),
+    "tag moves backwards across digits": diff(SVC, [("  tag: 1.10.0", "  tag: 1.9.0")]),
+    "added content line that looks like a file marker":
+        diff(SVC, TAGS).replace(" ctx\n-  tag", " ctx\n+++ b/x\n-  tag", 1),
+    "removed content line that looks like a file marker":
+        diff(SVC, TAGS).replace(" ctx\n-  tag", " ctx\n--- a/x\n-  tag", 1),
+    "hunk-less change lines": f"diff --git a/{SVC} b/{SVC}\nindex 1..2 100644\n--- a/{SVC}\n+++ b/{SVC}\n-  tag: 1.0.0\n+  tag: 1.1.0\n",
     "nine files": "".join(diff(f"platform-gitops/services/t/s{i}/values.yaml", TAGS) for i in range(9)),
     "same file twice": diff(SVC, TAGS) + diff(SVC, TAGS),
     "removals outnumber additions": diff(SVC, TAGS).replace("+  tag: \"1.1.0\"\n", ""),
@@ -107,11 +116,15 @@ MUT = [
     ("same-tag rewrite accepted", [("            elif rt == at:", "            elif False:")]),
     ("unpaired lines accepted", [("        if len(removed) != len(added):", "        if False:")]),
     ("new/deleted/mode/rename headers accepted (both defences removed)",
-     [("        if HEADER_REFUSE.match(line):", "        if HEADER_REFUSE.match(line) and False:"),
-      ('        problems.append(f"{cur}: unrecognised diff line {line[:80]}")', "        pass")]),
+     [("            if HEADER_REFUSE.match(line):", "            if HEADER_REFUSE.match(line) and False:"),
+      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")]),
     ("renames accepted (both defences removed)",
-     [("m.group(1) != m.group(2)", "False"), ("        if HEADER_REFUSE.match(line):", "        if False:"),
-      ('        problems.append(f"{cur}: unrecognised diff line {line[:80]}")', "        pass")]),
+     [("m.group(1) != m.group(2)", "False"), ("            if HEADER_REFUSE.match(line):", "            if False:"),
+      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")]),
+    ("file markers skipped anywhere, not only before the first hunk",
+     [("                in_header = False\n                continue", "                continue")]),
+    ("a tag may move backwards", [("elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):", "elif False:")]),
+    ("semver compared as strings", [("_semver(at) < _semver(rt)", "at < rt")]),
     ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')]),
 ]
 for name, reps in MUT:

@@ -40,6 +40,22 @@ The release hold of #2528 (`version_holds`), the bootstrap gate of #2590 and the
 exact-head checks are unchanged: the gate runs before the write in `bump`, again
 on the tree to push in each publishing job, and again as the `validate` check.
 
+## Overlapping releases and a stuck bump
+
+- Opening a bump closes every older open `release-bump/<service>-<tag>` PR of
+  the same service that the App opened ("Superseded by #N"), and deletes its
+  branch. Two open bumps on the same tag lines would otherwise leave the newer
+  one DIRTY after the older merges. A failed listing fails the job; it is never
+  read as "nothing to supersede".
+- The release run then waits up to 50 minutes for its PR to be MERGED. It fails
+  if the PR is closed unmerged, is in an unexpected state, or does not merge in
+  time. A PR closed by a newer release is only a notice. A stuck bump is
+  therefore a red release run, not a silent open PR.
+- Re-running an older release cannot move a tag backwards: the diff guard
+  refuses a downgrade, so auto-merge hands that PR to a human.
+- A DIRTY PR can still arise if an unrelated PR touches the same lines; the
+  wait times out red and a human rebases or re-runs the release.
+
 ## Roll back
 
 Remove the image from `release-bump-routes.yaml` in a reviewed PR; the next

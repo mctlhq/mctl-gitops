@@ -675,6 +675,7 @@ jobs:
         run: git diff origin/main..HEAD | python3 scripts/release-bump-diff-guard.py
 
       - name: Open the release-bump pull request
+        id: open_pr
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -698,7 +699,9 @@ jobs:
           existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
           if [[ -n "$existing" ]]; then
             echo "::notice::release-bump pull request #${existing} already open for ${branch}"
-            exit 0
+            pr="$existing"
+          else
+            create_pr=1
           fi
           body=$(printf '%s\n' \
             "Image tag bump for \`${IMAGE_NAME}:${NEW_TAG}\` (${TEAM}/${SERVICE})." \
@@ -707,5 +710,55 @@ jobs:
             "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \
             "" \
             "The only change is an image tag. auto-merge.yml merges this PR after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
-          gh pr create --repo "$REPO" --base main --head "$branch" \
-            --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body"
+          if [[ -n "${create_pr:-}" ]]; then
+            pr_url=$(gh pr create --repo "$REPO" --base main --head "$branch" \
+              --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body")
+            pr="${pr_url##*/}"
+          fi
+          [[ "$pr" =~ ^[0-9]+$ ]] || { echo "::error::could not determine the pull request number"; exit 1; }
+          echo "pr=${pr}" >> "$GITHUB_OUTPUT"
+
+          # Older open bumps for the same service are superseded by this one:
+          # two open bumps touching the same tag lines would leave the newer
+          # one DIRTY after the older merges. A failed listing is an error,
+          # never "nothing to supersede".
+          export PREFIX="release-bump/${SERVICE}-"
+          older=$(gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,headRefName,author \
+            --jq '.[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.headRefName as $h | $ENV.PREFIX as $p | ($h | startswith($p)) and ($h[($p | length):] | test("^[0-9]"))) | .number')
+          for n in $older; do
+            [[ "$n" == "$pr" ]] && continue
+            gh pr close "$n" --repo "$REPO" --delete-branch \
+              --comment "Superseded by #${pr} (${NEW_TAG})."
+          done
+
+      # Make a stuck bump visible on the release run: the run stays open until
+      # the pull request is merged, and fails if it is closed unmerged or the
+      # wait runs out. (A bump superseded by a newer release is a notice.)
+      - name: Wait for the bump to merge
+        timeout-minutes: 55
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.open_pr.outputs.pr }}
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::no pull request number from the previous step"; exit 1; }
+          deadline=$((SECONDS + 50 * 60))
+          while (( SECONDS < deadline )); do
+            state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+            case "$state" in
+              MERGED) echo "::notice::release-bump pull request #${PR} merged"; exit 0 ;;
+              CLOSED)
+                sup=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '[.comments[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.body | startswith("Superseded by #"))] | length')
+                if [[ "$sup" -gt 0 ]]; then
+                  echo "::notice::release-bump pull request #${PR} was superseded by a newer release"; exit 0
+                fi
+                echo "::error::release-bump pull request #${PR} was closed without merging"; exit 1 ;;
+              OPEN) ;;
+              *) echo "::error::unexpected pull request state: ${state}"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::release-bump pull request #${PR} did not merge within 50 minutes"
+          exit 1

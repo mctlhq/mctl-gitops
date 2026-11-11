@@ -101,6 +101,22 @@ def judge(files):
         out.append((f"{label}: publish-pr opens the pull request idempotently",
                     "gh pr list" in ptxt and "--state open" in ptxt and "gh pr create" in ptxt))
         out.append((f"{label}: publish-pr holds contents: read for GITHUB_TOKEN", pp.get("permissions") == {"contents": "read"}))
+        # supersede older bumps; wait and make a stuck bump visible
+        out.append((f"{label}: publish-pr records the pull request number as a step output",
+                    'echo "pr=${pr}" >> "$GITHUB_OUTPUT"' in ptxt and (step(pp, "Open the release-bump") or {}).get("id") == "open_pr"))
+        out.append((f"{label}: publish-pr supersedes only older App-authored bumps of the same service",
+                    'export PREFIX="release-bump/${SERVICE}-"' in ptxt and "startswith($p)" in ptxt and 'test("^[0-9]")' in ptxt
+                    and 'select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.headRefName' in ptxt and '[[ "$n" == "$pr" ]] && continue' in ptxt
+                    and len(re.findall(r"gh pr close", ptxt)) == 1 and "--comment" in ptxt and "Superseded by #" in ptxt))
+        out.append((f"{label}: a failed listing of older bumps stops the job", "older=$(gh pr list" in ptxt and "set -euo pipefail" in ptxt))
+        wt = step(pp, "Wait for the bump to merge")
+        wtxt = (wt or {}).get("run", "")
+        out.append((f"{label}: publish-pr waits for MERGED and fails on closed, unknown state or timeout",
+                    wt is not None and "MERGED)" in wtxt and "was closed without merging" in wtxt and "unexpected pull request state" in wtxt
+                    and re.search(r'did not merge within 50 minutes"\n\s*exit 1\s*$', wtxt) is not None and wt.get("timeout-minutes") == 55
+                    and "steps.open_pr.outputs.pr" in str(wt.get("env"))))
+        out.append((f"{label}: only a superseded-by comment from the App turns a closed bump into a notice",
+                    "Superseded by #" in wtxt and "mctl-gitops-pr$" in wtxt and '-gt 0' in wtxt))
         # nothing but the two publishing jobs names an environment
         envs = {n: j.get("environment") for n, j in jobs.items() if "environment" in j}
         out.append((f"{label}: only the two publishing jobs have an environment", set(envs) == {"publish-direct", "publish-pr"}, envs))
@@ -161,6 +177,13 @@ MUT = [
     ("auto-merge: merges without waiting for CLEAN", "auto-merge.yml", "              CLEAN)\n", "              CLEAN|BLOCKED)\n"),
     ("auto-merge: guard scripts from the PR merge commit", "auto-merge.yml", "          ref: ${{ github.event.repository.default_branch }}\n", "          ref: ${{ github.sha }}\n"),
     ("auto-merge: plain step also takes release-bump", "auto-merge.yml", " && !startsWith(github.event.pull_request.head.ref, 'release-bump/')", ""),
+    ("supersede closes every open bump", "release-deploy.yaml", '[[ "$n" == "$pr" ]] && continue', "true"),
+    ("supersede matches any author", "gitops-bump.yaml", "select(.author.login | test(\"^(app/)?mctl-gitops-pr$\")) | select(.headRefName", "select(.headRefName"),
+    ("supersede prefix without a tag check", "release-deploy.yaml", ' and ($h[($p | length):] | test("^[0-9]"))', ""),
+    ("wait: closed unmerged is success", "release-deploy.yaml", 'echo "::error::release-bump pull request #${PR} was closed without merging"; exit 1', 'exit 0'),
+    ("wait: timeout is success", "gitops-bump.yaml", 'did not merge within 50 minutes"\n          exit 1', 'did not merge within 50 minutes"\n          exit 0'),
+    ("wait: any closed bump counts as superseded", "release-deploy.yaml", 'if [[ "$sup" -gt 0 ]]; then', 'if true; then'),
+    ("wait step removed", "gitops-bump.yaml", "      - name: Wait for the bump to merge\n", "      - name: Something else\n"),
     ("claude-review: App not allowed", "claude-review.yml", ",mctl-codex,mctl-gitops-pr", ",mctl-codex"),
 ]
 for name, fn, old, new in MUT:
