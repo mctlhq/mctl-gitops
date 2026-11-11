@@ -392,13 +392,6 @@ spec:
           # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
-            # The orchestrator DevLoop identity (mctlhq/mctl-api#963):
-            # MCTL_ORCHESTRATOR_DEVLOOP_PROVIDER/_SUBJECT, written by
-            # zitadel-iac (helm-charts/zitadel-iac/iac/orchestrator-devloop.tf).
-            # Optional: without it the mapping is off and the machine user is
-            # an ordinary OIDC caller with no admin access. Bump ROLLOUT_MARKER
-            # after the Job first writes it.
-            - mctl-api-orchestrator-devloop
             {{- if (default dict .Values.securityCodeScanning).receiver }}
             - mctl-api-security-code-scanning
             {{- end }}
