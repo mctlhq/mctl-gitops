@@ -479,6 +479,24 @@ jobs:
           token: ${{ steps.checkout_token.outputs.token }}
           persist-credentials: false
 
+      # The commit actually built, resolved from the checkout itself and never
+      # from the input ref: a tag or branch name can move, the checked-out
+      # HEAD cannot. Stamped below as org.opencontainers.image.revision so a
+      # release hold (mctlhq/mctl-gitops#2528, check 8) can bind a grant to
+      # the exact source of an image. A value that is not 40 lowercase hex
+      # characters is a refusal to build, never an empty label.
+      - name: Resolve the source revision
+        id: source_rev
+        run: |
+          set -euo pipefail
+          rev=$(git rev-parse --verify HEAD^{commit})
+          if ! printf '%s' "$rev" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::could not resolve a 40-hex source revision (got '${rev}'); refusing to build"
+            exit 1
+          fi
+          echo "revision=${rev}" >> "$GITHUB_OUTPUT"
+          echo "source revision: ${rev}"
+
       # --- Resolve GHCR push token ---
       # A Vault PAT wins: tenant builds push with their own credential.
       # Everything else pushes with the job's own GITHUB_TOKEN
@@ -612,6 +630,9 @@ jobs:
           # the PAT.
           secrets: |
             github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
+          # Overrides any LABEL of the same name in the source Dockerfile.
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source_rev.outputs.revision }}
           # :latest only for release builds. Nothing in this repository or the
           # cluster pulls ghcr.io/mctlhq/*:latest, and a direct dispatch moving
           # it would repoint the tag at whatever was built last.

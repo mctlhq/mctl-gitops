@@ -680,6 +680,12 @@ jobs:
         # unreachable mctl-api or a missing OIDC token must refuse.
         run: python3 tests/test_build_image_source_repo_check.py
 
+      - name: Test that build-image stamps the source revision label
+        # org.opencontainers.image.revision is the 40-hex commit of the
+        # checkout, never the input ref; an unresolvable revision refuses the
+        # build (mctlhq/mctl-gitops#2528, task 13).
+        run: python3 tests/test_build_image_revision_label.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists
