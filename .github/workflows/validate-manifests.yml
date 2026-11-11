@@ -1171,6 +1171,8 @@ jobs:
           python3 -m pip install --quiet pyyaml
           scripts/validate-glovo-m1-staging.py --selftest
           scripts/validate-glovo-m1-staging.py
+          scripts/test-mctl-api-egress-policy.py --selftest
+          scripts/test-mctl-api-egress-policy.py
 
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not

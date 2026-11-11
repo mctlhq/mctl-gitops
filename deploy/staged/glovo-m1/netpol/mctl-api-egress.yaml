@@ -1,0 +1,136 @@
+# Staged, NOT applied. Least-privilege egress for the mctl-api pods (owner
+# decision #7). See ../mctl-api-egress.md for the inventory, rollout, rollback
+# and the honest limits (this does NOT block a public host on TCP 443).
+#
+# Selects ONLY pods that carry the canary label, so applying it changes nothing
+# until a pod is labelled by hand (kubectl label pod ... mctl.ai/egress-policy=enforced).
+# Because it selects pods, an additional policy never narrows other pods, and
+# the existing ingress policy allow-mctl-api-ingress is untouched.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mctl-api-egress-least-privilege
+  namespace: mctl-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mctl-api
+      mctl.ai/egress-policy: enforced
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kubernetes API (control-plane node address, as in the tenant templates)
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.101/32
+      ports:
+        - protocol: TCP
+          port: 6443
+    # Sibling mctl-api replicas
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Postgres (shared-pg-rw)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Valkey (events)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-events
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Temporal frontend
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: temporal
+      ports:
+        - protocol: TCP
+          port: 7233
+    # Vault
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+      ports:
+        - protocol: TCP
+          port: 8200
+    # Loki
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3100
+    # Argo Workflows server
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+      ports:
+        - protocol: TCP
+          port: 2746
+    # Backstage
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backstage
+      ports:
+        - protocol: TCP
+          port: 7007
+    # erpact-deployer
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: erpact
+      ports:
+        - protocol: TCP
+          port: 8000
+    # ZITADEL (api and login UI)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: zitadel
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 3000
+    # Public HTTPS only. Private, link-local (cloud metadata) and CGNAT ranges
+    # are excluded. The gate must add the cluster node public IPs as /32
+    # excepts (not recorded here: this repository is public).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443
