@@ -239,7 +239,7 @@ grant:
   source_commit: "<40 hex>"     # mctl-api commit the tag points at (the merge commit of the release PR), never the PR head
   source_tree: "<40 hex>"       # git tree of source_commit
   reviewed_release_head: "<40 hex>"  # commit whose full content the reviews and compatibility evidence covered
-  build_run: "<run id>"         # release-deploy run that built `digest` (evidence; not trusted by itself)
+  build_run: "<run id>"         # release-deploy run that built `digest` (audit evidence only; never replaces check 8)
   policy_sha256: "<64 hex>"     # sha256 of release-holds.yaml bytes the grant was issued against
   owner: {login: <login>, id: <numeric-id>}
   issued_at: "2026-..Z"
@@ -399,7 +399,8 @@ treated as a hold decision.
   the base branch, so a PR cannot change what runs.
 - It checks out `github.event.pull_request.base.sha` (not the merge ref), with `persist-credentials: false`
   and `permissions: {contents: read}`, and runs `scripts/release-hold.py` and the bootstrap reader from that
-  checkout. It fetches the head with `git fetch origin <head_sha>` and reads head files only as bytes with
+  checkout. It fetches the head with `git fetch origin refs/pull/<n>/head`, which works for fork PRs as well,
+  and refuses (exit 7) unless the fetched commit equals `head_sha`. It reads head files only as bytes with
   `git show <head_sha>:<path>`. Head content is never checked out into the working tree, executed, imported,
   installed, sourced, or passed to a shell or a third-party action.
 - Policy and grants come from the base tree only. Changes to the guard, the policy or its tests count as
@@ -409,9 +410,10 @@ treated as a hold decision.
   any of these with a guarded file is refused as `HOLD_POLICY_CHANGED`. A PR that changes only policy or guard
   code reaches `main` only through a human merge (`protected_re`), and it takes effect for later PRs, never for
   itself.
-- The result is posted as check run `release-hold` on `head_sha` by a dedicated GitHub App with `checks:
-  write` and `metadata: read` only. Its private key is a secret of environment `release-hold-checker`, which is
-  limited to `main`. The ruleset's required checks gain
+- The result is posted as check run `release-hold` on `head_sha` by a dedicated **checker App** with `checks:
+  write` and `metadata: read` only. Its private key is a secret of two environments, both limited to `main`:
+  `release-hold-checker` (PR-time job) and `release-hold-merge` (merge job, below). It is never a secret of
+  any other environment, and it is not a repository secret. The ruleset's required checks gain
   `{"context": "release-hold", "integration_id": <checker App id>}`. A job defined in a PR runs on the PR ref,
   so it cannot enter that environment, and it posts as GitHub Actions (15368). It therefore cannot satisfy the
   context. This is why adding a step to `validate` is not enough: `validate` is bound to 15368, and any PR can
@@ -436,14 +438,27 @@ treated as a hold decision.
   2. Run `release-hold.py diff --base <main tip> --head <head_sha> --channel pull-request
      --expiry-margin 15m`. This re-reads the grant from `main`, the GHCR digest, the tag ref, the revision
      label and the grant PR's merger.
-  3. Post `release-hold` = success on `head_sha`.
+  3. Post `release-hold` = success on `head_sha` with a checker App token.
   4. Immediately call `PUT /repos/mctlhq/mctl-gitops/pulls/<pr>/merge` with `sha=<head_sha>` and
-     `merge_method=merge`.
+     `merge_method=merge`, using a **merger App** token.
 - The ruleset gains `strict_required_status_checks_policy: true`. If `main` moves after step 2, GitHub then
   refuses the merge as out of date, and `sha` makes it refuse if the head moves. Either refusal writes
   nothing; the run reports, and the owner re-dispatches. The only remaining window is between steps 3 and 4
   (seconds). During that window, the verified state is still what merges.
-- The merge is made by the checker App, so `merged_by` is a Bot. That is acceptable for bump PRs, because the
+- **Identities (amended after review round 1).** Two Apps, each with the least it needs:
+  - The **checker App** (`checks: write`, `metadata: read`) posts `release-hold`. Its key lives in
+    `release-hold-checker` and `release-hold-merge`.
+  - The **merger App** (`contents: write`, `pull_requests: write`, `metadata: read`) only calls the merge
+    API. Its key lives **only** in `release-hold-merge`, which requires the owner's approval for every run.
+    It is **not** a bypass actor on any ruleset, so its merge must satisfy every ruleset rule like any other
+    merge: the approving review, all required contexts (including `release-hold` from the checker App),
+    `strict`, and `require_extra_approval_for_unattributed_changes`. Whether an App merge satisfies that last
+    rule is **not verified**, and it is proven in the disposable repository before task 14 (T31). If it does
+    not, the merge fails closed and step 4 falls back to the owner merging personally within the
+    expiry margin. The run's re-verification remains the record of what was checked.
+  - Neither App is the `mctl-agents` App, and neither key is reachable from a job that a PR defines.
+
+  The merge is made by the merger App, so `merged_by` is a Bot. That is acceptable for bump PRs, because the
   decision identity is the environment approver. It is never acceptable for grant PRs (see above).
 - `strict` applies to every PR in the repository: each must be up to date with `main` before merging. That
   is an owner decision (D1).
@@ -637,14 +652,21 @@ None of these is taken by this proposal or by an agent.
 
 - **D1.** Add the required context `release-hold`, bound to the checker App, to ruleset 18465404, and set
   `strict_required_status_checks_policy: true`. `strict` affects every PR in this repository.
-- **D2.** Create a new narrow checker App (`checks: write`, `metadata: read`) with its key in environment
-  `release-hold-checker`, or name an existing App that meets the same constraints. The `mctl-agents` App is
-  excluded.
+- **D2.** Create two new narrow Apps, or name existing Apps that meet the same constraints (the `mctl-agents`
+  App is excluded):
+  - the checker App (`checks: write`, `metadata: read`), with its key in `release-hold-checker` and
+    `release-hold-merge`;
+  - the merger App (`contents: write`, `pull_requests: write`, `metadata: read`), with its key only in
+    `release-hold-merge`.
+
+  Neither App is a ruleset bypass actor.
 - **D3.** P5b/P6: wait for #2543, or accept in writing, for the 4.155.0 decision only, that deploy-key holders
   can bypass L1-L4 and are only detected (L5).
-- **D4.** The digest-to-source link. Option one: the revision label (task 13) lands before #934 merges. If
-  #934 merges first, 4.155.0 can never pass check 8, and a new release is needed. Option two: the owner accepts
-  an owner-attested link (`build_run`, machine-checked: no).
+- **D4.** The digest-to-source link is machine-checked only (check 8). The revision label (task 13) must
+  be live before #934 merges. If #934 merges first, the 4.155.0 image has no label, it can never pass check
+  8, and a new release (new tag, rebuilt with the label) is needed. There is no owner-attested alternative:
+  it was dropped in review round 1, because it would be a non-machine-checked path around check 8. The owner
+  decides the order: task 13 first, or accept that merging #934 early forces a re-release.
 - **D5.** Reach Deny (task 11) before the hold is relied on at the point of effect.
 - **D6.** Keep the chart pinned for the duration of the hold (existing question below).
 

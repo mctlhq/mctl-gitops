@@ -82,13 +82,17 @@ Preconditions:
 - [ ] 13. (Amended 2026-11-11) In `build-image.yaml`, stamp `org.opencontainers.image.revision` with the
   resolved 40-hex SHA of the source checkout (`git rev-parse HEAD` after checkout, never the input ref).
   Extend `release-hold.py` check 8 to read it from the image config. (Independent of 3) — DoD: a test build
-  in a fixture shows the label, and T20 passes. The task must be live before #934 merges, unless the owner
-  takes D4 option two.
+  in a fixture shows the label, and T20 passes. The task must be live before #934 merges. Otherwise
+  4.155.0 needs a new release (D4).
 - [ ] 14. (Owner action, D1/D2) Prepare the ruleset 18465404 change: add the required context
   `release-hold` bound to the checker App's integration id, and set `strict_required_status_checks_policy:
-  true`. Prepare the checker App and environment `release-hold-checker` (branch policy `main`). Prepare
-  environment `release-hold-merge` (required reviewer = owner, `can_admins_bypass: false`). (depends on 7)
-  — DoD: exact JSON in the runbook, and a dry run in a disposable repository (T24, T26). Applied by the
+  true`. Prepare:
+  - the checker App and environment `release-hold-checker` (branch policy `main`);
+  - the merger App, whose key is only in environment `release-hold-merge` (branch policy `main`, required
+    reviewer = owner, `can_admins_bypass: false`), with the checker key also in that environment.
+
+  Neither App is a bypass actor. (depends on 7) — DoD: exact JSON in the runbook, and a dry run in a
+  disposable repository (T24, T26, T31). Applied by the
   owner, never by an agent.
 - [ ] 15. Add the post-sync digest verifier (read-only CronJob in `mctl-api`, ServiceAccount allowed only
   `get`/`list` on pods; alert on mismatch or unknown). Make `release-gate-watch.yml` run `release-hold.py`
@@ -188,6 +192,12 @@ test asserts that the bare repository's `main` SHA is unchanged and that no file
   an unreadable pod list is reported as unknown, never as clean.
 - [ ] T30. An allowlist file naming 4.155.0 without a valid grant in the same tree is refused by `verify`
   and by `diff`.
+- [ ] T31. Merger identity (disposable repository): a merger-App merge with `sha=` succeeds only when every
+  ruleset rule is met, including `require_extra_approval_for_unattributed_changes`. It fails, with no write,
+  when `release-hold` is missing or comes from another integration. If an App merge cannot satisfy the rules,
+  the runbook records the owner-merge fallback, and the test asserts that the fallback is refused once the
+  expiry margin has passed. A fork-PR fixture proves that `release-hold-pr` fetches `refs/pull/<n>/head` and
+  refuses a head that does not match `head_sha`.
 - [ ] T17. Mutation check: removing each layer's call makes at least one of T1-T8 or T18-T30 fail. The
   calls are: check in the bump script, verify in the push loop, `--since`, the per-attempt re-read, the
   expiry margin, the base-only checkout in `release-hold-pr`, the `sha=` and up-to-date checks in
