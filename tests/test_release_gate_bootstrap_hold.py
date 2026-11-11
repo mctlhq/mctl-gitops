@@ -84,7 +84,7 @@ def with_tag(tag_line):
     return REAL_API.replace(OLD_TAG, tag_line)
 
 
-def diff_rc(script, mutate, parent_policy=None, marker=None, base_api=None):
+def diff_rc(script, mutate, parent_policy=None, marker=None, base_api=None, base_mutate=None):
     """Parent commit = real policy + real bootstrap file; head = parent + mutate(dir). Exit code of `diff`."""
     d = _WORK / f"d{next(_N)}"
     d.mkdir()
@@ -99,6 +99,8 @@ def diff_rc(script, mutate, parent_policy=None, marker=None, base_api=None):
     def git(*a):
         subprocess.run(["git", "-C", str(d), "-c", "user.name=t", "-c", "user.email=t@t", *a],
                        check=True, capture_output=True)
+    if base_mutate:
+        base_mutate(d)  # the parent commit is built with this shape
     git("init", "-q")
     git("add", "-A")
     git("commit", "-qm", "base", "--no-gpg-sign")
@@ -267,7 +269,33 @@ def cases(script):
         diff_rc(script, lambda d: None, policy_with([GOOD]), base_api=shipped), 0)
     add("neg: shipped state: a push to 4.155.1 needs its own record",
         diff_rc(script, lambda d: set_tag(d, "4.155.1"), policy_with([GOOD]), base_api=shipped), REFUSED)
-    add("diff unknown: pushed block no longer parses", diff_rc(script, lambda d: (d / API).write_text(with_tag("tag: ["))), 7)
+    add("diff unknown: pushed block no longer parses",
+        diff_rc(script, lambda d: (d / API).write_text(with_tag("tag: [")), marker="pushed image.tag unreadable"), 7)
+
+    # A failed or unusable read of the PARENT's held file is UNKNOWN, never "nothing changed".
+    def restore(d):
+        shutil.rmtree(d / API, ignore_errors=True)
+        (d / API).unlink(missing_ok=True)
+        (d / API).write_text(REAL_API)
+
+    def parent_dir(d):
+        (d / API).unlink()
+        (d / API).mkdir()
+        (d / API / "x").write_text("x")
+
+    def parent_symlink(d):
+        (d / API).unlink()
+        (d / API).symlink_to("/etc/hostname")
+    add("diff unknown: parent path is a directory (read fails)",
+        diff_rc(script, restore, base_mutate=parent_dir, marker="is not a regular file"), 7)
+    add("diff unknown: parent path is a symlink",
+        diff_rc(script, restore, base_mutate=parent_symlink, marker="is not a regular file"), 7)
+    add("diff unknown: held file absent in the parent",
+        diff_rc(script, restore, base_mutate=lambda d: (d / API).unlink(), marker="absent in parent"), 7)
+    add("diff unknown: parent content is not text",
+        diff_rc(script, restore, base_mutate=lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="parent content is not text"), 7)
+    add("diff unknown: parent image.tag unreadable",
+        diff_rc(script, restore, base_mutate=lambda d: (d / API).write_text(with_tag("tag: [")), marker="parent image.tag unreadable"), 7)
     return out
 
 
@@ -318,20 +346,31 @@ MUTANTS = {
                                              "pos: bump of another image through a glob over the held file is not judged"),
     "an unnamed image is skipped": ('image is not None and image != h["repository"]', "image != h[\"repository\"]",
                                     "neg: image not named: judged (fail closed)"),
-    "diff: held file not copied into the scratch tree": ("            (tmp / p).write_bytes(h)\n            # The bump workflows rewrite",
-        "            # The bump workflows rewrite", "diff neg: push of 4.155.0, no allow in the parent policy"),
+    "diff: held file not copied into the scratch tree": ("            (tmp / p).write_bytes(h)\n            try:\n                old_text",
+        "            try:\n                old_text", "diff neg: push of 4.155.0, no allow in the parent policy"),
     "diff: removed held file not reported": ('viol.append(f"{p}: held file was removed")\n                continue\n            (tmp / p).parent',
         'continue\n            (tmp / p).parent', "diff neg: push removes the held file (violation, not unknown)"),
-    "diff: failed read of the held file skipped": ('unk.append(f"{p}: {exc}")\n                continue\n            if h is None:',
-        'continue\n            if h is None:', "diff unknown: held file unreadable in the pushed tree"),
     "diff: a changed held tag is not a write": ("            if new_t != old_tag:", "            if False:",
                                                   "diff neg: push of 4.155.0, allow expired in the parent policy"),
     "diff: parent policy not required to hold version_holds": ('holds = _holds(base_policy)', 'holds = (base_policy.get("version_holds") or []) if isinstance(base_policy, dict) else []',
                                                               "diff unknown: parent policy without version_holds"),
-    "diff: other content of the held file not compared": ("if b0 is not None and _strip_tag(b0.decode(), hold) != _strip_tag(h.decode(), hold):",
-        "if False:", "diff neg: values block edited, tag untouched"),
+    "diff: other content of the held file not compared": ("content_changed = _strip_tag(old_text, hold) != _strip_tag(new_text, hold)",
+        "content_changed = False", "diff neg: values block edited, tag untouched"),
+    "diff: pushed tag unreadable always reported (violation outranked)": ("if not content_changed:  # else", "if True:  # else",
+        "diff neg: second image reference added"),
     "diff: tag blanking too wide (whole file ignored)": ('return pat.sub(lambda m: m.group(1), text)', 'return ""',
         "diff neg: targetRevision edited, tag untouched"),
+    "diff: failed parent read of the held file skipped": ('unk.append(f"{p}: {exc}")\n                continue\n            if b is None:\n                unk.append(f"{p}: absent in parent {base[:12]}")\n                continue\n            if h is None:',
+        'continue\n            if b is None:\n                unk.append(f"{p}: absent in parent {base[:12]}")\n                continue\n            if h is None:',
+        "diff unknown: parent path is a directory (read fails)"),
+    "diff: symlink accepted as a regular file": ('fields[0] not in (b"100644", b"100755")', "False", "diff unknown: parent path is a symlink"),
+    "diff: held file absent in the parent not reported": ('unk.append(f"{p}: absent in parent {base[:12]}")\n                continue\n            if h is None:\n                viol.append(f"{p}: held file was removed")',
+        'pass\n                continue\n            if h is None:\n                viol.append(f"{p}: held file was removed")', "diff unknown: held file absent in the parent"),
+    "diff: non-text parent not reported": ('unk.append(f"{p}: parent content is not text")', "pass", "diff unknown: parent content is not text"),
+    "diff: unreadable parent tag not reported": ('unk.append(f"{p}: parent image.tag unreadable: {type(exc).__name__}: {exc}")', "pass",
+        "diff unknown: parent image.tag unreadable"),
+    "diff: unreadable pushed tag not reported": ('unk.append(f"{p}: pushed image.tag unreadable: {type(exc).__name__}: {exc}")', "pass",
+        "diff unknown: pushed block no longer parses"),
     "several values blocks accepted": ("if len(starts) != 1:", "if len(starts) < 1:", "neg: two values block scalars"),
 }
 

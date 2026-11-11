@@ -386,7 +386,8 @@ def _blob(repo: Path, rev: str, rel: str) -> bytes | None:
         return None
     meta, _, name = listing.rstrip(b"\0").partition(b"\t")
     fields = meta.split()
-    if len(fields) != 3 or fields[1] != b"blob" or name.decode(errors="replace") != rel:
+    if len(fields) != 3 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") \
+            or name.decode(errors="replace") != rel:
         raise GitReadError(f"{rel} at {rev[:12]} is not a regular file")
     return git("cat-file", "blob", fields[2].decode())
 
@@ -524,39 +525,52 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
         for hold in holds:
             p = hold["file"]
             try:
-                h = _blob(repo, head, p)
+                h, b = _blob(repo, head, p), _blob(repo, base, p)
             except GitReadError as exc:
                 unk.append(f"{p}: {exc}")
+                continue
+            if b is None:
+                unk.append(f"{p}: absent in parent {base[:12]}")
                 continue
             if h is None:
                 viol.append(f"{p}: held file was removed")
                 continue
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             (tmp / p).write_bytes(h)
+            try:
+                old_text = b.decode()
+            except UnicodeDecodeError:
+                unk.append(f"{p}: parent content is not text")
+                continue
+            try:
+                new_text = h.decode()
+            except UnicodeDecodeError:
+                viol.append(f"{p}: held file is not text")
+                continue
             # The bump workflows rewrite only the repository+tag pair: any other
             # byte that moved (env flags, repoURL, targetRevision, a second image
             # reference) is not a release bump, as for the gated `paths` files.
-            try:
-                b0 = _blob(repo, base, p)
-                if b0 is not None and _strip_tag(b0.decode(), hold) != _strip_tag(h.decode(), hold):
-                    viol.append(f"{p}: content other than the image tag changed")
-            except UnicodeDecodeError:
-                viol.append(f"{p}: held file is not text")
-            except GitReadError:
-                pass  # reported as unknown by the base read below
+            # A reviewed PR that edits the file also lands here, by design: the
+            # watcher cannot tell a reviewed merge from a deploy-key push (#2543).
+            content_changed = _strip_tag(old_text, hold) != _strip_tag(new_text, hold)
+            if content_changed:
+                viol.append(f"{p}: content other than the image tag changed (expected when a reviewed PR edits it)")
             # A push that changes the held tag is a new write: judged like a bump
             # (expiry applies). An unchanged tag is only the deployed state.
+            # Either side unreadable is UNKNOWN, never "no change".
             try:
-                b = _blob(repo, base, p)
                 with tempfile.TemporaryDirectory() as t2:
                     (Path(t2) / p).parent.mkdir(parents=True)
-                    (Path(t2) / p).write_bytes(b if b is not None else b"")
-                    old_tag = _bootstrap_tag(Path(t2), hold) if b is not None else None
-            except Exception:  # noqa: BLE001 - cannot tell whether it changed: judge as a write
-                old_tag = None
+                    (Path(t2) / p).write_bytes(b)
+                    old_tag = _bootstrap_tag(Path(t2), hold)
+            except Exception as exc:  # noqa: BLE001
+                unk.append(f"{p}: parent image.tag unreadable: {type(exc).__name__}: {exc}")
+                continue
             try:
                 new_t = _bootstrap_tag(tmp, hold)
-            except Exception:  # noqa: BLE001 - reported by the tree check below
+            except Exception as exc:  # noqa: BLE001
+                if not content_changed:  # else the content is what is wrong, already a violation
+                    unk.append(f"{p}: pushed image.tag unreadable: {type(exc).__name__}: {exc}")
                 continue
             if new_t != old_tag:
                 viol.extend(hold_problems(tmp, [hold], [p], new_t, image=hold["repository"]))
