@@ -92,6 +92,42 @@ owner's judgement, not a gap in code.
   decision packet carries D3 (the owner's written acceptance of the residual
   risk), and `release-gate-watch.yml` is a detector, not a guard.
 
+## Reconciliation with the #2590 gate (tasks 2-5, 8, 9 not implemented)
+
+`release-hold.py` as designed in #2589 would duplicate what `version_holds` in
+`release-gate.py` already does, so it was not written. Stacking a second tool on
+the same file would give two readers of one bootstrap values block (the design
+itself requires one reader, tasks note "does not write a second reader").
+
+Already enforced by #2590 / #2595 (see "What is enforced today"):
+- a held tag cannot be written or pushed without a recorded allow naming exactly
+  that version (design checks on hold and version);
+- the allow record carries `grant`, `approved_by` and `expires`, and expiry gates
+  new writes only;
+- every unreadable input is a refusal (exit 7 for the watcher), including a failed
+  read of the parent's held file;
+- the check runs before the write, before every push attempt and after every
+  rebase, on both routes (direct and PR), and again in `validate` and the watcher.
+
+Not covered, and what each would take:
+- **Digest and source binding** (design checks 4-8: grant added by an
+  owner-merged PR, tag ref, GHCR manifest digest, `source_commit`, image
+  `revision` label). The label is stamped from task 13; reading it needs GHCR
+  and GitHub API reads at gate time, behind one injectable function. The
+  smallest design that does not fork the tool is to add optional `digest` and
+  `source_commit` fields to the `allow` record and have `release-gate.py` verify
+  them, rather than a second script.
+- **Runtime keys** (`MCTL_BRIDGE_*`, `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE`
+  in the bootstrap values or optional Secrets): the gate reads the image tag
+  only. Same extension point.
+- **Chart pin (P7)**, **admission policy (P8)**, **App-bound `release-hold`
+  context (P12)**: separate work, see above.
+- **Preflight advisory (task 5)**: `release-preflight.py` does not mention the
+  hold; adding a notice is small but changes nothing at the point of effect.
+
+Owner decision needed: extend `version_holds` (recommended) or build the second
+tool the design describes.
+
 ## Not built (tasks 7, 10, 11, 14, 15)
 
 - 7: `release-hold-pr.yml` and `release-hold-merge.yml`, the `release-hold`
