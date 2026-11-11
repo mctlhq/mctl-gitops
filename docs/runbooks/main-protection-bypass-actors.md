@@ -159,6 +159,38 @@ transitional bypass for that writer, with an expiry the verifier enforces.
 7. Owner deletes environment secret `GITOPS_BUMP_DEPLOY_KEY`, then deploy key
    165489378.
 
+### Amendment 2026-11-11: fast PR-based path (NOT a Stage 1 substitute)
+
+Owner decision to reach the Glovo production milestone without waiting for a
+new App: release bumps for selected images are opened as pull requests by the
+existing `mctl-gitops-pr` App (installed on selected repositories,
+`contents: write` + `pull_requests: write`, key only in environment
+`app-gitops-pr`, deployment branch policy `main`). Reviewed code lands in a
+separate PR (`ci/release-bump-pr-route`).
+
+What it is: a route in `release-deploy.yaml` and `gitops-bump.yaml`, chosen per
+image from `platform-gitops/release-bump-routes.yaml`, that pushes only to
+`release-bump/*` and opens a PR. The PR needs the `validate`, `cloudflare-plan`
+and `reserved-hosts` checks and one approving review like any other PR, and it
+runs the release gate (`version_holds`, #2528) on the exact tree before the
+push and again in `validate`.
+
+What it is not:
+- It does not remove the DeployKey bypass. The deploy keys, the `DeployKey`
+  entry of ruleset 18465404 and the Argo writer key are unchanged, and images
+  outside the route list still push directly. The finding stays P1.
+- `mctl-gitops-pr`, `mctl-agents` and `mctl-app` are NOT added to the bypass
+  list. `mctl-gitops-pr` stays a non-bypass actor: it can create branches and
+  PRs and cannot push to `main`.
+- #2543 stays open until the old bypass credentials are gone: the images still
+  on the direct route are migrated, then Stage 2A/3 remove the keys and the
+  wildcard entry.
+
+Residual risk: `mctl-gitops-pr` keeps `contents: write` on `mctl-gitops`, so a
+compromised key can create branches and PRs (review and checks still apply) but
+cannot reach `main` without a reviewer. Accepted for the milestone, revisited
+when the image list is widened.
+
 ### Stage 2A (transitional): the Argo writer gets its own App
 
 Prerequisite, reviewed separately: no tenant namespace holds the write
