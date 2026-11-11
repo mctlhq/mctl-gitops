@@ -232,7 +232,8 @@ jobs:
           import subprocess
           _gate = subprocess.run(
               [sys.executable, "scripts/release-gate.py", "check",
-               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag]
+               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag,
+               "--policy-rev", "origin/main"]
           )
           if _gate.returncode != 0:
               print("ERROR: release gate refused this bump", file=sys.stderr)
@@ -395,7 +396,7 @@ jobs:
           # explicitly-staged file(s) above.
           git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
           # Release gate on the tree about to be pushed (see release-deploy).
-          python3 scripts/release-gate.py verify
+          python3 scripts/release-gate.py verify --policy-rev origin/main
           git push
 
       - name: Summary

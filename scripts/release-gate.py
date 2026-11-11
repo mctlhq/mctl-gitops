@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import re
 import subprocess
 import sys
@@ -51,8 +52,23 @@ def _dig(doc: Any, key: str) -> Any:
     return doc
 
 
-def _gates(root: Path) -> list[dict]:
-    doc = _load(root, GATE)
+def _policy_doc(root: Path, rev: str | None) -> Any:
+    """The gate policy: from the working tree, or (rev given) from a git revision.
+
+    The workflows pass `--policy-rev origin/main`, so the policy that judges a
+    bump is the reviewed one on main, never a file the pending commit touched.
+    A failed git read is an exception, i.e. a refusal.
+    """
+    if rev is None:
+        return _load(root, GATE)
+    raw = _blob(root, rev, GATE)
+    if raw is None:
+        raise ValueError(f"{GATE} absent at {rev}")
+    return _parse(raw)
+
+
+def _gates(root: Path, rev: str | None = None) -> list[dict]:
+    doc = _policy_doc(root, rev)
     gates = doc.get("gates") if isinstance(doc, dict) else None
     if not isinstance(gates, list) or not gates:
         raise ValueError("no gates list")
@@ -70,13 +86,15 @@ def _gates(root: Path) -> list[dict]:
     return gates
 
 
-def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[str]:
+def problems(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
+             today: datetime.date | None = None) -> list[str]:
     """Every reason to refuse. `files=None` is verify mode (whole tree)."""
     try:
-        gates = _gates(root)
+        gates = _gates(root, rev)
+        holds = _holds(_policy_doc(root, rev))
     except Exception as exc:  # noqa: BLE001 - unreadable gate is a refusal
         return [f"UNKNOWN: gate {GATE} unreadable: {type(exc).__name__}: {exc}"]
-    out: list[str] = []
+    out: list[str] = hold_problems(root, holds, files, new_tag, today)
     for g in gates:
         paths = g["paths"]
         touched = paths if files is None else [p for p in paths if p in files]
@@ -126,6 +144,138 @@ def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[s
         for p in g.get("prepull_paths") or []:
             if p in touched:
                 out.extend(_prepull_problems(root, p, files is not None))
+    return out
+
+
+# -- version holds: a version that needs an explicit, recorded allow -----------
+#
+# mctl-api is deployed from a bootstrap Application whose Helm values live in a
+# YAML block scalar (`values: |`) inside a Helm template, so the file as a whole
+# is not parseable YAML and `image.tag` is not a key of any parsed document.
+# The hold extracts the block, parses it, and refuses on anything it cannot
+# read, in doubt always as a refusal (mctlhq/mctl-gitops#2528).
+
+_VALUES_KEY = re.compile(r"^(\s*)values:\s*\|[+-]?\s*$")
+_HELM_LINE = re.compile(r"^\s*\{\{-?.*-?\}\}\s*$")
+
+
+class _DupKeyLoader(yaml.SafeLoader):
+    """safe_load keeps the last of two equal keys silently; a second `tag:` must be an error."""
+
+
+def _no_dups(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    seen: set = set()
+    for k, _ in node.value:
+        key = loader.construct_object(k, deep=True)
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r}")
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_DupKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dups)
+
+
+def block_values(text: str) -> Any:
+    """Parse the one `values: |` block scalar of a bootstrap Application."""
+    lines = text.split("\n")
+    starts = [i for i, ln in enumerate(lines) if _VALUES_KEY.match(ln)]
+    if len(starts) != 1:
+        raise ValueError(f"expected exactly one `values: |` block, found {len(starts)}")
+    i = starts[0]
+    key_indent = len(_VALUES_KEY.match(lines[i]).group(1))  # type: ignore[union-attr]
+    body: list[str] = []
+    for ln in lines[i + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip(" ")) <= key_indent:
+            break
+        body.append(ln)
+    body = [ln for ln in body if not _HELM_LINE.match(ln)]  # outer-chart directives, not values
+    indents = [len(ln) - len(ln.lstrip(" ")) for ln in body if ln.strip()]
+    if not indents:
+        raise ValueError("empty values block")
+    cut = min(indents)
+    doc = yaml.load("\n".join(ln[cut:] for ln in body), Loader=_DupKeyLoader)  # noqa: S506 - SafeLoader subclass
+    if not isinstance(doc, dict):
+        raise ValueError("values block is not a mapping")
+    return doc
+
+
+def _holds(doc: Any) -> list[dict]:
+    """Validate the `version_holds` section. A missing section is an error, not 'no holds'."""
+    holds = doc.get("version_holds") if isinstance(doc, dict) else None
+    if not isinstance(holds, list):
+        raise ValueError("version_holds missing or not a list")
+    for h in holds:
+        if not (isinstance(h, dict) and h.get("name") and isinstance(h.get("file"), str) and h["file"]
+                and isinstance(h.get("repository"), str) and h["repository"]
+                and _semver(h.get("held_from")) is not None):
+            raise ValueError(f"malformed hold {h!r}")
+        allow = h.get("allow")
+        if allow is None:
+            allow = h["allow"] = []
+        if not isinstance(allow, list):
+            raise ValueError(f"hold {h['name']}: allow is not a list")
+        seen: set[str] = set()
+        for a in allow:
+            ok = (isinstance(a, dict) and isinstance(a.get("version"), str) and _semver(a["version"]) is not None
+                  and all(isinstance(a.get(k), str) and a[k].strip() for k in ("grant", "approved_by"))
+                  and isinstance(a.get("expires"), datetime.date) and not isinstance(a["expires"], datetime.datetime))
+            if not ok:
+                raise ValueError(f"hold {h['name']}: malformed allow record {a!r}")
+            if _semver(a["version"]) < _semver(h["held_from"]):  # type: ignore[operator]
+                raise ValueError(f"hold {h['name']}: allow {a['version']} is below held_from")
+            if a["version"] in seen:
+                raise ValueError(f"hold {h['name']}: two allow records for {a['version']}")
+            seen.add(a["version"])
+    return holds
+
+
+def _bootstrap_tag(root: Path, hold: dict) -> str:
+    """The single image tag of the hold's file; any doubt raises."""
+    text = (root / hold["file"]).read_text()
+    pat = re.compile(r"repository:\s*" + re.escape(hold["repository"]) + r"\s*\n\s+tag:")
+    # The bump workflows rewrite every `repository: <image>` + `tag:` pair by
+    # text; the parser and that rewrite must see exactly one and the same.
+    if len(pat.findall(text)) != 1 or text.count(hold["repository"]) != 1:
+        raise ValueError("not exactly one image reference for the repository")
+    img = block_values(text).get("image")
+    if not isinstance(img, dict) or img.get("repository") != hold["repository"]:
+        raise ValueError("image.repository is not the held repository")
+    tag = img.get("tag")
+    if not isinstance(tag, str):
+        raise ValueError(f"image.tag is not a string: {tag!r}")
+    return tag
+
+
+def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_tag: str | None,
+                  today: datetime.date | None = None) -> list[str]:
+    """Refuse a held version unless an unexpired allow record names exactly that version.
+
+    Bump mode (files given): judged on `new_tag`, only for a hold whose file is
+    in the bump. Verify mode: every hold, judged on the tag now in the file.
+    """
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    out: list[str] = []
+    for h in holds:
+        if files is not None and h["file"] not in files:
+            continue
+        try:
+            current = _bootstrap_tag(root, h)
+        except Exception as exc:  # noqa: BLE001 - could not observe is a refusal
+            out.append(f"UNKNOWN: {h['file']} image.tag unreadable for hold {h['name']}: {type(exc).__name__}: {exc}")
+            continue
+        version = current if files is None else new_tag
+        v = _semver(version)
+        if v is None:
+            out.append(f"{h['name']}: tag {version!r} is not X.Y.Z, cannot compare to the hold")
+            continue
+        if v < _semver(h["held_from"]):  # type: ignore[operator]
+            continue
+        rec = [a for a in h["allow"] if a["version"] == version]
+        if not rec:
+            out.append(f"{h['name']}: {version} is held (from {h['held_from']}) and has no allow record in {GATE}")
+        elif rec[0]["expires"] < today:
+            out.append(f"{h['name']}: allow record for {version} expired on {rec[0]['expires']}")
     return out
 
 
@@ -186,8 +336,8 @@ def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
     return out
 
 
-def run(root: Path, files: list[str] | None, new_tag: str | None) -> int:
-    found = problems(root, files, new_tag)
+def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None) -> int:
+    found = problems(root, files, new_tag, rev)
     for line in found:
         print(f"::error::release gate: {line}", file=sys.stderr)
     if found:
@@ -309,6 +459,7 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
         try:
             gates = _gates(tmp)
             base_policy = _parse(pol_base)
+            holds = _holds(base_policy)
         except Exception as exc:  # noqa: BLE001
             return [], [f"parent gate policy unreadable: {type(exc).__name__}: {exc}"]
         if pol_head is None:
@@ -355,6 +506,21 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
                             viol.append(f"{p}: {why}")
                 elif _without_tag(old) != _without_tag(new):
                     viol.append(f"{p}: content other than image.tag changed")
+        # Held files: the pushed content is what the hold judges. A removed or
+        # unreadable one is reported here, so the final check cannot pass on a
+        # file that is merely missing from the scratch tree.
+        for hold in holds:
+            p = hold["file"]
+            try:
+                h = _blob(repo, head, p)
+            except GitReadError as exc:
+                unk.append(f"{p}: {exc}")
+                continue
+            if h is None:
+                viol.append(f"{p}: held file was removed")
+                continue
+            (tmp / p).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / p).write_bytes(h)
         # The pushed tree must satisfy the parent's policy.
         # A file already reported as a violation (removed, unparsable) is not
         # also an unknown: the read worked, the content is what is wrong.
@@ -409,7 +575,8 @@ def _tree(d: Path, *, tags=("1.117.0",) * 3, strategy: str | None = "Recreate", 
         gate
         if gate is not None
         else yaml.safe_dump(
-            {"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
+            {"version_holds": [],
+             "gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
                         "requires": [{"path": _P[0], "key": "strategy.type", "equals": "Recreate"}]}]}
         )
     )
@@ -439,7 +606,8 @@ def _prepull_selftest() -> list[str]:
     for name, kw, files, ok in cases:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
-            gate = yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
+            gate = yaml.safe_dump({"version_holds": [],
+                                   "gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
                                               "prepull_paths": [_P[0]]}]})
             _tree(d, gate=gate, tags=(kw.get("tag", "1.117.0"),) * 3)
             doc = yaml.safe_load((d / _P[0]).read_text())
@@ -482,10 +650,10 @@ def selftest() -> int:
         with tempfile.TemporaryDirectory() as t:
             d = Path(t)
             if kw.get("gate") == "REPO":
-                kw = {"gate": yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
+                kw = {"gate": yaml.safe_dump({"version_holds": [], "gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
                                                          "repository": "ghcr.io/other/img"}]})}
             if kw.get("gate") == "OUTSIDE":
-                kw = {"gate": yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
+                kw = {"gate": yaml.safe_dump({"version_holds": [], "gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
                                                          "requires": [{"path": "elsewhere.yaml", "key": "a", "equals": 1}]}]})}
             _tree(d, **kw)
             rc = 0 if not problems(d, files, tag) else REFUSED
@@ -513,7 +681,10 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("check")
     c.add_argument("--files", nargs="+", required=True)
     c.add_argument("--new-tag", required=True)
-    sub.add_parser("verify")
+    v = sub.add_parser("verify")
+    for sp in (c, v):
+        sp.add_argument("--policy-rev", default=None,
+                        help="read release-gates.yaml from this git revision (e.g. origin/main), not the tree")
     d = sub.add_parser("diff")
     d.add_argument("--base", required=True)
     d.add_argument("--head", required=True)
@@ -521,9 +692,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.selftest:
         return selftest()
     if a.cmd == "check":
-        return run(Path(a.root), a.files, a.new_tag)
+        return run(Path(a.root), a.files, a.new_tag, a.policy_rev)
     if a.cmd == "verify":
-        return run(Path(a.root), None, None)
+        return run(Path(a.root), None, None, a.policy_rev)
     if a.cmd == "diff":
         return run_diff(Path(a.root), a.base, a.head)
     ap.error("a command or --selftest is required")

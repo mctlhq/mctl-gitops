@@ -346,7 +346,8 @@ jobs:
           import subprocess
           _gate = subprocess.run(
               [sys.executable, "scripts/release-gate.py", "check",
-               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag]
+               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag,
+               "--policy-rev", "origin/main"]
           )
           if _gate.returncode != 0:
               print("ERROR: release gate refused this bump", file=sys.stderr)
@@ -498,7 +499,7 @@ jobs:
           # was unchanged since this check; after every rebase the check runs
           # again on the new tree. No path pushes a tree the gate has not seen.
           release_gate() {
-            python3 scripts/release-gate.py verify || {
+            python3 scripts/release-gate.py verify --policy-rev origin/main || {
               echo "::error::release gate refused the tree to be pushed"
               exit 1
             }
