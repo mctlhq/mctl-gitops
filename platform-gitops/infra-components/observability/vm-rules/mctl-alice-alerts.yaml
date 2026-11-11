@@ -230,6 +230,59 @@ spec:
               clients that reconnect without closing, or a leak in the
               transport map (sseTransports).
 
+        - alert: MctlAliceMemoryNearLimit
+          # Usage is read from the cAdvisor endpoint only: the kubelet exports
+          # container_memory_working_set_bytes a second time under /metrics/resource,
+          # and summing both would double the value (see mctl-alerts.yaml:19-23).
+          expr: |
+            (
+              sum by (namespace, pod) (
+                container_memory_working_set_bytes{
+                  namespace="labs", pod=~"labs-mctl-alice-base-service-.*", container="base-service",
+                  metrics_path="/metrics/cadvisor"
+                }
+              )
+              /
+              sum by (namespace, pod) (
+                container_spec_memory_limit_bytes{
+                  namespace="labs", pod=~"labs-mctl-alice-base-service-.*", container="base-service"
+                }
+              )
+            ) > 0.85
+            and
+            sum by (namespace, pod) (
+              container_spec_memory_limit_bytes{
+                namespace="labs", pod=~"labs-mctl-alice-base-service-.*", container="base-service"
+              }
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice pod {{ $labels.pod }} memory is above 85% of limit"
+            description: >-
+              Working set memory for pod {{ $labels.pod }} is at {{ $value | humanizePercentage }}
+              of its container memory limit. Check for memory leaks or high concurrent SSE streams.
+
+        - alert: MctlAliceRateLimitSpike
+          # mctl_alice_rate_limited_total is exported by mctl-alice on :9464/metrics
+          # (src/metrics.ts) and incremented whenever a request is answered 429.
+          expr: |
+            sum by (bucket) (
+              rate(mctl_alice_rate_limited_total{namespace="labs"}[5m])
+            ) > 1
+          for: 2m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: rate limit rejections spiking on bucket {{ $labels.bucket }}"
+            description: >-
+              More than 1 request per second is being rejected by the {{ $labels.bucket }}
+              rate limiter over 5 minutes. Check whether a client is flooding requests or
+              if token lookup limits need tuning.
+
     - name: mctl.alice.upstream
       interval: 60s
       rules:
