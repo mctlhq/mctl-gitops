@@ -346,9 +346,23 @@ tests:
         exp_alerts: []
 
   - interval: 1m
+    name: alice pod memory at 50% stays quiet despite duplicate resource series
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
+        values: '500x10'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",metrics_path="/metrics/resource"}'
+        values: '500x10'
+      - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service"}'
+        values: '1000x10'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: MctlAliceMemoryNearLimit, exp_alerts: []}
+
+  - interval: 1m
     name: alice pod memory above 85% fires MctlAliceMemoryNearLimit after 5m
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
+        values: '900x10'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",metrics_path="/metrics/resource"}'
         values: '900x10'
       - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service"}'
         values: '1000x10'
@@ -371,7 +385,7 @@ tests:
   - interval: 1m
     name: alice pod memory at 80% stays quiet
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
         values: '800x10'
       - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service"}'
         values: '1000x10'

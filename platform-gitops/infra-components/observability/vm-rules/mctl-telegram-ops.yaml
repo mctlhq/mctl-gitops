@@ -185,19 +185,29 @@ spec:
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
 
         - alert: MctlTelegramMemoryNearLimit
+          # Usage is read from the cAdvisor endpoint only: the kubelet exports
+          # container_memory_working_set_bytes a second time under /metrics/resource,
+          # and summing both would double the value (see mctl-alerts.yaml:19-23).
           expr: |
             (
               sum by (namespace, pod) (
-                container_memory_working_set_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+                container_memory_working_set_bytes{
+                  namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service",
+                  metrics_path="/metrics/cadvisor"
+                }
               )
               /
               sum by (namespace, pod) (
-                container_spec_memory_limit_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+                container_spec_memory_limit_bytes{
+                  namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"
+                }
               )
             ) > 0.85
             and
             sum by (namespace, pod) (
-              container_spec_memory_limit_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+              container_spec_memory_limit_bytes{
+                namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"
+              }
             ) > 0
           for: 5m
           labels:
@@ -209,7 +219,7 @@ spec:
               Working set memory for pod {{ $labels.pod }} is at {{ $value | humanizePercentage }}
               of its container memory limit. Each MTProto session consumes memory; this approaches
               the OOM threshold. Consider increasing memory limit or pruning inactive sessions.
-            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegrammemorynearlimit"
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramnearcapacity"
 
     - name: mctl-telegram-bridge
       rules:
