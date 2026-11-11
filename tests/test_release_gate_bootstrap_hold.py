@@ -254,7 +254,7 @@ def cases(script):
     add("diff neg: values block edited, tag untouched",
         diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("replicaCount: 2", "replicaCount: 9")), marker="content other than the image tag"), REFUSED)
     add("diff neg: targetRevision edited, tag untouched",
-        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("targetRevision: main", "targetRevision: evil", 1)), marker="content other than the image tag"), REFUSED)
+        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("targetRevision: a5b9ef9cf0f880f28b841033a8b2a6d9563ce050", "targetRevision: evil", 1)), marker="content other than the image tag"), REFUSED)
     add("diff neg: second image reference added",
         diff_rc(script, lambda d: (d / API).write_text(second_ref), marker="content other than the image tag"), REFUSED)
     add("diff neg: repository changed",

@@ -8,7 +8,12 @@ spec:
   sources:
     # Helm chart from the mctl-api repository
     - repoURL: https://github.com/mctlhq/mctl-api.git
-      targetRevision: main
+      # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
+      # chart change merged to mctl-api main must not reach production without
+      # a GitOps change. a5b9ef9c renders identically to the live release at
+      # 4.154.0 (helm template, same bootstrap values). Move this pin in the
+      # same reviewed PR that bumps the image tag.
+      targetRevision: a5b9ef9cf0f880f28b841033a8b2a6d9563ce050
       path: helm
       helm:
         releaseName: mctl-api
