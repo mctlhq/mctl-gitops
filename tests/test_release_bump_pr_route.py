@@ -132,7 +132,7 @@ def judge(files):
                         and re.search(r'did not merge within 50 minutes"\n\s*exit 1\s*$', wtxt) is not None
                         and "needs.publish-pr.outputs.pr" in str(wt.get("env")) and "github.token" in str(wt.get("env"))))
             out.append((f"{label}: only a superseded-by comment from the App turns a closed bump into a notice",
-                        "Superseded by #" in wtxt and "mctl-gitops-pr$" in wtxt and '-gt 0' in wtxt))
+                        "Superseded by #" in wtxt and "mctl-gitops-pr(\\\\[bot\\\\])?$" in wtxt and '-gt 0' in wtxt))
         # nothing but the two publishing jobs names an environment
         envs = {n: j.get("environment") for n, j in jobs.items() if "environment" in j}
         out.append((f"{label}: only the two publishing jobs have an environment", set(envs) == {"publish-direct", "publish-pr"}, envs))
