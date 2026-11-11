@@ -145,7 +145,8 @@ spec:
           # while shared-pg as a whole still has room. Thresholds are 80% of
           # each role's connectionLimit in
           # infra-components/data/cnpg/shared/cluster.yaml (mctl-api 64,
-          # temporal 140, backstage 100); change both together. rolconnlimit
+          # temporal 140, backstage 100, labs-mctl-alice 10,
+          # labs-mctl-telegram 10); change both together. rolconnlimit
           # is not exported, so the limits are mirrored here. Summed across
           # pods because only the primary serves these roles.
           expr: |
@@ -154,6 +155,10 @@ spec:
             (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="temporal"}) > 112)
               or
             (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="backstage"}) > 80)
+              or
+            (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="labs-mctl-alice"}) > 8)
+              or
+            (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="labs-mctl-telegram"}) > 8)
           for: 10m
           labels:
             severity: warning

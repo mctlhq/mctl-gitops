@@ -184,6 +184,33 @@ spec:
               flows or bot-scan traffic against /oauth/authorize.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
 
+        - alert: MctlTelegramMemoryNearLimit
+          expr: |
+            (
+              sum by (namespace, pod) (
+                container_memory_working_set_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+              )
+              /
+              sum by (namespace, pod) (
+                container_spec_memory_limit_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+              )
+            ) > 0.85
+            and
+            sum by (namespace, pod) (
+              container_spec_memory_limit_bytes{namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"}
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram pod {{ $labels.pod }} memory is above 85% of limit"
+            description: >-
+              Working set memory for pod {{ $labels.pod }} is at {{ $value | humanizePercentage }}
+              of its container memory limit. Each MTProto session consumes memory; this approaches
+              the OOM threshold. Consider increasing memory limit or pruning inactive sessions.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegrammemorynearlimit"
+
     - name: mctl-telegram-bridge
       rules:
         # Counts registrations per daemon, not transitions of a shared gauge.
