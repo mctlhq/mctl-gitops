@@ -14,6 +14,41 @@
 # of an unknown shape: argo-workflows/scripts/release-gate-guard.sh.
 # If a group's tags have already drifted apart every bump is refused, including
 # one that would reunite them: recover with a reviewed PR that aligns the group.
+#
+# `version_holds` (below `gates`) guard a version that must not ship without an
+# explicit, recorded allow. The section is REQUIRED (an empty list is allowed,
+# an absent one is a refusal). A held file is judged on the tag that would be
+# written (bump) or that is in the tree (verify), also when that tag sits in a
+# `values: |` block scalar of a bootstrap Application. Refused (exit 6):
+#   - a tag >= `held_from` with no `allow` record naming exactly that version;
+#   - an allow record that has no `grant` or `approved_by`, names a version
+#     below `held_from`, or appears twice for one version;
+#   - a NEW write of a held version (bump, or a pushed tag change) whose allow
+#     is expired. Expiry gates writes only: a held version already in the tree
+#     stays verifiable while its record exists, so a lapsed record never freezes
+#     every other release and PR. Recovery after expiry is a reviewed PR that
+#     renews the record or moves mctl-api to an allowed version;
+#   - a file whose single image tag cannot be read: no `values: |` block, an
+#     unparseable block, a duplicate key, two image references, a repository
+#     other than `repository`, a tag that is not a string X.Y.Z.
+# Adding an `allow` record is a reviewed PR to this file (the grant is the
+# human decision); the workflows read this file from origin/main, never from
+# the commit they are about to push (`--policy-rev origin/main`). A bump names
+# its image (`--image`): a hold for another repository is not judged.
+version_holds:
+  - name: mctl-api-bootstrap
+    issue: mctlhq/mctl-gitops#2528
+    file: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
+    repository: ghcr.io/mctlhq/mctl-api
+    # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
+    held_from: "4.155.0"
+    # Record shape, added in a reviewed PR once the owner grants the release:
+    #   - version: "4.155.0"
+    #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given
+    #     approved_by: mashkovd
+    #     expires: 2026-12-31              # the date after which the allow lapses
+    allow: []
+
 gates:
   - name: mctl-agents-workers
     issue: mctlhq/mctl-agents#1007

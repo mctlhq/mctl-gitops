@@ -37,6 +37,19 @@ def check(name, cond, detail=""):
         failures.append(f"{name}: {str(detail)[:300]}")
 
 
+
+def trust_policy(tmp):
+    """The bump steps read the gate policy from origin/main (--policy-rev): give the
+    scratch checkout an origin/main that carries its policy file."""
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "platform-gitops/release-gates.yaml")
+    git("commit", "-qm", "policy", "--no-gpg-sign")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def fixture(tmp):
     def w(rel, text):
         (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +67,10 @@ def fixture(tmp):
         for p in g["paths"]:
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / p, tmp / p)
+    for h in gate["version_holds"]:
+        (tmp / h["file"]).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / h["file"], tmp / h["file"])
+    trust_policy(tmp)
 
 
 def bump(tag="1.2.3", image=OTHER_IMAGE, path=OTHER, glob="", script=BUMP, prepare=None):
@@ -63,7 +80,7 @@ def bump(tag="1.2.3", image=OTHER_IMAGE, path=OTHER, glob="", script=BUMP, prepa
         if prepare:
             prepare(tmp)
         src = script.replace("/tmp/gitops-bump-changed-files.txt", str(tmp / "changed.txt"))
-        before = {str(p.relative_to(tmp)): p.read_bytes() for p in tmp.rglob("*") if p.is_file()}
+        before = {str(p.relative_to(tmp)): p.read_bytes() for p in tmp.rglob("*") if p.is_file() and ".git" not in p.parts}
         r = subprocess.run([sys.executable, "-c", src], cwd=tmp, capture_output=True, text=True,
                            env={**os.environ, "IMAGE_NAME": image, "NEW_TAG": tag,
                                 "VALUES_PATH": path, "VALUES_GLOB": glob})
@@ -160,7 +177,12 @@ def broken_gate(tmp):
 
 
 def no_gate(tmp):
+    # The policy is read from origin/main: it must be gone there too.
     (tmp / GATE).unlink()
+    for a in (["rm", "-q", "--cached", GATE], ["commit", "-qm", "no policy", "--no-gpg-sign"],
+              ["update-ref", "refs/remotes/origin/main", "HEAD"]):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
 
 
 rc, changed, _, _ = bump(prepare=broken_gate)

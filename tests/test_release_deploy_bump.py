@@ -57,6 +57,19 @@ def run(tmp, vpath, vglob=""):
     )
 
 
+
+def trust_policy(tmp):
+    """The bump steps read the gate policy from origin/main (--policy-rev): give the
+    scratch checkout an origin/main that carries its policy file."""
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "platform-gitops/release-gates.yaml")
+    git("commit", "-qm", "policy", "--no-gpg-sign")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def fixture(tmp, *, exec_values=True, exec_has_image=True):
     base = tmp / "platform-gitops/services/admins"
     (base / "mctl-agents-worker").mkdir(parents=True)
@@ -76,9 +89,10 @@ def fixture(tmp, *, exec_values=True, exec_has_image=True):
     (tmp / "scripts").mkdir()
     shutil.copy(pathlib.Path("scripts/release-gate.py"), tmp / "scripts/release-gate.py")
     (tmp / "platform-gitops/release-gates.yaml").write_text(
-        "gates:\n  - name: unrelated\n    paths: [platform-gitops/services/none/values.yaml]\n"
+        "version_holds: []\ngates:\n  - name: unrelated\n    paths: [platform-gitops/services/none/values.yaml]\n"
         '    min_tag: "0.0.1"\n'
     )
+    trust_policy(tmp)
 
 
 P1 = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"

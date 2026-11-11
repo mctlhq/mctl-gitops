@@ -37,6 +37,9 @@ def tree(tmp):
         for p in g["paths"]:
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / p, tmp / p)
+    for h in gate["version_holds"]:
+        (tmp / h["file"]).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / h["file"], tmp / h["file"])
     return gate["gates"][0]["paths"]
 
 
