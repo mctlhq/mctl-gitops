@@ -230,6 +230,12 @@ def _holds(doc: Any) -> list[dict]:
     return holds
 
 
+def _strip_tag(text: str, hold: dict) -> str:
+    """The file with the value of the held image's `tag:` line blanked (what a bump may change)."""
+    pat = re.compile(r"(repository:\s*" + re.escape(hold["repository"]) + r"\s*\n\s+tag:)[^\n]*")
+    return pat.sub(lambda m: m.group(1), text)
+
+
 def _bootstrap_tag(root: Path, hold: dict) -> str:
     """The single image tag of the hold's file; any doubt raises."""
     text = (root / hold["file"]).read_text()
@@ -527,6 +533,17 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
                 continue
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             (tmp / p).write_bytes(h)
+            # The bump workflows rewrite only the repository+tag pair: any other
+            # byte that moved (env flags, repoURL, targetRevision, a second image
+            # reference) is not a release bump, as for the gated `paths` files.
+            try:
+                b0 = _blob(repo, base, p)
+                if b0 is not None and _strip_tag(b0.decode(), hold) != _strip_tag(h.decode(), hold):
+                    viol.append(f"{p}: content other than the image tag changed")
+            except UnicodeDecodeError:
+                viol.append(f"{p}: held file is not text")
+            except GitReadError:
+                pass  # reported as unknown by the base read below
             # A push that changes the held tag is a new write: judged like a bump
             # (expiry applies). An unchanged tag is only the deployed state.
             try:

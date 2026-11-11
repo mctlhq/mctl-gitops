@@ -24,12 +24,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/release-gate.py"
 GATE = "platform-gitops/release-gates.yaml"
 API = "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml"
-REAL_POLICY = yaml.safe_load((ROOT / GATE).read_text())
-REAL_API = (ROOT / API).read_text()
-# The live tag moves with every allowed mctl-api release: derive it, never pin it.
-_m = re.search(r"repository: ghcr\.io/mctlhq/mctl-api\n\s+(tag: [^\n]+)", REAL_API)
+LIVE_POLICY = yaml.safe_load((ROOT / GATE).read_text())
+LIVE_API = (ROOT / API).read_text()
+# The live tag and the live allow list move with every allowed mctl-api release. Fixtures are built from a
+# synthetic baseline below the hold (tag 4.154.0, empty allow list), so no case depends on the live pair;
+# only the one control that verifies the unmodified live tree does.
+_m = re.search(r"repository: ghcr\.io/mctlhq/mctl-api\n\s+(tag: [^\n]+)", LIVE_API)
 assert _m, "no mctl-api image tag in the bootstrap file"
-OLD_TAG = _m.group(1)
+OLD_TAG = 'tag: "4.154.0"'
+REAL_API = LIVE_API.replace(_m.group(1), OLD_TAG)  # baseline file
+REAL_POLICY = copy.deepcopy(LIVE_POLICY)  # baseline policy
+REAL_POLICY["version_holds"][0]["allow"] = []
 _WORK = pathlib.Path(tempfile.mkdtemp(prefix="hold-test-"))
 atexit.register(shutil.rmtree, _WORK, ignore_errors=True)  # every tree lives under _WORK
 _N = itertools.count()
@@ -79,13 +84,15 @@ def with_tag(tag_line):
     return REAL_API.replace(OLD_TAG, tag_line)
 
 
-def diff_rc(script, mutate, parent_policy=None, marker=None):
+def diff_rc(script, mutate, parent_policy=None, marker=None, base_api=None):
     """Parent commit = real policy + real bootstrap file; head = parent + mutate(dir). Exit code of `diff`."""
     d = _WORK / f"d{next(_N)}"
     d.mkdir()
     for rel in [GATE, API] + [p for g in REAL_POLICY["gates"] for p in g["paths"]]:
         (d / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, d / rel)
+    (d / API).write_text(base_api if base_api is not None else REAL_API)  # baseline, never the live file
+    (d / GATE).write_text(yaml.safe_dump(REAL_POLICY))
     if parent_policy is not None:
         (d / GATE).write_text(yaml.safe_dump(parent_policy))
 
@@ -119,7 +126,8 @@ def cases(script):
         out.append((name, got, want))
 
     # --- positive controls: ordinary releases still pass ---------------------
-    add("positive: real tree verifies", verify(script, tree()), 0)
+    add("positive: the unmodified live tree verifies (live tag with the live allow list)", gate(script, ROOT, "verify"), 0)
+    add("positive: baseline tree verifies", verify(script, tree()), 0)
     add("positive: mctl-api 4.154.1 bump passes", bump(script, tree(), "4.154.1"), 0)
     add("positive: mctl-api 4.99.0 (older) bump passes", bump(script, tree(), "4.99.0"), 0)
     add("positive: other service plain image.tag bump passes",
@@ -239,6 +247,26 @@ def cases(script):
     nohold = copy.deepcopy(REAL_POLICY)
     del nohold["version_holds"]
     add("diff unknown: parent policy without version_holds", diff_rc(script, lambda d: None, nohold, marker="parent gate policy unreadable"), 7)
+    # content outside the tag line (the deploy-key bypass can edit anything)
+    add("diff pos: only the tag line changes", diff_rc(script, lambda d: set_tag(d, "4.154.2")), 0)
+    add("diff neg: values block edited, tag untouched",
+        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("replicaCount: 2", "replicaCount: 9")), marker="content other than the image tag"), REFUSED)
+    add("diff neg: targetRevision edited, tag untouched",
+        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("targetRevision: main", "targetRevision: evil", 1)), marker="content other than the image tag"), REFUSED)
+    add("diff neg: second image reference added",
+        diff_rc(script, lambda d: (d / API).write_text(second_ref), marker="content other than the image tag"), REFUSED)
+    add("diff neg: repository changed",
+        diff_rc(script, lambda d: (d / API).write_text(moved), marker="content other than the image tag"), REFUSED)
+    add("diff neg: held file is not text",
+        diff_rc(script, lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="held file is not text"), REFUSED)
+
+    # the state after 4.155.0 ships under its allow stays green, whatever the live file says
+    shipped = with_tag('tag: "4.155.0"')
+    add("pos: shipped state (4.155.0 + matching allow) verifies", verify(script, tree(shipped, allow=[GOOD])), 0)
+    add("pos: shipped state: an unrelated push is green",
+        diff_rc(script, lambda d: None, policy_with([GOOD]), base_api=shipped), 0)
+    add("neg: shipped state: a push to 4.155.1 needs its own record",
+        diff_rc(script, lambda d: set_tag(d, "4.155.1"), policy_with([GOOD]), base_api=shipped), REFUSED)
     add("diff unknown: pushed block no longer parses", diff_rc(script, lambda d: (d / API).write_text(with_tag("tag: ["))), 7)
     return out
 
@@ -290,8 +318,8 @@ MUTANTS = {
                                              "pos: bump of another image through a glob over the held file is not judged"),
     "an unnamed image is skipped": ('image is not None and image != h["repository"]', "image != h[\"repository\"]",
                                     "neg: image not named: judged (fail closed)"),
-    "diff: held file not copied into the scratch tree": ("            (tmp / p).write_bytes(h)\n            # A push that changes",
-        "            # A push that changes", "diff neg: push of 4.155.0, no allow in the parent policy"),
+    "diff: held file not copied into the scratch tree": ("            (tmp / p).write_bytes(h)\n            # The bump workflows rewrite",
+        "            # The bump workflows rewrite", "diff neg: push of 4.155.0, no allow in the parent policy"),
     "diff: removed held file not reported": ('viol.append(f"{p}: held file was removed")\n                continue\n            (tmp / p).parent',
         'continue\n            (tmp / p).parent', "diff neg: push removes the held file (violation, not unknown)"),
     "diff: failed read of the held file skipped": ('unk.append(f"{p}: {exc}")\n                continue\n            if h is None:',
@@ -300,6 +328,10 @@ MUTANTS = {
                                                   "diff neg: push of 4.155.0, allow expired in the parent policy"),
     "diff: parent policy not required to hold version_holds": ('holds = _holds(base_policy)', 'holds = (base_policy.get("version_holds") or []) if isinstance(base_policy, dict) else []',
                                                               "diff unknown: parent policy without version_holds"),
+    "diff: other content of the held file not compared": ("if b0 is not None and _strip_tag(b0.decode(), hold) != _strip_tag(h.decode(), hold):",
+        "if False:", "diff neg: values block edited, tag untouched"),
+    "diff: tag blanking too wide (whole file ignored)": ('return pat.sub(lambda m: m.group(1), text)', 'return ""',
+        "diff neg: targetRevision edited, tag untouched"),
     "several values blocks accepted": ("if len(starts) != 1:", "if len(starts) < 1:", "neg: two values block scalars"),
 }
 
