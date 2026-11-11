@@ -139,3 +139,42 @@ migrator rehearsal and apply/verify -> ZITADEL -> flags/UI -> ingress -> allowli
 The pilot team and second real human account remain unverified. Production D2
 requires separate operator authorization. `GLOVO_ENABLED=false` is the documented
 kill switch. None of this packet activates Basket or authorizes migration.
+
+
+## Follow-up inspection and PostgreSQL 17 rehearsal (2026-11-11)
+
+Read-only operator queries on `platform-db/shared-pg-1`, database `mctl-api`,
+inside `BEGIN READ ONLY` observed PostgreSQL **17.11**. `mctl-api` is a
+non-superuser login with connection limit 64 and owns `work_items`,
+`action_approval_requests` and `oauth_refresh_tokens`. No matching
+`glovo_runtime`, `glovo_migrator` or `mctl_api_workitems` roles, `glovo` schema,
+`public.work_items_schema_version` or noninternal approvals triggers were found.
+At that instant no locks on the approvals/refresh tables were listed. This is
+partial D0 evidence, not proof of future lock availability or a complete ownership
+transfer inventory. No DDL, Secret reads, approval decisions or production writes
+were performed.
+
+The fresh grant was read from the ledger as pending, expiring
+2026-11-18 18:21:13 UTC and bound to the old content digest above. After the
+proposal reconciliation in this change, that grant cannot authorize the new
+content. The user approved pursuing the working MCP in chat; a direct human
+ledger decision and release/operator decisions remain separate.
+
+MCTL whoami identifies `mashkovd` as admin with teams `commerce-proof`, `erpact`,
+`karabu`, `labs`, `mctl`. `admins` appears only among accessible namespaces;
+this does not prove developer membership. Pilot tenant selection remains open.
+The public MCP probe still returned HTTP 404.
+
+Local tests used disposable `postgres:17.11` (image digest
+`sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f`),
+Go 1.27.4, synthetic fixtures and no production data or credentials:
+- #1014 at `92cbd3d9c3dd6bc9ba77762f03f9c2b2870110d8`: PG basket/store and
+  API tests selected by `TestPG|TestGlovoBasket|TestBasketMCPConfig` passed.
+  This includes the two-replica OAuth/page/status integration and refusal cases.
+- Same head: `TestReadyAcrossApprovalSchemaV2WithBasketApprovals` passed.
+- #1018 at `04e4dd952e11d095ad3f675d1cdd3862a044927c`: CLI and internal migrator database suites passed (38.308s for the latter),
+  including legacy approvals, ownership checks, dry-run/verify, transaction
+  atomicity and lock/statement timeout cases.
+
+These tests use a fake identity provider. They do not satisfy production OAuth,
+real human decision, a production-copy D2 rehearsal, or R0 rollback acceptance.

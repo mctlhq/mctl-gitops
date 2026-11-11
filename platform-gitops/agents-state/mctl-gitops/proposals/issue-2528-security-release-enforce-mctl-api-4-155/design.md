@@ -1,5 +1,53 @@
 # Design: issue-2528-security-release-enforce-mctl-api-4-155
 
+## Binding reconciliation amendment (2026-11-11, R0 packet #2602)
+
+This section supersedes conflicting baseline claims, paths and task instructions
+below. All existing security requirements, three P2 findings, grant provenance,
+trusted-base checking, merge/effect-time revalidation, admission, negative tests
+and separate owner/operator approvals remain required. This amendment is not
+implementation, grant acceptance, release GO or residual-risk acceptance.
+
+At mctl-gitops `5f10a8c2750408320162d13628e35bdd8ca6bf53`:
+- #2590 already provides the bootstrap reader and `version_holds` in
+  `scripts/release-gate.py`; the mctl-api hold has `allow: []`.
+- #2595/#2596 route mctl-api bumps through PRs; they do not remove the wildcard
+  DeployKey bypass or prove the first live routed bump.
+- #2597 stamps the resolved source revision in the build image label.
+- #2599 pins the chart to `a5b9ef9cf0f880f28b841033a8b2a6d9563ce050`, preserving
+  the live `/devloop` path. Do not repin it to the 4.154.0 chart commit.
+- #2591 removed the orchestrator identity envFrom entry. Other env injection
+  paths still need verification; no Secret payload reads are permitted.
+
+Extend the EXISTING gate and reader; do not create `release-hold.py`, a second
+policy file (`release-holds.yaml`), or a second set of release grant records.
+Keep `platform-gitops/release-gates.yaml` as policy and its `version_holds[].allow`
+as the grant-record location. Leave `allow: []` until separately authorized.
+New held-version allow records must additionally bind `digest`, `source_commit`,
+`source_tree`, `reviewed_release_head` and `policy_digest`; verify the existing
+`grant`, `approved_by` and expiry against actual owner approval and provenance.
+The exact timestamp migration must preserve the rule that expiry gates new
+writes/merges, not later pod restarts or unrelated releases of deployed state.
+
+All earlier `release-hold.py` command references mean the corresponding existing
+`release-gate.py` command extended with the same security semantics. Preserve
+`check`, `verify`, `diff`, `--policy-rev` and existing worker gate behavior.
+Checker/merger workflows must load the extended gate and policy from the trusted
+base; PR-head scripts are data only. Guard the gate, reader, tests, policy,
+workflow and allow-record changes as policy changes. Re-read external evidence
+at merge and before every publish attempt; an unreadable source refuses effect.
+Image tag and chart pin move together in a reviewed, authorized release PR.
+The first live App-authored bump and final-head review remain unproven.
+
+Admission parameters use the static, validated allowlist of the amended design,
+not unverified Helm rendering from grant strings. No change to #2543 authority:
+DeployKey and cluster-admin residuals require separate explicit dispositions.
+The canonical coordination packet is
+`docs/plans/mctl-api-4-155-release-readiness.md`; this proposal remains the
+implementation specification. Any amendment changes the content digest and
+requires fresh independent review and a fresh digest-bound human grant.
+
+
 Decision: `READY_FOR_SEPARATE_IMPLEMENTATION_PROPOSAL`. The design below closes every source-verified write
 path. Two items stay BLOCKING-UNKNOWN until the owner disposes of them: chart drift until the pin lands,
 and out-of-band cluster-admin actions. The 2026-11-11 amendment adds a third: any holder of a write deploy key
