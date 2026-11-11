@@ -40,7 +40,7 @@ def repo_with(mutate=None, script=SCRIPT, pre=None):
     d = pathlib.Path(tempfile.mkdtemp())
     git(d, "init", "-q")
     gate = yaml.safe_load((ROOT / GATE).read_text())
-    files = [GATE] + [p for g in gate["gates"] for p in g["paths"]]
+    files = [GATE] + [p for g in gate["gates"] for p in g["paths"]] + [h["file"] for h in gate["version_holds"]]
     for f in files:
         (d / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / f, d / f)

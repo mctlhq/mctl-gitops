@@ -598,6 +598,11 @@ jobs:
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
 
+      - name: Release gate holds a bootstrap-embedded version
+        # mctl-api keeps its tag in a values block scalar; a held version needs
+        # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
+        run: python3 tests/test_release_gate_bootstrap_hold.py
+
       - name: Release gate diff judges a push by content
         # Includes the two sanctioned steps of a pre-pulled deploy (green) and
         # every other change to the pre-pulled file (red), with mutants.
