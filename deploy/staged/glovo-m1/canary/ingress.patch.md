@@ -67,60 +67,58 @@ refuses any Glovo string, so the diff stays text until the activation PR.
   the Ingress (`docs/runbooks/reserved-hosts.md`). Adding `glovo.mctl.ai: []`
   earlier would be useful hardening but trips the leak guard today.
 
-## Prerequisite, mctl-api chart (the chart tracks mctl-api `main`)
+## Prerequisite, mctl-api chart (mctl-api#1017, Draft, hold)
 
 `helm/templates/ingress.yaml` routes ONE global `paths` list for every host.
-Two small chart changes are needed in `mctlhq/mctl-api`, before this patch:
+mctl-api#1017 (head `518cf5d2`) adds, all inert until a values file uses them:
 
-1. Per-host `paths` override, so the Glovo host routes two paths only.
-2. `/glovo` in the default `paths`, so the approval page on `api.mctl.ai`
-   (`/glovo/basket/approvals/*`) is routed at all. Without it the page is
-   unreachable through Traefik even when the code is deployed.
+1. A per-host `paths` list that replaces the global list for that host only,
+   so the Glovo host routes `/mcp` and the RFC 9728 metadata path and nothing
+   else. A host without `paths` renders exactly as today.
+2. `ingress.extraPaths` (default `[]`), appended to the global list for hosts
+   without their own `paths`. The approval page on `api.mctl.ai`
+   (`/glovo/basket/approvals/*`) is routed only when a values file sets
+   `extraPaths: [/glovo]`. That is part of step B2 (`env.patch.md`), not of
+   this file: the page and its route ship together.
+3. The `glovoBasketUISecret` slot (`env.patch.md`).
 
-```diff
---- a/helm/templates/ingress.yaml
-+++ b/helm/templates/ingress.yaml
-@@ rules: range .Values.ingress.hosts
--          {{- range $paths }}
-+          {{- range (default $paths .paths) }}
---- a/helm/values.yaml
-+++ b/helm/values.yaml
-@@ ingress.paths
-     - /devloop
-+    # Glovo basket approval page (/glovo/basket/approvals/*, mctl-api#1007).
-+    - /glovo
-     - /api
-```
+The chart source is PINNED to a mctl-api commit in
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`
+(`targetRevision`, since mctlhq/mctl-gitops#2599). #1017 therefore does NOT
+reach production when it merges into mctl-api `main`: it reaches production
+only in the release PR that moves that pin together with the image tag, under
+the #2590 version hold (runbook step R1). Until that PR lands, this diff
+cannot render a per-host `paths` and must not be merged.
 
-Checked: with the first change, `helm template` of the chart with the host
-list below renders `api.mctl.ai` with the ten default paths and
-`glovo.mctl.ai` with `/mcp` and `/.well-known/oauth-protected-resource`
-only; the render without a per-host `paths` is byte-identical to today's.
-`helm/render_test.go` needs a case for both. Both changes are inert on their
-own: no code answers `/glovo/*` until the page is enabled, and no host sets
-`paths`. They ship with the mctl-api release that carries the Basket code
-(called 4.156.0 in the plan), so the chart change that tracks `main` lands no
-earlier than that code.
+Rendered check (done for this staging, `helm template` of the #1017 chart with
+the values of B1 + B2 + this diff applied to main `391c9a7a0`):
+`api.mctl.ai` routes the ten default paths plus `/glovo`; `glovo.mctl.ai`
+routes `/mcp` and `/.well-known/oauth-protected-resource` only; the TLS list
+has `mctl-api-api-mctl-ai-tls` and `mctl-api-glovo-mctl-ai-tls`; the
+cert-manager annotation is unchanged. The render without per-host `paths` is
+byte-identical to today's (the chart's own render test covers both).
 
 ## The diff (activation step C, its own PR and its own owner GO)
 
-Extract the fenced diff and apply it from the repository root;
-`git apply --check` was clean against main at the time of staging (9c87fe961).
+Apply in activation order: `env.patch.md` B1, then B2, then this diff. The
+three diffs were generated as a stack against main `391c9a7a0` and each one
+passed `git apply --check` on the tree the previous one produced. Extract the
+fenced diff and apply it from the repository root.
 
 ```diff
 diff --git a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-index eace5f3d9..c06df0607 100644
+index d3ac6e48f..c2b53c82f 100644
 --- a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
 +++ b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-@@ -50,6 +50,15 @@ spec:
-             tls: true
+@@ -61,6 +61,15 @@ spec:
+               - /glovo
              hosts:
                - host: api.mctl.ai
 +              # Glovo basket MCP (mctlhq/mctl-api#1006). Only the MCP and its
 +              # RFC 9728 metadata are routed at the edge; every other path
 +              # on this host stays a Traefik 404. Needs the chart's
-+              # hosts[].paths override (mctl-api chart change, see the
-+              # canary runbook) and the basket MCP already enabled.
++              # hosts[].paths override (mctl-api#1017) and the basket MCP
++              # already enabled.
 +              - host: glovo.mctl.ai
 +                paths:
 +                  - /mcp
@@ -147,7 +145,9 @@ The activation PR also changes the leak guard so that exactly these two
 additions pass and nothing else does. See "Leak guard at activation" in the
 runbook; the guard change is reviewed first, as its own commit, with a
 selftest that a Glovo string anywhere else in `platform-gitops/**` still
-fails.
+fails. (Run as is, today's guard refuses this diff:
+`REFUSED: Glovo/assistants reference in reconciled path ...`, which is the
+intended state until that PR.)
 
 ## Reserved-host proof (required before merge, read-only)
 
