@@ -631,6 +631,8 @@ jobs:
     if: needs.bump.outputs.has_change == 'true' && needs.bump.outputs.route == 'pr'
     runs-on: ubuntu-latest
     environment: app-gitops-pr
+    outputs:
+      pr: ${{ steps.open_pr.outputs.pr }}
     permissions:
       contents: read
     steps:
@@ -718,29 +720,66 @@ jobs:
           [[ "$pr" =~ ^[0-9]+$ ]] || { echo "::error::could not determine the pull request number"; exit 1; }
           echo "pr=${pr}" >> "$GITHUB_OUTPUT"
 
-          # Older open bumps for the same service are superseded by this one:
-          # two open bumps touching the same tag lines would leave the newer
-          # one DIRTY after the older merges. A failed listing is an error,
-          # never "nothing to supersede".
+          # Older open bumps for the same service are superseded by this one.
+          # "Older" is a strictly lower MAJOR.MINOR.PATCH parsed from the branch
+          # suffix; a suffix that is not exactly that shape is never matched
+          # (so another service named <service>-<digit> is never touched). If
+          # NEW_TAG cannot be ordered nothing is closed. If another open bump is
+          # NEWER than this one, this release is the stale one: its PR is closed
+          # and the run fails, so a re-run or a crossed dispatch cannot drop the
+          # newer tag silently. A failed listing fails the job; it is never read
+          # as "nothing to supersede".
+          semver_lt() {
+            local re='^([0-9]+)\.([0-9]+)\.([0-9]+)$' a b i
+            [[ "$1" =~ $re ]] || return 2
+            a=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+            [[ "$2" =~ $re ]] || return 2
+            b=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+            for i in 0 1 2; do
+              (( 10#${a[i]} < 10#${b[i]} )) && return 0
+              (( 10#${a[i]} > 10#${b[i]} )) && return 1
+            done
+            return 1
+          }
           export PREFIX="release-bump/${SERVICE}-"
-          older=$(gh pr list --repo "$REPO" --state open --limit 100 \
+          others=$(gh pr list --repo "$REPO" --state open --limit 100 \
             --json number,headRefName,author \
-            --jq '.[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.headRefName as $h | $ENV.PREFIX as $p | ($h | startswith($p)) and ($h[($p | length):] | test("^[0-9]"))) | .number')
-          for n in $older; do
-            [[ "$n" == "$pr" ]] && continue
-            gh pr close "$n" --repo "$REPO" --delete-branch \
-              --comment "Superseded by #${pr} (${NEW_TAG})."
-          done
+            --jq '.[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.headRefName as $h | $ENV.PREFIX as $p | ($h | startswith($p)) and ($h[($p | length):] | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | "\(.number) \(.headRefName)"')
+          while read -r n ref; do
+            [[ -n "$n" && "$n" != "$pr" ]] || continue
+            other_tag="${ref#"$PREFIX"}"
+            rc=0; semver_lt "$other_tag" "$NEW_TAG" || rc=$?
+            if [[ "$rc" == 0 ]]; then
+              gh pr close "$n" --repo "$REPO" --delete-branch \
+                --comment "Superseded by #${pr} (${NEW_TAG})."
+            elif [[ "$rc" == 1 ]]; then
+              gh pr close "$pr" --repo "$REPO" --delete-branch \
+                --comment "Not newer than #${n} (${other_tag}); closing."
+              echo "::error::a newer release-bump pull request #${n} (${other_tag}) is open; ${NEW_TAG} is not newer"
+              exit 1
+            else
+              echo "::warning::cannot order ${NEW_TAG} against #${n} (${other_tag}); closing nothing"
+            fi
+          done <<< "$others"
 
-      # Make a stuck bump visible on the release run: the run stays open until
-      # the pull request is merged, and fails if it is closed unmerged or the
-      # wait runs out. (A bump superseded by a newer release is a notice.)
+  # A stuck bump must be a red release run, not a silent open PR. The wait lives
+  # in its own job with no environment, no secret and read-only access, and
+  # outside any concurrency group: it can last up to 50 minutes and must not hold
+  # the serialization that publish-direct and publish-pr use. A bump superseded
+  # by a newer release is only a notice.
+  await-bump:
+    needs: publish-pr
+    if: needs.publish-pr.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      pull-requests: read
+    steps:
       - name: Wait for the bump to merge
-        timeout-minutes: 55
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR: ${{ steps.open_pr.outputs.pr }}
+          PR: ${{ needs.publish-pr.outputs.pr }}
         run: |
           set -euo pipefail
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::no pull request number from the previous step"; exit 1; }

@@ -626,6 +626,7 @@ jobs:
           python3 tests/test_release_bump_route.py
           python3 tests/test_release_bump_diff_guard.py
           python3 tests/test_release_bump_pr_route.py
+          python3 tests/test_release_bump_supersede.py
       - name: Unit-test the release preflight
         run: python3 tests/test_release_preflight.py
       - name: Read-only workflow steps hold no write credential

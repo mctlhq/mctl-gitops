@@ -45,6 +45,7 @@ PROTECTED = [
     "tests/test_release_bump_diff_guard.py",
     "tests/test_release_bump_route.py",
     "tests/test_release_bump_pr_route.py",
+    "tests/test_release_bump_supersede.py",
     "tests/test_release_deploy_bump.py",
     "tests/test_gitops_bump_inputs.py",
     "tests/test_wft_deploy_service_autoscaling_values.py",

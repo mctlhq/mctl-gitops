@@ -42,17 +42,23 @@ on the tree to push in each publishing job, and again as the `validate` check.
 
 ## Overlapping releases and a stuck bump
 
-- Opening a bump closes every older open `release-bump/<service>-<tag>` PR of
-  the same service that the App opened ("Superseded by #N"), and deletes its
-  branch. Two open bumps on the same tag lines would otherwise leave the newer
-  one DIRTY after the older merges. A failed listing fails the job; it is never
-  read as "nothing to supersede".
-- The release run then waits up to 50 minutes for its PR to be MERGED. It fails
-  if the PR is closed unmerged, is in an unexpected state, or does not merge in
-  time. A PR closed by a newer release is only a notice. A stuck bump is
-  therefore a red release run, not a silent open PR.
-- Re-running an older release cannot move a tag backwards: the diff guard
-  refuses a downgrade, so auto-merge hands that PR to a human.
+- Opening a bump closes every open `release-bump/<service>-<MAJOR.MINOR.PATCH>`
+  PR of the same service that the App opened and whose tag is strictly LOWER
+  ("Superseded by #N"), and deletes its branch. Tags are ordered numerically
+  from the branch suffix; a suffix that is not exactly that shape is never
+  matched, so another service named `<service>-<digit>` is untouched. If the new
+  tag cannot be ordered, nothing is closed (a warning). A failed listing fails
+  the job; it is never read as "nothing to supersede".
+- If an open bump of the service is NEWER than this release (a re-run of an old
+  release, or crossed dispatches), this release closes its own PR and fails: the
+  newer tag is never dropped and the old run is red.
+- `await-bump` waits up to 50 minutes for the PR to be MERGED and fails if it is
+  closed unmerged, in an unexpected state, or does not merge in time. A PR
+  closed by a newer release is only a notice. It is a separate job with no
+  environment, no secret, read-only access, and outside the `gitops-bump`
+  concurrency group (which in gitops-bump.yaml now covers only publish-direct
+  and publish-pr), so a 50-minute wait cannot hold or cancel other bumps.
+- The diff guard still refuses a downgrade against main.
 - A DIRTY PR can still arise if an unrelated PR touches the same lines; the
   wait times out red and a human rebases or re-runs the release.
 
