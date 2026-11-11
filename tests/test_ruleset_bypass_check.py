@@ -44,13 +44,14 @@ def ruleset(rid, name, actors, enforcement="active", include=("refs/heads/main",
     return {"id": rid, "name": name, "target": "branch", "enforcement": enforcement,
             "bypass_actors": actors,
             "conditions": {"ref_name": {"include": list(include), "exclude": []}},
-            "rules": [{"type": "pull_request"}]}
+            "rules": [{"type": r} for r in RULES]}
 
 
 def integ(app_id, mode="always"):
     return {"actor_id": app_id, "actor_type": "Integration", "bypass_mode": mode}
 
 
+RULES = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]
 DEPLOY_KEY = {"actor_id": None, "actor_type": "DeployKey", "bypass_mode": "always"}
 
 
@@ -67,8 +68,9 @@ def world(protection_actors, extra=None):
     return doc
 
 
-def allow(*entries):
-    return {"rulesets": {"18465404": {"name": "main-protection", "bypass_actors": list(entries)}}}
+def allow(*entries, rules=RULES):
+    return {"rulesets": {"18465404": {"name": "main-protection", "required_rules": list(rules),
+                                      "bypass_actors": list(entries)}}}
 
 
 ALLOW_TARGET = allow({"actor_type": "Integration", "actor_id": BUMP_APP, "bypass_mode": "always",
@@ -172,6 +174,35 @@ doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"]["include"] = [
 code, f, u, _ = run(doc)
 check("MUTATION main-protection no longer targets main -> findings", code == 10, f"{code} {f}")
 
+for label, inc, exc in (("exclude refs/heads/main", ["refs/heads/main"], ["refs/heads/main"]),
+                        ("exclude ~DEFAULT_BRANCH", ["~DEFAULT_BRANCH"], ["~DEFAULT_BRANCH"]),
+                        ("exclude ~ALL", ["refs/heads/main"], ["~ALL"]),
+                        ("exclude glob", ["~ALL"], ["refs/heads/ma*"])):
+    doc = world([integ(BUMP_APP)])
+    doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"] = {"include": inc, "exclude": exc}
+    code, f, u, _ = run(doc)
+    check(f"MUTATION main excluded ({label}) -> findings",
+          code == 10 and any("does not cover" in x for x in f), f"{code} {f}")
+
+for label, inc in (("~ALL", ["~ALL"]), ("glob refs/heads/*", ["refs/heads/*"]),
+                   ("~DEFAULT_BRANCH", ["~DEFAULT_BRANCH"])):
+    doc = world([integ(BUMP_APP)])
+    doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"] = {"include": inc, "exclude": []}
+    code, f, u, _ = run(doc)
+    check(f"include {label} still covers main -> clean", code == 0, f"{code} {f} {u}")
+
+for gone in RULES:
+    doc = world([integ(BUMP_APP)])
+    d = doc[f"/repos/{REPO}/rulesets/18465404"]
+    d["rules"] = [r for r in d["rules"] if r["type"] != gone]
+    code, f, u, _ = run(doc)
+    check(f"MUTATION rule {gone} removed -> findings", code == 10 and any(gone in x for x in f), f"{code} {f}")
+
+doc = world([integ(BUMP_APP)])
+doc[f"/repos/{REPO}/rulesets/18465404"]["rules"] = []
+code, f, u, _ = run(doc)
+check("MUTATION every rule removed -> findings", code == 10, f"{code} {f}")
+
 # 3. Could not observe is UNKNOWN (20), never clean, and outranks findings.
 doc = world([integ(BUMP_APP)])
 del doc[f"/repos/{REPO}/rulesets/18465404"]["bypass_actors"]
@@ -204,7 +235,9 @@ for label, body in (("not a list", {"message": "Not Found"}), ("entry without id
 for label, mut in (("bypass_actors not a list", lambda d: d.update(bypass_actors="DeployKey")),
                    ("actor without actor_type", lambda d: d.update(bypass_actors=[{"actor_id": 1}])),
                    ("detail for another id", lambda d: d.update(id=1)),
-                   ("conditions missing", lambda d: d.pop("conditions"))):
+                   ("conditions missing", lambda d: d.pop("conditions")),
+                   ("exclude not a list", lambda d: d["conditions"]["ref_name"].update(exclude="refs/heads/main")),
+                   ("rules not a list", lambda d: d.update(rules="pull_request"))):
     doc = world([integ(BUMP_APP)])
     mut(doc[f"/repos/{REPO}/rulesets/18465404"])
     code, f, u, _ = run(doc)
@@ -212,7 +245,10 @@ for label, mut in (("bypass_actors not a list", lambda d: d.update(bypass_actors
 
 for label, bad in (("no rulesets map", {}), ("DeployKey entry (null id)",
                    allow({"actor_type": "DeployKey", "actor_id": None, "bypass_mode": "always"})),
-                   ("bad expiry", allow({"actor_type": "Integration", "actor_id": 1, "expires": "soon"}))):
+                   ("bad expiry", allow({"actor_type": "Integration", "actor_id": 1, "expires": "soon"})),
+                   ("non-string expiry", allow({"actor_type": "Integration", "actor_id": 1, "expires": 20261201})),
+                   ("required_rules not a list", {"rulesets": {"18465404": {"required_rules": "pull_request",
+                                                                           "bypass_actors": []}}})):
     code, f, u, _ = run(world([DEPLOY_KEY]), bad)
     check(f"unusable allowlist ({label}) -> unknown, cannot be used to bless a wildcard", code == 20, f"{code} {u}")
 

@@ -14,7 +14,8 @@ A finding is:
   not removed in time);
 - more bypass actors on a ruleset than its allowlist has entries;
 - a ruleset named in the allowlist that a complete listing does not contain,
-  or that is not `active`, or no longer targets refs/heads/main.
+  or that is not `active`, or whose include/exclude no longer covers
+  refs/heads/main, or that lost a rule type listed in its `required_rules`.
 
 "Could not observe" is never "observed absent". A failed, partial (a later
 page failing), malformed or truncated read is UNKNOWN. GitHub omits
@@ -39,6 +40,7 @@ uses; a missing path is a failed read.
 Exit codes: 0 clean, 10 findings, 20 unknown (some read failed).
 """
 import datetime
+import fnmatch
 import json
 import os
 import re
@@ -138,6 +140,14 @@ def list_rulesets(repo, token, fetcher):
     return out
 
 
+def _matches_main(patterns):
+    """Does any ref_name pattern select main? `~DEFAULT_BRANCH` is main here."""
+    for p in patterns:
+        if p in ("~ALL", "~DEFAULT_BRANCH") or fnmatch.fnmatchcase(MAIN_REF, p):
+            return True
+    return False
+
+
 def _actor_key(a):
     return (a.get("actor_type"), a.get("actor_id"), a.get("bypass_mode", "always"))
 
@@ -200,7 +210,12 @@ def validate_allowlist(allowlist):
             if not isinstance(e, dict) or not _is_int(e.get("actor_id")) or not isinstance(e.get("actor_type"), str):
                 raise ValueError(f"allowlist entry {rid!r}: every actor needs actor_type and an integer actor_id")
             if e.get("expires") is not None:
+                if not isinstance(e["expires"], str):
+                    raise ValueError(f"allowlist entry {rid!r}: expires must be a YYYY-MM-DD string")
                 datetime.date.fromisoformat(e["expires"])
+        req = spec.get("required_rules", [])
+        if not isinstance(req, list) or not all(isinstance(r, str) for r in req):
+            raise ValueError(f"allowlist entry {rid!r}: required_rules must be a list of rule types")
     return rulesets
 
 
@@ -232,11 +247,21 @@ def scan(token, allowlist, fetcher=fetch, repo=REPO, today=None):
             if spec:
                 if detail.get("enforcement") != "active":
                     findings.append(f"ruleset {rid}: enforcement is {detail.get('enforcement')!r}, not active")
-                inc = (((detail.get("conditions") or {}).get("ref_name") or {}).get("include"))
-                if not isinstance(inc, list):
-                    raise ReadError(f"ruleset {rid}: conditions.ref_name.include missing")
-                if MAIN_REF not in inc and "~DEFAULT_BRANCH" not in inc:
-                    findings.append(f"ruleset {rid}: no longer targets {MAIN_REF} ({inc})")
+                ref = (detail.get("conditions") or {}).get("ref_name") or {}
+                inc, exc = ref.get("include"), ref.get("exclude", [])
+                if not isinstance(inc, list) or not isinstance(exc, list) \
+                        or not all(isinstance(x, str) for x in inc + exc):
+                    raise ReadError(f"ruleset {rid}: conditions.ref_name malformed")
+                if not _matches_main(inc) or _matches_main(exc):
+                    findings.append(f"ruleset {rid}: does not cover {MAIN_REF} "
+                                    f"(include {inc}, exclude {exc})")
+                rules = detail.get("rules")
+                if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+                    raise ReadError(f"ruleset {rid}: rules malformed")
+                present = {r.get("type") for r in rules}
+                for want in spec.get("required_rules", []):
+                    if want not in present:
+                        findings.append(f"ruleset {rid}: required rule {want!r} is missing")
             observed.append(rid)
         except ReadError as e:
             unknown.append(str(e))

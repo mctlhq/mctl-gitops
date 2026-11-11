@@ -3,6 +3,7 @@
   "rulesets": {
     "18465404": {
       "name": "main-protection",
+      "required_rules": ["deletion", "non_fast_forward", "pull_request", "required_status_checks"],
       "bypass_actors": []
     }
   }

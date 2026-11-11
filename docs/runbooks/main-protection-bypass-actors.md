@@ -265,7 +265,8 @@ the repository and compares the bypass actors with
 `scripts/ruleset-bypass-allowlist.json`. Exit 0 clean, 10 findings, 20
 unknown. A null or non-integer `actor_id`, an actor that is not allowlisted,
 more actors than allowlist entries, an expired transitional entry, or
-`main-protection` missing, disabled or retargeted is a finding. A failed,
+`main-protection` missing, disabled, no longer covering `main` (include or
+exclude), or missing one of its `required_rules` is a finding. A failed,
 partial or malformed read, or a response without `bypass_actors`, is
 unknown, never clean.
 
