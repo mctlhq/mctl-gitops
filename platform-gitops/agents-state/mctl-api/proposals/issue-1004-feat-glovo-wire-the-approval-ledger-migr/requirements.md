@@ -21,6 +21,51 @@ applied to a live database by this change. It also closes the payload-ownership
 obligation OPEN-989-4 with a test that pins the single writer of
 `bridge_commands.payload` for `place_order_fake`.
 
+## Amendment 2026-11-10: owner decisions D1 and D2
+
+Result of the independent review: AMEND REQUIRED, NO IMPLEMENTATION GO. This amendment
+records two owner decisions and does not approve implementation. Implementation approval
+is a separate, later request; `.status.yaml` stays `proposed`. Anything below that could
+not be verified against code or GitOps is marked UNVERIFIED and is not an assertion.
+
+D1 (work-items role, variant A). The work-items store gets a new login role
+`mctl_api_workitems` and an explicit `WORK_ITEMS_DB_URL`.
+- Least privilege: only the DML that `workitems` already uses (the `genericGrants` table in
+  `internal/workitems/apply_schema.go` plus USAGE on `work_item_intents_id_seq`, and SELECT on
+  `bridge_colocation_probe` through `bridge.WithWorkItemsRole`); no DDL, no ownership, not
+  superuser, no CREATEROLE, CREATEDB, BYPASSRLS or replication.
+- The physical database is the existing `mctl-api` database on `shared-pg`. The Glovo
+  store, the bridge store, the orders store and the work-items store SHALL all use that one
+  physical database (the `control.ProveOneDatabase` precondition); no separate Glovo database.
+- The working production DSN is not changed by this proposal or by its implementation. The
+  current production path (`AUDIT_DB_URL` fallback as role `mctl-api`) keeps working until a
+  separate deployment approval (D2 step 2) says otherwise.
+- The role-name rules are not widened: every `roleNameRE` stays `^[a-z_][a-z0-9_]{0,62}$`,
+  so the hyphenated `mctl-api` is never passed to `WithWorkItemsRole` and no identifier
+  quoting is introduced. Quoting is kept only as a rejected alternative (design).
+- This proposal includes grants verification, compatibility with the existing WorkItems and
+  DevLoop, and rollback (design sections 7 to 9, tasks 11 to 14).
+
+D2 (order). Four steps, each its own gate; no step is implied by the previous one:
+1. A15 mctl-gitops#2563 (draft, staged and inert): stages the roles `glovo_runtime`,
+   `glovo_migrator`, `mctl_api_workitems`, the grants and ownership plan, the
+   ExternalSecrets and the DSNs. Nothing in it is reconciled.
+2. A separate deployment gate, performed by an operator after its own approval: actual role
+   creation, grants and any necessary ownership transfer. There is NO automatic ownership
+   change of existing production tables, by this code or by any job. Ownership is
+   transferred only for the tables the migration strictly requires, and existing WorkItems
+   and DevLoop must not be harmed (design section 7).
+3. `cmd/glovo-migrate` applies the schemas as `glovo_migrator`, after a read-only ownership
+   pre-check and only with an explicit `-confirm`.
+4. Wiring is enabled only after the migrations, roles and readiness are confirmed, with the
+   feature flags closed and the write fence on. Owner-confirmed terminology (2026-11-10):
+   P0/P1 = `glovoWriteFenceHoldLifted` stays `false`, `bridge.Store.SetFence` is NOT called
+   (the bridge keeps its default refusing fence), flags OFF, zero fake effects; P2 = a
+   separately authorized activation of a real, ready, fail-closed `receipt.NewFence` that
+   permits only owner-approved, single-use fake `aar_` writes. "Write fence on" means P0/P1;
+   this proposal covers P0/P1 only. Merging dark wiring code earlier is allowed only because
+   every path is behind closed flags.
+
 ## User stories
 
 - AS the platform operator I WANT a one-shot migration entry point that applies the
@@ -40,16 +85,43 @@ Migrations
   a migration DSN, the Glovo runtime role and the work-items role THE SYSTEM SHALL call
   `workitems.ApplyGlovoApprovalSchema(ctx, migrationDSN, glovoRuntimeRole, workitems.WithWorkItemsRole(workItemsRole))`
   (which runs `workitems.ApplySchema` first) and exit 0 only on success.
-- IF the `-confirm` flag is absent or wrong, or any role name is empty or rejected by the
-  role-name rule, THEN THE SYSTEM SHALL exit non-zero without connecting to the database.
+- IF the `-confirm` flag is absent or wrong, or any role name is empty, equal to another
+  role of the call, or rejected by the role-name rule, THEN THE SYSTEM SHALL exit non-zero
+  without connecting to the database. There is no default for `-confirm` and no environment
+  variable that supplies it.
+- WHEN `-confirm` is correct THE SYSTEM SHALL, before any DDL, run a read-only ownership
+  pre-check as the migration role (`SET TRANSACTION READ ONLY`) over every relation,
+  sequence, function and schema the selected steps would touch, and SHALL list each one
+  whose owner is not the connecting role together with the operator transfer step.
+- IF the pre-check finds any foreign-owned object, or cannot complete (connection, catalog
+  read or malformed result), or the connecting role is not the expected migration role, or a
+  named role (`glovo_runtime`, `mctl_api_workitems`) does not exist, THEN THE SYSTEM SHALL
+  exit non-zero before issuing any DDL: 1 for a read failure, 3 for a wrong connecting role,
+  a missing named role or a missing CREATE privilege, 2 for a foreign-owned object. When
+  several apply, 1 outranks 3 outranks 2: a failed read is never treated as "nothing
+  foreign-owned". The expected migrator role comes from the flag `-migrator-role` (default
+  `glovo_migrator`), not from the environment.
+- THE SYSTEM SHALL provide `cmd/glovo-migrate -verify`, which runs the pre-check and the
+  grants verifier in a `READ ONLY` transaction, issues no DDL and needs no `-confirm`.
 - IF the migration reports that a relation of the block is owned by another role THEN THE
   SYSTEM SHALL exit non-zero and print the operator ownership-transfer step, and SHALL NOT
-  attempt the transfer itself.
+  attempt the transfer itself, now or in any later change: no code path of this proposal
+  issues `ALTER ... OWNER TO`, and no job changes ownership of an existing production table.
+- THE SYSTEM SHALL name the work-items role only as `mctl_api_workitems` in every deployed
+  configuration; the hyphenated `mctl-api` is rejected by the role-name rule and is never
+  passed to `WithWorkItemsRole`.
 - WHILE the API server runs THE SYSTEM SHALL NOT execute either schema function
   (`cmd/api` never calls them).
 
 Wiring (all inside the existing `MCTL_BRIDGE_ENABLED` / `GLOVO_ENABLED` /
-`MCTL_GLOVO_CONTROL_ENABLED` dark paths)
+`MCTL_GLOVO_CONTROL_ENABLED` dark paths). Every wiring task is gated behind those closed
+flags: with them unset (current production) none of the criteria below changes behaviour,
+and this change sets no flag, no env var and no DSN anywhere (D2 step 4 is a later,
+separately approved operator action that needs the roles, migrations and readiness
+confirmed first).
+- IF `WORK_ITEMS_DB_URL` is unset or the work-items database differs from the Glovo database
+  THEN THE SYSTEM SHALL leave the ledger unwired and report `one_database_not_proven`; it
+  SHALL NOT fall back to `AUDIT_DB_URL` for the ledger.
 - WHEN `cmd/api` has a Glovo store, a bridge store on the same pool and a work-items store
   THE SYSTEM SHALL construct the #988 orders store on the Glovo pool, the work-items store
   with `workitems.WithGlovoOrders`, a `workitems.GlovoDecisions` and pass it as
@@ -95,34 +167,79 @@ Readiness proof
   hook is `bridge.CancelOpenForConnections` and that it cancels open commands under the
   runtime role.
 
+Roles, grants and compatibility (D1)
+- WHEN the grants verification runs against a database THE SYSTEM SHALL compare, read-only,
+  the live privileges of `mctl_api_workitems`, `glovo_runtime` and `glovo_migrator` with the
+  in-code grant tables and report any extra or missing privilege, any DDL or ownership held
+  by a runtime role, and any superuser/CREATEROLE/CREATEDB/BYPASSRLS/replication attribute.
+  A role or object that cannot be read is reported unknown, never absent or clean.
+- THE SYSTEM SHALL keep every existing WorkItems and DevLoop path working through each step
+  of D2. A pod still running on `AUDIT_DB_URL` as `mctl-api` becomes a non-owner after the
+  transfer, and its restart runs `verifySchemaVersion`. A grant to `mctl-api` issued before the
+  transfer is a no-op while it owns the objects, and the transfer then leaves it with nothing
+  (reported by cross-review on PostgreSQL 16; UNVERIFIED by this proposal), so the transitional
+  grants (the `genericGrants` DML, SELECT on `work_items_schema_version`, USAGE on
+  `work_item_intents_id_seq` and every other sequence in scope, EXECUTE as needed) SHALL be
+  issued AFTER the owner changes, by the new owner or a member of it, in ONE transaction with
+  the `ALTER ... OWNER TO` statements (including an explicit transfer of the sequences, which
+  do not follow their table), or the failing window SHALL be defined with a freeze. Only
+  `ApplySchema` creates `public.work_items_schema_version`, so production has at most 12 of
+  the 13 generic relations until it exists (UNVERIFIED which exist); the operator pre-creates
+  it (one row, version 1) as the legacy owner before the transfer as preparation. This
+  procedure REQUIRES owner/operator confirmation and is not decided here.
+- WHEN `cmd/glovo-migrate -verify` runs after the transfer THE SYSTEM SHALL check the
+  EFFECTIVE privileges of the legacy role (table, sequence, function and version-table
+  readability, via `has_*_privilege`, read-only) and report `diverged` when the legacy role
+  has less than the transitional grant.
+- THE SYSTEM SHALL treat the bridge step of the migration (with
+  `bridge.WithWorkItemsRole(mctl_api_workitems)`) and the glovo, orders and join steps as
+  required for activation, not optional: `control.ProveOneDatabase` reads
+  `bridge_colocation_probe` through the work-items pool and `receipt.Ready` needs
+  `GlovoStoreReady` and the orders store. Ownership transfer for bridge and commerce objects
+  covers only objects that exist; which exist in production is UNVERIFIED and needs read-only
+  owner/ACL evidence before the deployment gate.
+- THE SYSTEM SHALL require `glovo_migrator` to hold CREATE on the database and on schema
+  `public`, and the operator performing `ALTER ... OWNER TO` to be a member of the old and the
+  new owner role (UNVERIFIED against the server version; the pre-check observes the CREATE
+  privileges).
+- THE SYSTEM SHALL provide a rollback for each D2 step (design section 9) that restores the
+  RECORDED pre-change owner and ACL, never revokes from a role that owns the object, and
+  lists the objects the migration step leaves behind with their disposition.
+
 ## Out of scope
 
 - Lifting `glovoWriteFenceHoldLifted`, opening `glovo.Default` or `glovo.ControlDefault`.
 - Any real Glovo provider.
 - Applying the migration or the role changes to a live database; changing mctl-gitops
-  (mctl-gitops#2563 stays a separate step).
+  (mctl-gitops#2563 stays a separate step); creating roles, grants or ownership changes
+  (D2 step 2 is an operator action behind its own approval); changing the working
+  production DSN; any implementation approval (this amendment grants none).
+- Widening any `roleNameRE` or quoting identifiers to admit `mctl-api`.
 - The tests listed in follow-up F1 of the #989 closure.
 - Reopening decisions already taken: decider is the order owner with current membership
   and at least `developer`; `ReservePermitMargin` is 120 s; fingerprint in Temporal history
   only for the fake-only M1.
 
-## Open questions
+## Decided and open questions
 
-- Work-items role name. GitOps gives the work-items store the `mctl-api` role (database
-  `mctl-api` on `shared-pg`, via the `AUDIT_DB_URL` fallback). Every `roleNameRE` in the
-  repo (`^[a-z_][a-z0-9_]{0,62}$`) refuses `mctl-api` because of the hyphen, so
-  `WithWorkItemsRole("mctl-api")` cannot succeed. This proposal assumes a dedicated
-  underscore role (proposed `mctl_api_workitems`) with an explicit `WORK_ITEMS_DB_URL`
-  (which `receipt.Ready` requires anyway, `WorkItemsURLExplicit`). The alternative is to
-  quote identifiers and admit hyphens. A clarification question was filed.
-- One database. `control.ProveOneDatabase` requires the Glovo, bridge and work-items stores
-  on the same database. Work items live in database `mctl-api`, so `GLOVO_DB_URL` must also
-  point at `mctl-api` (not a separate Glovo database). mctl-gitops#2563 was not readable
-  from this run; confirm it targets that database.
-- Whether the migration entry point should also run `glovo.ApplySchema`,
-  `orders.ApplySchema`, `glovojoin.ApplySchema` and `bridge.ApplySchema` (none has a
-  production caller either). This proposal adds them as optional, ordered steps behind
-  separate flags but only the two work-items functions are mandatory here.
+Decided (2026-11-10, owner):
+- Work-items role: `mctl_api_workitems`, explicit `WORK_ITEMS_DB_URL` (D1). The earlier
+  open question and its "quote identifiers" alternative are closed; quoting is rejected.
+- One database: the existing `mctl-api` database on `shared-pg` for Glovo, bridge, orders
+  and work-items (D1). `GLOVO_DB_URL` points at it, not at a new database.
+- Order: A15 staging, separate deployment gate, migration, then wiring (D2).
+- The glovo, bridge, orders and join `ApplySchema` steps are required for activation (see
+  Roles, grants and compatibility); they stay separate flags so a partial run is possible, and
+  only the two work-items functions are mandatory for a first run.
+- "Write fence on" = P0/P1 (see D2 step 4), owner clarification 2026-11-10.
+
+Still open (not decided here):
 - Membership detector source of truth: membership is a GitOps read (`gitReader`), so the
   detector polls owners of live connections; the scan interval (proposed 60 s, bounded well
   below the 5 minute heartbeat) is a recommendation.
+- Role for `COMMERCE_DB_URL` (the bridge reads only that variable; the commerce store
+  falls back to `AUDIT_DB_URL`). D1 fixes the database, not this role. UNVERIFIED: which
+  role owns the bridge and commerce tables today, and whether the bridge tables exist at
+  all in production (the bridge is off). The operator inventory of D2 step 2 answers it.
+- Whether other consumers use the work-items tables under a role other than `mctl-api`.
+  UNVERIFIED; the inventory in design section 7 must list them before any ownership change.
