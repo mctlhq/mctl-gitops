@@ -1,0 +1,52 @@
+# Release bump through a pull request (mctlhq/mctl-gitops#2543, stage 1 fast track)
+
+This is a **fast PR-based path**, not the elimination of the DeployKey P1.
+The `DeployKey` bypass actor on ruleset 18465404 stays, and so do the deploy
+keys, until every writer is migrated. #2543 stays open until the old bypass
+credentials are gone. Nothing here adds `mctl-gitops-pr`, `mctl-agents` or
+`mctl-app` to the ruleset's bypass actors.
+
+## What changes
+
+`release-deploy.yaml` and `gitops-bump.yaml` no longer push from the job that
+edits the values files. Three jobs:
+
+| Job | Holds | Does |
+|---|---|---|
+| `bump` | no environment, no secret, `contents: read` | reads the route, runs the release gate `check`, edits the files, makes one commit and hands it over as a patch |
+| `publish-direct` | environment `gitops-bump` (deploy key) | applies the patch to a fresh `main`, runs `release-gate.py verify --policy-rev origin/main`, pushes to `main`. Used for every image not listed below |
+| `publish-pr` | environment `app-gitops-pr` (`mctl-gitops-pr` App key) | applies the patch, re-authors it as the App bot, runs the gate and the tag-only guard, pushes **only** to `release-bump/<service>-<tag>` and opens a pull request |
+
+`platform-gitops/release-bump-routes.yaml` lists the images on the PR route
+(initially `ghcr.io/mctlhq/mctl-api`). `scripts/release-bump-route.py` reads it:
+a missing, unreadable or malformed file fails the release, it never falls back
+to either route.
+
+## How the PR lands
+
+1. The App opens the PR. `claude-review.yml` lists `mctl-gitops-pr` in
+   `allowed-bots`, so the review runs.
+2. After an approving review, `auto-merge.yml` checks that the author is
+   `mctl-gitops-pr[bot]`, the head is in this repository, and
+   `scripts/release-bump-diff-guard.py` accepts the diff at the judged head:
+   only image tag lines, paired one to one, same key and image name, at most 8
+   files under the three allowed `platform-gitops/` prefixes. Anything else is a
+   human merge.
+3. It waits until GitHub reports the PR `CLEAN` (approval and the required
+   checks `validate`, `cloudflare-plan`, `reserved-hosts`, which run the release
+   gate on the PR) and merges the exact head it judged, with a merge commit.
+
+The release hold of #2528 (`version_holds`), the bootstrap gate of #2590 and the
+exact-head checks are unchanged: the gate runs before the write in `bump`, again
+on the tree to push in each publishing job, and again as the `validate` check.
+
+## Roll back
+
+Remove the image from `release-bump-routes.yaml` in a reviewed PR; the next
+release goes through `publish-direct` again.
+
+## Pending evidence (only a live trial shows these)
+
+- the review approves a PR opened by the App and `auto-merge.yml` fires for it;
+- `validate` finishes within the 45 minutes `auto-merge.yml` waits;
+- the App's token cannot push `main` (expected: not a bypass actor).

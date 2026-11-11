@@ -89,41 +89,47 @@ jobs:
             check_path values_glob "$INPUT_VALUES_GLOB" '^[A-Za-z0-9._/*?-]+$'
           fi
 
+  # The bump is prepared here and published by exactly one of two jobs below.
+  # This job holds no environment and no write credential: it decides the route,
+  # edits the values files and builds ONE commit, which it hands over as a patch.
+  # The publishing jobs apply that patch to a fresh checkout of main, run the
+  # release gate on the tree that would result, and only then write.
   bump:
     needs: validate-inputs
     runs-on: ubuntu-latest
-    environment: gitops-bump
     permissions:
-      # Read only: the push is authorized by the deploy key, not by
-      # GITHUB_TOKEN.
       contents: read
+    outputs:
+      has_change: ${{ steps.commit.outputs.has_change }}
+      route: ${{ steps.route.outputs.route }}
     steps:
-      # main is protected by the `main-protection` ruleset (required PR +
-      # review); the default GITHUB_TOKEN has no bypass for it, so a plain
-      # checkout+push here gets rejected with GH013. These tag-bump commits
-      # are the narrowly-scoped exception to "never commit to main" that
-      # CLAUDE.md documents, and they push with a write deploy key. The
-      # ruleset's bypass_actors carry a `DeployKey` entry of its own,
-      # independent of any App: it is the same entry the agent workflows'
-      # commit-and-push steps have always pushed agents-state through.
-      #
-      # A deploy key rather than an mctl-agents App token: that App's token
-      # is also what the agents run with, so while the App could bypass the
-      # ruleset, so could every agent (mctlhq/mctl-agents#470), and so could
-      # any workflow in the org that reads the App's org-wide signing key
-      # (#1033). The key is a secret of the `gitops-bump` environment, which
-      # only releases it to jobs running on main, so a workflow pushed to a
-      # branch cannot read it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
-          ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
+          persist-credentials: false
 
       # The release gate imports yaml. Installed explicitly rather than assumed
       # on the runner image; if this step or the import fails the bump is
       # refused (the gate fails closed), never skipped.
       - name: Install PyYAML for the release gate
         run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      # Which way this image reaches main is read from main (see
+      # platform-gitops/release-bump-routes.yaml). A file that cannot be read
+      # or parsed fails this step: there is no default route.
+      - name: Decide how the bump reaches main
+        id: route
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          set -euo pipefail
+          route=$(python3 scripts/release-bump-route.py --image "$IMAGE_NAME")
+          case "$route" in
+            pr|direct) ;;
+            *) echo "::error::unexpected route '${route}'"; exit 1 ;;
+          esac
+          echo "route=${route}" >> "$GITHUB_OUTPUT"
+          echo "::notice::bump route for ${IMAGE_NAME}: ${route}"
 
       - name: Bump image tags
         env:
@@ -356,7 +362,10 @@ jobs:
           print(f"Total: {total_replaced} occurrence(s) bumped across {len(files)} file(s)")
           PYEOF
 
-      - name: Commit and push to main
+      # Commits locally only and hands the commit over as a patch. Nothing is
+      # pushed from this job.
+      - name: Commit (local only) and write the patch
+        id: commit
         env:
           IMAGE_NAME: ${{ inputs.image_name }}
           NEW_TAG:    ${{ inputs.image_tag }}
@@ -383,21 +392,30 @@ jobs:
 
           if [[ ${#git_add_args[@]} -eq 0 ]]; then
             echo "::notice::No staged changes (already at ${NEW_TAG})"
+            echo "has_change=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git add -- "${git_add_args[@]}"
           if git diff --staged --quiet; then
             echo "::notice::No staged changes (already at ${NEW_TAG})"
+            echo "has_change=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           SERVICE=$(basename "$IMAGE_NAME")
-          # Direct commit to main — scoped to exactly the allowlisted,
-          # explicitly-staged file(s) above.
           git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
-          # Release gate on the tree about to be pushed (see release-deploy).
-          python3 scripts/release-gate.py verify --policy-rev origin/main
-          git push
+          mkdir -p "$RUNNER_TEMP/bump-patch"
+          git format-patch -1 --stdout > "$RUNNER_TEMP/bump-patch/bump.patch"
+          echo "has_change=true" >> "$GITHUB_OUTPUT"
+
+      - name: Hand the bump commit to the publishing job
+        if: steps.commit.outputs.has_change == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}/bump-patch/bump.patch
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Summary
         if: always()
@@ -420,3 +438,135 @@ jobs:
               echo "| **Glob** | \`${VALUES_GLOB}\` |"
             fi
           } >> $GITHUB_STEP_SUMMARY
+
+  # Direct route: the deploy key pushes the gate-checked commit to main. The key
+  # is a secret of the `gitops-bump` environment, which releases it only to jobs
+  # running on main. This route stays for every image not listed in
+  # platform-gitops/release-bump-routes.yaml (mctlhq/mctl-gitops#2543: the
+  # DeployKey bypass actor is not removed by the PR route).
+  publish-direct:
+    needs: bump
+    if: needs.bump.outputs.has_change == 'true' && needs.bump.outputs.route == 'direct'
+    runs-on: ubuntu-latest
+    environment: gitops-bump
+    permissions:
+      # Read only: the push is authorized by the deploy key, not by
+      # GITHUB_TOKEN.
+      contents: read
+    steps:
+      # main is protected by the `main-protection` ruleset (required PR +
+      # review); the default GITHUB_TOKEN has no bypass for it. The ruleset's
+      # bypass_actors carry a `DeployKey` entry of its own, independent of any
+      # App; an mctl-agents App token is not used because the agents run with
+      # it too (mctlhq/mctl-agents#470, #1033).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
+
+      - name: Install PyYAML for the release gate
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Download the bump commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}/bump-patch
+
+      - name: Apply and push to main
+        run: |
+          set -euo pipefail
+          git config user.email "ci@mctl.ai"
+          git config user.name  "mctl-ci"
+          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          # Release gate on the tree about to be pushed (see release-deploy).
+          python3 scripts/release-gate.py verify --policy-rev origin/main
+          git push
+
+  # PR route: the mctl-gitops-pr App opens a release-bump/* pull request. It is
+  # not a ruleset bypass actor, so it cannot write main; auto-merge.yml merges
+  # the PR after the review and the required checks (including `validate`, which
+  # runs the release gate on the PR). The key is a secret of the main-only
+  # `app-gitops-pr` environment.
+  publish-pr:
+    needs: bump
+    if: needs.bump.outputs.has_change == 'true' && needs.bump.outputs.route == 'pr'
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    permissions:
+      contents: read
+    steps:
+      - name: Generate a write token for the bump pull request
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Install PyYAML for the release gate
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Download the bump commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}/bump-patch
+
+      # The commit is re-authored as the App's own bot account. An author that
+      # maps to no GitHub account (ci@mctl.ai) is "unattributed" and the ruleset
+      # then asks for a second approval nobody is there to give.
+      - name: Apply the bump commit as the App bot
+        run: |
+          set -euo pipefail
+          git config user.name "mctl-gitops-pr[bot]"
+          git config user.email "353875018+mctl-gitops-pr[bot]@users.noreply.github.com"
+          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          git commit --amend --reset-author --no-edit --trailer "Agent: none"
+
+      # Same shape check the merge step applies: only image tags move.
+      - name: Refuse anything but an image tag move
+        run: git diff origin/main..HEAD | python3 scripts/release-bump-diff-guard.py
+
+      - name: Open the release-bump pull request
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SERVICE=$(basename "$IMAGE_NAME")
+          branch="release-bump/${SERVICE}-${NEW_TAG}"
+          git check-ref-format "refs/heads/${branch}" || { echo "::error::invalid branch name"; exit 1; }
+          case "$branch" in release-bump/?*) ;; *) echo "::error::branch is not under release-bump/"; exit 1 ;; esac
+
+          # Release gate on the tree the pull request would merge, right before
+          # the only push this job makes. The push target is a release-bump/*
+          # ref; no refspec here can name main.
+          python3 scripts/release-gate.py verify --policy-rev origin/main
+          git push --force origin "HEAD:refs/heads/${branch}"
+
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            echo "::notice::release-bump pull request #${existing} already open for ${branch}"
+            exit 0
+          fi
+          body=$(printf '%s\n' \
+            "Image tag bump for \`${IMAGE_NAME}:${NEW_TAG}\`." \
+            "" \
+            "Opened by gitops-bump.yaml: ${RUN_URL}" \
+            "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \
+            "" \
+            "The only change is an image tag. auto-merge.yml merges this PR after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
+          gh pr create --repo "$REPO" --base main --head "$branch" \
+            --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body"

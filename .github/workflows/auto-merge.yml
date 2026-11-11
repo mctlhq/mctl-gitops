@@ -30,8 +30,19 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
-      (startsWith(github.event.pull_request.head.ref, 'claude/') || startsWith(github.event.pull_request.head.ref, 'portal-allowlist/'))
+      (startsWith(github.event.pull_request.head.ref, 'claude/') || startsWith(github.event.pull_request.head.ref, 'portal-allowlist/') || startsWith(github.event.pull_request.head.ref, 'release-bump/'))
+    # The release-bump route waits for the required checks (see the last step).
+    timeout-minutes: 50
     steps:
+      # release-bump/* only: the trusted guard script comes from the default
+      # branch, never from the PR (a pull_request_review run would otherwise
+      # check out the merge commit).
+      - name: Check out the guard scripts from the default branch
+        if: startsWith(github.event.pull_request.head.ref, 'release-bump/')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
       # A bot approval is enough to merge an ordinary `claude/*` PR, but not
       # one that decides which agent exists or what it may do
       # (mctl-agents#470), nor one that flips a proposal's approval state
@@ -91,6 +102,27 @@ jobs:
               protected=$(printf '%s\n%s\n' "$protected" "$portal_widening" | grep -v '^$' || true)
             fi
           fi
+          # release-bump/* PRs (release-deploy.yaml / gitops-bump.yaml, PR
+          # route of mctlhq/mctl-gitops#2543) merge only when the App opened
+          # them from this repository AND every changed line moves an image
+          # tag and nothing else. Fail closed: a diff that cannot be read in
+          # full, or one that the guard does not accept, is a human merge.
+          if [[ "$HEAD_REF" =~ ^release-bump/ ]]; then
+            bump_problem=""
+            if [ "$PR_AUTHOR" != "mctl-gitops-pr[bot]" ]; then
+              bump_problem="author is ${PR_AUTHOR}, not the release-bump App"
+            elif [ "$HEAD_REPO" != "$REPO" ]; then
+              bump_problem="head is not in ${REPO}"
+            elif ! gh api -H "Accept: application/vnd.github.diff" \
+                  "repos/${REPO}/compare/main...${head_sha}" > "$RUNNER_TEMP/pr.diff"; then
+              bump_problem="the diff of ${head_sha} could not be read"
+            elif ! python3 scripts/release-bump-diff-guard.py < "$RUNNER_TEMP/pr.diff"; then
+              bump_problem="the diff is not a pure image tag move"
+            fi
+            if [ -n "$bump_problem" ]; then
+              protected=$(printf '%s\nrelease-bump: %s\n' "$protected" "$bump_problem" | grep -v '^$' || true)
+            fi
+          fi
           if [ -n "$protected" ]; then
             echo "::notice::#${PR} touches paths that need a human merge; leaving it open:"
             printf '%s\n' "$protected"
@@ -104,13 +136,54 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       - name: Merge PR
-        if: steps.guard.outputs.merge == 'true'
+        if: steps.guard.outputs.merge == 'true' && !startsWith(github.event.pull_request.head.ref, 'release-bump/')
         run: |
           gh pr merge "$PR" \
             --merge --delete-branch \
             --match-head-commit "$HEAD_SHA" \
             --repo "$REPO"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
+      # release-bump/*: the review usually lands before the required checks
+      # finish, and the repository does not allow GitHub auto-merge, so wait here
+      # for the PR to become mergeable under every ruleset rule (CLEAN) and merge
+      # exactly the head the guard judged. A moved head, a conflict or a timeout
+      # leaves the PR open; a push re-runs the review and this workflow.
+      - name: Merge release-bump PR once the required checks pass
+        if: steps.guard.outputs.merge == 'true' && startsWith(github.event.pull_request.head.ref, 'release-bump/')
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 2700))
+          while :; do
+            if ! view=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,mergeStateStatus --jq '"\(.headRefOid) \(.mergeStateStatus)"'); then
+              echo "::error::could not read #${PR}; not merging."
+              exit 1
+            fi
+            cur=${view%% *}
+            state=${view##* }
+            if [ "$cur" != "$HEAD_SHA" ]; then
+              echo "::notice::#${PR} head moved from ${HEAD_SHA} to ${cur}; the new head gets its own review."
+              exit 0
+            fi
+            case "$state" in
+              CLEAN)
+                gh pr merge "$PR" --merge --delete-branch --match-head-commit "$HEAD_SHA" --repo "$REPO"
+                exit 0 ;;
+              BLOCKED|UNSTABLE|BEHIND|UNKNOWN|HAS_HOOKS) ;;
+              *) echo "::error::#${PR} is ${state}; not merging."; exit 1 ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::#${PR} did not become mergeable within 45 minutes (${state}); not merging."
+              exit 1
+            fi
+            sleep 30
+          done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}

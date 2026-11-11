@@ -618,6 +618,14 @@ jobs:
 
       - name: Auto-merge protected paths
         run: python3 tests/test_auto_merge_protected_paths.py
+      - name: Release bump PR route (routes file, tag-only diff guard, wiring)
+        # #2543 stage 1 fast track: the route decision fails closed, the guard
+        # accepts only image tag moves, and the workflows can write only to a
+        # release-bump/* ref on the PR route. Each test carries its own mutants.
+        run: |
+          python3 tests/test_release_bump_route.py
+          python3 tests/test_release_bump_diff_guard.py
+          python3 tests/test_release_bump_pr_route.py
       - name: Unit-test the release preflight
         run: python3 tests/test_release_preflight.py
       - name: Read-only workflow steps hold no write credential
