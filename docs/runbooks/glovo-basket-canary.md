@@ -23,6 +23,21 @@ own explicit owner GO. Merging a PR in this repository IS a production change
 (the `admins-mctl-api` Application auto-syncs with prune and selfHeal), so a
 step's "merge" is the step.
 
+## Holds and the production DDL sequence (owner, 2026-11-11)
+
+- Releases 4.155.0 and 4.156.0 are on HOLD. Each needs its own separate
+  authorization packet; nothing in this runbook authorizes either.
+- Production DDL (step D2) is forbidden until ALL of these have happened, in
+  this order, and then a separate operator authorization is given:
+  1. D0: the read-only inventory is recorded and read;
+  2. D1: the roles, ownership transfer and grants are applied AND verified;
+  3. a fresh review of #1018 on its final head (no unaddressed P1/P2);
+  4. a rehearsal of D2 on a disposable copy of the database;
+  5. the operator's separate, recorded authorization for production D2.
+- Merge order of the staging PRs in mctlhq/mctl-gitops: #2582, #2592 and #2593
+  first (or together), then this runbook (#2594), because the runbook cites
+  the staged patches those PRs add.
+
 ## Definition of done
 
 1. An authenticated OAuth MCP client run against `https://glovo.mctl.ai/mcp`
@@ -57,7 +72,7 @@ step's "merge" is the step.
 | --- | --- | --- | --- | --- |
 | 1 | R0 | mctl-api 4.155.0 dark (separate decision, not part of this package) | mctl-api | owner |
 | 2 | R1 | mctl-api 4.156.0 with the Basket code, plus the chart pin move (#1017), deployed dark (no Glovo env) | mctl-api, mctl-gitops release PR | owner (release), release-deploy PR route under the #2590 hold |
-| 3 | V | Vault `zitadel-admin` 8h role (gitops#2584), for the operator session | mctl-gitops | owner |
+| 3 | V | Optional convenience only: an operator Vault session. gitops#2584 is an unrelated task and NOT a Glovo gate | none | owner |
 | 4a | D0 | Read-only catalogue inventory of the production database (no DDL) | database | operator |
 | 4 | D1 | Database roles, transitional grants, ownership transfer (A15 operator plan) | database | operator |
 | 5 | W | Move the A15 ExternalSecrets and the inert `GLOVO_DB_*` env into reconciled paths | mctl-gitops | owner |
@@ -67,6 +82,7 @@ step's "merge" is the step.
 | 9 | B2 | `glovoBasketUISecret` slot, `extraPaths: [/glovo]`, `GLOVO_BASKET_UI_ENABLED` + marker | mctl-gitops | owner |
 | 10 | C | Ingress host `glovo.mctl.ai`, reserved host | mctl-gitops | owner |
 | 11 | A | Allowlist entry for the canary (team, principal) | API call | owner (admin credential) |
+| 11a | P | Default-deny egress policy for the Glovo workload: separate gate, prepared by another agent, link TODO; before P2 activation | mctl-gitops | owner |
 | 12 | E, N, K | Client run, owner decision, negative checks, kill-switch drill | none | agent + owner |
 
 No DNS change, no Cloudflare apply, no new certificate token, no
@@ -94,7 +110,8 @@ matrix. The Basket code is NOT in 4.155.0.
 ## Step R1: mctl-api 4.156.0 (Basket code) deployed dark
 
 - **Who**: owner decides the release; the release path deploys. The agent does
-  not tag, bump or redeploy.
+  not tag, bump or redeploy. HOLD: this step needs its own authorization
+  packet (see "Holds"); it is documented here, not authorized.
 - **What changes in 4.156.0 (chart, env, defaults)**:
   - Code: the host-routed router `withGlovoBasketHost`, the six-tool MCP, the
     store and the approval page. All of it is behind the env chain below and
@@ -167,18 +184,23 @@ matrix. The Basket code is NOT in 4.155.0.
   confirms the first by `grep`; the second is a known gap, listed under
   "Could not determine".
 
-## Step V: Vault admin session (optional but advised)
+## Step V: Vault session (optional convenience, not a gate)
 
-- **Who**: owner. **Change**: merge gitops#2584 (Draft today) after its own
-  review. **Verification** (from the PR): `vault read sys/auth/mctl/tune`
-  (max 8h, default 1h), `vault read auth/mctl/role/zitadel-admin`.
-- **Why**: steps D1 and D2 are one unattended operator session of more than the
-  1h default token life.
-- **Rollback**: the PR's runbook section (revert needs the role in
-  `allowedDeletes`). A leaked 8h token is revoked with `vault token revoke
-  -accessor`.
-- The owner logs in with `! vault login -method=oidc -path=mctl
-  role=zitadel-admin`; the agent never holds the token.
+- gitops#2584 (`opt-in 8h admin tokens on auth/mctl`) is an unrelated task. It
+  is NOT a Glovo prerequisite, and nothing in this runbook waits for it. An
+  operator who finds the default 1h token too short for the unattended D1 and
+  D2 session may use it if the owner has merged it for its own reasons, or
+  simply log in again.
+- Where the Glovo database credentials live: the A15 staging (gitops#2563,
+  `deploy/staged/glovo-m1/db/externalsecrets.yaml`) PROPOSES these Vault paths
+  (`username` and `password` properties): `platform/mctl-api/glovo-runtime-database`,
+  `platform/mctl-api/glovo-migrator-database` and
+  `platform/mctl-api/workitems-database`, read by `ClusterSecretStore
+  vault-backend`. None of them exists yet (the file says so); the operator
+  creates them in D1. No other Vault path, policy or role is needed by the
+  basket.
+- The owner logs in with `! vault login -method=oidc -path=mctl` and the role
+  they normally use; the agent never holds the token.
 
 ---
 
@@ -284,24 +306,42 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
 
 ## Step D1: roles, transitional grants, ownership transfer
 
-- **Who**: operator (owner), with the 8h Vault session of step V.
-- **Precondition**: R1 done; D0 recorded and read; gitops#2563 and gitops#2579 resolved on their
-  open items (UNVERIFIED list in #2563: `COMMERCE_DB_URL` role, connection
+- **Who**: operator (owner). No Vault convenience is required (step V).
+- **Design (owner, 2026-11-11)**: one physical database `mctl-api`; a separate
+  least-privilege work-items role `mctl_api_workitems` (DML only, no DDL, no
+  ownership) with an explicit `WORK_ITEMS_DB_URL` for it; the migrator role
+  `glovo_migrator` owns the schemas; `glovo_runtime` is the Glovo runtime
+  role. The legacy `mctl-api` role stops being the owner of the work-items
+  objects and receives only the transitional grants it still needs.
+- **Precondition**: R1 done; D0 recorded and read; gitops#2563 and gitops#2579
+  resolved on their open items (the UNVERIFIED list in #2563: connection
   limits, grantees via `aclexplode`, sequence ownership after the transfer,
   whether `work_items_schema_version` exists, URL-safe migrator password);
-  Vault values for the three roles created by the operator; a fresh logical
-  backup or snapshot of database `mctl-api` recorded (the 55 MB database makes
-  this cheap).
-- **Exact change**: per `deploy/staged/glovo-m1/db/roles.patch.md`: read-only
-  catalogue inventory first and the recorded ACL and owner; then ONE
-  transaction with the ownership transfer, followed by the transitional grants
-  to the legacy `mctl-api` role.
+  the three Vault secrets of step V created by the operator; a fresh logical
+  backup or snapshot of database `mctl-api` recorded (the database is 55 MB).
+- **`COMMERCE_DB_URL` is not needed for the basket-only v1.** Proven from the
+  code at #1014: it is read only by the commerce routes
+  (`cmd/api/main.go`) and by the command bridge (`cmd/api/glovo_bridge.go`);
+  no basket code path reads it, and the bridge stays off (its flags are not
+  set). The basket-only v1 does not inherit the full-M1 requirements in
+  gitops#2563 (bridge, orders, join, commerce role); D0 only confirms that no
+  commerce table is among the objects whose ownership moves.
+- **Exact change** (per `deploy/staged/glovo-m1/db/roles.patch.md`):
+  1. BEFORE any change, save the original owners and ACLs of every object that
+     will move (tables, sequences, functions, the schema) to a file the
+     operator keeps: this is the rollback source.
+  2. ONE transaction that contains the whole ownership transfer, INCLUDING
+     sequences and functions (a table moved without its sequences or trigger
+     functions leaves a half-owned set), and the transitional grants to the
+     legacy `mctl-api` role. If any statement fails, nothing is applied. The
+     transitional grants are not a later, separate step.
+  3. Switch the work-items store to the explicit `WORK_ITEMS_DB_URL` for
+     `mctl_api_workitems` (step W) and confirm healthy BEFORE D2.
 - **Verification (read-only)**: the catalogue queries of `roles.patch.md`
-  (the migrator's `-dry-run` is usable from here on, once `glovo_migrator`
-  exists); the running
-  mctl-api and DevLoop keep working: `mctl_get_service_status`, a DevLoop
-  read, no new error lines in `mctl_get_service_logs`.
-- **Rollback**: from the RECORDED owner and ACL, never a blind REVOKE.
+  compared with the saved originals; the running mctl-api and DevLoop keep
+  working: `mctl_get_service_status`, a DevLoop read, no new error lines in
+  `mctl_get_service_logs`. The migrator's `-dry-run` is usable from here on.
+- **Rollback**: from the SAVED owners and ACLs, never a blind REVOKE.
 
 ## Step W: reconciled A15 pieces (inert)
 
@@ -312,7 +352,8 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
   `mctl-api-workitems-db`, `mctl-api-glovo-migrator-db`) and the inert env text
   of `deploy/staged/glovo-m1/db/mctl-api-env.patch.md` (`GLOVO_DB_URL`,
   `GLOVO_DB_RUNTIME_ROLE`, `GLOVO_DB_MIGRATION_ROLE`, `envFromOptionalSecrets`)
-  into reconciled paths. No `GLOVO_ENABLED`. Marker bump (a Secret is new to
+  into reconciled paths, plus the explicit `WORK_ITEMS_DB_URL` for
+  `mctl_api_workitems`. No `GLOVO_ENABLED`. Marker bump (a Secret is new to
   the pods).
 - **Verification**: `kubectl -n mctl-api get externalsecret` shows
   `SecretSynced` (status only; Secret `.data` is never read); pods Ready; no
@@ -322,10 +363,11 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
 
 ## Step D2: apply the three schemas with `glovo-migrate` (#1018)
 
-- **Who**: operator, as `glovo_migrator`. NO-GO until the owner records a
-  separate deployment decision after: a fresh review of #1018 on its final
-  head, the D0 inventory read, the D1 privileges verified, and the maintenance
-  window agreed.
+- **Who**: operator, as `glovo_migrator`. FORBIDDEN until, in this order: D0
+  inventory recorded and read; D1 applied and verified; a fresh review of
+  #1018 on its final head; the disposable rehearsal below; and then a
+  separate, recorded operator authorization for production D2 (and an agreed
+  maintenance window).
 - **Where it runs**: `cmd/glovo-migrate` is not in the mctl-api image and is
   not built by the release. The operator builds it from a checkout of the
   4.156.0 release tag (the commit the image's revision label names):
@@ -339,9 +381,9 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
   named by `-dsn-env` (default `MCTL_GLOVO_MIGRATE_DSN`), never from the
   command line, and is never printed. It must use `sslmode=require` or
   stricter over TCP and name role `glovo_migrator` (the tool refuses any other
-  `current_user`, `-expect-role`). The operator exports it from the Vault
-  session of step V (`vault kv get` into the variable, not to the terminal);
-  agents never read it.
+  `current_user`, `-expect-role`). The operator exports it from the proposed
+  Vault path `platform/mctl-api/glovo-migrator-database` (created in D1; step
+  V) into the variable without echoing it; agents never read it.
 - **Preflight (the tool does it)**: CREATE on the database, schema `public`
   and schema `glovo` (when present), USAGE on `plpgsql`, ownership of every
   table, function and sequence a step touches, no schema newer than the
@@ -492,8 +534,14 @@ the page. An unlinked identity gets the uniform 404 page and no decision form.
 
 - **Who**: owner merges; the agent prepares the PR from `canary/env.patch.md`
   (diff B1).
-- **Precondition**: R1, D2 verified; W done; `OAUTH_DB_URL` question answered
-  (see env patch, Unknowns); the allowlist is empty (never written).
+- **Precondition**: R1, D2 verified; W done (explicit `WORK_ITEMS_DB_URL` for
+  `mctl_api_workitems` live and healthy); the `OAUTH_DB_URL` CHECK done and
+  recorded by the operator (names only: whether `mctl-api-secrets` supplies
+  it, that the DSN is the intended database, that its role has the needed
+  grants; agents never read Secret data; no automatic fallback to
+  `AUDIT_DB_URL`); the allowlist is empty (never written); if the pilot team
+  is `admins`, the extra `GLOVO_NON_SELECTABLE_TENANTS` line of
+  `canary/env.patch.md` is in the PR and its proof (below) is recorded.
 - **Exact change**: diff B1 of `deploy/staged/glovo-m1/canary/env.patch.md`:
   `GLOVO_ENABLED: "true"`, `GLOVO_MCP_RESOURCE:
   https://glovo.mctl.ai/mcp`, `GLOVO_BASKET_MCP_ENABLED: "true"`, marker
@@ -549,13 +597,17 @@ the page. An unlinked identity gets the uniform 404 page and no decision form.
 
 - **Who**: owner, with the platform-admin credential (human admin only; the
   agent has none and uses none).
-- **Precondition**: C verified; the team chosen; the owner holds `developer`
-  membership of it (the decision handler requires live `developer` membership
-  of the basket's team); the owner's principal id from `mctl_whoami`.
+- **Precondition**: C verified; the team chosen: tentatively `admins`, ONLY
+  after proof of the owner's OAuth session and live `developer` membership of
+  it (`mctl_whoami` for the principal id; the tenant membership read; both as
+  the owner, never an agent or service identity). Because `admins` is
+  unselectable by default (`GLOVO_NON_SELECTABLE_TENANTS`), choosing it needs
+  the extra B1 line; if the proof fails, another team is chosen instead and
+  no override is added. The decision handler requires live `developer`
+  membership of the basket's team.
 - **Exact change**: `PUT /api/v1/glovo/pilot/<team>/principals/<owner
-  principal>` on `https://api.mctl.ai`. Exactly one entry. `admins` is
-  non-selectable by default and is not the team. Never widen the list during
-  the canary.
+  principal>` on `https://api.mctl.ai`. Exactly one entry. Never
+  widen the list during the canary.
 - **Verification**: by effect, in step E (a read route for the allowlist is not
   assumed).
 - **Rollback**: `DELETE` the same path. Instant, no deploy.
@@ -621,11 +673,20 @@ the superseded one. Record: image digest, gitops SHA, approval id, timestamps
 | N3 | same with the owner's normal MCTL API token (audience `api.mctl.ai`), read from the environment, never printed | 401 `invalid_token` ("audience is not the glovo resource") | agent |
 | N4 | the Glovo-audience token from E2 sent to `https://api.mctl.ai/mcp` | 401 (the platform `/mcp` refuses a Glovo audience) | agent via the scripted client |
 | N5 | other paths on the Glovo host: `/healthz /readyz /openapi.yaml /docs /oauth/token /identity/links /api/v1/glovo/pilot /devloop/decide/x` | 404 each | agent |
-| N6 | a second human account (not allowlisted) runs the same OAuth flow | no Glovo token (refusal at consent or token); no tool call succeeds | owner supplies the account; if none exists this row is reported UNPROVEN, not passed |
+| N6 | a second human account (not allowlisted) runs the same OAuth flow | no Glovo token (refusal at consent or token); no tool call succeeds | a second REAL human account is not chosen yet. A bot or service identity is never substituted; without a real test this row is reported UNPROVEN, not passed |
 | N7 | allowlist drill: owner `DELETE`s the entry, the client calls `glovo_get_basket` | refused; then `PUT` again and the call succeeds | owner + agent |
-| N8 | the approval page with a signed-in user who is not the basket owner | uniform 404 page (needs a second account; same rule as N6) | owner supplies the account |
+| N8 | the approval page with a signed-in user who is not the basket owner | uniform 404 page (needs a second real human account; same rule as N6: UNPROVEN until tested) | owner supplies the account |
 | N9 | decision replay (E5) | 400 | owner |
 | N10 | kill switch: Ingress revert (C) | `https://glovo.mctl.ai/mcp` 404 at Traefik within about a minute; restore | owner |
+
+## Step P: egress policy (separate gate, TODO)
+
+Before P2 activation a default-deny, least-privilege outbound NetworkPolicy
+for the Glovo workload must be in place. Another agent prepares it under its
+own gate; link: TODO. Until it lands, "no Glovo egress" is a code-level
+property only (no outbound client in the basket path; no egress policy exists
+in namespace `mctl-api`, verified read-only 2026-11-11). This runbook neither
+writes nor applies that policy.
 
 ## Step K: after the DoD
 
@@ -641,6 +702,10 @@ stays. Close mctl-api#1006 only on the observed E5 result.
   Terraform apply). **cert-manager**: no new token; the existing DNS-01 token
   covers `mctl.ai`. The edge uses the Origin CA wildcard, so a
   `mctl-api-glovo-mctl-ai-tls` certificate is optional.
+- **Egress policy**: a default-deny, least-privilege outbound policy for the
+  Glovo workload is a SEPARATE GATE, prepared by another agent, and must land
+  before P2 activation. Link: TODO (not yet opened; this runbook does not
+  prepare or apply it). It is a step, not an open question; see "Step P".
 - **NetworkPolicy**: `allow-mctl-api-ingress` in namespace `mctl-api` already
   admits Traefik to every pod of the namespace; the host-routed MCP is the
   same pods and the same port. There is no egress policy in that file, and none exists in the namespace
@@ -655,7 +720,8 @@ stays. Close mctl-api#1006 only on the observed E5 result.
   the canary; their flags stay unset (see `env.patch.md`).
 - **A second workload or Service**: none; `mctl-api` serves the host.
 - **New Secret, Vault path or policy for the basket itself**: none beyond the
-  A15 database credentials and the two ZITADEL client keys.
+  A15 database credentials (the three proposed Vault paths of step V, none of
+  which exists yet) and the two ZITADEL client keys.
 
 ## Could not determine (from this repository, read-only)
 
@@ -664,8 +730,10 @@ stays. Close mctl-api#1006 only on the observed E5 result.
    D0, not by this repository. The migrator itself is #1018 (approved at
    `04e4dd95`, not in the image): the operator builds it from the release tag
    (D2).
-2. Whether `OAUTH_DB_URL` is set explicitly in production (Secret names and
-   data are not read). B1 refuses the boot if it is not.
+2. The real `OAUTH_DB_URL`: the live Deployment spec has no literal
+   (only `AUDIT_DB_URL` and `LIFECYCLE_DB_URL`); `mctl-api-secrets` may supply
+   it via `envFrom`, which agents do not read. This is the operator's CHECK
+   before B1 (names only), not a decision to default it to `AUDIT_DB_URL`.
 3. Whether any Secret already supplies a `GLOVO_*` name (the #2529 G4(b)
    names-only check, by the operator).
 4. After the ownership transfer: how the legacy `mctl-api` role keeps its
@@ -676,8 +744,9 @@ stays. Close mctl-api#1006 only on the observed E5 result.
    5s `lock_timeout` by default.
 6. Whether Cloudflare bot rules challenge a non-browser MCP client on the new
    host (checked at step C, first real request).
-7. The team the owner uses and their membership role; a second human account
-   for N6 and N8.
+7. Proof of the owner's OAuth session and `developer` membership of `admins`
+   (tentative pilot team); a second real human account for N6 and N8 (not
+   chosen; UNPROVEN until tested).
 8. Whether 4.156.0 reaches the same `Ready` state with the bridge, orders and
    join schemas absent: the code paths read here (`scope.Resolver`,
    `GlovoBasketDecisions.ReadyFn`) do not use `glovo.Store.Ready`, but this is
@@ -688,5 +757,5 @@ stays. Close mctl-api#1006 only on the observed E5 result.
     review-triggered auto-merge fire). 4.156.0 may be that first bump; if it
     is not proven by then, the owner decides between a hand-run PR and the
     direct route for that release.
-11. Egress: there is no egress NetworkPolicy to prove "no Glovo egress"
-    network-side; the evidence is the code review (no outbound client).
+11. Egress: no egress NetworkPolicy exists; the least-privilege policy is
+    step P (separate gate, TODO).
