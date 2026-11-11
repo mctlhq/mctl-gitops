@@ -307,12 +307,20 @@ def wiring():
         chk = re.search(r'"scripts/release-gate\.py", "check",\s*\n\s*"--files", \*\[os\.path\.normpath\(f\) for f in files\], '
                         r'"--new-tag", new_tag,\s*"--policy-rev", "origin/main", "--image", image_name\]', wf)
         out.append((f"wiring: {label} check reads the policy from origin/main and names the image", bool(chk), True))
-        pushes = [m.start() for m in re.finditer(r"^\s+(?:if )?git push\b", wf, re.M)]
-        vers = [m.start() for m in re.finditer(r"release-gate\.py verify --policy-rev origin/main", wf)]
-        out.append((f"wiring: {label} verify reads the policy from origin/main", len(vers) == 1, True))
-        out.append((f"wiring: {label} verify precedes the push",
-                    len(pushes) == 1 and len(vers) == 1 and vers[0] < pushes[0], True))
+        # The push happens in the two publishing jobs (direct and PR route). In
+        # each of them verify reads the policy from origin/main and runs before
+        # that job's only push; no job pushes a tree it did not verify.
+        jobs = yaml.safe_load(wf)["jobs"]
+        for jn in ("publish-direct", "publish-pr"):
+            text = "\n".join(str(st.get("run", "")) for st in jobs[jn]["steps"])
+            pushes = [m.start() for m in re.finditer(r"^\s*(?:if )?git push\b", text, re.M)]
+            vers = [m.start() for m in re.finditer(r"release-gate\.py verify --policy-rev origin/main", text)]
+            out.append((f"wiring: {label} {jn} verify reads the policy from origin/main", len(vers) == 1, True))
+            out.append((f"wiring: {label} {jn} verify precedes the push",
+                        len(pushes) == 1 and len(vers) == 1 and vers[0] < pushes[0], True))
         out.append((f"wiring: {label} no unpinned verify left", "release-gate.py verify\n" not in wf and "release-gate.py verify |" not in wf, True))
+        out.append((f"wiring: {label} the bump job pushes nothing",
+                    not any(re.search(r"^\s*(?:if )?git push\b", str(st.get("run", "")), re.M) for st in jobs["bump"]["steps"]), True))
     return out
 
 
