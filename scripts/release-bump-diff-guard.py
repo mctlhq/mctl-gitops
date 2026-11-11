@@ -64,8 +64,9 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
 
     strict_order: a tag move whose two tags are not both plain MAJOR.MINOR.PATCH
     is refused too (they cannot be shown to go forward), not just left unjudged.
-    collect: when a dict, filled with file -> identities of the changed lines in
-    order, for the caller to compare two diffs.
+    collect: when a dict, filled with file -> (identity, new tag) of the changed
+    lines in order, for the caller to compare two diffs. The new tag is part of
+    it because every split `tag:` line shares one identity.
     """
     problems = []
     files = []
@@ -81,7 +82,7 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
             problems.append(f"{cur}: {len(removed)} removed and {len(added)} added lines do not pair")
             return
         if collect is not None:
-            collect[cur] = [ai for (ai, _) in added]
+            collect[cur] = [(ai, at) for (ai, at) in added]
         for (ri, rt), (ai, at) in zip(removed, added):
             if ri != ai:
                 problems.append(f"{cur}: a changed line moves more than the tag ({ri} -> {ai})")

@@ -112,6 +112,8 @@ def option_verdicts(script):
     patch = PATCH_HEAD + diff(SVC, TAGS) + SIG
     case("same-lines-as accepts the same lines (format-patch signature ignored)", run_opts(script, diff(SVC, TAGS), [], patch=patch), "accept")
     case("same-lines-as refuses an extra changed line of the same identity", run_opts(script, diff(SVC, TWO), [], patch=patch), "refuse")
+    case("same-lines-as refuses the same identity moved to a different tag",
+         run_opts(script, diff(SVC, [('  tag: "1.0.0"', '  tag: "1.2.0"')]), [], patch=patch), "refuse")
     case("same-lines-as refuses a different file", run_opts(script, diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]), [], patch=patch), "refuse")
     case("same-lines-as refuses a different identity", run_opts(script, diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]), [], patch=PATCH_HEAD + diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]) + SIG), "refuse")
     case("same-lines-as refuses a patch that changes no line", run_opts(script, diff(SVC, TAGS), [], patch=PATCH_HEAD + SIG), "refuse")
@@ -167,6 +169,7 @@ MUT = [
     ("strict-order ignored", [("    strict_order = \"--strict-order\" in argv", "    strict_order = False")]),
     ("unorderable tags pass strict-order", [("elif strict_order and (_semver(rt) is None or _semver(at) is None):", "elif False:")]),
     ("same-lines comparison skipped", [("        elif got != want:", "        elif False:")]),
+    ("same-lines compares identities only", [("collect[cur] = [(ai, at) for (ai, at) in added]", "collect[cur] = [(ai, None) for (ai, at) in added]")]),
     ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")]),
     ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")]),
     ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')]),
