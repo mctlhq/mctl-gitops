@@ -26,12 +26,25 @@ become ready and the old pods keep serving (a stalled rollout, not an outage).
 | `GLOVO_BASKET_UI_CLIENT_ID`, `GLOVO_BASKET_UI_CLIENT_SECRET` | references only, via chart slot `glovoBasketUISecret` | unset | both needed or the page stays off (logged) | B2 |
 | `GLOVO_DB_URL` | `postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require`, credentials from Secret `mctl-api-glovo-runtime-db` | unset | `GLOVO_ENABLED=true` without it: refuses boot (no `AUDIT_DB_URL` fallback) | staged in #2563 (A15) |
 | `GLOVO_DB_RUNTIME_ROLE`, `GLOVO_DB_MIGRATION_ROLE` | `glovo_runtime`, `glovo_migrator` | unset | `GLOVO_ENABLED=true` without both: refuses boot | staged in #2563 (A15) |
-| `GLOVO_NON_SELECTABLE_TENANTS` | leave unset | `admins` | empty counts as unset. `admins` can never be the chosen team; every other team is selectable by an allowlisted member | none |
-| `OAUTH_DB_URL` | UNKNOWN, see Unknowns | falls back to `AUDIT_DB_URL` for the refresh store | `GLOVO_ENABLED=true` needs it set EXPLICITLY (`ExplicitOAuthDB`): refuses boot if only the fallback is in effect | B1 precondition |
+| `GLOVO_NON_SELECTABLE_TENANTS` | leave unset UNLESS the pilot team is `admins` (see below) | `admins` | empty counts as unset (cannot clear the default). With the default, `admins` can never be the chosen team; every other team is selectable by an allowlisted member | B1, conditional |
+| `OAUTH_DB_URL` | an explicit DSN whose real value and grants the OPERATOR has checked (names only; agents never read Secret data) | the code falls back to `AUDIT_DB_URL` for the refresh store; this canary does NOT accept that fallback | `GLOVO_ENABLED=true` needs it set EXPLICITLY (`ExplicitOAuthDB`): refuses boot if only the fallback is in effect | B1 precondition (operator check) |
 | `TENANT_AUTHZ_MODE` | already `principal` in gitops | | anything else: `GLOVO_ENABLED=true` refuses boot, and the page stays off | none |
 | `SELF_URL` | already `https://api.mctl.ai` | | the approval page origin and its `approval_url` origin come from it; the ZITADEL redirect is `<SELF_URL>/glovo/basket/approvals/callback` | none |
 | `MCTL_OIDC_PROVIDERS`, `ZITADEL_LINK_PROVIDER` | already set through `oidcProvidersSecret`; provider `zitadel` | provider `zitadel` | the page needs an entry with that name, and `MCTL_FEDERATION_DISABLED` off | none |
-| `WORK_ITEMS_DB_URL` | as decided by #2563/#2579 (legacy DSN preserved until the operator step) | falls back to `AUDIT_DB_URL` | the basket needs the work-items ledger non-nil. Which role it connects as must match the grants `ApplyGlovoApprovalSchema` issues, see runbook step D | D |
+| `WORK_ITEMS_DB_URL` | explicit DSN for the dedicated least-privilege role `mctl_api_workitems`, one physical database `mctl-api` (credential from Secret `mctl-api-workitems-db`, staged in #2563) | falls back to `AUDIT_DB_URL`; the canary does not rely on the fallback | the basket needs the work-items ledger non-nil (`GLOVO_BASKET_MCP_ENABLED=true` refuses boot without it). The role must match the grants `ApplyGlovoApprovalSchema` issues (runbook D1, D2) | W, before B1 |
+| `COMMERCE_DB_URL` | NOT needed, leave as it is | unset (commerce routes fall back to `AUDIT_DB_URL` or answer 503) | read only by the commerce routes and the command bridge (`cmd/api/main.go`, `cmd/api/glovo_bridge.go` at #1014); no basket code path reads it; the bridge is not enabled | none |
+
+**Pilot team `admins` (tentative, owner decision 2026-11-11).** The default
+`GLOVO_NON_SELECTABLE_TENANTS=admins` makes `admins` unselectable on purpose
+(it is the platform's own system tenant). Choosing it therefore needs one more
+B1 line, a non-empty comma-separated list that does not contain `admins`
+(empty does not work: it restores the default), for example a list naming only
+tenants that must stay excluded. This lowers a deliberate guard, so it is
+applied only after the owner's OAuth session and live `developer` membership
+of `admins` are proven read-only (`mctl_whoami` and the tenant membership read;
+no agent identity, no service principal stands in for the owner), and the line
+is part of the B1 PR, not of the generated diff above. If the proof fails, the
+canary uses another team and this line is not added.
 
 The allowlist is data, not env: `PUT
 /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` (human platform admin
@@ -241,15 +254,22 @@ index 085fbe937..d3ac6e48f 100644
 
 ## Unknowns (not determinable from this repository, read-only)
 
-1. Whether `OAUTH_DB_URL` is set explicitly in production. It is not in the
-   public gitops env; it could come from `mctl-api-secrets`. Secret data and
-   key names are not read by agents. If it is not set, B1 refuses the boot.
-   Remedy if it is not: an explicit `OAUTH_DB_URL` equal to `AUDIT_DB_URL`
-   (same database, same behaviour, now explicit), decided by the operator.
+1. Whether `OAUTH_DB_URL` is set explicitly in production. Facts: the live
+   Deployment spec has no literal `OAUTH_DB_URL` (only the `AUDIT_DB_URL` and
+   `LIFECYCLE_DB_URL` literals); it could still arrive through `envFrom`
+   Secret `mctl-api-secrets`, which agents do not read. This is a STEP, not an
+   open choice: the operator checks, names only, whether the Secret supplies
+   `OAUTH_DB_URL`, that its DSN is the intended database, and that the role has
+   the grants the refresh and team-grant stores need. If it is absent or wrong,
+   the operator supplies an explicit, separately reviewed value in the W PR.
+   There is NO automatic fallback to `AUDIT_DB_URL`: B1 does not start until
+   the check is recorded.
 2. Whether any other source (`mctl-api-secrets`, `mctl-api-events`,
    `mctl-api-zitadel-hook`, `mctl-api-orchestrator-devloop`) already supplies a
    `GLOVO_*` name. A stray malformed value would refuse the boot (the same
    concern as #2529 gate G4(b)). Operator names-only check, per #2529.
-3. Which team (tenant) the owner uses for the canary and whether the owner
-   already holds `developer` on it (the decision handler requires live
-   `developer` membership of the basket's team).
+3. Which team (tenant) the canary uses: tentatively `admins` (owner,
+   2026-11-11), only after proof of the owner's OAuth session and live
+   `developer` membership (see "Pilot team `admins`" above). Until proven it is
+   undecided. A second human account for the negative checks N6 and N8 is not
+   chosen; without a real second account those checks are reported UNPROVEN.
