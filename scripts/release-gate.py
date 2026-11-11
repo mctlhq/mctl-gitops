@@ -87,14 +87,14 @@ def _gates(root: Path, rev: str | None = None) -> list[dict]:
 
 
 def problems(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
-             today: datetime.date | None = None) -> list[str]:
+             today: datetime.date | None = None, image: str | None = None) -> list[str]:
     """Every reason to refuse. `files=None` is verify mode (whole tree)."""
     try:
         gates = _gates(root, rev)
         holds = _holds(_policy_doc(root, rev))
     except Exception as exc:  # noqa: BLE001 - unreadable gate is a refusal
         return [f"UNKNOWN: gate {GATE} unreadable: {type(exc).__name__}: {exc}"]
-    out: list[str] = hold_problems(root, holds, files, new_tag, today)
+    out: list[str] = hold_problems(root, holds, files, new_tag, today, image)
     for g in gates:
         paths = g["paths"]
         touched = paths if files is None else [p for p in paths if p in files]
@@ -248,16 +248,21 @@ def _bootstrap_tag(root: Path, hold: dict) -> str:
 
 
 def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_tag: str | None,
-                  today: datetime.date | None = None) -> list[str]:
-    """Refuse a held version unless an unexpired allow record names exactly that version.
+                  today: datetime.date | None = None, image: str | None = None) -> list[str]:
+    """Refuse a held version unless an allow record names exactly that version.
 
-    Bump mode (files given): judged on `new_tag`, only for a hold whose file is
-    in the bump. Verify mode: every hold, judged on the tag now in the file.
+    Bump mode (files given): a NEW write, judged on `new_tag`, only for a hold
+    whose file is in the bump and whose repository is the image being bumped
+    (`image`; unknown image = judged, fail closed). The record must be unexpired.
+    Verify mode: every hold, judged on the tag now in the file. That tag is
+    already deployed, so a record that exists counts as granted even after
+    `expires`: letting it lapse must not freeze every other release and PR.
+    Expiry only ever stops the next write of the held version.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
     out: list[str] = []
     for h in holds:
-        if files is not None and h["file"] not in files:
+        if files is not None and (h["file"] not in files or (image is not None and image != h["repository"])):
             continue
         try:
             current = _bootstrap_tag(root, h)
@@ -274,7 +279,7 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
         rec = [a for a in h["allow"] if a["version"] == version]
         if not rec:
             out.append(f"{h['name']}: {version} is held (from {h['held_from']}) and has no allow record in {GATE}")
-        elif rec[0]["expires"] < today:
+        elif files is not None and rec[0]["expires"] < today:
             out.append(f"{h['name']}: allow record for {version} expired on {rec[0]['expires']}")
     return out
 
@@ -336,8 +341,9 @@ def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
     return out
 
 
-def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None) -> int:
-    found = problems(root, files, new_tag, rev)
+def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
+        image: str | None = None) -> int:
+    found = problems(root, files, new_tag, rev, image=image)
     for line in found:
         print(f"::error::release gate: {line}", file=sys.stderr)
     if found:
@@ -521,6 +527,22 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
                 continue
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             (tmp / p).write_bytes(h)
+            # A push that changes the held tag is a new write: judged like a bump
+            # (expiry applies). An unchanged tag is only the deployed state.
+            try:
+                b = _blob(repo, base, p)
+                with tempfile.TemporaryDirectory() as t2:
+                    (Path(t2) / p).parent.mkdir(parents=True)
+                    (Path(t2) / p).write_bytes(b if b is not None else b"")
+                    old_tag = _bootstrap_tag(Path(t2), hold) if b is not None else None
+            except Exception:  # noqa: BLE001 - cannot tell whether it changed: judge as a write
+                old_tag = None
+            try:
+                new_t = _bootstrap_tag(tmp, hold)
+            except Exception:  # noqa: BLE001 - reported by the tree check below
+                continue
+            if new_t != old_tag:
+                viol.extend(hold_problems(tmp, [hold], [p], new_t, image=hold["repository"]))
         # The pushed tree must satisfy the parent's policy.
         # A file already reported as a violation (removed, unparsable) is not
         # also an unknown: the read worked, the content is what is wrong.
@@ -681,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("check")
     c.add_argument("--files", nargs="+", required=True)
     c.add_argument("--new-tag", required=True)
+    c.add_argument("--image", default=None, help="image being bumped; a hold for another repository is skipped")
     v = sub.add_parser("verify")
     for sp in (c, v):
         sp.add_argument("--policy-rev", default=None,
@@ -692,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.selftest:
         return selftest()
     if a.cmd == "check":
-        return run(Path(a.root), a.files, a.new_tag, a.policy_rev)
+        return run(Path(a.root), a.files, a.new_tag, a.policy_rev, a.image)
     if a.cmd == "verify":
         return run(Path(a.root), None, None, a.policy_rev)
     if a.cmd == "diff":

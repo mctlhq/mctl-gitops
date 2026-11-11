@@ -21,14 +21,20 @@
 # written (bump) or that is in the tree (verify), also when that tag sits in a
 # `values: |` block scalar of a bootstrap Application. Refused (exit 6):
 #   - a tag >= `held_from` with no `allow` record naming exactly that version;
-#   - an allow record that is expired, has no `grant` or `approved_by`, names a
-#     version below `held_from`, or appears twice for one version;
+#   - an allow record that has no `grant` or `approved_by`, names a version
+#     below `held_from`, or appears twice for one version;
+#   - a NEW write of a held version (bump, or a pushed tag change) whose allow
+#     is expired. Expiry gates writes only: a held version already in the tree
+#     stays verifiable while its record exists, so a lapsed record never freezes
+#     every other release and PR. Recovery after expiry is a reviewed PR that
+#     renews the record or moves mctl-api to an allowed version;
 #   - a file whose single image tag cannot be read: no `values: |` block, an
 #     unparseable block, a duplicate key, two image references, a repository
 #     other than `repository`, a tag that is not a string X.Y.Z.
 # Adding an `allow` record is a reviewed PR to this file (the grant is the
 # human decision); the workflows read this file from origin/main, never from
-# the commit they are about to push (`--policy-rev origin/main`).
+# the commit they are about to push (`--policy-rev origin/main`). A bump names
+# its image (`--image`): a hold for another repository is not judged.
 version_holds:
   - name: mctl-api-bootstrap
     issue: mctlhq/mctl-gitops#2528

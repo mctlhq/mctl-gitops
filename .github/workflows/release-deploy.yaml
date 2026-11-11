@@ -347,7 +347,7 @@ jobs:
           _gate = subprocess.run(
               [sys.executable, "scripts/release-gate.py", "check",
                "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag,
-               "--policy-rev", "origin/main"]
+               "--policy-rev", "origin/main", "--image", image_name]
           )
           if _gate.returncode != 0:
               print("ERROR: release gate refused this bump", file=sys.stderr)
