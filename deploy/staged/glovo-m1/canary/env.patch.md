@@ -63,15 +63,27 @@ behind a feature gate that answers 503 `not_ready` (`WorkerConfigured` is
 false); that is a side effect of the shared `GLOVO_ENABLED` switch, to be
 confirmed in step B1 (runbook), not something the basket uses.
 
-## Prerequisite, mctl-api chart
+## Prerequisite, mctl-api chart (mctl-api#1017, Draft, hold)
 
-`glovoBasketUISecret` slot in `helm/values.yaml` and `helm/templates/
-deployment.yaml`, mirroring `devLoopDecideSecret` (lines 58-70 and 242-250 of
-the chart at mctl-api `main`): two optional `secretKeyRef`s
-(`GLOVO_BASKET_UI_CLIENT_ID`, `GLOVO_BASKET_UI_CLIENT_SECRET`), a `fail` when
-the same name is also given in `env`, and a render test. #1007 has no slot
-(its description of the activation order says so). Ships with the release
-that carries the Basket code; until the slot exists, B2 cannot be applied.
+mctl-api#1017 (head `518cf5d2`) adds, inert until a values file uses them:
+
+- the `glovoBasketUISecret` slot in `helm/values.yaml` and
+  `helm/templates/deployment.yaml`, mirroring `devLoopDecideSecret`: two
+  optional `secretKeyRef`s (`GLOVO_BASKET_UI_CLIENT_ID`,
+  `GLOVO_BASKET_UI_CLIENT_SECRET`), a `fail` when the same name is also given
+  in `env`, and a render test (#1007 has no slot);
+- `ingress.extraPaths` (default `[]`) and the per-host `paths` list, used by
+  diff B2 (`extraPaths: [/glovo]`) and by the ingress diff
+  (`ingress.patch.md`).
+
+The chart source is PINNED to a mctl-api commit in
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`
+(`targetRevision`, since mctlhq/mctl-gitops#2599), so #1017 does not reach
+production when it merges to mctl-api `main`. It reaches production in the
+4.156.0 release PR, which moves the pin and the image tag together under the
+#2590 version hold (runbook R1). Until then B2 cannot render: the slot and
+`extraPaths` do not exist in the pinned chart. B1 needs no chart change and
+applies on the pin as it is today.
 
 ## ROLLOUT_MARKER: which steps need a bump
 
@@ -85,22 +97,24 @@ or the `zitadel-iac` Job adding the two client keys after the pods started).
 | Change | Pods roll without the marker? | Marker bump |
 | --- | --- | --- |
 | B1: `GLOVO_ENABLED`, `GLOVO_MCP_RESOURCE`, `GLOVO_BASKET_MCP_ENABLED` | yes (env changed) | bump, recommended |
-| B2: slot + `GLOVO_BASKET_UI_ENABLED` | yes (env and `secretKeyRef` changed) | bump, REQUIRED in the sense that the `zitadel-iac` apply with the two keys must precede it; bump only after that apply (see the marker comment in the file) |
+| B2: slot + `extraPaths` + `GLOVO_BASKET_UI_ENABLED` | yes (env and `secretKeyRef` changed) | bump, REQUIRED in the sense that the `zitadel-iac` apply with the two keys must precede it; bump only after that apply (see the marker comment in the file) |
 | Rotating the ZITADEL client secret, or a `mctl-api-glovo-runtime-db` sync | no | REQUIRED, alone, after the Secret changed |
 | Kill switch, flags off | yes | bump, recommended |
 | Ingress host add or remove | no pod change at all | not needed |
 
 ## Diff B1: basket MCP on, approval page off
 
-`git apply --check` was clean against main at the time of staging
-(9c87fe961). Extract the fenced diff.
+Generated against main `391c9a7a0`; `git apply --check` is clean on that tree
+(re-run it against main on the activation day and regenerate if main moved).
+`2026-MM-DD` in the marker is filled in on the activation day. Extract the
+fenced diff and apply it from the repository root.
 
 ```diff
 diff --git a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-index eace5f3d9..45ea58587 100644
+index d2167a689..085fbe937 100644
 --- a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
 +++ b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-@@ -63,10 +63,10 @@ spec:
+@@ -68,10 +68,10 @@ spec:
              # start, so when a rollout depends on generated configuration
              # (for example zitadel-iac output), bump only after it is applied.
              # The line below records why the current value was set.
@@ -115,7 +129,7 @@ index eace5f3d9..45ea58587 100644
              ARGOCD_URL: https://ops.mctl.ai
              # Repositories the orchestrator DevLoop principal may start or
              # read a DevLoop for (mctlhq/mctl-api#963), exact and
-@@ -366,6 +366,17 @@ spec:
+@@ -371,6 +371,17 @@ spec:
              # (envFromExtraSecret below). Without both the endpoint answers
              # 401/503 and nothing is published.
              EVENTS_VALKEY_URL: "redis://github-producer@valkey.platform-events.svc.cluster.local:6379/0"
@@ -135,19 +149,35 @@ index eace5f3d9..45ea58587 100644
  
 ```
 
-## Diff B2: approval page on (applies on top of B1)
+## Diff B2: approval page on, plus the `/glovo` route on api.mctl.ai (applies on top of B1)
 
 Precondition: the `zitadel-iac` change of #2582 is applied and the Secret has
 the two keys (read-only check is by effect, not by reading the Secret: the
 page logs `glovo basket approval page enabled` on start, or one ERROR naming
-what is missing). Also needs the chart slot above, released.
+what is missing). Also needs the chart of mctl-api#1017, released and pinned
+(see the prerequisite above). The diff also carries `extraPaths: [/glovo]`,
+so the page route reaches Traefik in the same PR as the flag that serves it.
+`git apply --check` is clean on the tree B1 produces (main `391c9a7a0`).
 
 ```diff
 diff --git a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-index 45ea58587..fdb675ea1 100644
+index 085fbe937..d3ac6e48f 100644
 --- a/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
 +++ b/platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
-@@ -63,10 +63,11 @@ spec:
+@@ -53,6 +53,12 @@ spec:
+             enabled: true
+             className: traefik
+             tls: true
++            # Routes the approval page (/glovo/basket/approvals/*, served on
++            # api.mctl.ai) through Traefik. Empty by default in the chart
++            # (mctl-api#1017); set it only together with
++            # GLOVO_BASKET_UI_ENABLED. Rollback: delete this key.
++            extraPaths:
++              - /glovo
+             hosts:
+               - host: api.mctl.ai
+ 
+@@ -68,10 +74,11 @@ spec:
              # start, so when a rollout depends on generated configuration
              # (for example zitadel-iac output), bump only after it is applied.
              # The line below records why the current value was set.
@@ -163,7 +193,7 @@ index 45ea58587..fdb675ea1 100644
              ARGOCD_URL: https://ops.mctl.ai
              # Repositories the orchestrator DevLoop principal may start or
              # read a DevLoop for (mctlhq/mctl-api#963), exact and
-@@ -377,6 +378,11 @@ spec:
+@@ -382,6 +389,11 @@ spec:
              GLOVO_ENABLED: "true"
              GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp
              GLOVO_BASKET_MCP_ENABLED: "true"
@@ -175,7 +205,7 @@ index 45ea58587..fdb675ea1 100644
              # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
              # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
  
-@@ -477,6 +483,15 @@ spec:
+@@ -475,6 +487,15 @@ spec:
            # that one does need the keys: mctl-api refuses to start in those
            # modes without them. Rollback: delete this line.
            oauthZitadelSecret: mctl-api-oidc-zitadel
@@ -185,8 +215,8 @@ index 45ea58587..fdb675ea1 100644
 +          # confidential `mctl-api-glovo-basket` client that zitadel-iac
 +          # writes into the same Secret (mctl-gitops#2582). Optional refs, so
 +          # a Secret without the keys leaves the page off. Needs the chart
-+          # slot of the same name (mctl-api chart change). Rollback: delete
-+          # this line and GLOVO_BASKET_UI_ENABLED.
++          # slot of the same name (mctl-api#1017). Rollback: delete this line
++          # and GLOVO_BASKET_UI_ENABLED.
 +          glovoBasketUISecret: mctl-api-oidc-zitadel
            {{- if .Values.usageWriter.enabled }}
  
