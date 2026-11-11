@@ -1,0 +1,9 @@
+{
+  "_comment": "Bypass actors allowed on the rulesets of mctlhq/mctl-gitops (#2543), read by scripts/check-ruleset-bypass-actors.py. Every entry names ONE actor by an integer actor_id; a DeployKey entry (actor_id is always null) can never be listed. A ruleset not named here may have no bypass actors at all. `expires` marks a transitional entry: after that date it is a finding. This file states the TARGET; it changes in the same PR as the matching operator step in docs/runbooks/main-protection-bypass-actors.md, never ahead of it. Today it is empty on purpose, so the live check is red until the DeployKey entry is gone.",
+  "rulesets": {
+    "18465404": {
+      "name": "main-protection",
+      "bypass_actors": []
+    }
+  }
+}
