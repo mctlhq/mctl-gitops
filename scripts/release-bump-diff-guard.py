@@ -12,6 +12,11 @@ not be read. Both are a refusal for the callers (publish-pr, auto-merge.yml):
 "could not read" is never "nothing to object to", and an empty diff is not a
 pass either.
 
+Options (used by release-bump-apply.sh after a conflict resolution only):
+--strict-order refuses a tag move whose tags are not both MAJOR.MINOR.PATCH;
+--same-lines-as PATCH requires the changed lines to be exactly the ones PATCH
+changes.
+
 New, deleted, renamed and mode-changed files, binary patches, workflow files,
 scripts and the gate policy are all outside what a bump may touch. The
 allowlist mirrors ALLOWED_PREFIXES of release-deploy.yaml and gitops-bump.yaml.
@@ -54,8 +59,14 @@ def shape(line: str):
     return None
 
 
-def judge(diff: str) -> list:
-    """Return the list of reasons to refuse; empty means every change is a tag move."""
+def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
+    """Return the list of reasons to refuse; empty means every change is a tag move.
+
+    strict_order: a tag move whose two tags are not both plain MAJOR.MINOR.PATCH
+    is refused too (they cannot be shown to go forward), not just left unjudged.
+    collect: when a dict, filled with file -> identities of the changed lines in
+    order, for the caller to compare two diffs.
+    """
     problems = []
     files = []
     cur = None
@@ -69,11 +80,15 @@ def judge(diff: str) -> list:
         if len(removed) != len(added):
             problems.append(f"{cur}: {len(removed)} removed and {len(added)} added lines do not pair")
             return
+        if collect is not None:
+            collect[cur] = [ai for (ai, _) in added]
         for (ri, rt), (ai, at) in zip(removed, added):
             if ri != ai:
                 problems.append(f"{cur}: a changed line moves more than the tag ({ri} -> {ai})")
             elif rt == at:
                 problems.append(f"{cur}: a changed line keeps the same tag")
+            elif strict_order and (_semver(rt) is None or _semver(at) is None):
+                problems.append(f"{cur}: tags cannot be ordered ({rt} -> {at})")
             elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):
                 # A re-run of an older release must not roll a newer tag back.
                 # Tags that are not plain MAJOR.MINOR.PATCH cannot be ordered
@@ -139,12 +154,40 @@ def judge(diff: str) -> list:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    strict_order = "--strict-order" in argv
+    same_as = None
+    if "--same-lines-as" in argv:
+        i = argv.index("--same-lines-as")
+        if i + 1 >= len(argv):
+            print("release-bump-diff-guard: --same-lines-as needs a patch path", file=sys.stderr)
+            return 2
+        same_as = argv[i + 1]
     try:
         data = sys.stdin.buffer.read().decode("utf-8")
     except Exception as exc:  # noqa: BLE001
         print(f"release-bump-diff-guard: cannot read the diff: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
-    problems = judge(data)
+    got = {}
+    problems = judge(data, strict_order=strict_order, collect=got)
+    if same_as is not None:
+        # The resolved change must touch exactly the lines the bump patch itself
+        # touches: a conflict resolution that took the patch side of a whole file
+        # would otherwise also revert a neighbouring image line changed on main.
+        try:
+            with open(same_as, "rb") as fh:
+                patch = fh.read().decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            print(f"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        want = {}
+        # Only the changed lines are read from the patch; its mail headers and
+        # signature are not judged here (the resolved diff is, above).
+        judge(patch, collect=want)
+        if not want:
+            problems.append("the bump patch names no changed line")
+        elif got != want:
+            problems.append(f"the resolved change touches {got}, the bump patch touches {want}")
     if problems:
         for p in problems:
             print(f"release-bump-diff-guard: REFUSED: {p}", file=sys.stderr)

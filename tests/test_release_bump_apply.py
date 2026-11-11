@@ -27,8 +27,9 @@ def sh(cwd, *args, check=True, input=None):
     return r
 
 
-def content(tag, other="keep"):
-    return f'image:\n  repository: ghcr.io/mctlhq/foo\n  tag: "{tag}"\nconfig:\n  other: {other}\n'
+def content(tag, other="keep", worker="1.0.0"):
+    return (f'server:\n  repository: ghcr.io/mctlhq/foo\n  tag: "{tag}"\n'
+            f'worker:\n  repository: ghcr.io/mctlhq/foo-worker\n  tag: "{worker}"\nconfig:\n  other: {other}\n')
 
 
 def setup(script_text):
@@ -44,10 +45,10 @@ def setup(script_text):
     return d
 
 
-def make_patch(d, tag, name):
+def make_patch(d, tag, name, worker="1.0.0"):
     """A bump commit on top of the current HEAD, written as a patch, then dropped."""
     base = sh(d, "git", "rev-parse", "HEAD").stdout.strip()
-    (d / FILE).write_text((d / FILE).read_text().replace('tag: "' + (d / FILE).read_text().split('tag: "')[1].split('"')[0] + '"', f'tag: "{tag}"'))
+    (d / FILE).write_text(content(tag, worker=worker))
     sh(d, "git", "add", FILE)
     sh(d, "git", "commit", "-q", "-m", f"bump {tag}")
     p = d / f"{name}.patch"
@@ -63,6 +64,10 @@ def apply(d, patch):
 
 def tag_of(d):
     return (d / FILE).read_text().split('tag: "')[1].split('"')[0]
+
+
+def worker_of(d):
+    return (d / FILE).read_text().split('tag: "')[2].split('"')[0]
 
 
 def cases(script_text):
@@ -105,6 +110,25 @@ def cases(script_text):
     rc, log = apply(d, a)
     case("a conflict that would revert an unrelated line is refused", rc != 0, True)
 
+    # 4b. the neighbouring image line was moved on main; the patch side would put it back
+    #     (a FORWARD move for that line, so only the same-lines check can see it)
+    d = setup(script_text)
+    a = make_patch(d, "1.2.0", "a")
+    (d / FILE).write_text(content("1.1.5", worker="0.9.0"))
+    sh(d, "git", "commit", "-qam", "main moved the worker")
+    rc, log = apply(d, a)
+    case("a conflict that would revert a neighbouring image line is refused", rc != 0, True)
+
+    # 4c. tags that cannot be ordered are not resolved
+    d = setup(script_text)
+    (d / FILE).write_text(content("main-aaa"))
+    sh(d, "git", "commit", "-qam", "sha tag")
+    a = make_patch(d, "main-bbb", "a")
+    (d / FILE).write_text(content("main-ccc"))
+    sh(d, "git", "commit", "-qam", "main moved")
+    rc, log = apply(d, a)
+    case("a conflict between tags that cannot be ordered is refused", rc != 0, True)
+
     # 5. a patch that does not apply at all is a failure, not a silent skip
     d = setup(script_text)
     bad = d / "bad.patch"
@@ -116,9 +140,11 @@ def cases(script_text):
 
 MUTANTS = [
     ("conflict resolved to main's side", "git checkout --theirs", "git checkout --ours"),
-    ("guard skipped after resolution", "git diff \"$(git rev-parse HEAD~1)\" HEAD | python3 scripts/release-bump-diff-guard.py ||", "true ||"),
+    ("guard skipped after resolution", "git diff \"$(git rev-parse HEAD~1)\" HEAD | python3 scripts/release-bump-diff-guard.py --strict-order --same-lines-as \"$patch\" ||", "true ||"),
     ("guard failure ignored", "  exit 1\n}\n", "  true\n}\n"),
     ("am failure treated as success", "if git am --3way \"$patch\"; then\n  exit 0\nfi", "git am --3way \"$patch\" || true\nexit 0"),
+    ("neighbouring line may be reverted", ' --strict-order --same-lines-as "$patch"', " --strict-order"),
+    ("unorderable tags resolved", "--strict-order --same-lines-as", "--same-lines-as"),
     ("conflict continue skipped", "GIT_EDITOR=true git am --continue", "true"),
 ]
 

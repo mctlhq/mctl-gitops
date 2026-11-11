@@ -7,9 +7,10 @@
 # the same image can land in between, and then the same tag line conflicts. A
 # bump is only an image tag move, so the conflict is resolved in favour of the
 # patch (the newer release wins) and the result is then judged against main by
-# release-bump-diff-guard.py: anything but paired image-tag lines (an unrelated
-# line of the same file reverted by taking the patch side, or a tag moving
-# backwards because an OLDER release lost the race) is refused. Failing here is
+# release-bump-diff-guard.py: anything but a forward move of exactly the lines
+# the patch bumps is refused (a neighbouring line of the same file reverted by
+# taking the patch side, a tag that cannot be ordered, or a tag moving backwards
+# because an OLDER release lost the race). Failing here is
 # visible and never pushes; the caller stops on a non-zero exit.
 set -euo pipefail
 
@@ -34,7 +35,10 @@ done <<< "$conflicted"
 GIT_EDITOR=true git am --continue
 
 # The resolved commit must still be nothing but an image tag move over main.
-git diff "$(git rev-parse HEAD~1)" HEAD | python3 scripts/release-bump-diff-guard.py || {
-  echo "::error::the conflict resolution is not a plain image tag move over main (a newer bump may already be there); refusing"
+# --strict-order: tags that cannot be ordered (main-<sha>, staging-N) cannot be
+# shown to move forward, so they are not resolved here. --same-lines-as: the
+# patch side of a whole file must not revert a neighbouring line changed on main.
+git diff "$(git rev-parse HEAD~1)" HEAD | python3 scripts/release-bump-diff-guard.py --strict-order --same-lines-as "$patch" || {
+  echo "::error::the conflict resolution is not a forward image tag move of exactly the bumped lines over main; refusing"
   exit 1
 }

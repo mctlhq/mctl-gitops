@@ -83,6 +83,45 @@ def run(script, text):
     return subprocess.run([sys.executable, str(script)], input=text.encode(), capture_output=True)
 
 
+def run_opts(script, text, args, patch=None):
+    """Run with options; `patch` (text) is written to a file and passed after --same-lines-as."""
+    with tempfile.TemporaryDirectory() as d:
+        args = list(args)
+        if patch is not None:
+            pf = pathlib.Path(d) / "bump.patch"
+            pf.write_text(patch)
+            args += ["--same-lines-as", str(pf)]
+        return subprocess.run([sys.executable, str(script), *args], input=text.encode(), capture_output=True)
+
+
+TWO = [('  tag: "1.0.0"', '  tag: "1.1.0"'), ('  tag: "2.0.0"', '  tag: "2.1.0"')]
+SIG = "\n-- \n2.39.0\n\n"
+PATCH_HEAD = "From abc Mon Sep 17 00:00:00 2001\nFrom: t <t@t>\nSubject: [PATCH] bump\n\n---\n"
+
+
+def option_verdicts(script):
+    out = []
+
+    def case(name, r, want):
+        ok = (r.returncode == 0) if want == "accept" else (r.returncode == 1 and b"REFUSED" in r.stderr)
+        out.append((name, ok, r))
+
+    case("strict-order accepts a forward semver move", run_opts(script, diff(SVC, TAGS), ["--strict-order"]), "accept")
+    case("strict-order refuses tags that cannot be ordered", run_opts(script, diff(SVC, [("  tag: sha-aaa", "  tag: sha-bbb")]), ["--strict-order"]), "refuse")
+    case("strict-order refuses a move between a semver and a non-semver tag", run_opts(script, diff(SVC, [("  tag: 1.0.0", "  tag: sha-bbb")]), ["--strict-order"]), "refuse")
+    patch = PATCH_HEAD + diff(SVC, TAGS) + SIG
+    case("same-lines-as accepts the same lines (format-patch signature ignored)", run_opts(script, diff(SVC, TAGS), [], patch=patch), "accept")
+    case("same-lines-as refuses an extra changed line of the same identity", run_opts(script, diff(SVC, TWO), [], patch=patch), "refuse")
+    case("same-lines-as refuses a different file", run_opts(script, diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]), [], patch=patch), "refuse")
+    case("same-lines-as refuses a different identity", run_opts(script, diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]), [], patch=PATCH_HEAD + diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]) + SIG), "refuse")
+    case("same-lines-as refuses a patch that changes no line", run_opts(script, diff(SVC, TAGS), [], patch=PATCH_HEAD + SIG), "refuse")
+    r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as", "/nonexistent/bump.patch"])
+    out.append(("same-lines-as with an unreadable patch exits 2", r.returncode == 2, r))
+    r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as"])
+    out.append(("same-lines-as without a path exits 2", r.returncode == 2, r))
+    return out
+
+
 def verdicts(script):
     out = []
     for n, t in GOOD.items():
@@ -94,7 +133,7 @@ def verdicts(script):
         out.append((f"refuses: {n}", r.returncode == 1 and b"REFUSED" in r.stderr, r))
     r = subprocess.run([sys.executable, str(script)], input=b"\xff\xfe", capture_output=True)
     out.append(("refuses: undecodable input (exit 2)", r.returncode == 2, r))
-    return out
+    return out + option_verdicts(script)
 
 
 for n, ok, r in verdicts(GUARD):
@@ -125,6 +164,11 @@ MUT = [
      [("                in_header = False\n                continue", "                continue")]),
     ("a tag may move backwards", [("elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):", "elif False:")]),
     ("semver compared as strings", [("_semver(at) < _semver(rt)", "at < rt")]),
+    ("strict-order ignored", [("    strict_order = \"--strict-order\" in argv", "    strict_order = False")]),
+    ("unorderable tags pass strict-order", [("elif strict_order and (_semver(rt) is None or _semver(at) is None):", "elif False:")]),
+    ("same-lines comparison skipped", [("        elif got != want:", "        elif False:")]),
+    ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")]),
+    ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")]),
     ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')]),
 ]
 for name, reps in MUT:

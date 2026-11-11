@@ -61,10 +61,12 @@ on the tree to push in each publishing job, and again as the `validate` check.
 - `bump` builds its patch from main as it was when that job ran, so two close
   releases of one image conflict on the same tag line. Both publishing jobs
   apply the patch with `scripts/release-bump-apply.sh`: a conflict is resolved
-  in favour of the patch (the tag bump is the whole change) and the result is
-  judged against main by the diff guard, which refuses anything but paired tag
-  lines, so an older release that lost the race, or a conflict that would revert
-  an unrelated line, fails red instead of landing.
+  in favour of the patch (the newer release wins) and the result is judged
+  against main by the diff guard with `--strict-order --same-lines-as <patch>`.
+  It lands only if it is a FORWARD MAJOR.MINOR.PATCH move of exactly the lines
+  the patch bumps. An older release that lost the race, tags that cannot be
+  ordered (`main-<sha>`, `staging-N`), or a resolution that would revert a
+  neighbouring image line changed on main, fail red instead of landing.
 - The bump branch is `release-bump/<image basename>-<tag>` in both workflows, so
   a bump opened by either is seen (and superseded) by the other.
 - A DIRTY PR can still arise if an unrelated PR touches the same lines; the
