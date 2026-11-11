@@ -44,11 +44,11 @@ containerSecurityContext:
   readOnlyRootFilesystem: true
 resources:
   requests:
-    cpu: 50m
-    memory: 192Mi
+    cpu: 100m
+    memory: 256Mi
   limits:
-    cpu: 250m
-    memory: 384Mi
+    cpu: 500m
+    memory: 1024Mi
 env:
   NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   PORT: "8080"
