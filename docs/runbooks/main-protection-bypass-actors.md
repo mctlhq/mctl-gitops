@@ -266,7 +266,10 @@ the repository and compares the bypass actors with
 unknown. A null or non-integer `actor_id`, an actor that is not allowlisted,
 more actors than allowlist entries, an expired transitional entry, or
 `main-protection` missing, disabled, no longer covering `main` (include or
-exclude), or missing one of its `required_rules` is a finding. A failed,
+exclude, matched the way GitHub does: a single `*` does not cross `/`),
+missing one of its `required_rules`, requiring fewer approvals than
+`min_approving_review_count`, or missing a context in
+`required_status_checks` is a finding. A failed,
 partial or malformed read, or a response without `bypass_actors`, is
 unknown, never clean.
 

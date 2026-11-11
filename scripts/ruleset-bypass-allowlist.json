@@ -4,6 +4,8 @@
     "18465404": {
       "name": "main-protection",
       "required_rules": ["deletion", "non_fast_forward", "pull_request", "required_status_checks"],
+      "min_approving_review_count": 1,
+      "required_status_checks": ["validate", "reserved-hosts", "cloudflare-plan"],
       "bypass_actors": []
     }
   }

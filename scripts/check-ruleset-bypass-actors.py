@@ -15,7 +15,9 @@ A finding is:
 - more bypass actors on a ruleset than its allowlist has entries;
 - a ruleset named in the allowlist that a complete listing does not contain,
   or that is not `active`, or whose include/exclude no longer covers
-  refs/heads/main, or that lost a rule type listed in its `required_rules`.
+  refs/heads/main, or that lost a rule type listed in its `required_rules`,
+  requires fewer approvals than `min_approving_review_count`, or dropped a
+  context listed in `required_status_checks`.
 
 "Could not observe" is never "observed absent". A failed, partial (a later
 page failing), malformed or truncated read is UNKNOWN. GitHub omits
@@ -140,12 +142,48 @@ def list_rulesets(repo, token, fetcher):
     return out
 
 
-def _matches_main(patterns):
-    """Does any ref_name pattern select main? `~DEFAULT_BRANCH` is main here."""
+def _ref_glob(pattern):
+    """GitHub ref patterns match like File.fnmatch with FNM_PATHNAME: `*` and
+    `?` stop at `/`, only `**` crosses it."""
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _matches_main(patterns, strict):
+    """Does any ref_name pattern select main? `~DEFAULT_BRANCH` is main here.
+
+    strict (include side): GitHub's pathname-aware match, so a pattern such as
+    `refs/*` is not taken to cover main. Not strict (exclude side): also the
+    permissive fnmatch, which errs toward a finding."""
     for p in patterns:
-        if p in ("~ALL", "~DEFAULT_BRANCH") or fnmatch.fnmatchcase(MAIN_REF, p):
+        if p in ("~ALL", "~DEFAULT_BRANCH") or _ref_glob(p).match(MAIN_REF):
+            return True
+        if not strict and fnmatch.fnmatchcase(MAIN_REF, p):
             return True
     return False
+
+
+def _rule_params(rules, rtype, rid):
+    for r in rules:
+        if r.get("type") == rtype:
+            params = r.get("parameters")
+            if not isinstance(params, dict):
+                raise ReadError(f"ruleset {rid}: {rtype} rule has no parameters")
+            return params
+    return None
 
 
 def _actor_key(a):
@@ -213,6 +251,11 @@ def validate_allowlist(allowlist):
                 if not isinstance(e["expires"], str):
                     raise ValueError(f"allowlist entry {rid!r}: expires must be a YYYY-MM-DD string")
                 datetime.date.fromisoformat(e["expires"])
+        if "min_approving_review_count" in spec and not _is_int(spec["min_approving_review_count"]):
+            raise ValueError(f"allowlist entry {rid!r}: min_approving_review_count must be an integer")
+        ctxs = spec.get("required_status_checks", [])
+        if not isinstance(ctxs, list) or not all(isinstance(c, str) for c in ctxs):
+            raise ValueError(f"allowlist entry {rid!r}: required_status_checks must be a list of contexts")
         req = spec.get("required_rules", [])
         if not isinstance(req, list) or not all(isinstance(r, str) for r in req):
             raise ValueError(f"allowlist entry {rid!r}: required_rules must be a list of rule types")
@@ -252,7 +295,7 @@ def scan(token, allowlist, fetcher=fetch, repo=REPO, today=None):
                 if not isinstance(inc, list) or not isinstance(exc, list) \
                         or not all(isinstance(x, str) for x in inc + exc):
                     raise ReadError(f"ruleset {rid}: conditions.ref_name malformed")
-                if not _matches_main(inc) or _matches_main(exc):
+                if not _matches_main(inc, strict=True) or _matches_main(exc, strict=False):
                     findings.append(f"ruleset {rid}: does not cover {MAIN_REF} "
                                     f"(include {inc}, exclude {exc})")
                 rules = detail.get("rules")
@@ -262,6 +305,25 @@ def scan(token, allowlist, fetcher=fetch, repo=REPO, today=None):
                 for want in spec.get("required_rules", []):
                     if want not in present:
                         findings.append(f"ruleset {rid}: required rule {want!r} is missing")
+                if "min_approving_review_count" in spec:
+                    pr = _rule_params(rules, "pull_request", rid)
+                    n = pr.get("required_approving_review_count") if pr is not None else None
+                    if pr is not None and not _is_int(n):
+                        raise ReadError(f"ruleset {rid}: required_approving_review_count malformed")
+                    if pr is not None and n < spec["min_approving_review_count"]:
+                        findings.append(f"ruleset {rid}: pull_request requires {n} approvals, "
+                                        f"fewer than {spec['min_approving_review_count']}")
+                if "required_status_checks" in spec:
+                    sc = _rule_params(rules, "required_status_checks", rid)
+                    if sc is not None:
+                        checks = sc.get("required_status_checks")
+                        if not isinstance(checks, list) or not all(
+                                isinstance(c, dict) and isinstance(c.get("context"), str) for c in checks):
+                            raise ReadError(f"ruleset {rid}: required_status_checks malformed")
+                        have = {c["context"] for c in checks}
+                        for ctx in spec["required_status_checks"]:
+                            if ctx not in have:
+                                findings.append(f"ruleset {rid}: required status check {ctx!r} is missing")
             observed.append(rid)
         except ReadError as e:
             unknown.append(str(e))

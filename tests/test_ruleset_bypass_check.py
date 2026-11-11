@@ -44,7 +44,7 @@ def ruleset(rid, name, actors, enforcement="active", include=("refs/heads/main",
     return {"id": rid, "name": name, "target": "branch", "enforcement": enforcement,
             "bypass_actors": actors,
             "conditions": {"ref_name": {"include": list(include), "exclude": []}},
-            "rules": [{"type": r} for r in RULES]}
+            "rules": [{"type": r, **({"parameters": copy.deepcopy(PARAMS[r])} if r in PARAMS else {})} for r in RULES]}
 
 
 def integ(app_id, mode="always"):
@@ -52,6 +52,9 @@ def integ(app_id, mode="always"):
 
 
 RULES = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]
+PARAMS = {"pull_request": {"required_approving_review_count": 1},
+          "required_status_checks": {"required_status_checks": [
+              {"context": c, "integration_id": 15368} for c in ("cloudflare-plan", "reserved-hosts", "validate")]}}
 DEPLOY_KEY = {"actor_id": None, "actor_type": "DeployKey", "bypass_mode": "always"}
 
 
@@ -70,6 +73,8 @@ def world(protection_actors, extra=None):
 
 def allow(*entries, rules=RULES):
     return {"rulesets": {"18465404": {"name": "main-protection", "required_rules": list(rules),
+                                      "min_approving_review_count": 1,
+                                      "required_status_checks": ["validate", "reserved-hosts", "cloudflare-plan"],
                                       "bypass_actors": list(entries)}}}
 
 
@@ -184,7 +189,15 @@ for label, inc, exc in (("exclude refs/heads/main", ["refs/heads/main"], ["refs/
     check(f"MUTATION main excluded ({label}) -> findings",
           code == 10 and any("does not cover" in x for x in f), f"{code} {f}")
 
-for label, inc in (("~ALL", ["~ALL"]), ("glob refs/heads/*", ["refs/heads/*"]),
+for label, inc in (("refs/*", ["refs/*"]), ("refs/heads/*/x", ["refs/heads/*/x"]),
+                   ("ref?heads/main", ["refs?heads/main"])):
+    doc = world([integ(BUMP_APP)])
+    doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"] = {"include": inc, "exclude": []}
+    code, f, u, _ = run(doc)
+    check(f"MUTATION include {label} (single * or ? does not cross /) -> findings",
+          code == 10 and any("does not cover" in x for x in f), f"{code} {f}")
+
+for label, inc in (("~ALL", ["~ALL"]), ("glob refs/heads/*", ["refs/heads/*"]), ("refs/**", ["refs/**"]),
                    ("~DEFAULT_BRANCH", ["~DEFAULT_BRANCH"])):
     doc = world([integ(BUMP_APP)])
     doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"] = {"include": inc, "exclude": []}
@@ -202,6 +215,33 @@ doc = world([integ(BUMP_APP)])
 doc[f"/repos/{REPO}/rulesets/18465404"]["rules"] = []
 code, f, u, _ = run(doc)
 check("MUTATION every rule removed -> findings", code == 10, f"{code} {f}")
+
+doc = world([integ(BUMP_APP)])
+for r in doc[f"/repos/{REPO}/rulesets/18465404"]["rules"]:
+    if r["type"] == "pull_request":
+        r["parameters"]["required_approving_review_count"] = 0
+code, f, u, _ = run(doc)
+check("MUTATION approvals lowered to 0 -> findings", code == 10 and any("approvals" in x for x in f), f"{code} {f}")
+
+for ctx in ("validate", "reserved-hosts", "cloudflare-plan"):
+    doc = world([integ(BUMP_APP)])
+    for r in doc[f"/repos/{REPO}/rulesets/18465404"]["rules"]:
+        if r["type"] == "required_status_checks":
+            r["parameters"]["required_status_checks"] = [
+                c for c in r["parameters"]["required_status_checks"] if c["context"] != ctx]
+    code, f, u, _ = run(doc)
+    check(f"MUTATION status check {ctx} dropped -> findings", code == 10 and any(ctx in x for x in f), f"{code} {f}")
+
+for label, mut in (("pull_request without parameters", lambda r: r.pop("parameters") if r["type"] == "pull_request" else None),
+                   ("approval count not an int", lambda r: r["parameters"].update(required_approving_review_count="1")
+                    if r["type"] == "pull_request" else None),
+                   ("status checks not a list", lambda r: r["parameters"].update(required_status_checks="validate")
+                    if r["type"] == "required_status_checks" else None)):
+    doc = world([integ(BUMP_APP)])
+    for r in doc[f"/repos/{REPO}/rulesets/18465404"]["rules"]:
+        mut(r)
+    code, f, u, _ = run(doc)
+    check(f"malformed rule parameters ({label}) -> unknown", code == 20, f"{code} {u}")
 
 # 3. Could not observe is UNKNOWN (20), never clean, and outranks findings.
 doc = world([integ(BUMP_APP)])
