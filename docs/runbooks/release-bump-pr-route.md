@@ -58,7 +58,15 @@ on the tree to push in each publishing job, and again as the `validate` check.
   environment, no secret, read-only access, and outside the `gitops-bump`
   concurrency group (which in gitops-bump.yaml now covers only publish-direct
   and publish-pr), so a 50-minute wait cannot hold or cancel other bumps.
-- The diff guard still refuses a downgrade against main.
+- `bump` builds its patch from main as it was when that job ran, so two close
+  releases of one image conflict on the same tag line. Both publishing jobs
+  apply the patch with `scripts/release-bump-apply.sh`: a conflict is resolved
+  in favour of the patch (the tag bump is the whole change) and the result is
+  judged against main by the diff guard, which refuses anything but paired tag
+  lines, so an older release that lost the race, or a conflict that would revert
+  an unrelated line, fails red instead of landing.
+- The bump branch is `release-bump/<image basename>-<tag>` in both workflows, so
+  a bump opened by either is seen (and superseded) by the other.
 - A DIRTY PR can still arise if an unrelated PR touches the same lines; the
   wait times out red and a human rebases or re-runs the release.
 

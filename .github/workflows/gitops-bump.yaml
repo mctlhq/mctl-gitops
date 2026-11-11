@@ -480,7 +480,7 @@ jobs:
           set -euo pipefail
           git config user.email "ci@mctl.ai"
           git config user.name  "mctl-ci"
-          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"
           # Release gate on the tree about to be pushed (see release-deploy).
           python3 scripts/release-gate.py verify --policy-rev origin/main
           git push
@@ -536,7 +536,7 @@ jobs:
           set -euo pipefail
           git config user.name "mctl-gitops-pr[bot]"
           git config user.email "353875018+mctl-gitops-pr[bot]@users.noreply.github.com"
-          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"
           git commit --amend --reset-author --no-edit --trailer "Agent: none"
 
       # Same shape check the merge step applies: only image tags move.

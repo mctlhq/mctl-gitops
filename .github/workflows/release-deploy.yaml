@@ -578,7 +578,7 @@ jobs:
           set -euo pipefail
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-ci"
-          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"
 
           # Concurrent release-deploy runs race to push here — e.g. a repo that
           # ships two images from a single push to main (mctl-telegram builds
@@ -669,7 +669,7 @@ jobs:
           set -euo pipefail
           git config user.name "mctl-gitops-pr[bot]"
           git config user.email "353875018+mctl-gitops-pr[bot]@users.noreply.github.com"
-          git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"
+          bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"
           git commit --amend --reset-author --no-edit --trailer "Agent: none"
 
       # Same shape check the merge step applies: only image tags move.
@@ -682,12 +682,15 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
           TEAM: ${{ inputs.team_name }}
-          SERVICE: ${{ inputs.component_name }}
+          COMPONENT: ${{ inputs.component_name }}
           IMAGE_NAME: ${{ inputs.image_name }}
           NEW_TAG: ${{ inputs.image_tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Keyed by the image basename, as in gitops-bump.yaml, so a bump
+          # opened by either workflow is seen (and superseded) by the other.
+          SERVICE=$(basename "$IMAGE_NAME")
           branch="release-bump/${SERVICE}-${NEW_TAG}"
           git check-ref-format "refs/heads/${branch}" || { echo "::error::invalid branch name"; exit 1; }
           case "$branch" in release-bump/?*) ;; *) echo "::error::branch is not under release-bump/"; exit 1 ;; esac
@@ -706,7 +709,7 @@ jobs:
             create_pr=1
           fi
           body=$(printf '%s\n' \
-            "Image tag bump for \`${IMAGE_NAME}:${NEW_TAG}\` (${TEAM}/${SERVICE})." \
+            "Image tag bump for \`${IMAGE_NAME}:${NEW_TAG}\` (${TEAM}/${COMPONENT})." \
             "" \
             "Opened by release-deploy.yaml: ${RUN_URL}" \
             "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \

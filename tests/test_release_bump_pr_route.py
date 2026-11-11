@@ -75,8 +75,15 @@ def judge(files):
         out.append((f"{label}: publish-direct verifies with the trusted policy before it pushes",
                     re.search(r"release-gate\.py verify --policy-rev origin/main", dtxt) is not None
                     and dtxt.find("release-gate.py verify") < re.search(r"^\s*(?:if )?git push\b", dtxt, re.M).start()))
+        # both publishing jobs apply the patch through the conflict-resolving script
+        out.append((f"{label}: publish-direct applies the patch through release-bump-apply.sh and never a bare git am",
+                    'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"' in dtxt and "git am" not in dtxt))
         # PR route
         ptxt = steps_text(pp)
+        out.append((f"{label}: publish-pr applies the patch through release-bump-apply.sh and never a bare git am",
+                    'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"' in ptxt and "git am" not in ptxt))
+        out.append((f"{label}: the bump branch is keyed by the image basename in both workflows",
+                    'SERVICE=$(basename "$IMAGE_NAME")' in str((step(pp, "Open the release-bump") or {}).get("run", ""))))
         out.append((f"{label}: publish-pr is the app-gitops-pr environment", pp.get("environment") == "app-gitops-pr"))
         out.append((f"{label}: publish-pr never touches the deploy key", "DEPLOY_KEY" not in ptxt and "ssh-key" not in ptxt and "gitops-bump" not in str(pp.get("environment"))))
         tok = step(pp, "write token")
@@ -195,6 +202,9 @@ MUT = [
     ("await-bump gets write access", "gitops-bump.yaml", "    permissions:\n      pull-requests: read\n", "    permissions:\n      pull-requests: write\n"),
     ("workflow-wide concurrency back", "gitops-bump.yaml", "# a queued bump of another service would be cancelled behind it.\njobs:\n", "# a queued bump of another service would be cancelled behind it.\nconcurrency:\n  group: gitops-bump\n  cancel-in-progress: false\njobs:\n"),
     ("newer bump no longer stops this run", "release-deploy.yaml", 'is not newer"\n              exit 1', 'is not newer"\n              true'),
+    ("publish-direct applies with a bare git am", "release-deploy.yaml", 'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"\n\n          # Concurrent', 'git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"\n\n          # Concurrent'),
+    ("publish-pr applies with a bare git am", "gitops-bump.yaml", 'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"\n          git commit --amend', 'git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"\n          git commit --amend'),
+    ("release-deploy branch keyed by component_name", "release-deploy.yaml", '          SERVICE=$(basename "$IMAGE_NAME")\n          branch=', '          SERVICE="${COMPONENT}"\n          branch='),
     ("claude-review: App not allowed", "claude-review.yml", ",mctl-codex,mctl-gitops-pr", ",mctl-codex"),
 ]
 for name, fn, old, new in MUT:
