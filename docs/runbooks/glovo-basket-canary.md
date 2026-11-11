@@ -2,7 +2,18 @@
 
 Source: mctlhq/mctl-api#1006 (working issue), plan mctlhq/mctl-gitops#2457.
 Code: mctl-api #1007 (approval page), #1008 (MCP and store), #1014
-(integration of both). #1013 (provider planner) is not needed.
+(integration of both), #1017 (chart: per-host ingress paths, `extraPaths`,
+`glovoBasketUISecret` slot), #1018 (`cmd/glovo-migrate`, the operator-run
+schema migrator). #1013 (provider planner) is not needed. Staged GitOps
+patches live under `deploy/staged/glovo-m1/` as `.md` (leak guard, below):
+`canary/env.patch.md` (B1, B2), `canary/ingress.patch.md` (C),
+`zitadel-client.patch.md` (Z), `db/` (D1, W).
+
+Scope (owner, 2026-11-11): v1 is a synthetic Basket Approval Canary served by
+mctl-api itself. Excluded: Temporal, trusted control worker, Telegram, fake
+dispatch, any provider effect, the real Glovo API, session custody (#1020),
+live adapter (#1021). The result is an approved or rejected basket, never an
+order.
 Earlier fake-order package and runbook: `docs/runbooks/glovo-m1.md` (not used
 by this canary; its Temporal, Telegram and three-image parts are deferred).
 
@@ -45,14 +56,15 @@ step's "merge" is the step.
 | # | Step | Change | Repo | Who merges or acts |
 | --- | --- | --- | --- | --- |
 | 1 | R0 | mctl-api 4.155.0 dark (separate decision, not part of this package) | mctl-api | owner |
-| 2 | R1 | mctl-api 4.156.0 with the Basket code and three chart changes, deployed dark (image tag only, no Glovo env) | mctl-api, mctl-gitops bump | owner (release), release-deploy path |
+| 2 | R1 | mctl-api 4.156.0 with the Basket code, plus the chart pin move (#1017), deployed dark (no Glovo env) | mctl-api, mctl-gitops release PR | owner (release), release-deploy PR route under the #2590 hold |
 | 3 | V | Vault `zitadel-admin` 8h role (gitops#2584), for the operator session | mctl-gitops | owner |
+| 4a | D0 | Read-only catalogue inventory of the production database (no DDL) | database | operator |
 | 4 | D1 | Database roles, transitional grants, ownership transfer (A15 operator plan) | database | operator |
 | 5 | W | Move the A15 ExternalSecrets and the inert `GLOVO_DB_*` env into reconciled paths | mctl-gitops | owner |
-| 6 | D2 | Apply three schemas as `glovo_migrator`: Glovo base, approval v2, basket v1 | database | operator |
+| 6 | D2 | `glovo-migrate` (#1018) as `glovo_migrator`: Glovo base, approval v2, basket v1 | database | operator |
 | 7 | Z | ZITADEL client `mctl-api-glovo-basket` (gitops#2582 moved to `zitadel-iac`) with the leak-guard change | mctl-gitops | owner |
 | 8 | B1 | `GLOVO_ENABLED`, `GLOVO_MCP_RESOURCE`, `GLOVO_BASKET_MCP_ENABLED` + marker | mctl-gitops | owner |
-| 9 | B2 | `glovoBasketUISecret` slot, `GLOVO_BASKET_UI_ENABLED` + marker | mctl-gitops | owner |
+| 9 | B2 | `glovoBasketUISecret` slot, `extraPaths: [/glovo]`, `GLOVO_BASKET_UI_ENABLED` + marker | mctl-gitops | owner |
 | 10 | C | Ingress host `glovo.mctl.ai`, reserved host | mctl-gitops | owner |
 | 11 | A | Allowlist entry for the canary (team, principal) | API call | owner (admin credential) |
 | 12 | E, N, K | Client run, owner decision, negative checks, kill-switch drill | none | agent + owner |
@@ -81,28 +93,79 @@ matrix. The Basket code is NOT in 4.155.0.
 
 ## Step R1: mctl-api 4.156.0 (Basket code) deployed dark
 
-- **Who**: owner decides the release; the platform release path (MCTL MCP /
-  Control Plane, then `release-deploy` bump) deploys. The agent does not tag,
-  bump or redeploy.
-- **Precondition**: #1007, #1008, #1014 reviewed on their final heads
-  (Claude and agy, no unaddressed P1/P2, CI green) and merged into mctl-api
-  `main` only after the 4.155.0 decision, with #1014 retargeted to `main`
-  before #1008's branch is deleted. The three chart changes below are in the
-  same release: (a) per-host `paths` in `helm/templates/ingress.yaml`,
-  (b) `/glovo` in the default `paths`, (c) the `glovoBasketUISecret` slot. The
-  chart tracks mctl-api `main`, so they go live at the merge, all inert: no
-  host sets `paths`, no code answers `/glovo/*`, no env fills the slot.
-- **Exact change**: image tag bump only. No Glovo env, no flag.
+- **Who**: owner decides the release; the release path deploys. The agent does
+  not tag, bump or redeploy.
+- **What changes in 4.156.0 (chart, env, defaults)**:
+  - Code: the host-routed router `withGlovoBasketHost`, the six-tool MCP, the
+    store and the approval page. All of it is behind the env chain below and
+    is OFF by default: with none of the `GLOVO_*` names set, the binary
+    behaves as 4.155.0 (no `glovo basket` log line, no route on any host).
+  - Chart (mctl-api#1017): per-host `paths`, `ingress.extraPaths` (default
+    `[]`) and the `glovoBasketUISecret` slot (default `""`). A values file
+    that uses none of them renders byte-identically to 4.155.0 (the chart's
+    render test covers both).
+  - Env chain, fail-closed: `GLOVO_ENABLED` then `GLOVO_MCP_RESOURCE`
+    (`https://<host>/mcp`) then `GLOVO_BASKET_MCP_ENABLED` (needs the Glovo
+    database pool, the work-items ledger and both schemas verified) then
+    `GLOVO_BASKET_UI_ENABLED` (needs the UI client id and secret; otherwise
+    the page stays off). Also read: `OAUTH_DB_URL` (explicit),
+    `GLOVO_DB_URL`, `GLOVO_DB_RUNTIME_ROLE`, `GLOVO_DB_MIGRATION_ROLE`,
+    `TENANT_AUTHZ_MODE=principal`. A wrong value refuses the boot; it never
+    starts half-on. Every name is in `canary/env.patch.md`.
+  - Kill switch: remove the Ingress host first (C), revoke the allowlist entry
+    (A, instant, no deploy), then the flags (B2, B1). Schemas stay.
+- **The chart is pinned, so the pin moves with the tag.** The chart source of
+  `admins-mctl-api` is pinned to a mctl-api commit in
+  `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`
+  (`targetRevision`, mctlhq/mctl-gitops#2599; today `a5b9ef9c`). Merging #1017
+  into mctl-api `main` therefore ships nothing to production. The 4.156.0
+  release PR (opened through the PR route, branch
+  `release-bump/mctl-api-4.156.0`, author `mctl-gitops-pr[bot]`) bumps the
+  image tag; the `targetRevision` move to the 4.156.0 release commit is the
+  same PR or a reviewed sibling, never a later drift. Both are subject to the
+  `mctl-api-bootstrap` version hold of #2590: 4.155.0 and later are held until
+  a reviewed PR adds an allow record (grant, approved_by, expires). Do not
+  pin to the 4.154.0 tag commit: that would drop `/devloop` from production
+  (verified 2026-11-11).
+- **Precondition**: #1007, #1008, #1014 (retargeted to `main`), #1017 and #1018
+  reviewed on their final heads (Claude and agy, no unaddressed P1/P2, CI
+  green) and merged into mctl-api `main` only after 4.155.0 is released, so
+  that release-please #934 does not absorb them. 4.155.0 is deployed and
+  Argo is Synced and Healthy.
+- **Exact change**: the release PR described above: image tag and chart pin.
+  No Glovo env, no flag, no Ingress host.
+- **Image digest and provenance (before and after)**: read the digest the
+  Deployment runs, by tag and by digest, and compare it with the build:
+  `kubectl -n mctl-api get deploy mctl-api -o jsonpath='{.spec.template.spec.containers[0].image}'`
+  and the pod `imageID`; the OCI label `org.opencontainers.image.revision`
+  (since mctl-gitops#2597) must equal the commit of the release tag
+  (`docker buildx imagetools inspect ghcr.io/mctlhq/mctl-api:4.156.0`, then
+  the config label). The 4.154.0 digest today is
+  `sha256:42d5a572156f179f0f697bd3279fe7817831294d9ccb4a55a91d28b02f9d4488`;
+  record the 4.155.0 digest too, it is the rollback target. A digest that
+  does not carry the expected revision label is a stop, not a pass.
 - **Verification (read-only)**: `mctl_get_service_status mctl-api`; pods Ready;
   `curl -sS -o /dev/null -w '%{http_code}\n' https://glovo.mctl.ai/mcp` is
-  still a Traefik 404; startup log has no `glovo basket` line.
-- **Rollback**: revert the tag to 4.155.0 through the release path. Chart skew
-  is harmless (the chart changes are inert).
+  still a Traefik 404 (observed 2026-11-11); `/devloop` still answers;
+  startup log has no `glovo basket` line.
+- **Rollback**: roll the tag AND the pin back together to the recorded
+  4.155.0 digest and commit through the release path
+  (`mctl_rollback_service`, or a revert PR; for an emergency, remove the
+  image from `platform-gitops/release-bump-routes.yaml` to return to the
+  direct route). Chart skew is harmless (the changes are inert) but is not
+  left in place on purpose.
 - **Why before the database**: 4.155.0 verifies the approval schema at version
   1 (`glovoApprovalSchemaVersion = 1` at `081bd6b7`); 4.156.0 verifies version
   2. Applying v2 while 4.155.0 is the only image would make the order-pilot
   readiness report `approval_schema_not_ready` (dark, so harmless, but it is a
   skew to avoid).
+- **No Glovo egress**: the basket code has no outbound HTTP client (catalog,
+  basket and approval are in-process and in the database). This is a
+  code-level fact, not a network control: the `mctl-api` namespace has NO
+  egress NetworkPolicy (verified read-only 2026-11-11), so nothing in the
+  cluster would block an outbound call either. A reviewer of #1008 and #1014
+  confirms the first by `grep`; the second is a known gap, listed under
+  "Could not determine".
 
 ## Step V: Vault admin session (optional but advised)
 
@@ -119,6 +182,27 @@ matrix. The Basket code is NOT in 4.155.0.
 
 ---
 
+## Step D0: read-only inventory (before any DDL)
+
+- **Who**: operator. Read only; nothing here changes the database.
+- **Why**: the legacy objects of database `mctl-api` are not known from this
+  repository (owners, ACLs, whether `public.work_items_schema_version`
+  exists, the Postgres minor version, open transactions). Decisions in D1 and
+  D2 are made from this output, not from the plan.
+- **Exact change**: none. Run the catalogue inventory queries of
+  `deploy/staged/glovo-m1/db/roles.patch.md` (owners and ACLs via
+  `aclexplode`, sequence ownership, triggers, `pg_stat_activity` on
+  `public.action_approval_requests`, `SHOW server_version`, table sizes) from a
+  read-only session, and record the output (names and counts, no row data)
+  on mctl-api#1006. The migrator's `-dry-run` (step D2) repeats this against
+  the three target schemas, but it connects as `glovo_migrator`, which does
+  not exist until D1, so it is the second inventory, not the first.
+- **Verification**: the output is recorded and a reviewer has read it before D1
+  starts.
+- **Rollback**: none needed.
+
+---
+
 ## Database migrations (reference for steps D1, D2)
 
 ### What runs when
@@ -131,9 +215,12 @@ matrix. The Basket code is NOT in 4.155.0.
 | `glovobasket.ApplySchema` (basket schema v1) | MANUAL, as `glovo_migrator` | Needs v2 first (it refuses otherwise) |
 | 4.156.0 boot | read-only | `VerifyGlovoApprovalSchema` and `glovobasket.VerifySchema`, only when `GLOVO_BASKET_MCP_ENABLED=true`. The boot never applies a schema |
 
-No binary in mctl-api `main` calls the three `Apply*` functions. The planned
-`cmd/glovo-migrate` (mctl-api#1004) is not merged and has no `-with-basket`
-step. This is the main open item (see "Could not determine").
+No binary in mctl-api `main` calls the three `Apply*` functions. The program
+that does is `cmd/glovo-migrate` (mctl-api#1018, approved at `04e4dd95`,
+Draft, not in any image and not in `main` yet): it runs base, approval v2 and
+basket v1 in that order, each in its own transaction, as `glovo_migrator`.
+Where and how the operator runs it is step D2. The older plan of #1004 (with
+`-with-bridge/-orders/-join`) is not used.
 
 Order: base, then approval v2, then basket v1. Each takes advisory locks
 (`glovo-schema`, `glovo-approval-schema`, `glovo-basket-schema`) and runs in one
@@ -173,8 +260,11 @@ later reader and writer of that table until it is granted. Mitigation, all
 operator-side: run in a quiet window; first read `pg_stat_activity` for open
 transactions on that table; connect with `options=-c lock_timeout=5000 -c
 statement_timeout=60000` in the migration DSN so a blocked step fails fast
-(SQLSTATE 55P03) and is retried; the schema steps are idempotent. The unknown
-is whether `cmd/glovo-migrate` sets a `lock_timeout` itself (not in main).
+(SQLSTATE 55P03) and is retried; the schema steps are idempotent. The migrator
+sets `SET LOCAL lock_timeout = 5s` and `statement_timeout = 60s` in every
+transaction by default (`-lock-timeout`, `-statement-timeout`), so a blocked
+step fails with exit code 3 instead of queueing; the DSN options are an
+extra guard, not the only one.
 
 Behavioural side effect: `aar_guard` and `aar_binding_required` are BEFORE
 triggers on the shared approvals table, so they run for existing DevLoop
@@ -195,7 +285,7 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
 ## Step D1: roles, transitional grants, ownership transfer
 
 - **Who**: operator (owner), with the 8h Vault session of step V.
-- **Precondition**: R1 done; gitops#2563 and gitops#2579 resolved on their
+- **Precondition**: R1 done; D0 recorded and read; gitops#2563 and gitops#2579 resolved on their
   open items (UNVERIFIED list in #2563: `COMMERCE_DB_URL` role, connection
   limits, grantees via `aclexplode`, sequence ownership after the transfer,
   whether `work_items_schema_version` exists, URL-safe migrator password);
@@ -206,8 +296,9 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
   catalogue inventory first and the recorded ACL and owner; then ONE
   transaction with the ownership transfer, followed by the transitional grants
   to the legacy `mctl-api` role.
-- **Verification (read-only)**: the `-verify` mode of the migrator once it
-  exists, else the catalogue queries of `roles.patch.md`; the running
+- **Verification (read-only)**: the catalogue queries of `roles.patch.md`
+  (the migrator's `-dry-run` is usable from here on, once `glovo_migrator`
+  exists); the running
   mctl-api and DevLoop keep working: `mctl_get_service_status`, a DevLoop
   read, no new error lines in `mctl_get_service_logs`.
 - **Rollback**: from the RECORDED owner and ACL, never a blind REVOKE.
@@ -229,28 +320,63 @@ fail closed (`VerifyGlovoApprovalSchema` sees four enabled triggers expected).
 - **Rollback**: revert the PR; Argo prunes the ExternalSecrets and the Secrets
   they own.
 
-## Step D2: apply the three schemas
+## Step D2: apply the three schemas with `glovo-migrate` (#1018)
 
-- **Who**: operator, as `glovo_migrator` (the #2563 Job once its image and
-  command exist, or an operator-run binary).
-- **Precondition**: D1 verified; W done (credentials present); no open
-  transaction on `public.action_approval_requests` (`pg_stat_activity`, read
-  only); quiet window; the migration DSN carries `lock_timeout` as above.
-- **Exact change**: in order, `glovo.ApplySchema`, then
-  `workitems.ApplyGlovoApprovalSchema` (with the work-items role and
-  `glovo_runtime`), then `glovobasket.ApplySchema(…, "glovo_runtime")`.
-  The #2563 job args also name `-with-bridge`, `-with-orders`, `-with-join`
-  (needed by the order pilot's colocation proof); the basket needs none of
-  them (its decision gate is its own schema check, not `Store.Ready`). Whether
-  to apply them anyway is an owner decision, not assumed here.
-- **Verification (read-only)**: `SELECT max(version) FROM
-  glovo.glovo_schema_version`, `glovo.approval_schema_version` (expect 2),
+- **Who**: operator, as `glovo_migrator`. NO-GO until the owner records a
+  separate deployment decision after: a fresh review of #1018 on its final
+  head, the D0 inventory read, the D1 privileges verified, and the maintenance
+  window agreed.
+- **Where it runs**: `cmd/glovo-migrate` is not in the mctl-api image and is
+  not built by the release. The operator builds it from a checkout of the
+  4.156.0 release tag (the commit the image's revision label names):
+  `git checkout 4.156.0 && go build -o glovo-migrate ./cmd/glovo-migrate`
+  (Go version from `go.mod`), and runs it from a host that reaches
+  `shared-pg-rw.platform-db.svc:5432` (a port-forward or a pod in the
+  cluster; never a public path). Record the binary's SHA-256 and the commit
+  on mctl-api#1006. Until #1018 is on `main` the build uses its approved head
+  `04e4dd95`; the tag build replaces that as soon as the code is released.
+- **Credentials**: the migration DSN is read from the environment variable
+  named by `-dsn-env` (default `MCTL_GLOVO_MIGRATE_DSN`), never from the
+  command line, and is never printed. It must use `sslmode=require` or
+  stricter over TCP and name role `glovo_migrator` (the tool refuses any other
+  `current_user`, `-expect-role`). The operator exports it from the Vault
+  session of step V (`vault kv get` into the variable, not to the terminal);
+  agents never read it.
+- **Preflight (the tool does it)**: CREATE on the database, schema `public`
+  and schema `glovo` (when present), USAGE on `plpgsql`, ownership of every
+  table, function and sequence a step touches, no schema newer than the
+  binary. A refusal is exit 1 and names what is missing.
+- **Exact change, in this order**:
+  1. `glovo-migrate -dry-run -workitems-role <work-items role> -runtime-role glovo_runtime`
+     reads the catalogue and prints what the apply would do; applies nothing.
+     This is the read-only inventory of the three target schemas. Read it
+     with a reviewer. Exit 0 is "would apply cleanly", not "applied".
+  2. Same flags without `-dry-run`: base, then approval v2, then basket v1,
+     each in its own transaction, idempotent, each taking its advisory lock
+     (`glovo-schema`, `glovo-approval-schema`, `glovo-basket-schema`). Quiet
+     window; no open transaction on `public.action_approval_requests` (D0).
+  3. `glovo-migrate -verify` (same flags): reads, changes nothing, exits 2
+     unless all three schemas are ready.
+- **Exit codes**: 0 ok; 1 refused (wrong role, no TLS, newer schema, ownership
+  not transferred); 2 verify found the schemas not ready; 3 could not observe
+  the catalogue, a lock timeout, or a step failed. A 3 is retried only after
+  reading what it printed; an unobservable catalogue is never treated as
+  "nothing to do".
+- **Not applied here**: `-with-bridge`, `-with-orders`, `-with-join` of the
+  older plan do not exist in #1018. The basket does not need those schemas
+  (its decision gate is its own check, not `Store.Ready`). Whether 4.156.0
+  reaches Ready without them is proven only by the rehearsal below.
+- **Rehearsal**: run steps 1 to 3 first against a disposable copy of the
+  database (restore of the D1 backup into a scratch instance, roles recreated)
+  and record the exit codes. Production is not the first run.
+- **Verification (read-only)**: `-verify` exit 0, plus: `SELECT max(version)
+  FROM glovo.glovo_schema_version`, `glovo.approval_schema_version` (expect 2),
   `glovo.basket_schema_version` (expect 1); count of enabled triggers
   (`aar_guard`, `aar_binding_required`, `approval_bindings_guard`,
   `basket_approval_bindings_guard`, `basket_revisions_frozen`,
   `basket_revisions_no_truncate`, `baskets_guard`) is 7; the owner of the
-  three binding-related tables is one role; table owner of the basket tables is
-  `glovo_migrator`.
+  three binding-related tables is one role; table owner of the basket tables
+  is `glovo_migrator`.
 - **Rollback**: none needed (additive). See "Rollback" above.
 
 ## Step D3: shared-ledger smoke
@@ -283,7 +409,9 @@ changed, as the FIRST commit of each PR, reviewed on its own:
 
 The guard is PR-controlled content, so the reviewer reads its diff first and
 the owner's merge GO names it. This is proposed text; nothing here changes the
-guard.
+guard. Until that first commit, every diff staged under
+`deploy/staged/glovo-m1/` is refused if applied to a reconciled path, on
+purpose (`REFUSED: Glovo/assistants reference in reconciled path`).
 
 ## Step Z: ZITADEL client and the owner's identity link
 
@@ -306,6 +434,48 @@ guard.
   redirect (owner). The Secret keys are verified by effect in B2, never read.
 - **Rollback**: revert the PR; the Job removes the client. Pods are not
   affected before B2.
+
+#### Checked against the code (2026-11-11, read-only)
+
+The staged client of #2582 matches what the page does (mctl-api #1007/#1014):
+confidential web application, `client_secret_basic`, PKCE, authorization code
+grant only, one redirect `https://api.mctl.ai/glovo/basket/approvals/callback`,
+`prompt=login` on the page's authorization request, BEARER access token. The
+client id and secret reach the pods only as `GLOVO_BASKET_UI_CLIENT_ID` and
+`GLOVO_BASKET_UI_CLIENT_SECRET` through the `glovoBasketUISecret` slot (B2).
+This client is for the approval page only. The MCP clients (Inspector, Claude
+connector) do not use it: they authenticate against the MCTL authorization
+server (next section), which logs the user in through the existing ZITADEL
+upstream.
+
+### OAuth discovery, audience and scopes (MCP side)
+
+- Protected-resource metadata is served on the Glovo host only, at
+  `https://glovo.mctl.ai/.well-known/oauth-protected-resource` (and the `/mcp`
+  suffixed path): `resource` is exactly `GLOVO_MCP_RESOURCE`
+  (`https://glovo.mctl.ai/mcp`), `authorization_servers` is
+  `["https://api.mctl.ai"]`, `scopes_supported` is `[]`. The 401 from `/mcp`
+  carries `WWW-Authenticate: Bearer resource_metadata="..."`.
+- The authorization server is the existing MCTL one at `https://api.mctl.ai`
+  (discovery at `/.well-known/oauth-authorization-server`, PKCE S256). The
+  Glovo token's audience is the resource (`https://glovo.mctl.ai/mcp`); the
+  platform `/mcp` refuses it and `/mcp` on the Glovo host refuses a platform
+  token (N3, N4). Authorization is the allowlist and the team grant, not an
+  OAuth scope: no new scope is defined or needed.
+- Redirect URIs for the MCP client are the existing
+  `OAUTH_ALLOWED_REDIRECT_URIS` entries (the Inspector callback
+  `http://localhost:6274/oauth/callback`, the Claude connector callback
+  `https://claude.ai/api/mcp/auth_callback`); no change. The approval page
+  callback above is a different client and a different redirect.
+
+### Tenant binding and allowlist
+
+A basket belongs to an explicit team (tenant) chosen on the consent screen;
+it is never inferred. Access needs two things at once: an allowlist entry
+`(team, principal)` (step A; empty until an admin writes it) and a live team
+grant for that principal. Another team's baskets, and another user's baskets
+in the same team, are refused (N6, N8). The approval decision requires live
+`developer` membership of the basket's team.
 
 ### The owner's identity link (once, owner)
 
@@ -343,9 +513,12 @@ the page. An unlinked identity gets the uniform 404 page and no decision form.
 
 - **Who**: owner merges; the agent prepares the PR (diff B2).
 - **Precondition**: Z done (keys exist); the owner's identity link verified;
-  chart slot released (R1).
+  the #1017 chart (slot and `extraPaths`) released and pinned (R1).
 - **Exact change**: diff B2: `glovoBasketUISecret: mctl-api-oidc-zitadel`,
+  `ingress.extraPaths: [/glovo]` (routes the page on `api.mctl.ai`),
   `GLOVO_BASKET_UI_ENABLED: "true"`, marker `2026-MM-DD-glovo-basket-b2`.
+  Apply B2 on top of B1 only; the diffs were generated as a stack
+  (B1, B2, C) and verified with `git apply --check` in that order.
 - **Verification (read-only)**: startup log line `glovo basket approval page
   enabled` with provider `zitadel` (the alternative is one ERROR line listing
   what is missing). `GET https://api.mctl.ai/glovo/basket/approvals/aar_x`
@@ -359,7 +532,8 @@ the page. An unlinked identity gets the uniform 404 page and no decision form.
   `canary/ingress.patch.md`.
 - **Precondition**: B1 and B2 verified; the reserved-host proof
   (`scripts/test-reserved-hosts-policy.sh --services --platform --admit` on a
-  live route dump) clean; R1's per-host `paths` chart change released.
+  live route dump) clean; the #1017 per-host `paths` chart released and pinned
+  (R1).
 - **Exact change**: the Ingress host with two paths and `glovo.mctl.ai:
   [mctl-api]` in `reservedPlatformHosts`. No DNS, no Cloudflare change: the
   `*.mctl.ai` wildcard A record is proxied and already resolves; edge TLS is
@@ -469,7 +643,9 @@ stays. Close mctl-api#1006 only on the observed E5 result.
   `mctl-api-glovo-mctl-ai-tls` certificate is optional.
 - **NetworkPolicy**: `allow-mctl-api-ingress` in namespace `mctl-api` already
   admits Traefik to every pod of the namespace; the host-routed MCP is the
-  same pods and the same port. There is no egress policy in that file. The
+  same pods and the same port. There is no egress policy in that file, and none exists in the namespace
+  (verified read-only 2026-11-11), so "no Glovo egress" is a property of the
+  code (no outbound client in the basket path), not of the network. The
   Glovo database is the same `shared-pg-rw.platform-db.svc:5432` as the audit
   and lifecycle databases. ZITADEL is reached like the existing identity-link
   and OAuth flows. The basket MCP calls no other service. No change.
@@ -483,9 +659,11 @@ stays. Close mctl-api#1006 only on the observed E5 result.
 
 ## Could not determine (from this repository, read-only)
 
-1. Which program applies the three schemas in production: `cmd/glovo-migrate`
-   (#1004) is not merged and has no basket step; the basket and approval-v2
-   `Apply*` functions have no caller in `cmd/`.
+1. Which Postgres versions and real legacy objects production has beyond what
+   the migrator preflight checks (only 16.15 was observed): answered by step
+   D0, not by this repository. The migrator itself is #1018 (approved at
+   `04e4dd95`, not in the image): the operator builds it from the release tag
+   (D2).
 2. Whether `OAUTH_DB_URL` is set explicitly in production (Secret names and
    data are not read). B1 refuses the boot if it is not.
 3. Whether any Secret already supplies a `GLOVO_*` name (the #2529 G4(b)
@@ -494,8 +672,8 @@ stays. Close mctl-api#1006 only on the observed E5 result.
    startup DDL, which role the work-items DSN uses, and the role of
    `COMMERCE_DB_URL` (all open in gitops#2563).
 5. Table sizes and open transactions on `action_approval_requests` at the
-   moment of D2 (the 55 MB figure is the whole database); whether the migrator
-   sets a `lock_timeout`.
+   moment of D2 (the 55 MB figure is the whole database). The migrator sets a
+   5s `lock_timeout` by default.
 6. Whether Cloudflare bot rules challenge a non-browser MCP client on the new
    host (checked at step C, first real request).
 7. The team the owner uses and their membership role; a second human account
@@ -505,3 +683,10 @@ stays. Close mctl-api#1006 only on the observed E5 result.
    `GlovoBasketDecisions.ReadyFn`) do not use `glovo.Store.Ready`, but this is
    proven only by the rehearsal on a disposable database, not run here.
 9. Whether Super Bot Fight Mode treats the new host like `api.mctl.ai`.
+10. Whether the PR release route is proven live: it is proven only by the first
+    real routed bump (does Claude approve an App-authored PR, does the
+    review-triggered auto-merge fire). 4.156.0 may be that first bump; if it
+    is not proven by then, the owner decides between a hand-run PR and the
+    direct route for that release.
+11. Egress: there is no egress NetworkPolicy to prove "no Glovo egress"
+    network-side; the evidence is the code review (no outbound client).
