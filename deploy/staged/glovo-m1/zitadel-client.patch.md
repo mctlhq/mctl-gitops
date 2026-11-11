@@ -30,18 +30,28 @@ client a code or ID token issued for the DevLoop decide page would be
 accepted by the basket page and the reverse, and one secret would cover both
 flows. A dedicated client is one resource in the existing pattern.
 
-Activation order (each step its own PR and approval):
+Activation order (each step its own PR and approval; runbook
+`docs/runbooks/glovo-basket-canary.md`, step Z, which this diff is):
 
-1. mctl-api: a chart slot (e.g. `glovoBasketUISecret`, optional
-   `secretKeyRef`s, mirroring `devLoopDecideSecret`); #1007 has none.
-2. A mctl-api release with #1007 and that slot, deployed after the release
-   hold lifts.
+1. The chart slot `glovoBasketUISecret` (optional `secretKeyRef`s, mirroring
+   `devLoopDecideSecret`) exists in mctl-api#1017 (which also carries the
+   per-host ingress paths and `extraPaths`). #1007 has none.
+2. A mctl-api release with #1007 and #1017, deployed after the release hold
+   lifts. The chart source is pinned (mctlhq/mctl-gitops#2599), so #1017
+   reaches production only in the release PR that moves the pin with the tag.
 3. This diff into zitadel-iac, together with a change to the leak guard that
    admits it. Expected plan: no new action, one create plus an in-place
-   update of the Secret data; `allowedActions` stays as is.
-4. Bootstrap: `glovoBasketUISecret: mctl-api-oidc-zitadel` and a
-   `ROLLOUT_MARKER` bump; `GLOVO_BASKET_UI_ENABLED: "true"` last, once the
-   basket store is wired.
+   update of the Secret data; `allowedActions` stays as is. It follows the
+   database step (D2) and precedes B2.
+4. B2 (`canary/env.patch.md`): `glovoBasketUISecret:
+   mctl-api-oidc-zitadel`, `extraPaths: [/glovo]`, a `ROLLOUT_MARKER` bump and
+   `GLOVO_BASKET_UI_ENABLED: "true"`, last, once the basket MCP (B1) is on.
+
+Checked against the mctl-api code at #1014 (2026-11-11, read-only): the page
+uses exactly this client shape (confidential, client_secret_basic, PKCE,
+authorization code, `prompt=login`, ID-token audience = its own client id,
+redirect `<SELF_URL>/glovo/basket/approvals/callback`). The MCP clients do not
+use this client; they authenticate against the MCTL authorization server.
 
 Verified against the tree this was staged from (`tofu` 1.12.6, mocked
 providers): `tofu test` 100 passed with the diff applied; a mutation (an
