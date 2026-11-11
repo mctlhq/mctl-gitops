@@ -198,10 +198,11 @@ test asserts that the bare repository's `main` SHA is unchanged and that no file
   the runbook records the owner-merge fallback, and the test asserts that the fallback is refused once the
   expiry margin has passed. A fork-PR fixture proves that `release-hold-pr` fetches `refs/pull/<n>/head` and
   refuses a head that does not match `head_sha`.
-- [ ] T17. Mutation check: removing each layer's call makes at least one of T1-T8 or T18-T30 fail. The
+- [ ] T17. Mutation check: removing each layer's call makes at least one of T1-T8 or T18-T31 fail. The
   calls are: check in the bump script, verify in the push loop, `--since`, the per-attempt re-read, the
   expiry margin, the base-only checkout in `release-hold-pr`, the `sha=` and up-to-date checks in
-  `release-hold-merge`, the tree equality, and check 4 for direct-pushed grants. The guard_test pattern from `tests/test_release_gate_guard.py`
+  `release-hold-merge`, the tree equality, check 4 for direct-pushed grants, the merger-App-only key
+  placement, and the `refs/pull/<n>/head` == `head_sha` check. The guard_test pattern from `tests/test_release_gate_guard.py`
   is reused.
 
 ## Rollback
