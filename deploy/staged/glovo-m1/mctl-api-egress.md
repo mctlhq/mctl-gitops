@@ -45,9 +45,9 @@ name only, **L** = inferred.
 | loki-stack (monitoring) | 3100 | `LOKI_URL`, live Service | H |
 | argo-workflows-server | 2746 | workflow operations, live Service | M |
 | backstage | 7007 | live Service, portal calls | M |
-| erpact-deployer | 8000 | erpact tools, live Service | M |
+| erpact deployer (public `deployer.erpact.online`) | 443 | `ERPACT_DEPLOYER_URL` in mctl-api.yaml; covered by the public 443 rule. The in-cluster `erpact:8000` path is retired and deliberately not allowed | H |
 | zitadel / zitadel-login | 8080 / 3000 | OIDC, live Services; may go via public host instead | M |
-| public HTTPS (auth, GitHub, Cloudflare R2, claude.ai) | 443 | `DEX_ISSUER_URL`, `ARGO_LOGS_R2_ENDPOINT`, `OAUTH_CIMD_ALLOWED_HOSTS`, issuer host | M |
+| public HTTPS (auth, GitHub, Cloudflare R2, claude.ai) | 443 | ZITADEL issuer host (`auth.mctl.ai`; `DEX_ISSUER_URL` is unset), `ARGO_LOGS_R2_ENDPOINT`, `OAUTH_CIMD_ALLOWED_HOSTS`, issuer host | M |
 | other DB URLs (`*_DB_URL` via envFrom Secret) | 5432 | host unreadable by rule (Secret .data) | **L** |
 | gitops SSH (`GITOPS_SSH_KNOWN_HOSTS_PATH`) | 22 | optional; NOT allowed here | **L** |
 
@@ -72,7 +72,7 @@ name only, **L** = inferred.
 
 1. Apply the policy. It selects nothing yet, so nothing changes.
 2. Label ONE replica: `kubectl -n mctl-api label pod <pod> mctl.ai/egress-policy=enforced`.
-   The label is lost when the pod restarts, which makes the canary self-healing.
+   The label survives container restarts and is lost only when the pod is recreated, so deleting the pod is also a rollback.
 3. Run the verification below against that pod.
 4. If green for an agreed soak, promote in a separate PR (drop the extra label
    from `podSelector` or add it through the chart) and re-run the verification.

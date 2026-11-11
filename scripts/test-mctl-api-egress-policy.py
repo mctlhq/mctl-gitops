@@ -46,7 +46,6 @@ REQUIRED = {
     "loki": ns("monitoring", 3100),
     "argo-workflows": ns("argo-workflows", 2746),
     "backstage": ns("backstage", 7007),
-    "erpact": ns("erpact", 8000),
     "zitadel-api": ns("zitadel", 8080),
     "zitadel-login": ns("zitadel", 3000),
     "public-https-auth": ip("104.16.1.1", 443),
@@ -72,6 +71,7 @@ FORBIDDEN = {
     "tenant-ns-service": ns("admins", 8080),
     "postgres-wrong-ns": ns("admins", 5432),
     "wrong-port-vault": ns("vault", 8201),
+    "erpact-in-cluster-retired": ns("erpact", 8000),
     "wrong-pod-dns": ns("kube-system", 53, "UDP", {"k8s-app": "other"}),
 }
 
@@ -111,14 +111,25 @@ def _peer_ok(peer, d):
     return True
 
 
+def _port_ok(p, d):
+    if p.get("protocol", "TCP") != d["proto"]:
+        return False
+    lo = p.get("port")
+    if lo is None:
+        return True  # protocol-only entry: every port
+    if not isinstance(lo, int):
+        raise Unknown(f"named port {lo!r} is not supported by this evaluator")
+    return lo <= d["port"] <= p.get("endPort", lo)
+
+
 def allowed(doc, d):
     for rule in doc["spec"].get("egress", []):
         ports = rule.get("ports")
-        if ports is not None and not any(
-            p.get("protocol", "TCP") == d["proto"] and p.get("port") == d["port"] for p in ports
-        ):
+        # Omitted or empty ports = every port; omitted or empty to = every peer.
+        if ports and not any(_port_ok(p, d) for p in ports):
             continue
-        if any(_peer_ok(p, d) for p in rule.get("to", [])):
+        peers = rule.get("to")
+        if not peers or any(_peer_ok(p, d) for p in peers):
             return True
     return False
 
@@ -176,6 +187,14 @@ def selftest(base) -> int:
                lambda d: d["spec"]["egress"][-1]["to"][0]["ipBlock"].pop("except"))
     expect_red("public ports widened to all",
                lambda d: d["spec"]["egress"][-1].pop("ports"))
+    expect_red("ssh to anywhere (rule without to)",
+               lambda d: d["spec"]["egress"].append({"ports": [{"protocol": "TCP", "port": 22}]}))
+    expect_red("empty to with port 80",
+               lambda d: d["spec"]["egress"].append({"to": [], "ports": [{"protocol": "TCP", "port": 80}]}))
+    expect_red("empty ports list on public rule",
+               lambda d: d["spec"]["egress"][-1].__setitem__("ports", []))
+    expect_red("endPort range on public rule",
+               lambda d: d["spec"]["egress"][-1]["ports"][0].__setitem__("endPort", 65535))
     expect_red("selector widened to all pods", lambda d: d["spec"].__setitem__("podSelector", {}))
     expect_red("ingress added", lambda d: d["spec"].__setitem__("ingress", [{}]))
     return 1 if bad else 0

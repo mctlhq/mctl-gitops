@@ -101,14 +101,6 @@ spec:
       ports:
         - protocol: TCP
           port: 7007
-    # erpact-deployer
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: erpact
-      ports:
-        - protocol: TCP
-          port: 8000
     # ZITADEL (api and login UI)
     - to:
         - namespaceSelector:
