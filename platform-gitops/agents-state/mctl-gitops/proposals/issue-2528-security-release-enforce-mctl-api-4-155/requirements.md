@@ -17,10 +17,22 @@ hold. Several paths can move the bootstrap tag with no human decision bound to i
   list, so it can merge on a bot approval.
 - **Chart drift.** The chart source is `targetRevision: main` of the mctl-api repo. Its defaults can change
   production with no GitOps write.
+- **Any write deploy key (amended 2026-11-11).** Ruleset 18465404's only bypass actor is `DeployKey` with
+  `actor_id: null` and `bypass_mode: always`, so **both** write keys, `gitops-bump` (165489378) and
+  `argo-workflows-bot-2026-10` (166128843), can push any path to `main` with no PR and no required check
+  (mctl-gitops#2543, P1). The `gitops-bump` environment also releases its key to any workflow on `main` that
+  names it.
+- **No hold is machine-readable today.** The only release hold file in the org is mctl-agents
+  `.github/release/hold.json`, which governs mctl-agents releases only. The mctl-api hold exists only as
+  #934's Draft state and its comments.
 
 The existing release gate (`scripts/release-gate.py` + `platform-gitops/release-gates.yaml`) covers only the
 mctl-agents worker group. It cannot parse the bootstrap file, which is a Helm template carrying the service
 values inside a `values: |` string. A PR-only check cannot stop direct pushes.
+
+This proposal was amended on 2026-11-11 after an independent review returned AMEND with three P2 findings
+(see design.md "Amendment 2026-11-11"). The bootstrap-aware values reader is built in a separate PR, and this
+proposal consumes it rather than duplicating it.
 
 This proposal designs a fail-closed, TOCTOU-safe release hold for the mctl-api image and its dark-Bridge
 invariants. The hold is enforced where the write takes effect (before write, before every push attempt, at
@@ -70,7 +82,13 @@ Owner grant
   below. Each check is fail-closed:
   - It names the hold, the image, the tag, the immutable GHCR manifest digest (`sha256:` 64 hex), the
     40-hex mctl-api source commit of the tag, the sha256 of `release-holds.yaml` it was issued against,
-    the owner's GitHub login and numeric id, `issued_at`, `expires_at` and the allowed channel.
+    the owner's GitHub login and numeric id, `issued_at`, `expires_at` and the allowed channel. It also
+    names the source tree and the reviewed release head (amended 2026-11-11).
+  - The tag commit's tree equals the grant's `source_tree`, and that equals the tree of
+    `reviewed_release_head`. The grant binds the commit the image is built from (the release PR's merge
+    commit), never the release PR head.
+  - The image config label `org.opencontainers.image.revision` of the digest equals `source_commit`. A
+    missing label means unknown (exit 7).
   - The owner is in the hold's `owners` list.
   - The commit that introduced the grant came from a PR merged by that same owner (a `User`, not a
     `Bot`).
@@ -82,12 +100,23 @@ Owner grant
   does not match THEN THE SYSTEM SHALL refuse the change and write nothing.
 - THE SYSTEM SHALL NOT treat a CI result, a check-run conclusion, a PR approval by itself, or a free-text
   "GO" comment as a grant.
+- THE SYSTEM SHALL NOT accept a review, approval or CI result on a release PR head as covering a release
+  whose tag commit tree differs from that head's tree. Evidence bound to an earlier #934 head (`2fc67f31`,
+  `70fcec0b`, `5b76cbc3` or `6241d5c8`, as of 2026-11-11) covers that head only.
+- IF a grant was added to `main` by a commit with no associated PR merged by the named owner (for example,
+  a direct push through the deploy-key bypass) THEN THE SYSTEM SHALL treat the grant as absent.
 
 Point-of-write enforcement (direct pushes)
 - WHEN `release-deploy.yaml` or `gitops-bump.yaml` is asked to write any file in the hold's guarded set
   THE SYSTEM SHALL run `scripts/release-hold.py check` before any file is written. It SHALL also run
   `scripts/release-hold.py verify` on the exact tree before every push attempt, including after each
   rebase. The workflow SHALL push nothing if either check exits non-zero.
+- WHEN either direct-write workflow is about to run `git push` THE SYSTEM SHALL make `verify` the last
+  command before it. Each attempt SHALL re-read the hold, the grant, the GHCR digest, the tag ref, the
+  revision label, the grant's merger and the clock, with nothing cached between attempts. It SHALL treat a
+  grant that expires within 15 minutes as expired. A missing or failing script SHALL abort the push.
+- THE SYSTEM SHALL allow `environment: gitops-bump` and `GITOPS_BUMP_DEPLOY_KEY` only in
+  `release-deploy.yaml` and `gitops-bump.yaml`, enforced by a test.
 - WHILE the grant's `channel` is `pull-request` (the default, as #2523 requires) THE SYSTEM SHALL refuse a
   held tag in both direct-write workflows even when a valid grant exists.
 - WHEN a push attempt follows a rebase THE SYSTEM SHALL compare the hold policy of the rebased tree with the
@@ -99,12 +128,25 @@ Point-of-write enforcement (direct pushes)
   record a notice, and the bump job SHALL refuse.
 
 Merge-path enforcement (PRs)
-- WHEN a PR changes any file in the guarded set, `release-holds.yaml` or `release-grants/**`
-  THE SYSTEM SHALL run `release-hold.py diff --base <merge-base> --head <head>` in `validate-manifests.yml`.
-  The policy and grant are read from the base side only.
+- WHEN a PR is opened or updated THE SYSTEM SHALL evaluate the hold in `release-hold-pr.yml` on
+  `pull_request_target`. The workflow definition, `release-hold.py`, the values reader, the policy and the
+  grants SHALL come from the base commit. The PR head SHALL be read only as git data, and never checked out
+  into the working tree, executed, imported or passed to a shell. (Amended 2026-11-11: the earlier
+  `validate-manifests.yml` call ran PR-controlled code and is no longer a gate.)
+- THE SYSTEM SHALL treat a change to the guard, the reader, the policy, the grants, the admission allowlist,
+  the hold tests or the release, bump, validation or auto-merge workflows as a policy change. Combined with a
+  guarded file, it SHALL be refused (`HOLD_POLICY_CHANGED`).
+- THE SYSTEM SHALL publish the PR-time result as check `release-hold` from a dedicated checker App. The
+  ruleset SHALL require that context bound to the App's integration id, so that no job defined by a PR can
+  satisfy it. IF the checker cannot run THEN the PR SHALL stay blocked.
+- WHEN a PR changes a guarded file THE SYSTEM SHALL merge it only through `release-hold-merge.yml`. That
+  workflow (dispatched on `main`, environment approved by an owner `User`) SHALL re-run `diff` against the
+  current `main` tip and the exact head SHA with a 15-minute expiry margin, refuse a PR that is not up to
+  date, and merge with `sha=<head>`. The ruleset SHALL have `strict_required_status_checks_policy: true`,
+  so a `main` that moved after verification makes the merge fail with no write.
 - THE SYSTEM SHALL add the guarded set, `release-holds.yaml`, `release-grants/**`,
-  `scripts/release-hold.py` and the admission-policy file to the `auto-merge.yml` `protected_re`, so that no
-  bot approval can merge them.
+  `scripts/release-hold.py`, the admission-policy and allowlist files and `.github/workflows/` to the
+  `auto-merge.yml` `protected_re`, so that no bot approval can merge them.
 
 Deployment-effect enforcement (Kubernetes admission)
 - THE SYSTEM SHALL deploy a ValidatingAdmissionPolicy, bound to the `mctl-api` namespace, for Deployments,
@@ -117,7 +159,20 @@ Deployment-effect enforcement (Kubernetes admission)
   inject them without any container `env` entry.
 - THE SYSTEM SHALL roll out the admission policy with `validationActions: [Warn, Audit]` first, and
   switch to `[Deny]` only in a separate reviewed PR after one observed sync shows no warning for the
-  running 4.154.0 pods.
+  running 4.154.0 pods. The hold SHALL NOT be reported as enforced at the point of effect before Deny.
+- THE SYSTEM SHALL take the admission allowlist from a static, guarded file that `release-hold.py`
+  validates against grants. It SHALL NOT render the allowlist from grant files at Helm render time, because
+  Helm cannot verify merger, tag ref or digest.
+- THE SYSTEM SHALL NOT enforce grant expiry at admission. Expiry bounds the start of a rollout (merge or
+  push), and pod restarts after expiry remain allowed. A post-sync verifier SHALL compare running image
+  digests with the allowlisted digest and alert on a mismatch or an unknown result.
+
+Deploy-key bypass (amended 2026-11-11)
+- WHILE ruleset 18465404 lets any deploy key bypass `main` protection THE SYSTEM SHALL rate P5b (the
+  `argo-workflows-bot-2026-10` key) and P6 as BLOCKING-UNKNOWN. It SHALL report the hold as enforced
+  against them only after mctl-gitops#2543 narrows the bypass, or after the owner accepts the residual in
+  writing. Until then, the L5 detector, running with script and policy from the parent commit, is the only
+  control on those paths.
 
 Runtime-flag guard in git
 - WHILE no activation grant exists THE SYSTEM SHALL refuse any guarded file that sets
@@ -144,6 +199,12 @@ Detection
   detects; it does not enforce.
 
 Tests
+- THE SYSTEM SHALL include negative bypass tests: a bump with no grant, a bump with a stale grant for a
+  different head or tree, a bump from a workflow other than the two allowed ones, a direct push of a tag,
+  grant and allowlist, a PR that edits the guard together with a guarded file, a PR-defined spoof of the
+  required check, a grant that expires before the merge, a `main` that tightened the hold before the merge,
+  and a head that moved after dispatch. Each SHALL prove that no write happened, or, where only detection
+  exists (direct push, P5b/P6), that the detector alerts.
 - THE SYSTEM SHALL include synthetic negative tests that run the real embedded bump scripts and push loops
   against a local bare repository. Each test SHALL prove that no commit reached the bare `main` for every
   refusal case in tasks.md. A normal authorised release of another service, and a granted bump through a PR,
@@ -162,6 +223,9 @@ Tests
 
 ## Open questions
 
+- (Amended 2026-11-11) The owner decisions D1-D6 in design.md: the ruleset's required context and `strict`,
+  the checker App, the P5b/P6 residual versus #2543, the digest-to-source label before #934 merges, Deny
+  before reliance, and the chart pin.
 - Out-of-band cluster-admin paths (Argo CD UI/CLI sync with parameter overrides, `kubectl` with the
   `KUBECONFIG`/`ARGOCD_TOKEN` repository secrets, deleting or unbinding the ValidatingAdmissionPolicy) could
   not be observed from source. Admission covers the first two, and root-app `selfHeal` reverts the policy
