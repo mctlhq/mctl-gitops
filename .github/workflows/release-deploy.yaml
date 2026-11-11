@@ -747,7 +747,7 @@ jobs:
           export PREFIX="release-bump/${SERVICE}-"
           others=$(gh pr list --repo "$REPO" --state open --limit 100 \
             --json number,headRefName,author \
-            --jq '.[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.headRefName as $h | $ENV.PREFIX as $p | ($h | startswith($p)) and ($h[($p | length):] | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | "\(.number) \(.headRefName)"')
+            --jq '.[] | select(.author.login | test("^(app/)?mctl-gitops-pr(\\[bot\\])?$")) | select(.headRefName as $h | $ENV.PREFIX as $p | ($h | startswith($p)) and ($h[($p | length):] | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | "\(.number) \(.headRefName)"')
           while read -r n ref; do
             [[ -n "$n" && "$n" != "$pr" ]] || continue
             other_tag="${ref#"$PREFIX"}"
@@ -792,7 +792,7 @@ jobs:
             case "$state" in
               MERGED) echo "::notice::release-bump pull request #${PR} merged"; exit 0 ;;
               CLOSED)
-                sup=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '[.comments[] | select(.author.login | test("^(app/)?mctl-gitops-pr$")) | select(.body | startswith("Superseded by #"))] | length')
+                sup=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '[.comments[] | select(.author.login | test("^(app/)?mctl-gitops-pr(\\[bot\\])?$")) | select(.body | startswith("Superseded by #"))] | length')
                 if [[ "$sup" -gt 0 ]]; then
                   echo "::notice::release-bump pull request #${PR} was superseded by a newer release"; exit 0
                 fi

@@ -76,6 +76,10 @@ def cases(text):
     case("ordering is numeric, 1.10.0 is newer than 1.9.0", (rc, closed), (1, ["50"]))
     rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mashkovd")], new_tag="1.3.0")
     case("a bump by another author is never closed", (rc, closed), (0, []))
+    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mctl-gitops-pr[bot]")], new_tag="1.3.0")
+    case("the App's REST login (mctl-gitops-pr[bot]) is recognised", (rc, closed), (0, ["41"]))
+    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="evil-mctl-gitops-pr[bot]")], new_tag="1.3.0")
+    case("a look-alike bot login is never closed", (rc, closed), (0, []))
     rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="app/other-app")], new_tag="1.3.0")
     case("a bump by another App is never closed", (rc, closed), (0, []))
     rc, closed, _ = run_block(text, [pr(50, "1.3.0", service="foo"), pr(41, "1.0.0", service="foo-2")], new_tag="1.3.0", service="foo")
@@ -105,7 +109,8 @@ MUTANTS = [
     ("lexical-ish compare drops the numeric base", "10#${a[i]} < 10#${b[i]}", "${a[i]} < ${b[i]}"),
     ("minor and patch ignored", "for i in 0 1 2; do", "for i in 0; do"),
     ("newer open bump no longer fails the run", [('is not newer"\n' + IND + 'exit 1', 'is not newer"\n' + IND + 'true')]),
-    ("author filter dropped", 'select(.author.login | test("^(app/)?mctl-gitops-pr$")) | ', ""),
+    ("author filter dropped", 'select(.author.login | test("^(app/)?mctl-gitops-pr(\\\\[bot\\\\])?$")) | ', ""),
+    ("REST [bot] login no longer recognised", '(\\\\[bot\\\\])?$', '$'),
     ("tag-shape filter dropped and unorderable closes", [(' and ($h[($p | length):] | test("^[0-9]+\\\\.[0-9]+\\\\.[0-9]+$"))', ""), ('if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then')]),
     ("own PR may be closed", '[[ -n "$n" && "$n" != "$pr" ]] || continue', '[[ -n "$n" ]] || continue'),
     ("unorderable tag closes anyway", 'if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then'),
