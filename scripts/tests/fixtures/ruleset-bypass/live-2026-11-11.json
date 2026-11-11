@@ -1,0 +1,162 @@
+{
+ "/repos/mctlhq/mctl-gitops/rulesets/14564982": {
+  "_links": {
+   "html": {
+    "href": "https://github.com/mctlhq/mctl-gitops/rules/14564982"
+   },
+   "self": {
+    "href": "https://api.github.com/repos/mctlhq/mctl-gitops/rulesets/14564982"
+   }
+  },
+  "bypass_actors": [],
+  "conditions": {
+   "ref_name": {
+    "exclude": [],
+    "include": [
+     "~DEFAULT_BRANCH"
+    ]
+   }
+  },
+  "created_at": "2026-03-31T21:01:08.040+02:00",
+  "enforcement": "disabled",
+  "id": 14564982,
+  "name": "main",
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5E8VNNzgDePnY",
+  "rules": [
+   {
+    "type": "deletion"
+   },
+   {
+    "type": "non_fast_forward"
+   }
+  ],
+  "source": "mctlhq/mctl-gitops",
+  "source_type": "Repository",
+  "target": "branch",
+  "updated_at": "2026-03-31T21:01:08.057+02:00"
+ },
+ "/repos/mctlhq/mctl-gitops/rulesets/18465404": {
+  "_links": {
+   "html": {
+    "href": "https://github.com/mctlhq/mctl-gitops/rules/18465404"
+   },
+   "self": {
+    "href": "https://api.github.com/repos/mctlhq/mctl-gitops/rulesets/18465404"
+   }
+  },
+  "bypass_actors": [
+   {
+    "actor_id": null,
+    "actor_type": "DeployKey",
+    "bypass_mode": "always"
+   }
+  ],
+  "conditions": {
+   "ref_name": {
+    "exclude": [],
+    "include": [
+     "refs/heads/main"
+    ]
+   }
+  },
+  "created_at": "2026-07-03T08:41:43.738+02:00",
+  "enforcement": "active",
+  "id": 18465404,
+  "name": "main-protection",
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5E8VNNzgEZwnw",
+  "rules": [
+   {
+    "type": "deletion"
+   },
+   {
+    "type": "non_fast_forward"
+   },
+   {
+    "parameters": {
+     "allowed_merge_methods": [
+      "merge",
+      "squash",
+      "rebase"
+     ],
+     "dismiss_stale_reviews_on_push": true,
+     "dismissal_restriction": {
+      "allowed_actors": [],
+      "enabled": false
+     },
+     "require_code_owner_review": false,
+     "require_extra_approval_for_unattributed_changes": true,
+     "require_last_push_approval": false,
+     "required_approving_review_count": 1,
+     "required_review_thread_resolution": false,
+     "required_reviewers": []
+    },
+    "type": "pull_request"
+   },
+   {
+    "parameters": {
+     "do_not_enforce_on_create": false,
+     "required_status_checks": [
+      {
+       "context": "cloudflare-plan",
+       "integration_id": 15368
+      },
+      {
+       "context": "reserved-hosts",
+       "integration_id": 15368
+      },
+      {
+       "context": "validate",
+       "integration_id": 15368
+      }
+     ],
+     "strict_required_status_checks_policy": false
+    },
+    "type": "required_status_checks"
+   }
+  ],
+  "source": "mctlhq/mctl-gitops",
+  "source_type": "Repository",
+  "target": "branch",
+  "updated_at": "2026-11-09T12:38:52.226+01:00"
+ },
+ "/repos/mctlhq/mctl-gitops/rulesets?includes_parents=true&per_page=100": [
+  {
+   "_links": {
+    "html": {
+     "href": "https://github.com/mctlhq/mctl-gitops/rules/14564982"
+    },
+    "self": {
+     "href": "https://api.github.com/repos/mctlhq/mctl-gitops/rulesets/14564982"
+    }
+   },
+   "created_at": "2026-03-31T21:01:08.040+02:00",
+   "enforcement": "disabled",
+   "id": 14564982,
+   "name": "main",
+   "node_id": "RRS_lACqUmVwb3NpdG9yec5E8VNNzgDePnY",
+   "source": "mctlhq/mctl-gitops",
+   "source_type": "Repository",
+   "target": "branch",
+   "updated_at": "2026-03-31T21:01:08.057+02:00"
+  },
+  {
+   "_links": {
+    "html": {
+     "href": "https://github.com/mctlhq/mctl-gitops/rules/18465404"
+    },
+    "self": {
+     "href": "https://api.github.com/repos/mctlhq/mctl-gitops/rulesets/18465404"
+    }
+   },
+   "created_at": "2026-07-03T08:41:43.738+02:00",
+   "enforcement": "active",
+   "id": 18465404,
+   "name": "main-protection",
+   "node_id": "RRS_lACqUmVwb3NpdG9yec5E8VNNzgEZwnw",
+   "source": "mctlhq/mctl-gitops",
+   "source_type": "Repository",
+   "target": "branch",
+   "updated_at": "2026-11-09T12:38:52.226+01:00"
+  }
+ ]
+}

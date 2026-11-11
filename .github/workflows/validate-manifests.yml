@@ -321,6 +321,12 @@ jobs:
       - name: Pin required-check job ids
         run: python3 tests/test_required_check_job_ids.py
 
+      # mctlhq/mctl-gitops#2543: the ruleset bypass verifier is an operator
+      # check (bypass_actors is visible only to a ruleset editor, which
+      # GITHUB_TOKEN is not). CI proves the detector both ways on fixtures.
+      - name: Self-test the ruleset bypass verifier
+        run: python3 -I tests/test_ruleset_bypass_check.py
+
       - name: Validate agent credential delivery
         run: |
           set -euo pipefail

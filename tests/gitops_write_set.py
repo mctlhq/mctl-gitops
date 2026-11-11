@@ -23,7 +23,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SECRET_NAMES = ("mctl-gitops-deploy-key", "github-actions-pat")
 VAULT_PATHS = ("platform/argo-workflows/gitops-deploy-key",
                "platform/argo-workflows/github-actions-pat")
-# The same deploy key as an Actions environment secret (CI bump jobs).
+# The CI bump jobs' deploy key, an Actions environment secret. It is a
+# different key from the one in mctl-gitops-deploy-key (#2543); both can
+# bypass main-protection because its DeployKey entry admits every write key.
 CI_SECRET_NAMES = ("GITOPS_BUMP_DEPLOY_KEY",)
 ALL_NAMES = SECRET_NAMES + VAULT_PATHS + CI_SECRET_NAMES
 

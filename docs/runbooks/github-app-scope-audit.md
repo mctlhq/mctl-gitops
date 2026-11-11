@@ -72,6 +72,10 @@ The entry had to go because the agents run with this App's token, so an
 App that could bypass the ruleset meant every agent could. If it ever
 reappears on that list, treat it as a regression.
 
+That `DeployKey` entry is itself class-wide: GitHub stores it with
+`actor_id: null`, so it admits every write deploy key on the repository
+(#2543). See `docs/runbooks/main-protection-bypass-actors.md`.
+
 ## Consumers
 
 For who can *read* the `AGENTS_APP_PRIVATE_KEY` secret
