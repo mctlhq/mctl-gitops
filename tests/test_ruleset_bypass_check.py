@@ -74,7 +74,9 @@ def world(protection_actors, extra=None):
 def allow(*entries, rules=RULES):
     return {"rulesets": {"18465404": {"name": "main-protection", "required_rules": list(rules),
                                       "min_approving_review_count": 1,
-                                      "required_status_checks": ["validate", "reserved-hosts", "cloudflare-plan"],
+                                      "required_status_checks": [
+                                          {"context": c, "integration_id": 15368}
+                                          for c in ("validate", "reserved-hosts", "cloudflare-plan")],
                                       "bypass_actors": list(entries)}}}
 
 
@@ -190,7 +192,7 @@ for label, inc, exc in (("exclude refs/heads/main", ["refs/heads/main"], ["refs/
           code == 10 and any("does not cover" in x for x in f), f"{code} {f}")
 
 for label, inc in (("refs/*", ["refs/*"]), ("refs/heads/*/x", ["refs/heads/*/x"]),
-                   ("ref?heads/main", ["refs?heads/main"])):
+                   ("refs?heads/main", ["refs?heads/main"])):
     doc = world([integ(BUMP_APP)])
     doc[f"/repos/{REPO}/rulesets/18465404"]["conditions"]["ref_name"] = {"include": inc, "exclude": []}
     code, f, u, _ = run(doc)
@@ -231,6 +233,22 @@ for ctx in ("validate", "reserved-hosts", "cloudflare-plan"):
                 c for c in r["parameters"]["required_status_checks"] if c["context"] != ctx]
     code, f, u, _ = run(doc)
     check(f"MUTATION status check {ctx} dropped -> findings", code == 10 and any(ctx in x for x in f), f"{code} {f}")
+
+for label, change in (("integration_id dropped", lambda c: c.pop("integration_id")),
+                      ("integration_id changed", lambda c: c.update(integration_id=1))):
+    doc = world([integ(BUMP_APP)])
+    for r in doc[f"/repos/{REPO}/rulesets/18465404"]["rules"]:
+        if r["type"] == "required_status_checks":
+            for c in r["parameters"]["required_status_checks"]:
+                if c["context"] == "validate":
+                    change(c)
+    code, f, u, _ = run(doc)
+    check(f"MUTATION validate check {label} -> findings",
+          code == 10 and any("'validate' from integration 15368" in x for x in f), f"{code} {f}")
+
+code, f, u, _ = run(world([DEPLOY_KEY]), {"rulesets": {"18465404": {
+    "bypass_actors": [], "required_status_checks": ["validate"]}}})
+check("allowlist status check without integration_id -> unknown", code == 20, f"{code} {u}")
 
 for label, mut in (("pull_request without parameters", lambda r: r.pop("parameters") if r["type"] == "pull_request" else None),
                    ("approval count not an int", lambda r: r["parameters"].update(required_approving_review_count="1")

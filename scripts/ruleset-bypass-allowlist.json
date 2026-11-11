@@ -5,7 +5,11 @@
       "name": "main-protection",
       "required_rules": ["deletion", "non_fast_forward", "pull_request", "required_status_checks"],
       "min_approving_review_count": 1,
-      "required_status_checks": ["validate", "reserved-hosts", "cloudflare-plan"],
+      "required_status_checks": [
+        {"context": "validate", "integration_id": 15368},
+        {"context": "reserved-hosts", "integration_id": 15368},
+        {"context": "cloudflare-plan", "integration_id": 15368}
+      ],
       "bypass_actors": []
     }
   }

@@ -17,7 +17,7 @@ A finding is:
   or that is not `active`, or whose include/exclude no longer covers
   refs/heads/main, or that lost a rule type listed in its `required_rules`,
   requires fewer approvals than `min_approving_review_count`, or dropped a
-  context listed in `required_status_checks`.
+  {context, integration_id} pair listed in `required_status_checks`.
 
 "Could not observe" is never "observed absent". A failed, partial (a later
 page failing), malformed or truncated read is UNKNOWN. GitHub omits
@@ -254,8 +254,11 @@ def validate_allowlist(allowlist):
         if "min_approving_review_count" in spec and not _is_int(spec["min_approving_review_count"]):
             raise ValueError(f"allowlist entry {rid!r}: min_approving_review_count must be an integer")
         ctxs = spec.get("required_status_checks", [])
-        if not isinstance(ctxs, list) or not all(isinstance(c, str) for c in ctxs):
-            raise ValueError(f"allowlist entry {rid!r}: required_status_checks must be a list of contexts")
+        if not isinstance(ctxs, list) or not all(
+                isinstance(c, dict) and isinstance(c.get("context"), str) and _is_int(c.get("integration_id"))
+                for c in ctxs):
+            raise ValueError(f"allowlist entry {rid!r}: required_status_checks must be "
+                             "{context, integration_id} pairs")
         req = spec.get("required_rules", [])
         if not isinstance(req, list) or not all(isinstance(r, str) for r in req):
             raise ValueError(f"allowlist entry {rid!r}: required_rules must be a list of rule types")
@@ -320,10 +323,13 @@ def scan(token, allowlist, fetcher=fetch, repo=REPO, today=None):
                         if not isinstance(checks, list) or not all(
                                 isinstance(c, dict) and isinstance(c.get("context"), str) for c in checks):
                             raise ReadError(f"ruleset {rid}: required_status_checks malformed")
-                        have = {c["context"] for c in checks}
-                        for ctx in spec["required_status_checks"]:
-                            if ctx not in have:
-                                findings.append(f"ruleset {rid}: required status check {ctx!r} is missing")
+                        # The source matters: a context without its integration_id
+                        # can be satisfied by anyone who can post a status.
+                        have = {(c["context"], c.get("integration_id")) for c in checks}
+                        for want in spec["required_status_checks"]:
+                            if (want["context"], want["integration_id"]) not in have:
+                                findings.append(f"ruleset {rid}: required status check {want['context']!r} "
+                                                f"from integration {want['integration_id']} is missing")
             observed.append(rid)
         except ReadError as e:
             unknown.append(str(e))

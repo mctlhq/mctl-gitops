@@ -268,8 +268,8 @@ more actors than allowlist entries, an expired transitional entry, or
 `main-protection` missing, disabled, no longer covering `main` (include or
 exclude, matched the way GitHub does: a single `*` does not cross `/`),
 missing one of its `required_rules`, requiring fewer approvals than
-`min_approving_review_count`, or missing a context in
-`required_status_checks` is a finding. A failed,
+`min_approving_review_count`, or missing a `{context, integration_id}`
+pair in `required_status_checks` is a finding. A failed,
 partial or malformed read, or a response without `bypass_actors`, is
 unknown, never clean.
 
