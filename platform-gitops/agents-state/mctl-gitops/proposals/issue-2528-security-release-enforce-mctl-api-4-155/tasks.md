@@ -91,7 +91,8 @@ release-bump publication. UNKNOWN outranks a concurrent observed violation.
   a write blindly. A proven completed effect is reconciled once; a proven
   unperformed effect needs a new human decision. Test broker failure closed.
 - [ ] T7 / P2-4 positive control: packet-only PR -> real synthetic human decision
-  -> allow-only PR -> combined tag+chart PR -> guarded merge -> observed exact
+  -> allow-only PR (grant remains approved/unspent) -> combined tag+chart PR
+  -> guarded merge (one consume) -> observed exact
   deployment diff. Exercise BOTH bump producers, shape/apply/merge guards and
   detector/admission interfaces, including grant-only policy publication.
 - [ ] T8 / P2-4 negative controls: wrong or absent pin, pin-only or tag-only API

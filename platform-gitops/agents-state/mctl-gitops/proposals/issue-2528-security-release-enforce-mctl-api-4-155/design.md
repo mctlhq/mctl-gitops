@@ -43,7 +43,8 @@ the index digest, verify the referenced platform manifests/configs by digest and
 check revision labels on runnable images. Handle non-runnable attestation
 manifests explicitly; do not treat malformed or unknown descriptors as absent.
 
-packet_ref names an immutable GitOps commit and packet path. The approval's
+packet_ref names an immutable GitOps commit reachable from trusted main after
+the packet-only PR merged, and the packet path. The approval's
 artifact_hash and args_digest must equal sha256(packet bytes), not just the
 image digest; its target names packet_ref. Use the existing generic action
 approval contract with action_kind release.mctl-api, risk high, side_effect
@@ -75,8 +76,11 @@ expected intent/context/content binding, that principal, platform_admin basis,
 no decided_via principal and a nonempty freshness window. An account name or
 GitHub User type alone is not a human authorization proof.
 
-Verify the allow-only PR's immutable merged tree and provenance through GitHub:
-only the expected entry changed, it names the same packet/decision, the
+At allow-only admission verify the candidate head, exact entry diff, packet,
+human decision and owner review without spending the deployment approval.
+Before a later deployment, also verify the allow-only PR's immutable merged
+tree and provenance through GitHub: only the expected entry changed, it names
+the same packet/decision, the
 configured owner GitHub User ID approved the exact final head, and the configured
 broker App merged that head. The direct-human ledger decision is the human
 authority proof; a bot review or an account name alone cannot replace it. This
@@ -127,9 +131,13 @@ P2-2/P2-3 as implemented-but-not-enforced at most; release remains NO-GO.
 
 ## 4. Merge-time transaction and recovery (P2-3)
 
-The broker serializes guarded merges and loads code/policy from the current
-trusted main. It re-reads PR base/head, full diff, packet, allow provenance,
-ledger decision, current reviews/checks, git tag/source/tree and registry digests.
+The broker serializes guarded merges, loads code/policy from current trusted
+main, classifies the effect and verifies the appropriate owner authorization,
+base/head, complete diff and current reviews/checks. Packet-only, allow-only and
+policy/code-only merges never consume a deployment grant. The following spend
+protocol applies only to a release-effect or an explicitly authorized rollback:
+re-read packet, allow provenance, ledger decision, git tag/source/tree and
+registry digests in addition to the common checks.
 Build a merge-plan binding base/head, policy/packet digests, grant, effect type
 and a deadline. Require at least 15 minutes left in both packet expiry and API
 fresh_until. Right before merging, consume the approval through the API with its

@@ -58,11 +58,13 @@ The canonical coordination packet is docs/plans/mctl-api-4-155-release-readiness
 
 ### R3. Validate the deployment-causing merge (P2-3)
 
-- Before every guarded merge, the broker re-reads exact current base/head,
-  trusted policy, packet/allow provenance, expiry, tag/source/tree/digest/chart,
-  reviews and all required checks. Recheck after every retry; strict checks
+- Before every guarded merge, the broker re-reads current base/head, trusted
+  policy, effect class, applicable owner authorization, reviews and checks.
+  For release/rollback effects it also rechecks packet/allow provenance, expiry
+  and tag/source/tree/digest/chart. Recheck after every retry; strict checks
   enforce up-to-date base at GitHub's actual merge, and the merge names the head SHA.
-- Consume only after all reads pass, with at least 15 minutes left in the API
+- Consume a deployment grant only for a release/rollback effect, after all
+  reads pass, with at least 15 minutes left in the API
   freshness window and packet expiry. The merge request has a 60-second deadline;
   do not start/retry after that window. A crash or ambiguous response must not
   release another writer or permit a consumed grant to be replayed.
@@ -79,7 +81,8 @@ The canonical coordination packet is docs/plans/mctl-api-4-155-release-readiness
 - Recognize separate policy/code, release-packet, allow-only and release-effect
   PRs. Reject combining a grant/policy change with its deployment effect.
 - Allow-only PRs verify a genuine packet-bound human decision and authorized
-  broker merge with an exact-head owner review. They change only one version's allow entry. Policy changes require
+  broker merge with an exact-head owner review. They change only one version's
+  allow entry and do not consume the deployment grant. Policy changes require
   their own protected review and cannot disable the hold implicitly.
 - A release-effect PR changes exactly the API tag and chart pin together, as
   authorized by the packet. Wire the producer, patch apply/conflict rules,
