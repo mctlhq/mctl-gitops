@@ -7,6 +7,9 @@ name: Agy PR review
 # https://github.com/mctlhq/.github/blob/main/docs/plans/agy-formal-reviews.md
 # Merge this caller only after the central bootstrap has passed live acceptance.
 on:
+  # Temporary compile-only probe: the trusted callee skips this untrusted event.
+  pull_request:
+    types: [opened, synchronize]
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
