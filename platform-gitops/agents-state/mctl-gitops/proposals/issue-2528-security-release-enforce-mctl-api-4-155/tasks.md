@@ -1,110 +1,127 @@
-# Tasks: issue-2528-security-release-enforce-mctl-api-4-155
+# Tasks and acceptance proof: amended #2528
 
-- [ ] 1. Baseline inventory. Run the planned `forbidden_env` scan by hand
-  (`grep -rnw` for the four names over the `env_sources` globs) and record the
-  result in the PR description. Confirm that `mctl-api.yaml` has exactly one
-  `repoURL: https://github.com/mctlhq/mctl-api.git` with a sibling 40-hex
-  `targetRevision`. — DoD: a clean scan on `main` is recorded, or each hit is
-  listed and escalated before task 3 merges.
-- [ ] 2. Schema. Extend `_holds()` in `scripts/release-gate.py` with
-  `chart_repo`, `require_pinned_chart`, `require_binding`, `source_repo`,
-  `forbidden_env`, `env_sources`, and the record fields `digest`,
-  `source_commit`, `release_head` and `chart_revision`. Unknown keys and
-  malformed values are errors. Document them in the `release-gates.yaml` header
-  comment. — DoD: `--selftest` covers each malformed field; the live policy still
-  loads.
-- [ ] 3. Offline checks (depends on 2). Add `chart_problems()` and
-  `env_problems()` and call them from `hold_problems()` in both `check` and
-  `verify`. Add the new fields to the `mctl-api-bootstrap` hold with
-  `allow: []`. — DoD: `python3 scripts/release-gate.py verify` passes on the
-  current tree; the T1-T6 cases are red when their rule is mutated out (MUTANTS).
-- [ ] 4. Online `artifact` subcommand (depends on 2). Route all reads through
-  the injectable `_fetch`, with exits 0/6/7, a 20 s timeout and no retries
-  inside the tool. Skip below `held_from`. — DoD: T7-T10 pass with fake fetchers;
-  no test touches the network.
-- [ ] 5. Grant/effect separation (depends on 2). In `diff_problems()`, refuse a
-  change set that touches `version_holds` or `scripts/release-gate.py` together
-  with the held tag or chart `targetRevision`. — DoD: T11 passes;
-  `tests/test_release_gate_diff.py` stays green.
-- [ ] 6. Workflow wiring (depends on 3, 4). In `release-deploy.yaml` and
-  `gitops-bump.yaml`, call `artifact --policy-rev origin/main` next to every
-  `verify --policy-rev origin/main` in bump, `publish-direct` (inside the
-  per-attempt `release_gate()`) and `publish-pr`. Add the needed
-  `packages: read` permission only if task 8 confirms it is required. —
-  DoD: T12-T15 pass in `tests/test_release_deploy_bump.py` /
-  `tests/test_release_bump_pr_route.py` style harnesses against a disposable
-  bare remote.
-- [ ] 7. PR trust (depends on 3, 5). In `validate-manifests.yml`, add a step
-  that runs the base ref's `release-gate.py` with `python3 -I` from
-  `$RUNNER_TEMP` (`verify`, `diff --base <merge-base> --head HEAD`, and
-  `artifact` when held). Add `artifact` to `release-gate-watch.yml` daily. —
-  DoD: T16 passes; a PR that edits the script cannot turn its own check green.
-- [ ] 8. GHCR access decision. Determine whether `ghcr.io/mctlhq/mctl-api`
-  manifests are readable anonymously or need `GITHUB_TOKEN` with `packages:
-  read`, and whether the chart at `a5b9ef9c` supports `image.digest`. — DoD: the
-  answer is recorded in the runbook. If digest values are supported, open a
-  follow-up for an offline `image.digest == allow.digest` check.
-- [ ] 9. Runbook (depends on 3-7). Update `docs/runbooks/mctl-api-release-hold.md`:
-  P7 KNOWN-ENFORCED, P9 partial, the new rows for artifact/env/separation, and
-  P5b, P6, P8, P12 and Job-written Secrets still BLOCKING-UNKNOWN. Keep the
-  dependency map (#934, #2523, #993, #992, #1007, #935, #1040, #1292). — DoD:
-  every row cites a file and line on the implementation head.
-- [ ] 10. Review. Independent review on the final head, plus a separate
-  digest-bound owner approval, before merge. No allow record is added in this
-  change. — DoD: the review is recorded; `allow: []` is unchanged.
+All implementation boxes remain unchecked. This amendment is preparation only;
+independent final-content review and a new digest-bound human implementation
+grant are required. Do not edit .status.yaml or decide/consume the old grant.
 
-## Tests
+## Delivery sequence
 
-All tests use copies of the real bootstrap file and the policy in temp trees,
-fake fetchers, and disposable bare git remotes. Every negative case asserts the
-exit code and, for workflow harnesses, that the remote's `main` SHA is unchanged
-and no `release-bump/*` ref was pushed.
+- [ ] 1. Pin the current bootstrap, API chart/source, ruleset/identity inventory
+  and the existing positive/negative gate reproductions. Retain the R0 hold and
+  record all unknown write/credential paths. DoD: source citations and the five
+  findings below are linked to their replacement contracts, not marked fixed
+  merely because this proposal merged.
+- [ ] 2. Implement policy/packet/allow validation in the existing gate, with one
+  canonicalization/hash algorithm and duplicate/unknown-field rejection. Add
+  trusted owner IDs and protected-file hashing; leave live allow empty. DoD:
+  R1 fields/relations and historical-state versus new-effect cases pass fixtures.
+- [ ] 3. Implement the read adapter for MCTL decision/consume, GitHub PR/review/
+  git provenance and GHCR digest/config evidence. Contract-test the release
+  intent and direct-human binding against the actual pre-release API behavior;
+  never weaken registered-policy or authority settings. Missing capabilities
+  block readiness pending separate approved prerequisites. DoD: T1-T3 below.
+- [ ] 4. Implement the credential-free Helm renderer and env-source graph,
+  including key contracts proven against runtime producer source. Keep the
+  existing values-block reader. DoD: the real baseline passes; T9-T10 fail
+  closed; no live Secret or real credential is read.
+- [ ] 5. Implement effect classes and separate detector/admission semantics.
+  Update both bump producers, patch application/conflict rules, shape guard,
+  auto-merge handoff and diff logic for the exact API tag+chart pair. Preserve
+  all unrelated-service restrictions. DoD: the full positive path T7 and the
+  mutation/negative controls T8 run against disposable bare remotes.
+- [ ] 6. Add the default-branch pull_request_target checker, dedicated App
+  context and explicit trusted-policy reads. DoD: head/workflow/script/policy
+  substitutions and a same-named generic Actions success cannot satisfy T4.
+- [ ] 7. Implement the broker's fresh base/head/evidence reads, atomic API
+  consume, deadline, strict/exact-head merge and crash reconciliation. Remove
+  direct guarded merges from auto-merge; fail closed if broker unavailable.
+  DoD: T5-T6, including crash after green/consume, leave no unauthorized write.
+- [ ] 8. Prepare exact checker/broker App, environment and ruleset payloads for
+  the owner, including separate update-authority and PR/check enforcement rules.
+  Coordinate writer migration with #2543 before cutover; prove normal DevLoop,
+  deployment and rollback continuity. DoD: disposable GitHub repository tests
+  show the broker can merge an authorized PR, cannot push main or skip checks,
+  and all non-broker ordinary actors cannot merge even with a stale green check.
+  No production actor/credential/ruleset mutation occurs under this task alone.
+- [ ] 9. Owner/operator separately authorizes and performs the proven staged
+  cutover. If capability or migration evidence is missing, keep the gate inert
+  and release NO-GO. DoD: live authority/rules/checker IDs match approved
+  payloads; representative ordinary workflows are healthy; bypass/cluster-admin
+  residuals are explicitly inventoried. Do not report P2-2/P2-3 enforced early.
+- [ ] 10. Update the write-path runbook and canonical R0 packet with final-head
+  code links, implementation versus enforced status, approval provenance,
+  positive/mutation evidence, residuals and rollback. Independent implementation
+  review must have no unaddressed P1/P2. Implementation completion is not BUILD
+  GO, DEPLOY GO, DDL permission or Glovo activation.
 
-- [ ] T1. Held 4.155.0, allow record missing `digest` (and each other bound
-  field in turn): `check` exits 6.
-- [ ] T2. Held version with a valid record, but the chart `targetRevision` is not
-  equal to `chart_revision`: refused in `check` and `verify`.
-- [ ] T3. Chart `targetRevision: main` at 4.154.0: `verify` refused (chart main
-  drift).
-- [ ] T4. Two `mctl-api.git` sources, or none: UNKNOWN refusal.
-- [ ] T5. Each forbidden key added to the values `env`, then as a `secretKey` in
-  `mctl-api-secrets.yaml`, then in a `.tf` under `zitadel-iac`: refused at
-  4.154.0.
-- [ ] T6. An `env_sources` glob that matches nothing, or an unreadable file:
-  UNKNOWN refusal.
-- [ ] T7. `artifact`: GHCR digest differs from the record: exit 6.
-- [ ] T8. `artifact`: revision label differs from `source_commit`, or the
-  label is absent: exit 6.
-- [ ] T9. `artifact`: the git tag resolves to another commit, or the tag is
-  absent: exit 6 or 7.
-- [ ] T10. `artifact`: HTTP 500, timeout, malformed JSON, or a missing
-  `Docker-Content-Digest`: exit 7.
-- [ ] T11. One commit adds an allow record and bumps the tag: `diff` refused.
-- [ ] T12. `release-deploy.yaml` route: a held bump with no record leaves the
-  remote unchanged.
-- [ ] T13. `gitops-bump.yaml` route: same as T12, and an expired record also
-  leaves the remote unchanged.
-- [ ] T14. Concurrent `main`: a record removed on the remote between bump and
-  publish, so the retry after rebase refuses and no push happens.
-- [ ] T15. Positive control: an ordinary bump below `held_from` publishes
-  through both routes. A held bump with a complete record, matching chart and a
-  fake-fetcher match publishes on the PR route.
-- [ ] T16. PR trust: a PR copy of `release-gate.py` patched to always pass still
-  fails the trusted-copy step.
-- [ ] T17. Mutation: removing each new rule from the script turns at least one
-  of T1-T11 red (extend MUTANTS in `tests/test_release_gate_bootstrap_hold.py`).
+## Test groups (all necessary before enforcement)
 
-## Rollback
+Use synthetic identities/artifacts, injectable provider answers, exact baseline
+fixtures and disposable remotes/repositories; never attack production. Every
+negative effect test proves no target-main SHA change and no unauthorized
+release-bump publication. UNKNOWN outranks a concurrent observed violation.
 
-All changes are in git and grant nothing. To roll back, revert the
-implementation PR: the gate returns to the current `version_holds` behaviour
-(version plus allow record), which still refuses 4.155.0 with `allow: []`.
+- [ ] T1 / P2-1: a valid packet and direct-human decision pass. Unrelated intent,
+  implementation aar used as release grant, copied grant, missing decision
+  binding, wrong owner, delegated/service decider, disabled principal, stale
+  context, expired freshness, policy drift or failed ledger reads refuse.
+  Test the atomic consume race: exactly one attempt can spend the decision.
+- [ ] T2 / P2-1: reject arbitrary release_head, a different release PR, missing
+  final-head reviews, changed source_tree, tag/source mismatch, wrong image
+  label/digest, chart_revision != source_commit and changed trusted policy.
+  Verify all OCI runnable platforms and explicit attestation handling. Provider
+  pagination failure, malformed responses, registry/git reads failing and
+  missing immutable packet/provenance are UNKNOWN, never an empty clean set.
+- [ ] T3 / P2-1: owner decision on the packet reference/content is preserved
+  through allow-only publication. Packet mutation, unrelated allow PR, missing exact-head owner review, unexpected
+  merger, wrong numeric/principal mapping, policy hash including its own allow,
+  a security-code change after approval and a missing configured owner refuse.
+  Reject missing admission/revalidation capability; never silently relax it.
+- [ ] T4 / P2-2: remove the PR's trusted step, replace its workflow/script or
+  local dependencies, edit PR policy and forge release-hold via GitHub Actions.
+  None satisfy the App-bound check. Canary code in the PR must never run in the
+  privileged checker. Fail on head/base fetch mismatch or leaked render access.
+- [ ] T5 / P2-3: between CI and merge expire the decision, retarget the registry
+  tag, tighten base policy, move the head, change reviews and race the base.
+  Each forces fresh evaluation or refusal; no stale merge. New merges/rollback
+  writes require freshness, while unchanged deployments/restarts do not.
+- [ ] T6 / P2-3: crash before/after consume and after posting a successful
+  check; leave a stale green result; make a merge response ambiguous. Non-broker
+  actors cannot merge, consumed grants cannot replay and UNKNOWN cannot retry
+  a write blindly. A proven completed effect is reconciled once; a proven
+  unperformed effect needs a new human decision. Test broker failure closed.
+- [ ] T7 / P2-4 positive control: packet-only PR -> real synthetic human decision
+  -> allow-only PR -> combined tag+chart PR -> guarded merge -> observed exact
+  deployment diff. Exercise BOTH bump producers, shape/apply/merge guards and
+  detector/admission interfaces, including grant-only policy publication.
+- [ ] T8 / P2-4 negative controls: wrong or absent pin, pin-only or tag-only API
+  release, extra env/marker/second-source changes, mixed policy+effect, changed
+  packet, conflict resolution reverting a neighboring line and stale bump all
+  refuse. Other services' valid tag-only releases remain positive controls.
+- [ ] T9 / P2-5: render the real bootstrap + pinned API chart successfully and
+  detect each forbidden key in env, valueFrom, envFrom prefixes, desired
+  ExternalSecret keys and proven producer output. New sources outside old
+  globs must be resolved or UNKNOWN; they must not evade observation.
+- [ ] T10 / P2-5: malformed/duplicate YAML, inline/unresolved Helm, escaped or
+  computed keys, ambiguous references, incomplete render profiles, unknown
+  producer keys, missing files and failed reads are UNKNOWN/refused. A regex
+  scan cannot turn the failure green. Assert no credentials, network, live
+  Secret payload access or execution of candidate scripts during rendering.
+- [ ] T11 / mutation proof: remove each new binding, trusted-source rule,
+  effect/authority check, expiry/deadline, read-failure branch and graph-coverage
+  check in turn. A named T1-T10 test must fail; restore it and confirm pass.
+  Run the existing worker gate, bootstrap hold, diff, route and write-path tests.
 
-- If only the online check misbehaves, for example a GHCR outage blocking a
-  legitimate held release, the fallback is a reviewed PR that removes the
-  `artifact` calls from the workflows. Ordinary releases below `held_from` are
-  never affected.
-- If the `forbidden_env` scan produces a false positive, the fallback is a
-  reviewed PR that narrows the `env_sources` globs.
-- Never roll back by deleting the `mctl-api-bootstrap` hold: an absent hold
-  removes all protection.
+## Review closure map
+
+| Finding | Replacement contract | Required evidence |
+|---|---|---|
+| P2-1 authority/head binding | requirements R1; design 2 | T1-T3 |
+| P2-2 PR-controlled trust | requirements R2; design 3 | T4 and authority cutover |
+| P2-3 stale merge | requirements R3; design 4 | T5-T6 and authority cutover |
+| P2-4 impossible positive path | requirements R4; design 5 | T7-T8 through real callers |
+| P2-5 parser fallback | requirements R5; design 6 | T9-T10 on baseline and failures |
+
+All five require independent review of this new content before a fresh human
+implementation grant. This mapping is a specification correction, not evidence
+that unimplemented controls or production enforcement already pass.

@@ -178,3 +178,19 @@ Go 1.27.4, synthetic fixtures and no production data or credentials:
 
 These tests use a fake identity provider. They do not satisfy production OAuth,
 real human decision, a production-copy D2 rehearsal, or R0 rollback acceptance.
+
+
+## Five-P2 proposal correction (2026-11-12)
+
+The resumed investigator produced content `sha256:2c3cb1c5...179e99ab` and grant
+`aar_045442c76066428da01870ac379b9d32`. Independent review returned AMEND:
+authority/head binding, trusted workflow, merge-time validation, the positive
+tag+chart path and YAML fallback each had a P2. The amended
+[canonical proposal](../../platform-gitops/agents-state/mctl-gitops/proposals/issue-2528-security-release-enforce-mctl-api-4-155/requirements.md)
+and its design/tasks now specify their replacements and required tests.
+This is a specification correction; implementation, capability proof and
+operator cutover remain undone. The old grant must not approve the new content.
+A fresh final-content review and matching human grant are required. In
+particular, no release readiness is inferred before the trusted merge-authority
+boundary and #2543 migration prerequisites are demonstrated. No ledger state,
+allow record, release, production setting or acceptance status changes here.
