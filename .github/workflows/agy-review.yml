@@ -22,7 +22,7 @@ permissions: {}
 
 jobs:
   agy-review:
-    uses: mctlhq/.github/.github/workflows/agy-formal-review.yml@78222f02aea038b51d93a1a05634e9110060f390
+    uses: mctlhq/.github/.github/workflows/agy-formal-review.yml@0eb1c0747a6b53395dc41d501ad0912fa2a92380
     permissions:
       contents: read
       actions: read
