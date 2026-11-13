@@ -277,9 +277,22 @@ env:
   # ignore it). Disconnect, delete, revoke_telegram_session and tier "none" on
   # it need an explicit confirm_canary, and the manage page asks twice, so a
   # manual test cannot silently leave the canary red (2026-10-28: ~38 h).
-  # Keep it equal to tg_user_id in the out-of-band Secret mctl-telegram-canary;
-  # when the canary moves to another account, change both together.
+  # Keep it equal to MCP_K8S_SA_TELEGRAM_ID below and to CANARY_TG_USER_ID on
+  # the canary CronJob; when the canary moves to another account, change all
+  # three together (the server refuses to start if the SA id is not listed).
   CANARY_TELEGRAM_IDS: "8745115872"
+  # The canary authenticates to /mcp with its projected ServiceAccount token
+  # (mctl-telegram#1286), not a minted worker token: on 2026-11-13 a
+  # revoke_worker_token by telegram_id killed that token and the canary could
+  # not recover by itself. The server verifies the token against the cluster
+  # JWKS and admits exactly this subject, with this audience, as this Telegram
+  # id, with fixed read-only scopes. The audience is dedicated so a token
+  # minted for the API server can never be replayed here; it must match the
+  # projected volume on the canary CronJob. Issuer defaults to
+  # https://kubernetes.default.svc.cluster.local, which is this cluster's.
+  MCP_K8S_SA_SUBJECT: "system:serviceaccount:labs:labs-mctl-telegram-canary"
+  MCP_K8S_SA_AUDIENCE: "tg.mctl.ai/canary"
+  MCP_K8S_SA_TELEGRAM_ID: "8745115872"
   DEMO_REVIEWER_TG_ID: "8745115872"
   # Claude Directory review (2026-10-22): the only peer the reviewer identity
   # may really write to (send_message / send_reply, mctl-telegram 0.88.0+;
@@ -777,9 +790,10 @@ extraObjects:
   # suspended (deploy/canary/cronjob.yaml suspend:true) over suspicion that its
   # MTProto list_dialogs calls, sharing the server's Telegram egress IP,
   # contributed to new-login SendCode throttling. That hang was fixed in
-  # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light. Identity lives
-  # in the out-of-band Secret mctl-telegram-canary (tg_user_id + bearer_token)
-  # — not in git. Target identity is 8745115872 (@mctlhq) since 2026-10-30
+  # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light. Identity is
+  # declared here: a projected ServiceAccount token (audience
+  # tg.mctl.ai/canary) that the server maps to one Telegram id through
+  # MCP_K8S_SA_* above; nothing secret is stored. Target identity is 8745115872 (@mctlhq) since 2026-10-30
   # (924671154 @dmitriimashkov from 2026-08-23), guarded by
   # CANARY_TELEGRAM_IDS above; read-only scopes (telegram:dialogs:read + messages:read),
   # send_enabled=false on its row. Do not point this probe at operator
@@ -791,12 +805,10 @@ extraObjects:
   # 8745115872 (@mctlhq) was the earlier candidate but is tied up as the
   # App-Directory demo identity; 924671154 exists on stable only, so moving
   # there removes the sharing rather than relocating it.
-  # The bearer token is NOT mintable through /api/agent/token (that issues
-  # aud=agent, accepted only on /api/agent/v1/*, never on /mcp). The path that
-  # does mint it is POST /api/mcp/worker-token, shipped in mctl-telegram#412:
-  # admin-scoped, read-only allowlist, 30d default and 90d ceiling. Since
-  # #421 the canary renews itself from there (see the RBAC below) and only
-  # needs a human every year, when the renewal chain hits its ceiling.
+  # Until 2026-11-13 the canary used a worker token minted by hand (POST
+  # /api/mcp/worker-token, mctl-telegram#412) kept in the out-of-band Secret
+  # mctl-telegram-canary and renewed by the canary itself (#421). That Secret
+  # and its patch RBAC are now unused and are removed in a follow-up.
   # Recreate + 1 replica stays.
   # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
   # platform-owned and live in bootstrap/templates/system/
@@ -842,10 +854,22 @@ extraObjects:
                 app.kubernetes.io/name: mctl-telegram
                 mctl.me/component: canary
             spec:
-              # Needed for token self-renewal: the projected service-account
-              # volume is what authenticates the PATCH that writes the renewed
-              # token back into the Secret.
+              # Its projected token below is the canary's /mcp credential;
+              # the server admits this ServiceAccount by name
+              # (MCP_K8S_SA_SUBJECT).
               serviceAccountName: labs-mctl-telegram-canary
+              # kubelet issues the token for the dedicated audience, rotates
+              # it well before expirationSeconds, and it dies with the pod.
+              # 600s is the minimum Kubernetes allows; the server refuses any
+              # token living longer than an hour or not bound to a pod.
+              volumes:
+                - name: mcp-token
+                  projected:
+                    sources:
+                      - serviceAccountToken:
+                          audience: tg.mctl.ai/canary
+                          expirationSeconds: 600
+                          path: token
               imagePullSecrets:
                 - name: ghcr-credentials
               restartPolicy: Never
@@ -868,19 +892,19 @@ extraObjects:
                     readOnlyRootFilesystem: true
                     capabilities:
                       drop: ["ALL"]
+                  volumeMounts:
+                    - name: mcp-token
+                      mountPath: /var/run/secrets/tg.mctl.ai
+                      readOnly: true
                   env:
                     - name: CANARY_BASE_URL
                       value: "https://tg.mctl.ai"
+                    # Log label only; keep it equal to MCP_K8S_SA_TELEGRAM_ID,
+                    # which is what actually decides the identity.
                     - name: CANARY_TG_USER_ID
-                      valueFrom:
-                        secretKeyRef:
-                          name: mctl-telegram-canary
-                          key: tg_user_id
-                    - name: CANARY_BEARER_TOKEN
-                      valueFrom:
-                        secretKeyRef:
-                          name: mctl-telegram-canary
-                          key: bearer_token
+                      value: "8745115872"
+                    - name: CANARY_BEARER_TOKEN_FILE
+                      value: /var/run/secrets/tg.mctl.ai/token
                     - name: CANARY_PROBE_UNREAD
                       value: "true"
                     # Connector login-path probes (mctl-telegram#959): every
@@ -890,13 +914,6 @@ extraObjects:
                     # vm-rules/mctl-telegram-canary.yaml.
                     - name: CANARY_LOGIN_PATH
                       value: "true"
-                    # Naming the Secret is what switches renewal on; the
-                    # binary leaves it off entirely when this is unset, so
-                    # this line and the RBAC above must travel together.
-                    # Namespace is read from the projected service-account
-                    # volume, not configured, so it cannot point elsewhere.
-                    - name: CANARY_TOKEN_SECRET_NAME
-                      value: "mctl-telegram-canary"
                     - name: PUSHGATEWAY_URL
                       value: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
                   resources:
