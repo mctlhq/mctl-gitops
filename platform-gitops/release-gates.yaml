@@ -47,7 +47,21 @@ version_holds:
     #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given
     #     approved_by: mashkovd
     #     expires: 2026-12-31              # the date after which the allow lapses
-    allow: []
+    allow:
+      # One-time bootstrap grant (owner decision 2026-11-13): 4.155.0 is the
+      # release that has to carry the human step-up (mctlhq/mctl-api#1022)
+      # the #2528 gate will rely on, so it cannot wait for that gate. Covers
+      # only the 4.155.0 tag on the merge of mctlhq/mctl-api#934: parents
+      # a5b9ef9cf0f880f28b841033a8b2a6d9563ce050 (main, frozen) and
+      # 5820073f20abc78ab1db2b1b42c146c70ac8cbf3 (release metadata only).
+      # The GHCR digest and its revision label are checked by hand against
+      # that tag commit before the owner approves the release-bump PR; the
+      # evidence packet is in the PR that adds this record. The owner
+      # merges this record personally; an agent merge is not a grant.
+      - version: "4.155.0"
+        grant: mctlhq/mctl-gitops#PRNUM
+        approved_by: mashkovd
+        expires: 2026-11-27
 
 gates:
   - name: mctl-agents-workers
