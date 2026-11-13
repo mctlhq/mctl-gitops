@@ -56,8 +56,11 @@ version_holds:
       # 5820073f20abc78ab1db2b1b42c146c70ac8cbf3 (release metadata only).
       # The GHCR digest and its revision label are checked by hand against
       # that tag commit before the owner approves the release-bump PR; the
-      # evidence packet is in the PR that adds this record. The owner
-      # merges this record personally; an agent merge is not a grant.
+      # evidence packet is in the PR that adds this record. The GO was
+      # given by the owner in a chat session on 2026-11-13 and the merge was
+      # carried out by a Claude agent session on that explicit instruction:
+      # the grant rests on that chat decision, not on the merge identity
+      # (the gap mctlhq/mctl-api#1022 closes).
       - version: "4.155.0"
         grant: mctlhq/mctl-gitops#2607
         approved_by: mashkovd
