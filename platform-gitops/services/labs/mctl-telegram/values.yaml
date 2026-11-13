@@ -807,16 +807,14 @@ extraObjects:
   # there removes the sharing rather than relocating it.
   # Until 2026-11-13 the canary used a worker token minted by hand (POST
   # /api/mcp/worker-token, mctl-telegram#412) kept in the out-of-band Secret
-  # mctl-telegram-canary and renewed by the canary itself (#421). That Secret
-  # and its patch RBAC are now unused and are removed in a follow-up.
+  # mctl-telegram-canary and renewed by the canary itself (#421). The patch
+  # RBAC and the token alerts were removed with that scheme.
   # Recreate + 1 replica stays.
-  # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
-  # platform-owned and live in bootstrap/templates/system/
-  # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
-  # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
-  # drop them silently, and whitelisting it project-wide would let any tenant
-  # grant itself patch on NetworkPolicies through update-config's
-  # config_patch. Only the serviceAccountName reference below belongs here.
+  # The canary's ServiceAccount is NOT here. It is an authentication identity
+  # (MCP_K8S_SA_SUBJECT above), so it is platform-owned and lives in
+  # bootstrap/templates/system/labs-mctl-telegram-canary-rbac.yaml, out of
+  # reach of update-config's tenant config_patch. Only the
+  # serviceAccountName reference below belongs here.
   - apiVersion: batch/v1
     kind: CronJob
     metadata:
