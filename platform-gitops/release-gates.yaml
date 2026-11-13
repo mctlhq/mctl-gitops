@@ -66,8 +66,8 @@ version_holds:
         approved_by: mashkovd
         expires: 2026-11-27
       # Second bootstrap grant (owner GO in chat, 2026-11-13): 4.156.0
-      # carries the Glovo Basket code (mctl-api #1007, #1008, #1014, #1017,
-      # #1018), every part of it off unless the GLOVO_* env chain is set,
+      # carries the Basket canary code of mctlhq/mctl-api#1006 (#1007, #1008,
+      # #1014, #1017, #1018), every part of it off unless its env chain is set,
       # and still precedes #1022. Covers only the 4.156.0 tag on the merge
       # of mctlhq/mctl-api#1023, whose first parent is mctl-api main at
       # 373e237823294f832353cacd83ab5a4d6f8e4cd4 and whose second parent
