@@ -1,157 +1,147 @@
-# Bind the mctl-api 4.155.0 release hold to artifact, chart and runtime flags at the GitOps point of effect
+# mctl-api release hold: bound human authority and guarded release effects
 
-## Context
+Status: PROPOSED. Revision of 2026-11-13 that merges #2604 (base: packet-bound
+human decision, broker-only guarded merges, default-branch checker,
+credential-free rendering) with #2606 (donor: record-level provenance,
+policy_digest, RFC3339 expiry, honest detection) and resolves three independent
+reviews (findings A-H, L, M; map in tasks.md). It extends scripts/release-gate.py
+and release-gates.yaml version_holds. Merging it authorizes no implementation,
+acceptance flip, allow record, release, grant decision or consumption,
+ruleset, App, environment, credential, database or production change. Grants
+aar_045442c76066428da01870ac379b9d32 and aar_31e2ff84fe6b41b5bf918e79334ca9bd
+bind superseded content and must not approve this revision. The coordination
+packet is docs/plans/mctl-api-4-155-release-readiness.md.
 
-Issue mctlhq/mctl-gitops#2528 asks for the mctl-api 4.155.0 owner hold to be
-enforced where a GitOps write or deployment takes effect. A check in an earlier
-PR is not enough. 4.155.0 bundles the Bridge changes (#970/#971) with the
-deferred execution-request queue, and both are under the owner hold of
-mctl-api#934. Since the issue was filed, part of the hold has been built.
-`platform-gitops/release-gates.yaml` carries a `version_holds` entry
-`mctl-api-bootstrap` (`held_from: "4.155.0"`, `allow: []`). `scripts/release-gate.py`
-reads the `values: |` block of
-`platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml` and refuses
-a held tag that has no allow record. It does this before the write, before every
-push (`--policy-rev origin/main`) on the direct and PR routes, in `validate`,
-and after the fact in `release-gate-watch.yml`. The chart source is now pinned to
-`a5b9ef9cf0f880f28b841033a8b2a6d9563ce050`.
+## Baseline (read 2026-11-13, mctl-gitops main 618cfe917; no Secret data read)
 
-This proposal amends the #2528 proposal to cover what is still not enforced
-(see `docs/plans/mctl-api-4-155-release-readiness.md`, "Reconcile before
-deciding the implementation grant"):
+- Hold mctl-api-bootstrap: held_from 4.155.0, allow: [], record field
+  `expires` is a YAML date. hold_problems skips tags below held_from;
+  run() returns 6 even for an UNKNOWN problem.
+- Bootstrap image tag 4.154.0; GHCR resolves ghcr.io/mctlhq/mctl-api:4.154.0 to
+  sha256:42d5a572156f179f0f697bd3279fe7817831294d9ccb4a55a91d28b02f9d4488
+  (registry read; live pod imageID not observed). Chart pinned to a5b9ef9c.
+- Both bump jobs map every nonzero gate exit to 6 (release-deploy.yaml:358-360,
+  gitops-bump.yaml:243-245). auto-merge.yml:82 protected_re does not name
+  mctl-api.yaml, so a bot-approved claude/* PR can auto-merge it today.
+- Ruleset 18465404: bypass DeployKey (null id, always); strict checks TRUE;
+  required contexts cloudflare-plan, reserved-hosts, validate (15368) and
+  agy-formal-review (5732062); one approval; non_fast_forward and deletion rules.
+  Classic protection on main: allow_force_pushes false, enforce_admins false.
+- Write deploy keys 165489378 (gitops-bump) and 166128843
+  (argo-workflows-bot-2026-10). Every environment has can_admins_bypass true.
+  APP_PRIVATE_KEY and AGENTS_APP_PRIVATE_KEY are repository-level secrets,
+  readable by a workflow on any branch a writer pushes.
+- mctlhq/mctl-api#1022 (OPEN, owner GO 2026-11-13) specifies the fresh,
+  MFA-backed decide-page decision; the existing DevLoop decide page
+  (internal/api/handlers_devloop_decide.go) has prompt=login, max_age=0 and
+  auth_time but no amr check. #2543 is OPEN.
 
-- an allow record is a set of strings (version, grant, approver, expiry). It is
-  not bound to an immutable artifact, a source commit, a reviewed release head
-  or the chart revision;
-- nothing refuses the Bridge and queue runtime keys in the bootstrap values or
-  in the Secrets the app loads with `envFrom`;
-- the PR-time check runs the PR's own copy of the guard;
-- the chart pin is not tied to the tag.
+## Required behavior
 
-The change extends the existing reader. A second reader is out of scope.
+### R0. The only human signal is a #1022 ledger decision (A)
 
-## User stories
+- mctl-api#1022 is a hard prerequisite: until it is released and contract-tested,
+  readiness is BLOCKED. Every owner decision this proposal relies on (packet
+  release grant, policy change, owners change) is a fresh browser decision on a
+  decide page modelled on handlers_devloop_decide.go: prompt=login, max_age=0,
+  auth_time not earlier than the challenge start, amr containing a second
+  factor (mfa, hwk or swk), the decide page's own client ID only. Bearer and MCP
+  routes refuse these intents for every principal, including the owner.
+- The ledger record carries decider principal ID, auth_time, amr, client_id,
+  challenge ID and the binding digests. The gate and broker verify that record
+  through a read-only API call. A GitHub login, review, merge, environment
+  approval or App approval is never a human signal; an agent holding the
+  owner's gh or MCP token produces none that counts.
+- "Green gate = merge without asking" never applies to packet, allow or policy
+  PRs, nor to release-effect PRs. Failed ledger reads are UNKNOWN.
 
-- AS the release owner I WANT a held mctl-api version to deploy only when an
-  allow record names the exact image digest, source commit, release head and
-  chart revision SO THAT a string-only or reused approval cannot release a
-  different artifact.
-- AS the release owner I WANT the Bridge and queue activation keys refused in
-  every GitOps-declared env source of mctl-api SO THAT "dark Bridge" stays true
-  regardless of which version runs.
-- AS a platform operator I WANT every write path to the bootstrap file to run the
-  same, trusted check immediately before the write SO THAT a PR, retry, rebase or
-  newer `main` cannot discard the hold.
-- AS a reviewer I WANT an explicit inventory of the write paths that remain
-  unenforced SO THAT the release decision records them as owner-accepted residual
-  risk rather than assuming they are covered.
+### R1. Authorization binds the whole release
 
-## Acceptance criteria (EARS)
+- A held release names a committed canonical packet, a #1022 decision bound to
+  sha256(packet bytes), and an allow record merged by the broker.
+- The packet binds repository/version/image digest, API release PR, reviewed
+  release_head, source_commit/source_tree, chart_revision == source_commit,
+  policy_digest and RFC3339 UTC expires_at. The tag resolves to source_commit;
+  tree(source_commit) == source_tree == tree(release_head); the image revision
+  label equals source_commit. packet_ref is first-parent reachable from main.
+- The allow record copies the packet fields, names its allow_pr and the
+  decision ID, and passes record-level provenance: the first-parent commit that
+  last changed it is the merge commit of allow_pr, merged by the broker App,
+  changing only allow entries. A deploy-key edit of an existing record makes the
+  record absent. `expires` is replaced by quoted `expires_at`
+  (YYYY-MM-DDTHH:MM:SSZ); the old field is malformed.
+- policy_digest covers the hold minus allow lists plus protected enforcement
+  file hashes. Expiry and policy_digest gate new writes and merges only, never
+  deployed state, pod restarts or unrelated releases.
 
-Allow-record binding
+### R2. Trust never comes from PR-controlled code (E)
 
-- WHEN `release-gates.yaml` is loaded and a hold has `require_binding: true`
-  THE SYSTEM SHALL reject (exit 6) any allow record that lacks one of `digest`
-  (`sha256:` plus 64 lowercase hex), `source_commit`, `release_head` or
-  `chart_revision` (each 40 lowercase hex), or carries a malformed one.
-- WHEN a held version (>= `held_from`) is checked in bump mode (`check`) or tree
-  mode (`verify`) THE SYSTEM SHALL require the first source of the held
-  Application whose `repoURL` is the hold's `chart_repo` to have a
-  `targetRevision` exactly equal to the allow record's `chart_revision`.
-- WHILE a hold has `require_pinned_chart: true` THE SYSTEM SHALL refuse the held
-  file, at any version, if its `chart_repo` source `targetRevision` is not a
-  40-hex commit (for example `main` or a tag name) or if that source appears
-  more or less than exactly once.
-- WHEN `release-gate.py artifact --hold <name> --version <v>` runs THE SYSTEM
-  SHALL resolve `<repository>:<v>` in GHCR to a manifest digest and refuse unless
-  it equals the allow record's `digest`, refuse unless the image config label
-  `org.opencontainers.image.revision` equals `source_commit`, and refuse unless
-  the mctl-api git tag `<v>` resolves to `source_commit`.
-- IF any GHCR or GitHub read for the artifact check fails, times out, is
-  partial or is malformed THEN THE SYSTEM SHALL exit 7 (UNKNOWN) and the calling
-  workflow SHALL treat that as a refusal with no write.
-- WHEN `release-deploy.yaml` or `gitops-bump.yaml` writes or pushes a held version
-  of the bootstrap file (bump job, every `publish-direct` attempt, every
-  `publish-pr` attempt) THE SYSTEM SHALL run the artifact check in the same step
-  that already runs `release-gate.py verify --policy-rev origin/main`, after any
-  rebase and before the push.
+- release-hold is computed on pull_request_target by default-branch code that
+  reads the candidate only as git data, and is posted by a dedicated checker App
+  whose integration ID the ruleset requires.
+- Checker and broker run only in environments restricted to main, with
+  can_admins_bypass false and environment-scoped secrets; their workflows refuse
+  any ref other than refs/heads/main. No workflow_dispatch from another branch
+  can reach their credentials. Repository-level App keys are a listed risk
+  with a migration task.
 
-Runtime keys
+### R3. The broker validates every guarded merge
 
-- WHILE a hold lists `forbidden_env` THE SYSTEM SHALL refuse (exit 6), at any
-  version, if any listed name appears as a key of `env` in the held file's
-  `values: |` block, as a `secretKey` of an ExternalSecret in the hold's
-  `env_sources`, or as a token in any other file matched by `env_sources`.
-- THE SYSTEM SHALL ship `forbidden_env` for `mctl-api-bootstrap` as
-  `MCTL_BRIDGE_ENABLED`, `MCTL_BRIDGE_PROVIDERS`, `MCTL_BRIDGE_PROVIDER_TOKENS`
-  and `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE`.
-- IF an `env_sources` pattern matches no file, or a matched file cannot be
-  read or parsed THEN THE SYSTEM SHALL refuse with an UNKNOWN problem line.
+- The broker is the sole ordinary merger. Before every guarded merge it re-reads
+  base/head, trusted policy and its provenance (B), effect class, the ledger
+  decision, checks and, for release effects, packet, allow provenance, expiry,
+  tag/source/tree/digest/chart. Strict checks and the exact head SHA bind
+  GitHub's merge. App approvals (e.g. mctl-agy-reviewer[bot]) and owner-login
+  GitHub approvals never count toward human authority.
+- A deployment grant is consumed only for a release or rollback effect, after
+  all reads pass, with at least 15 minutes of freshness and packet expiry left;
+  merge within 60 seconds. Ambiguity is reconciled, never retried blindly.
 
-Trust and TOCTOU
+### R4. The authorized path works and fails closed
 
-- WHEN `validate-manifests.yml` runs on a pull request THE SYSTEM SHALL also run
-  the base branch's `scripts/release-gate.py` (read with `git show
-  origin/<base>:scripts/release-gate.py`, executed with `python3 -I` from a
-  temporary directory) against the PR tree, in addition to the PR's own copy.
-- IF a single pull request or pushed commit changes both the hold policy
-  (`version_holds` in `release-gates.yaml`, or `scripts/release-gate.py`) and the
-  held file's image tag or chart `targetRevision` THEN THE SYSTEM SHALL refuse it
-  (`release-gate.py diff` and the PR validator). A grant and the change it
-  authorises land in separate reviewed changes.
-- WHILE an allow record is consumed by a new write THE SYSTEM SHALL read the
-  policy from `origin/main` at push time (existing `--policy-rev origin/main`),
-  so a newer `main` that removed or changed the record refuses the push.
+- Classes: policy, packet-only, allow-only, release-effect, unrelated; mixed or
+  unclassified is refused. A release effect moves exactly the API tag and chart
+  pin. Both bump producers, apply, shape guard, auto-merge handoff and diff agree.
+- Exit codes: 0 pass, 6 refused, 7 UNKNOWN; 7 outranks 6 and is preserved
+  through run(), both bump jobs and every caller (G).
 
-Inventory and reporting
+### R5. The hold covers the image anywhere (C, D)
 
-- THE SYSTEM SHALL record every write path in
-  `docs/runbooks/mctl-api-release-hold.md` as KNOWN-ENFORCED, KNOWN-NOT-A-PATH or
-  BLOCKING-UNKNOWN. P7 is updated to reflect the landed pin.
-- WHILE P5b, P6, P8, P9 (Job-written Secrets) or P12 are BLOCKING-UNKNOWN THE
-  SYSTEM SHALL NOT be described as preventing deployment of a held version. The
-  release decision packet SHALL carry the owner's dated residual-risk disposition
-  for each of them.
-- IF a test of a refusal path is run THEN THE SYSTEM SHALL demonstrate that no
-  commit reached the target ref (no new SHA on the disposable remote's `main`,
-  no `release-bump/*` branch push).
+- A repo-wide scan of rendered manifests finds every reference to the held
+  repository, keyed on repository, not on the hold file. A new or unparseable
+  reference is UNKNOWN. Admission is cluster-wide.
+- While the hold is in force, any mctl-api tag other than the pinned baseline
+  4.154.0@sha256:42d5a572... needs a record, including tags below held_from.
+- build-image refuses to overwrite an existing tag of the held repository (no
+  commit-named exception) and confirms the pushed digest. Steady-state
+  verification compares the registry digest and pod imageIDs with the pin.
 
-## Out of scope
+### R6. Rendered env sources fail closed
 
-- Any change to mctl-api#934 (Draft/hold), any mctl-api tag, build or release.
-- Adding an allow record for 4.155.0, or any approval/GO. This proposal grants
-  nothing.
-- Deploy key, ruleset (18465404), App, environment, or credential changes
-  (#2543). These are recorded as residual risk only.
-- The ValidatingAdmissionPolicy (P8), the App-bound `release-hold` status context
-  (P12), the post-sync digest verifier CronJob, and ruleset `strict` checks:
-  separate owner-approved work.
-- Scanning Secrets written at runtime by the zitadel-iac Job beyond static text
-  in `platform-gitops/helm-charts/zitadel-iac/**`. Reading Secret payloads is
-  forbidden.
-- Bridge activation, provider credentials, the reviewer aggregate gate (#1040),
-  the B4 marker rollback (#1007), the release signal watcher (#1292).
-- A separate `release-hold.py`. The existing reader is extended.
+- Trusted pinned Helm render, strict duplicate-key parsing, no regex fallback.
+  Resolve env/envFrom/valueFrom through reconciled sources and producer key
+  contracts. MCTL_BRIDGE_ENABLED, MCTL_BRIDGE_PROVIDERS,
+  MCTL_BRIDGE_PROVIDER_TOKENS and MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE are
+  forbidden at every version. Rendering has no credentials, network or plugins;
+  never read live Secret payloads.
 
-## Open questions
+### R7. Detection is honest (L, H, M)
 
-- Does the mctl-api chart at `a5b9ef9c` render an `image.digest` value? If yes,
-  should the hold also require `image.digest` in the bootstrap values to equal
-  the allow record's `digest`, so that Argo pulls by digest rather than by a
-  mutable tag? Without it, the artifact check proves tag-to-digest only at write
-  time. A tag re-push afterwards is a residual risk (the post-sync verifier is
-  out of scope).
-- Which credential does the artifact check use for GHCR? The Actions
-  `GITHUB_TOKEN` with `packages: read` if the package grants this repo access, or
-  anonymous if `ghcr.io/mctlhq/mctl-api` is public. Neither was observed in this
-  run.
-- What format does `release_head` take: the #934 head SHA at review time, or the
-  merge commit on mctl-api `main`? This design binds it as an audit field and
-  checks only that it is well-formed. A machine check of it against GitHub
-  (PR merged at that head) is a follow-up.
-- The issue reports grants `aar_31e2ff84...` (fresh) and `aar_e6e35315...`
-  (superseded). Their ledger state was not read: UNKNOWN.
-- Decision for the issue: `READY_FOR_SEPARATE_IMPLEMENTATION_PROPOSAL` for the
-  gate extension above. Releasing 4.155.0 stays `BLOCKED_UNPROVEN_WRITE_PATH`
-  until #2543 closes P5b/P6, or until the owner accepts that residual in
-  writing.
+- The in-repo watcher runs from the pushed commit and is not a control. A
+  detector in a repository no mctl-gitops write credential can change, running a
+  pinned gate SHA, plus a heartbeat whose absence alerts, is a GO precondition.
+- Expiry is judged at the GitHub-recorded time of the first-parent merge commit
+  that introduced the effect, never the detector clock or a committer date.
+- The first-parent walk is sound only while the previously observed tip stays on
+  the new tip's first-parent chain and allow_force_pushes false and the
+  non_fast_forward rule are observed; otherwise violation or UNKNOWN.
+
+### R8. Residual risk is accepted, named and compensated (F)
+
+- Choice: accepted risk plus compensating detection, not remediation before
+  4.155.0. The owner accepted it in chat on 2026-11-13. A dated GitHub record by
+  the owner (scope 4.155.0, expiry, incident and rollback owner) naming deploy
+  keys 165489378 and 166128843, cluster-admin overrides, P9 env injection and
+  repository-level App keys is a GO precondition; it is not fabricated here.
+- No new or wider bypass is added. These paths stay ACCEPTED-RISK, never
+  reported as enforced, until #2543 lands.

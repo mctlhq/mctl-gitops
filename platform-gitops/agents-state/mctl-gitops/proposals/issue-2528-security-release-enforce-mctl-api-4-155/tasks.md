@@ -1,110 +1,149 @@
-# Tasks: issue-2528-security-release-enforce-mctl-api-4-155
+# Tasks and acceptance proof: #2528
 
-- [ ] 1. Baseline inventory. Run the planned `forbidden_env` scan by hand
-  (`grep -rnw` for the four names over the `env_sources` globs) and record the
-  result in the PR description. Confirm that `mctl-api.yaml` has exactly one
-  `repoURL: https://github.com/mctlhq/mctl-api.git` with a sibling 40-hex
-  `targetRevision`. — DoD: a clean scan on `main` is recorded, or each hit is
-  listed and escalated before task 3 merges.
-- [ ] 2. Schema. Extend `_holds()` in `scripts/release-gate.py` with
-  `chart_repo`, `require_pinned_chart`, `require_binding`, `source_repo`,
-  `forbidden_env`, `env_sources`, and the record fields `digest`,
-  `source_commit`, `release_head` and `chart_revision`. Unknown keys and
-  malformed values are errors. Document them in the `release-gates.yaml` header
-  comment. — DoD: `--selftest` covers each malformed field; the live policy still
-  loads.
-- [ ] 3. Offline checks (depends on 2). Add `chart_problems()` and
-  `env_problems()` and call them from `hold_problems()` in both `check` and
-  `verify`. Add the new fields to the `mctl-api-bootstrap` hold with
-  `allow: []`. — DoD: `python3 scripts/release-gate.py verify` passes on the
-  current tree; the T1-T6 cases are red when their rule is mutated out (MUTANTS).
-- [ ] 4. Online `artifact` subcommand (depends on 2). Route all reads through
-  the injectable `_fetch`, with exits 0/6/7, a 20 s timeout and no retries
-  inside the tool. Skip below `held_from`. — DoD: T7-T10 pass with fake fetchers;
-  no test touches the network.
-- [ ] 5. Grant/effect separation (depends on 2). In `diff_problems()`, refuse a
-  change set that touches `version_holds` or `scripts/release-gate.py` together
-  with the held tag or chart `targetRevision`. — DoD: T11 passes;
-  `tests/test_release_gate_diff.py` stays green.
-- [ ] 6. Workflow wiring (depends on 3, 4). In `release-deploy.yaml` and
-  `gitops-bump.yaml`, call `artifact --policy-rev origin/main` next to every
-  `verify --policy-rev origin/main` in bump, `publish-direct` (inside the
-  per-attempt `release_gate()`) and `publish-pr`. Add the needed
-  `packages: read` permission only if task 8 confirms it is required. —
-  DoD: T12-T15 pass in `tests/test_release_deploy_bump.py` /
-  `tests/test_release_bump_pr_route.py` style harnesses against a disposable
-  bare remote.
-- [ ] 7. PR trust (depends on 3, 5). In `validate-manifests.yml`, add a step
-  that runs the base ref's `release-gate.py` with `python3 -I` from
-  `$RUNNER_TEMP` (`verify`, `diff --base <merge-base> --head HEAD`, and
-  `artifact` when held). Add `artifact` to `release-gate-watch.yml` daily. —
-  DoD: T16 passes; a PR that edits the script cannot turn its own check green.
-- [ ] 8. GHCR access decision. Determine whether `ghcr.io/mctlhq/mctl-api`
-  manifests are readable anonymously or need `GITHUB_TOKEN` with `packages:
-  read`, and whether the chart at `a5b9ef9c` supports `image.digest`. — DoD: the
-  answer is recorded in the runbook. If digest values are supported, open a
-  follow-up for an offline `image.digest == allow.digest` check.
-- [ ] 9. Runbook (depends on 3-7). Update `docs/runbooks/mctl-api-release-hold.md`:
-  P7 KNOWN-ENFORCED, P9 partial, the new rows for artifact/env/separation, and
-  P5b, P6, P8, P12 and Job-written Secrets still BLOCKING-UNKNOWN. Keep the
-  dependency map (#934, #2523, #993, #992, #1007, #935, #1040, #1292). — DoD:
-  every row cites a file and line on the implementation head.
-- [ ] 10. Review. Independent review on the final head, plus a separate
-  digest-bound owner approval, before merge. No allow record is added in this
-  change. — DoD: the review is recorded; `allow: []` is unchanged.
+All boxes are unchecked. Nothing starts before an independent review of this
+content and a fresh digest-bound #1022 human implementation decision. Do not
+edit .status.yaml or decide/consume an old grant. No task adds an allow record,
+releases, tags, builds, bumps or syncs mctl-api, reads Secret data, or changes
+keys, rulesets, Apps or environments; those are prepared here and applied by
+the owner. Every PR below touches protected paths and is human-merged until
+cutover; none is merged under "green gate = merge without asking".
+
+## Delivery
+
+- [ ] 0. Now, independent of the rest: add
+  `^platform-gitops/bootstrap/templates/mctl-platform/mctl-api\.yaml$` to
+  protected_re (auto-merge.yml:82) and a test that every version_holds[].file
+  matches it. DoD: tests/test_auto_merge_protected_paths.py fails when the entry
+  is removed; a bot-approved claude/* PR touching the file stays open.
+- [ ] 1. Prerequisite (mctl-api#1022): release and contract-test the decide-page
+  decision for intents release.mctl-api and policy.mctl-gitops.release-hold.
+  DoD: T1 passes against the released API in a disposable environment.
+- [ ] 2. Gate core (scripts/release-gate.py, release-gates.yaml): owners
+  (principal IDs), decide-page client ID, baseline pin, expires_at, packet and
+  allow schema, policy-digest, record and policy provenance, first-parent
+  packet_ref, run() returning 7 on UNKNOWN, any-new-tag rule. allow stays [].
+  DoD: T2-T5 pass; existing tests/test_release_gate*.py pass unchanged.
+- [ ] 3. External reads behind one adapter: ledger decision, GitHub PR/files/
+  git, GHCR digest/config/label. DoD: T3 and T6 failure cases are 7.
+- [ ] 4. Bump jobs: `sys.exit(7 if rc == 7 else 6)` at release-deploy.yaml:358-360
+  and gitops-bump.yaml:243-245 (and release-preflight.py check_gate); check
+  --route, held output, START_SHA, pre-push diff before every push, await-bump
+  only when held is 'false'. DoD: T7 through the real embedded scripts against
+  bare remotes; exit 7 reaches the job summary as "could not observe".
+- [ ] 5. Effect classes and the tag+pin release effect in both producers,
+  release-bump-apply.sh, release-bump-diff-guard.py and auto-merge handoff.
+  DoD: T8 positive path and T9 negatives; other services stay tag-only.
+- [ ] 6. Repo-wide rendered image scan, credential-free Helm renderer, env
+  graph and zitadel-iac key contract; no-overwrite without commit-named
+  exemption for held repositories and post-push digest re-read in build-image.
+  DoD: T10-T11; the real baseline passes.
+- [ ] 7. release-hold-pr.yml (checker) and release-hold-merge.yml (broker),
+  both refusing non-main refs. Auto-merge change: the protected/held branch
+  that today says "need a human merge; leaving it open" dispatches the broker
+  after cutover and never merges itself. DoD: T12-T14.
+- [ ] 8. Environment and key migration payloads: release-hold-checker and
+  release-hold-merge (main-only branch policy, can_admins_bypass false,
+  environment secrets); plan to move APP_PRIVATE_KEY and AGENTS_APP_PRIVATE_KEY
+  (app-key-ratchet.yml, build-image.yaml, release-deploy.yaml) into main-only
+  environments. DoD: in a disposable repo a workflow pushed on a feature branch
+  cannot read either environment's secret; the migration plan names every
+  consumer.
+- [ ] 9. Ruleset payloads: restrict-updates ruleset (broker App plus existing
+  DeployKey only) and 18465404 plus release-hold bound to the checker App.
+  Inventory and pin classic protection allow_force_pushes false. DoD: T13 in a
+  disposable repo; applied by the owner only after DevLoop/deploy continuity.
+- [ ] 10. Admission: cluster-wide binding, baseline pin, [Warn, Audit]; Deny in a
+  separate PR after a clean sync. DoD: T15 in kind/envtest.
+- [ ] 11. Out-of-repo detector (D7), post-sync digest verifier, heartbeat.
+  DoD: T16; a run that cannot read mctl-gitops alerts "could not observe".
+- [ ] 12. GO preconditions recorded in the readiness packet: link to the owner's
+  dated GitHub residual-risk record naming deploy keys 165489378 and 166128843,
+  cluster-admin, P9 and repository-level App keys; detector live with heartbeat.
+  DoD: link resolves to an owner-authored record; until then the packet reads
+  NO-GO.
+- [ ] 13. Mutation proof and independent implementation review. DoD: T17.
 
 ## Tests
 
-All tests use copies of the real bootstrap file and the policy in temp trees,
-fake fetchers, and disposable bare git remotes. Every negative case asserts the
-exit code and, for workflow harnesses, that the remote's `main` SHA is unchanged
-and no `release-bump/*` ref was pushed.
+Synthetic identities, injected provider answers, disposable remotes, repos and
+clusters. Every negative effect test asserts the bare main SHA is unchanged, no
+PR merged and no unauthorized release-bump branch published. UNKNOWN outranks a
+concurrent violation.
 
-- [ ] T1. Held 4.155.0, allow record missing `digest` (and each other bound
-  field in turn): `check` exits 6.
-- [ ] T2. Held version with a valid record, but the chart `targetRevision` is not
-  equal to `chart_revision`: refused in `check` and `verify`.
-- [ ] T3. Chart `targetRevision: main` at 4.154.0: `verify` refused (chart main
-  drift).
-- [ ] T4. Two `mctl-api.git` sources, or none: UNKNOWN refusal.
-- [ ] T5. Each forbidden key added to the values `env`, then as a `secretKey` in
-  `mctl-api-secrets.yaml`, then in a `.tf` under `zitadel-iac`: refused at
-  4.154.0.
-- [ ] T6. An `env_sources` glob that matches nothing, or an unreadable file:
-  UNKNOWN refusal.
-- [ ] T7. `artifact`: GHCR digest differs from the record: exit 6.
-- [ ] T8. `artifact`: revision label differs from `source_commit`, or the
-  label is absent: exit 6.
-- [ ] T9. `artifact`: the git tag resolves to another commit, or the tag is
-  absent: exit 6 or 7.
-- [ ] T10. `artifact`: HTTP 500, timeout, malformed JSON, or a missing
-  `Docker-Content-Digest`: exit 7.
-- [ ] T11. One commit adds an allow record and bumps the tag: `diff` refused.
-- [ ] T12. `release-deploy.yaml` route: a held bump with no record leaves the
-  remote unchanged.
-- [ ] T13. `gitops-bump.yaml` route: same as T12, and an expired record also
-  leaves the remote unchanged.
-- [ ] T14. Concurrent `main`: a record removed on the remote between bump and
-  publish, so the retry after rebase refuses and no push happens.
-- [ ] T15. Positive control: an ordinary bump below `held_from` publishes
-  through both routes. A held bump with a complete record, matching chart and a
-  fake-fetcher match publishes on the PR route.
-- [ ] T16. PR trust: a PR copy of `release-gate.py` patched to always pass still
-  fails the trusted-copy step.
-- [ ] T17. Mutation: removing each new rule from the script turns at least one
-  of T1-T11 red (extend MUTANTS in `tests/test_release_gate_bootstrap_hold.py`).
+- [ ] T1 (A) Decision: bearer request and MCP tool call with a real owner
+  token refused; fresh login without a second factor in amr, a token from
+  another client ID, auth_time before the challenge start, expired challenge,
+  missing or unparseable amr/auth_time refused. One credential acting as broker
+  dispatcher, environment approver and PR merger (owner gh token) authorizes
+  nothing without a ledger decision. Positive: a valid decide-page decision
+  stores every field. Exactly one consume succeeds in a race.
+- [ ] T2 (R1) Packet: arbitrary release_head, other release PR, tree mismatch,
+  tag/source mismatch, wrong label or digest, chart_revision != source_commit,
+  noncanonical bytes, packet_ref only reachable through a second parent refuse.
+- [ ] T3 (R1) Allow provenance: deploy-key push adding a record; deploy-key
+  edit of an existing record's digest; merge by a human or another App; extra
+  file in the allow PR; allow_pr not matching L; decision for another packet;
+  expires_at after the packet's or old `expires` field refuse. Shallow history
+  and paginated file count mismatch are 7.
+- [ ] T4 (B) Policy: owners, held_from or protected file changed by a direct
+  push, by a non-broker merge or without a bound policy decision refuses every
+  guarded merge; owners added in the PR that relies on them refuse.
+  policy_digest is stable across key order, comments and an added record, and
+  changes with each hold field and protected file; a YAML date value is 7.
+- [ ] T5 (D) Tags: 4.154.1, 4.150.0, 4.156.0 and 5.0.0 without a record refuse;
+  4.154.0 with a different registry digest alerts; deployed held version with a
+  lapsed record still verifies.
+- [ ] T6 Each unreadable input (ledger, GitHub, GHCR, label, git) is 7, never 6
+  or pass.
+- [ ] T7 (G) Bump: no record 6; injected UNKNOWN exits 7 through both jobs; held
+  version on the direct route refused; --since aborts after a policy change.
+- [ ] T8 Positive: packet-only PR, decide-page decision, allow-only PR (grant
+  unspent), tag+pin PR, broker merge with one consume, exact deployment diff,
+  through BOTH producers.
+- [ ] T9 Negatives: pin-only, tag-only, wrong pin, extra env or marker, second
+  source, mixed policy+effect, changed packet, conflict reverting a neighbor.
+- [ ] T10 (C) A second manifest naming ghcr.io/mctlhq/mctl-api, an unparseable
+  image reference and a render failure are UNKNOWN; forbidden keys found in env,
+  valueFrom, envFrom prefixes, ExternalSecrets and producer output.
+- [ ] T11 (D) build-image refuses an existing held tag, including a
+  commit-named one; a post-push digest mismatch fails the run.
+- [ ] T12 (E) Checker: head script canary never runs; head/base fetch mismatch
+  is 7; a same-named Actions job does not satisfy the App-bound context; a
+  dispatch from a non-main branch cannot reach the environment.
+- [ ] T13 Broker and ruleset: non-broker actors (including owner login and
+  mctl-agy-reviewer[bot] approvals) cannot merge with a stale green check;
+  broker cannot push main or skip checks; App approvals do not count.
+- [ ] T14 Broker transaction: expiry within 15 minutes, moved base or head,
+  retagged registry, tightened policy, crash before/after consume, ambiguous
+  merge response; consumed grants never replay.
+- [ ] T15 Admission in any namespace denies a non-baseline mctl-api image,
+  forbidden env and Secrets; missing params deny; baseline admitted.
+- [ ] T16 (L, H, M) Detector: a push that also edits release-gate-watch.yml and
+  release-gate.py silences the in-repo watcher (asserted limitation) while the
+  pinned detector alerts; a fast-forward grafting a fabricated first-parent
+  history alerts FIRST_PARENT_REWRITE; allow_force_pushes true alerts; a record
+  valid at its merge commit's merged_at but expired now does not alert; missing
+  heartbeat alerts.
+- [ ] T17 Mutation: removing each binding, provenance step, class rule, exit-7
+  path, expiry/deadline, first-parent check and coverage rule turns a named
+  test red; restoring it turns it green.
 
-## Rollback
+## Finding map
 
-All changes are in git and grant nothing. To roll back, revert the
-implementation PR: the gate returns to the current `version_holds` behaviour
-(version plus allow record), which still refuses 4.155.0 with `allow: []`.
+| Finding | Requirements | Design | Tests |
+|---|---|---|---|
+| A human signal via #1022 | R0 | 2.1, 5 | T1, T13 |
+| B policy provenance | R1, R3 | 3 | T4 |
+| C image anywhere | R5 | 7.1, 7.3 | T10, T15 |
+| D overwrite, lower tag, digest pin | R5 | 7.2 | T5, T11 |
+| E main-only environments, App keys | R2 | 1, 4; task 8 | T12 |
+| F #2543 accepted risk | R8 | 9; task 12 | record link |
+| G exit 7 | R4 | 1; task 4 | T6, T7 |
+| H expiry at merge commit time | R7 | 8 | T16 |
+| L pinned detector, heartbeat | R7 | 8 | T16 |
+| M first-parent soundness | R1, R7 | 2.2, 8 | T2, T16 |
+| Donor: record provenance, policy_digest, RFC3339, P4b | R1 | 2.3, 3, 6 | T3, T4, T7 |
+| Strict true, four contexts | baseline | 5 | T13 |
+| protected_re vs broker | R3 | 5; tasks 0, 7 | T13 |
 
-- If only the online check misbehaves, for example a GHCR outage blocking a
-  legitimate held release, the fallback is a reviewed PR that removes the
-  `artifact` calls from the workflows. Ordinary releases below `held_from` are
-  never affected.
-- If the `forbidden_env` scan produces a false positive, the fallback is a
-  reviewed PR that narrows the `env_sources` globs.
-- Never roll back by deleting the `mctl-api-bootstrap` hold: an absent hold
-  removes all protection.
+This map is a specification correction, not evidence that any control exists.
