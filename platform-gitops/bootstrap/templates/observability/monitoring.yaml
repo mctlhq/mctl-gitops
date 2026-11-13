@@ -690,9 +690,7 @@ spec:
                   # agent-only"; an enumeration would let the next alert added
                   # to the VMRule reintroduce it silently. Every alert in
                   # mctl-telegram-canary.yaml needs an operator by
-                  # construction — the token ones (TokenExpiring,
-                  # TokenRenewalFailing) explicitly require a human with an
-                  # admin:users login to remint the credential.
+                  # construction.
                   - receiver: telegram
                     continue: true
                     matchers:
