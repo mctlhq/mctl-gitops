@@ -54,8 +54,8 @@ version_holds:
       # only the 4.155.0 tag on the merge of mctlhq/mctl-api#934: parents
       # a5b9ef9cf0f880f28b841033a8b2a6d9563ce050 (main, frozen) and
       # 5820073f20abc78ab1db2b1b42c146c70ac8cbf3 (release metadata only).
-      # The GHCR digest and its revision label are checked by hand against
-      # that tag commit before the owner approves the release-bump PR; the
+      # The GHCR digest and its revision label were checked by hand against
+      # that tag commit on the release-bump PR (#2608) before it merged; the
       # evidence packet is in the PR that adds this record. The GO was
       # given by the owner in a chat session on 2026-11-13 and the merge was
       # carried out by a Claude agent session on that explicit instruction:
@@ -63,6 +63,19 @@ version_holds:
       # (the gap mctlhq/mctl-api#1022 closes).
       - version: "4.155.0"
         grant: mctlhq/mctl-gitops#2607
+        approved_by: mashkovd
+        expires: 2026-11-27
+      # Second bootstrap grant (owner GO in chat, 2026-11-13): 4.156.0
+      # carries the Basket canary code of mctlhq/mctl-api#1006 (#1007, #1008,
+      # #1014, #1017, #1018), every part of it off unless its env chain is set,
+      # and still precedes #1022. Covers only the 4.156.0 tag on the merge
+      # of mctlhq/mctl-api#1023, whose first parent is mctl-api main at
+      # 373e237823294f832353cacd83ab5a4d6f8e4cd4 and whose second parent
+      # changes release metadata only. Same manual tag/digest/revision-label
+      # check on the release-bump PR; same provenance as above (chat GO,
+      # merge by a Claude agent session).
+      - version: "4.156.0"
+        grant: mctlhq/mctl-gitops#2611
         approved_by: mashkovd
         expires: 2026-11-27
 
