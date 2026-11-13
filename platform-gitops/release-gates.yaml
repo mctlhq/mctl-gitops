@@ -59,7 +59,7 @@ version_holds:
       # evidence packet is in the PR that adds this record. The owner
       # merges this record personally; an agent merge is not a grant.
       - version: "4.155.0"
-        grant: mctlhq/mctl-gitops#PRNUM
+        grant: mctlhq/mctl-gitops#2607
         approved_by: mashkovd
         expires: 2026-11-27
 
