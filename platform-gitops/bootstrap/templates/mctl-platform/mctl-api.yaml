@@ -10,10 +10,11 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. a5b9ef9c renders identically to the live release at
-      # 4.154.0 (helm template, same bootstrap values). Move this pin in the
-      # same reviewed PR that bumps the image tag.
-      targetRevision: a5b9ef9cf0f880f28b841033a8b2a6d9563ce050
+      # a GitOps change. f54c5b96 is the 4.156.0 release commit; it renders
+      # identically to a5b9ef9c (the 4.155.0 pin) with these bootstrap values
+      # (helm template, empty diff). Move this pin in the same reviewed PR that
+      # bumps the image tag.
+      targetRevision: f54c5b963b97740cab99d2165e2df4b12c363951
       path: helm
       helm:
         releaseName: mctl-api
