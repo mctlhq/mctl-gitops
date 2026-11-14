@@ -38,7 +38,8 @@ A script the tokenizer cannot parse (an unterminated quote, heredoc or
 substitution, or a process substitution) is an error, never a pass: a write
 the gate could not see is not a write that is absent. Likewise a target that
 keeps any expansion without one literal value -- `$UNKNOWN`, `$(...)`,
-`${F:?}`, `$1`, or a variable assigned two different values -- fails.
+`${F:?}`, `$1`, a variable assigned two different values, or one also
+bound by `for`/`read`/`printf -v`/`getopts` -- fails.
 
 Known gaps, none used by the templates today: the source of an `mv` (which
 it removes), `rm`, whole-tree staging (`git add -A`, `git add .`,
@@ -596,7 +597,29 @@ def write_targets(cmd: Command) -> list[str]:
 # ── Resolution and verdict ─────────────────────────────────────────────────
 
 
-RESERVED_PREFIX_WORDS = ("then", "else", "do", "{", "!")
+RESERVED_PREFIX_WORDS = ("then", "else", "do", "{", "!", "if", "elif", "while", "until")
+NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def dynamic_bindings(words: list[str]) -> list[str]:
+    """Names this command gives a value that has no literal form.
+
+    `for F in ...`, `read F`, `mapfile F`, `printf -v F`, `getopts s F`.
+    Over-reporting (an option value that looks like a name) only leaves
+    that name unresolved, which fails closed.
+    """
+    if not words:
+        return []
+    cmd = words[0]
+    if cmd in ("for", "select") and len(words) > 1:
+        return [words[1]]
+    if cmd in ("read", "mapfile", "readarray"):
+        return [w for w in words[1:] if NAME_RE.match(w)]
+    if cmd == "getopts" and len(words) > 2:
+        return [words[2]]
+    if cmd == "printf":
+        return [words[i + 1] for i, w in enumerate(words[:-1]) if w == "-v"]
+    return []
 
 
 def extract_var_map(commands: list[Command]) -> dict[str, str]:
@@ -615,6 +638,8 @@ def extract_var_map(commands: list[Command]) -> dict[str, str]:
         # `then F=x`, `else F=y`, `do F=z`: the keyword starts the command.
         while words and words[0] in RESERVED_PREFIX_WORDS:
             words = words[1:]
+        for name in dynamic_bindings(words):
+            values.setdefault(name, set()).add(SUBST)
         if words and words[0] in DECLARE_WORDS:
             words = words[1:]
         if not words or not all(ASSIGNMENT_WORD_RE.match(w) for w in words):
@@ -888,6 +913,20 @@ SELFTEST_CASES = (
     ("assignment after then resolves",
      f'if true; then F={SHARED}; fi\necho x >> "$F"\n', SHARED),
     ("reassigned after the write", f'F={SHARED}\necho x >> "$F"\nF=/tmp/x\n', "$F"),
+    # A name also bound by for/read/printf -v/getopts has no literal value
+    # (PR #2614 review); `if F=...` and `while F=...` assignments count.
+    ("for loop rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\n'
+     f'for F in {SHARED}; do echo x >> "$F"; done\n', "$F"),
+    ("read rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\nread -r F < list\necho x >> "$F"\n', "$F"),
+    ("printf -v rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\nprintf -v F %s x\necho x >> "$F"\n', "$F"),
+    ("getopts rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\ngetopts ab F\necho x >> "$F"\n', "$F"),
+    ("if F=... is a second value",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\n'
+     f'if F={SHARED}; then echo x >> "$F"; fi\n', "$F"),
     ("same value twice resolves", f'F={SHARED}\nF={SHARED}\necho x >> "$F"\n', SHARED),
 )
 
