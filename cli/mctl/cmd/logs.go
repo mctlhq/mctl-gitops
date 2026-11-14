@@ -103,12 +103,17 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 }
 
+// minFollowWindow is mctl-api's lower bound for since (minLogWindow in
+// internal/api/handlers_read.go): a shorter window is refused with 400.
+const minFollowWindow = 60
+
 // followWindow is the window for the next poll: the time since the last one
-// started plus a margin, never under 10s, in whole seconds.
+// started plus a margin, in whole seconds, never under the API's 1m floor.
+// The overlap this creates is dropped by logCursor.
 func followWindow(elapsed time.Duration) string {
 	secs := int((elapsed + 5*time.Second + time.Second - 1) / time.Second)
-	if secs < 10 {
-		secs = 10
+	if secs < minFollowWindow {
+		secs = minFollowWindow
 	}
 	return fmt.Sprintf("%ds", secs)
 }

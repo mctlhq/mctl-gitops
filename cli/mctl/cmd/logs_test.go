@@ -73,7 +73,15 @@ func TestFollowWindowCoversTheGap(t *testing.T) {
 	for _, tc := range []struct {
 		elapsed time.Duration
 		want    string
-	}{{5 * time.Second, "10s"}, {20 * time.Second, "25s"}, {20*time.Second + time.Millisecond, "26s"}} {
+	}{
+		// mctl-api refuses since < 1m with 400, so a short gap still asks for 60s.
+		{0, "60s"},
+		{5 * time.Second, "60s"},
+		{20 * time.Second, "60s"},
+		{54*time.Second + 500*time.Millisecond, "60s"},
+		{60 * time.Second, "65s"},
+		{60*time.Second + time.Millisecond, "66s"},
+	} {
 		if got := followWindow(tc.elapsed); got != tc.want {
 			t.Errorf("followWindow(%v) = %s, want %s", tc.elapsed, got, tc.want)
 		}

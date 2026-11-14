@@ -13,7 +13,7 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a new service to the platform",
-	Long: `Deploy a new service via the mctl API. Supports both repo-based deploys and template-based onboard flows (--service-template).`,
+	Long:  `Deploy a new service via the mctl API. Supports both repo-based deploys and template-based onboard flows (--service-template).`,
 	Example: `  # Deploy a web service with ingress
   mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --host my-api.preview.mctl.ai
 
@@ -110,19 +110,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	inputs := map[string]string{
-		"action":            "onboard",
-		"team_name":         deployTeam,
-		"component_name":    deployName,
-		"component_type":    serviceType,
-		"dockerfile_repo": deployRepo,
-		"dockerfile_path": deployDockerfile,
-		"git_tag":           deployTag,
-		"image_tag":         deployImageTag,
-		"port":              deployPort,
-		"host":              deployHost,
-		"env_vars":          envVars,
-		"secret_env_vars":   secretVars,
-		"service_template":  deployTemplate,
+		"action":           "onboard",
+		"team_name":        deployTeam,
+		"component_name":   deployName,
+		"component_type":   serviceType,
+		"dockerfile_repo":  deployRepo,
+		"dockerfile_path":  deployDockerfile,
+		"git_tag":          deployTag,
+		"image_tag":        deployImageTag,
+		"port":             deployPort,
+		"host":             deployHost,
+		"env_vars":         envVars,
+		"secret_env_vars":  secretVars,
+		"service_template": deployTemplate,
 	}
 
 	client := api.NewClient(token)

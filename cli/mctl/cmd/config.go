@@ -65,7 +65,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	inputs := map[string]string{
 		"action":          "update-config",
 		"team_name":       configTeam,
-		"component_name":    configName,
+		"component_name":  configName,
 		"env_vars":        envVars,
 		"secret_env_vars": secretVars,
 	}
