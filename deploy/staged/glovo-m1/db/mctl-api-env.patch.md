@@ -39,10 +39,12 @@ operator step and the read-only grants verification of design section 8.
   and who the grantees are (`pg_class.relowner`, `aclexplode(relacl)` on the
   `bridge_*` relations), and whether any such table exists at all.
 - `DB_POOL_MAX_CONNS`: stays at the default 8; `connectionLimit` sizing decided in roles.patch.md (2026-11-14).
-  mctl-api sizes one pool per distinct `*_DB_URL` per replica (default 8), so
-  with `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` distinct the earlier "8 x 2
-  replicas" comment no longer holds. Evidence required: deployed replica count
-  and surge, and the `pgshared: pools` startup log.
+  mctl-api sizes one pool per distinct `*_DB_URL` per replica (default 8);
+  measured 2026-11-14: 2 replicas, `maxSurge` 25% (3 pods at most), three
+  `pgshared: pool opened ... max_conns: 8` lines per pod.
+- D0 (2026-11-14) found no `bridge_*` sequence in `public` and no `glovo`
+  schema; the `bridge_*` tables themselves were not listed by name, so the
+  `COMMERCE_DB_URL` item above stays open. Basket v1 keeps the bridge off.
 
 ## Flags that stay off (all absent today, none is added)
 
