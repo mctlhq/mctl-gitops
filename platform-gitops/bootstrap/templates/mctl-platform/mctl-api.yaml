@@ -331,6 +331,15 @@ spec:
             # pinning the operator CA; verify-full needs a copied CA secret
             # in this namespace (helm postgresCA) and can wait for CA sync.
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # The OAuth refresh/flow store. Same DSN as AUDIT_DB_URL, which is
+            # what cmd/api/main.go already falls back to, so nothing changes
+            # today: pgshared keys pools by the exact connection string, so an
+            # identical value reuses the audit pool rather than opening one.
+            # Explicit because GLOVO_ENABLED=true refuses to start on the
+            # fallback (cmd/api/glovo_team_grant.go, mctl-api#1006 step B).
+            # Keep it byte-identical to AUDIT_DB_URL unless the OAuth store is
+            # deliberately moved.
+            OAUTH_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
             # The lifecycle ownership store (ADR-010) gets its OWN database,
             # not mctl-api's: it is the source of truth for who may act on an
             # entity, and its neighbours in mctl-api -- the audit log, the
