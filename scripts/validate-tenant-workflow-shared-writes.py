@@ -35,8 +35,14 @@ variable reference (`$TENANT`, `${TENANT}`, `$PARAM_TENANT_NAME`,
 count).
 
 A script the tokenizer cannot parse (an unterminated quote, heredoc or
-substitution) is an error, never a pass: a write the gate could not see is
-not a write that is absent.
+substitution, or a process substitution) is an error, never a pass: a write
+the gate could not see is not a write that is absent. Likewise a target that
+keeps any expansion without one literal value -- `$UNKNOWN`, `$(...)`,
+`${F:?}`, `$1`, or a variable assigned two different values -- fails.
+
+Known gaps, none used by the templates today: the source of an `mv` (which
+it removes), `rm`, whole-tree staging (`git add -A`, `git add .`,
+`git commit -a`), and paths relative to a `cd` (only `git -C` is followed).
 
 Run with --selftest to prove the detector still detects.
 """
@@ -349,6 +355,13 @@ class Lexer:
                     flush()
                     continue
                 self.skip_blanks()
+                if op in ("<", ">") and self.peek() == "(":
+                    # `done < <(cmd)` / `cmd > >(tee f)`: a process
+                    # substitution's body is not read for writes.
+                    raise self.error(
+                        f"process substitution {op}(...) is not supported; "
+                        "use a pipe, a temp file or $(...) instead"
+                    )
                 target = self.read_word()
                 if not target:
                     raise self.error(f"redirect {op!r} without a target")
@@ -583,27 +596,37 @@ def write_targets(cmd: Command) -> list[str]:
 # ── Resolution and verdict ─────────────────────────────────────────────────
 
 
+RESERVED_PREFIX_WORDS = ("then", "else", "do", "{", "!")
+
+
 def extract_var_map(commands: list[Command]) -> dict[str, str]:
-    """Simple `VAR=literal` assignments, last assignment per name wins.
+    """Names with exactly one literal value across the whole script.
 
     Only plain assignment commands count (`VAR=x`, `export VAR=x`, quoted or
-    not). An assignment whose value is a command substitution has no literal
-    form and is left unresolved.
+    not). The map ignores order and control flow, so a name assigned two
+    different values (on two `if` branches, or reassigned after the write)
+    has no single literal form and is left unresolved rather than resolved
+    to whichever came last. So is a name ever assigned a command
+    substitution.
     """
-    var_map: dict[str, str] = {}
+    values: dict[str, set[str]] = {}
     for cmd in commands:
         words = cmd.words
+        # `then F=x`, `else F=y`, `do F=z`: the keyword starts the command.
+        while words and words[0] in RESERVED_PREFIX_WORDS:
+            words = words[1:]
         if words and words[0] in DECLARE_WORDS:
             words = words[1:]
         if not words or not all(ASSIGNMENT_WORD_RE.match(w) for w in words):
             continue
         for w in words:
             name, value = ASSIGNMENT_WORD_RE.match(w).groups()
-            if SUBST in value:
-                var_map.pop(name, None)
-                continue
-            var_map[name] = value
-    return var_map
+            values.setdefault(name, set()).add(value)
+    return {
+        name: next(iter(vals))
+        for name, vals in values.items()
+        if len(vals) == 1 and not any(SUBST in v for v in vals)
+    }
 
 
 def resolve_literal(text: str, var_map: dict[str, str], depth: int = 3) -> str:
@@ -632,15 +655,21 @@ def resolve_literal(text: str, var_map: dict[str, str], depth: int = 3) -> str:
 OUTSIDE_REPO_VARS = ("HOME", "TMPDIR")
 
 
+# Any unescaped `$` still in a path after the allowed references are taken
+# out: `${F:?}`, `${F%x}`, `$1`, `$@`, `$*`, `$$`, ... None of these has a
+# literal value here, so where the write lands is unknown.
+UNESCAPED_DOLLAR_RE = re.compile(r"(?<!\\)\$")
+
+
 def unresolved(path: str) -> bool:
-    """True when the path still holds a reference with no literal value."""
+    """True when the path still holds an expansion with no literal value."""
     if SUBST in path:
         return True
     for m in VARREF_RE.finditer(path):
         name = m.group(1) or m.group(2)
         if name not in TENANT_VARS and name not in OUTSIDE_REPO_VARS:
             return True
-    return False
+    return bool(UNESCAPED_DOLLAR_RE.search(VARREF_RE.sub("", path)))
 
 
 def verdict(path: str) -> str | None:
@@ -843,6 +872,23 @@ SELFTEST_CASES = (
     ("command-substitution target", 'F=$(mktemp -p platform-gitops)\necho x > "$F"\n', "$F"),
     ("unresolved dir plus tenant marker", 'echo x > "$BASE/${TENANT}.csv"\n', None),
     ("$HOME target", 'echo x > "$HOME/.netrc"\n', None),
+    # Expansions with operators and positional parameters have no literal
+    # value either (PR #2614 review).
+    ("${F:?} guard target", f'F={SHARED}\nsed -i "/x/d" "${{F:?}}"\n', "${F:?}"),
+    ("${F%x} target", f'F={SHARED}\necho x >> "${{F%.bak}}"\n', "${F%.bak}"),
+    ("positional target", f'w() {{ echo x > "$1"; }}\nw {SHARED}\n', "$1"),
+    ("$@ target", 'git add "$@"\n', "$@"),
+    # A name with two values has no single literal value.
+    ("assigned on two branches",
+     f'if [ "$M" = a ]; then F={SHARED}\nelse F="platform-gitops/tenants/${{TENANT}}/r.csv"; fi\n'
+     'echo x >> "$F"\n', "$F"),
+    ("assigned on two && paths",
+     f'F={SHARED}\n[ -n "$M" ] && F="platform-gitops/tenants/${{TENANT}}/r.csv"\n'
+     'echo x >> "$F"\n', "$F"),
+    ("assignment after then resolves",
+     f'if true; then F={SHARED}; fi\necho x >> "$F"\n', SHARED),
+    ("reassigned after the write", f'F={SHARED}\necho x >> "$F"\nF=/tmp/x\n', "$F"),
+    ("same value twice resolves", f'F={SHARED}\nF={SHARED}\necho x >> "$F"\n', SHARED),
 )
 
 PARSE_ERROR_CASES = (
@@ -850,6 +896,7 @@ PARSE_ERROR_CASES = (
     ("unterminated single quote", "sed -i 's/a/b/ platform-gitops/argocd/values.yaml\n"),
     ("unterminated heredoc", "cat > /tmp/x <<EOF\nno end\n"),
     ("unterminated $(", "X=$(echo y\n"),
+    ("process substitution", "while read -r l; do :; done < <(cat platform-gitops/a)\n"),
 )
 
 
