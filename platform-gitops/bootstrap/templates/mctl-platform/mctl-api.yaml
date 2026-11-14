@@ -69,10 +69,10 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
-            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
-            # is read only at container start.
-            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
+            # This rollout turns the basket MCP on (mctl-api#1006, step B1 of
+            # docs/runbooks/glovo-basket-canary.md): its store and schemas are
+            # read once at start.
+            ROLLOUT_MARKER: "2026-11-14-basket-mcp-b1"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -388,6 +388,16 @@ spec:
             # (envFromExtraSecret below). Without both the endpoint answers
             # 401/503 and nothing is published.
             EVENTS_VALKEY_URL: "redis://github-producer@valkey.platform-events.svc.cluster.local:6379/0"
+            # Basket MCP canary (mctlhq/mctl-api#1006). Fail-closed chain: the
+            # basket flag needs the feature flag, which needs the resource, the
+            # dedicated database (the *_DB_* lines above) and the explicit
+            # OAUTH_DB_URL; anything missing refuses the boot, never a half-on
+            # feature. "true"/"false" only. The pilot allowlist is not env: it
+            # stays empty until a platform admin adds a (team, principal) pair.
+            # Kill switch: remove the Ingress host first, then these lines.
+            GLOVO_ENABLED: "true"
+            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp
+            GLOVO_BASKET_MCP_ENABLED: "true"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
