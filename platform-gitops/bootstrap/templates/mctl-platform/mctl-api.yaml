@@ -62,6 +62,15 @@ spec:
               - /glovo
             hosts:
               - host: api.mctl.ai
+              # Basket MCP host (mctlhq/mctl-api#1006). Only the MCP and its
+              # RFC 9728 metadata are routed at the edge; every other path on
+              # this host stays a Traefik 404. Uses the chart's per-host paths
+              # override (mctl-api#1017). Kill switch: delete these lines
+              # first, before any flag is removed.
+              - host: glovo.mctl.ai
+                paths:
+                  - /mcp
+                  - /.well-known/oauth-protected-resource
 
           env:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git

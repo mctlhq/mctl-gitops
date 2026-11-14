@@ -53,7 +53,10 @@ SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
 # Exact lines (whitespace included) that may match LEAK in one reconciled file,
 # keyed by the path relative to the repository root. Empty until the first
 # activation PR; each activation PR adds only its own lines, removal PRs delete
-# them.
+# them. Only lines that match LEAK are judged, so only those are listed: a
+# neighbouring line without a Glovo or assistants reference (an ingress
+# `paths:` entry such as `- /mcp`) needs no entry, and listing one would be a
+# dead entry. The self-test pins this both ways.
 ALLOWED_LINES: dict[str, frozenset[str]] = {
     # Step D1: the Basket canary managed roles (mctlhq/mctl-api#1006).
     "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml": frozenset({
@@ -123,6 +126,12 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '              - /glovo',
         '            GLOVO_BASKET_UI_ENABLED: "true"',
         '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # Step C: the host, restricted to the MCP and its metadata path.
+        '              - host: glovo.mctl.ai',
+    }),
+    # Step C: the host is reserved for mctl-api in the same PR as its Ingress.
+    "platform-gitops/bootstrap/values.yaml": frozenset({
+        '  glovo.mctl.ai: [mctl-api]',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
@@ -385,6 +394,13 @@ def selftest() -> int:
     allow = {a_file: frozenset({a_line})}
     add("allowlist: listed line in listed file passes", 0,
         lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n"), allow)
+    # Host block shape of activation step C: only the host line matches LEAK.
+    h_line = "      - host: glovo.mctl.ai"
+    h_block = f"hosts:\n{h_line}\n        paths:\n          - /mcp\n          - /.well-known/oauth-protected-resource\n"
+    add("allowlist: non-matching path lines under an allowed host need no entry", 0,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset({h_line})})
+    add("allowlist: the host line itself is still required", REFUSED,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset()})
     add("allowlist: same line in another file refuses", REFUSED,
         lambda r: (r / RECONCILED / "services/labs/y.yaml").write_text(f"roles:\n{a_line}\n"), allow)
     add("allowlist: extra Glovo line next to an allowed one refuses", REFUSED,
