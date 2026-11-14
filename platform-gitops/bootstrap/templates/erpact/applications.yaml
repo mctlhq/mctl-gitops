@@ -2,9 +2,38 @@
 # ArgoCD reads git.mctl.ai/erpact/clo-apps, so Forgejo stays. This copy is kept
 # but stopped: automated sync is off so ArgoCD does not restore the replicas,
 # tenants/erpact/values.yaml caps pods at 0, every Deployment/StatefulSet was
-# scaled to 0 and every CronJob suspended. The PVCs erpact-mariadb and
-# erpact-sites keep their data. To bring it back: restore the automated block
-# below (prune, selfHeal) on each Application and the pods quota, then sync.
+# scaled to 0 and every CronJob suspended.
+#
+# DATA DELETED 2026-11-14: the PVCs erpact-mariadb and erpact-sites (reclaim
+# policy Delete) were removed, so their Hetzner volumes are gone. The only
+# copy is the R2 archive written by the erpact-backup CronJob: bucket
+# erpact-backups, prefix erpact/<UTC timestamp>/, last run 20261114T034714Z
+# (mariadb.sql.gz = mariadb-dump --all-databases incl. the mysql schema and
+# site DB users; sites-shared-stteam.tar.gz and sites-control.tar.gz = the
+# erpact-sites subPaths shared-stteam/ and control/ without logs/ and assets/;
+# SHA256SUMS; COMPLETE). The restore-drill CronJob proved that run restores
+# (all sites: DB present, core tables, DB user, encryption_key). Retention
+# keeps 14 runs but only runs inside the suspended backup job, so nothing
+# prunes the archive while this copy is stopped. The R2 credentials stay in
+# the Secret erpact-backup-r2, the MariaDB root password in mariadb-root.
+#
+# To bring it back:
+# 1. Restore the pods quota in tenants/erpact/values.yaml and the automated
+#    block below (prune, selfHeal) on each Application. Merge.
+# 2. Sync erpact-infra only. It recreates the two PVCs empty and starts
+#    MariaDB with a fresh datadir. Keep erpact-shared/erpact-control (the
+#    benches) and the CronJobs stopped until step 4, so nothing writes into
+#    the empty volumes and the backup does not prune good runs.
+# 3. Run a one-off pod in namespace erpact with erpact-sites mounted and
+#    envFrom erpact-backup-r2 (fetch.sh in the ConfigMap erpact-restore-drill
+#    shows the download and sha256sum -c). Then:
+#    zcat mariadb.sql.gz | mariadb -h mariadb -u root   (root password from
+#    mariadb-root); extract sites-shared-stteam.tar.gz into the volume's
+#    shared-stteam/ and sites-control.tar.gz into control/.
+# 4. Sync erpact-shared, erpact-control and erpact-deployer, unsuspend the
+#    CronJobs, run the restore drill once and check each site answers.
+#    Assets are rebuilt by the bench image; logs/ is not restored.
+# Anything written to the mctl copy after the last backup run is lost.
 #
 # Applications of the ERPact copy (tenant erpact). Their manifests live in
 # the private Forgejo repository git.mctl.ai/erpact/mctl-apps (see
