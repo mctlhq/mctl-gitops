@@ -528,6 +528,12 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
+      - name: Unit-test the ExternalSecret annotation healer's failure paths
+        # scripts/heal-eso-lac.sh used to print a clean summary and exit 0
+        # when kubectl or jq failed, because the scan ran in a process
+        # substitution. Runs the script against a fake kubectl on PATH.
+        run: python3 tests/test_heal_eso_lac.py
+
       - name: Check the k3s-preview kured and SUC manifests follow the module inputs
         # kube-hetzner re-applies its own kured DaemonSet and
         # system-upgrade-controller Deployment, without resources, whenever
