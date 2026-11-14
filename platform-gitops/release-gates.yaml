@@ -133,7 +133,7 @@ version_holds:
       # release-bump PR; same provenance as above (chat GO, merge by a
       # Claude agent session).
       - version: "4.157.0"
-        grant: mctlhq/mctl-gitops#2641
+        grant: mctlhq/mctl-gitops#2642
         approved_by: mashkovd
         expires: 2026-11-28
 
