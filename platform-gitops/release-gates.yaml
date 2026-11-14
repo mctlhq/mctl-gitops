@@ -110,6 +110,26 @@ version_holds:
         grant: mctlhq/mctl-gitops#2628
         approved_by: mashkovd
         expires: 2026-11-28
+      # Fifth grant (owner GO in chat, 2026-11-14, confirmed for the full
+      # content after the version moved from the expected 4.156.3): 4.157.0
+      # is 4.156.2 plus mctlhq/mctl-api#1039 (the deploy-plan store opens on
+      # DEPLOY_PLAN_DB_URL, else AUDIT_DB_URL, never WORK_ITEMS_DB_URL, so
+      # the DML-only work-items role of #1006 no longer blocks boot), #1036
+      # (digest-bound owner grants for preview apply; ships dark, both MCP
+      # tools enabled: false in the portal allowlist and nothing can decide
+      # a grant before slice 2) and the wave-2 fixes #1033, #1035, #1037 and
+      # #1038. Covers only the 4.157.0 tag on the merge of
+      # mctlhq/mctl-api#1034, whose first parent is mctl-api main at
+      # d72d53d7d46cd645255cdba94d7ca7360db96103 and whose second parent
+      # changes release metadata only. If main moves before #1034 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.157.0"
+        grant: mctlhq/mctl-gitops#GRANT
+        approved_by: mashkovd
+        expires: 2026-11-28
 
 gates:
   - name: mctl-agents-workers
