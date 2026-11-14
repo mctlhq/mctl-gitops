@@ -133,7 +133,9 @@ class Splitter:
                 end = len(self.src) if end == -1 else end
                 line = self.src[self.pos:end]
                 self.pos = min(end + 1, len(self.src))
-                if (line.lstrip("\t") if strip_tabs else line).strip() == delim:
+                # POSIX: the delimiter line matches exactly; `<<-` strips
+                # leading tabs only. An indented or padded `EOF` is body.
+                if (line.lstrip("\t") if strip_tabs else line) == delim:
                     if to_shell:
                         body_end = self.pos - len(line) - (1 if self.src[self.pos - 1:self.pos] == "\n" else 0)
                         self.code_bodies.append((self.src[start:max(start, body_end)], quoted))
@@ -275,7 +277,8 @@ class Splitter:
 # string: `sh -c "yq ..."`, `bash <<EOF`, `kubectl exec ... -- sh <<EOF`.
 SHELLS = {"sh", "bash", "dash", "ash", "zsh", "ksh"}
 RAW_EXPANSION = re.compile(r"(?<!\\)[$`]")
-YQ_WORD = re.compile(r"(?<![\w./-])yq(?![\w.-])")
+# `yq`, `/usr/bin/yq`, `./yq` -- but not `yq.yaml`, `myq` or `charts/yq/x`.
+YQ_WORD = re.compile(r"(?:(?<![\w./-])|(?<=/))yq(?![\w./-])")
 
 
 def feeds_shell(words: list[str]) -> bool:
@@ -521,6 +524,11 @@ SELFTEST_CASES = (
     ("heredoc piped to bash, quoted", "cat <<'EOF' | bash\nyq \".a.$X\" f\nEOF", True),
     ("unquoted heredoc to sh, continuation", 'sh <<EOF\nyq -i \\\n  ".a=$X" f\nEOF', True),
     ("unquoted heredoc to sh, escaped $", 'sh <<EOF\nyq ".a=\\$X" f\nEOF', True),
+    ("path-qualified yq in sh -c", "sh -c '/usr/local/bin/yq \".a = \\\"$X\\\"\" f'", True),
+    ("path-qualified yq in unquoted heredoc to sh", 'sh <<EOF\n./yq ".a=$X" f\nEOF', True),
+    ("yq directory in sh -c is not yq", 'sh -c "cat charts/yq/$F"', False),
+    ("indented EOF is still body",
+     "cat > /tmp/x <<EOF\n  EOF\nyq \".a.$X\" f\nEOF\nyq '.a' f", False),
     ("heredoc piped to grep stays data", 'cat <<EOF | grep x\nyq ".a.$X" f\nEOF', False),
 )
 
@@ -529,6 +537,7 @@ PARSE_ERROR_CASES = (
     ("unterminated single quote", "yq '.a f"),
     ("unterminated $(", 'V=$(yq ".a" f'),
     ("unterminated heredoc", "cat <<EOF\nyq x\n"),
+    ("padded EOF does not end the heredoc", "cat <<EOF\nx\nEOF \n"),
 )
 
 
