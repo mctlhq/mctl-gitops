@@ -136,6 +136,30 @@ version_holds:
         grant: mctlhq/mctl-gitops#2642
         approved_by: mashkovd
         expires: 2026-11-28
+      # Sixth grant (owner GO in chat, 2026-11-14, for each change): 4.158.0
+      # is 4.157.0 plus two changes. mctlhq/mctl-api#1041 (closes #1031):
+      # deploy-service and preview-deploy are refused on the generic execute
+      # path for tenants whose values set tenant.profile: agent-deploy,
+      # admins included; CI OIDC and rollback-service pass. No tenant sets
+      # that profile yet (checked on mctl-gitops main 2026-11-14: 7 tenants,
+      # all values parse, no profile, no duplicate names), so the visible
+      # change is only that an unreadable tenant profile now fails a direct
+      # deploy closed with 503 instead of passing. mctlhq/mctl-api#1043:
+      # create-tenant accepts tenant names of 2-31 characters instead of
+      # 2-63, matching every team_name operation; delete and cleanup paths
+      # keep 63, and every existing tenant name is 14 characters or less.
+      # Covers only the 4.158.0 tag on the merge of mctlhq/mctl-api#1042,
+      # whose first parent is mctl-api main at
+      # 3bfe868bde17c66c122cc8bb49503f85f2b75bee and whose second parent
+      # changes release metadata only. If main moves before #1042 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.158.0"
+        grant: mctlhq/mctl-gitops#2645
+        approved_by: mashkovd
+        expires: 2026-11-28
 
 gates:
   - name: mctl-agents-workers
