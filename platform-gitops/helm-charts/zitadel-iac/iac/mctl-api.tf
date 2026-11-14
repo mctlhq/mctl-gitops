@@ -227,6 +227,36 @@ resource "zitadel_application_oidc" "mctl_api_decide" {
   id_token_userinfo_assertion = true
 }
 
+# The Glovo basket approval page (mctl-api#1006): an MCP client shows the
+# basket owner a link to api.mctl.ai/glovo/basket/approvals/{id}, and the
+# owner signs in here, fresh, for that one decision (prompt=login,
+# max_age=0, PKCE, nonce). mctl-api reads the ID token only and resolves the
+# person to their linked principal; the decision handler's owner checks
+# decide, the page grants nothing by itself. It is the decide page's model,
+# with a client of its own rather than a second redirect on mctl-api-decide:
+# a code or ID token issued for one page is then never accepted by the
+# other (the ID token's aud is the client id), the secrets rotate apart, and
+# removing this client touches no DevLoop decision. Same shape as
+# mctl-api-decide: client secret plus PKCE, one redirect, opaque (BEARER)
+# access token, because a JWT access token of any app in this project would
+# pass mctl-api's JWT bearer check. Do not switch it to JWT. Not in
+# ZITADEL_HOOK_CLAIM_CLIENT_IDS (customers.tf): the page resolves a linked
+# identity by subject and reads no customer claim.
+resource "zitadel_application_oidc" "mctl_api_glovo_basket" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-glovo-basket"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/glovo/basket/approvals/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -275,6 +305,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # is set in bootstrap/templates/mctl-platform/mctl-api.yaml.
     DEVLOOP_DECIDE_CLIENT_ID     = zitadel_application_oidc.mctl_api_decide.client_id
     DEVLOOP_DECIDE_CLIENT_SECRET = zitadel_application_oidc.mctl_api_decide.client_secret
+    # The Glovo basket approval page client (mctl-api#1006). Nothing reads
+    # these keys: the mctl-api chart has no slot for them yet, and the page
+    # stays unmounted unless GLOVO_BASKET_UI_ENABLED is "true" (it is unset).
+    GLOVO_BASKET_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_basket.client_id
+    GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret
     # The development client above, for an operator to copy into a local
     # run. Not read by mctl-api: the chart references keys by name, and these
     # names are none of them.
