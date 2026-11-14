@@ -53,7 +53,10 @@ SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
 # Exact lines (whitespace included) that may match LEAK in one reconciled file,
 # keyed by the path relative to the repository root. Empty until the first
 # activation PR; each activation PR adds only its own lines, removal PRs delete
-# them.
+# them. Only lines that match LEAK are judged, so only those are listed: a
+# neighbouring line without a Glovo or assistants reference (an ingress
+# `paths:` entry such as `- /mcp`) needs no entry, and listing one would be a
+# dead entry. The self-test pins this both ways.
 ALLOWED_LINES: dict[str, frozenset[str]] = {
     # Step D1: the Basket canary managed roles (mctlhq/mctl-api#1006).
     "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml": frozenset({
@@ -119,7 +122,16 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_ENABLED: "true"',
         '            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp',
         '            GLOVO_BASKET_MCP_ENABLED: "true"',
-        '            # docs/runbooks/glovo-basket-canary.md): its store and schemas are',
+        # Step B2: the approval page flag, its route and its chart slot.
+        '              - /glovo',
+        '            GLOVO_BASKET_UI_ENABLED: "true"',
+        '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # Step C: the host, restricted to the MCP and its metadata path.
+        '              - host: glovo.mctl.ai',
+    }),
+    # Step C: the host is reserved for mctl-api in the same PR as its Ingress.
+    "platform-gitops/bootstrap/values.yaml": frozenset({
+        '  glovo.mctl.ai: [mctl-api]',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
@@ -139,11 +151,17 @@ class Unknown(Exception):
     pass
 
 
-def _load(path: Path) -> Any:
+def _load(path: Path) -> dict:
+    """Every staged document is a mapping. An empty file (safe_load gives
+    None) or a list is unreadable, not an empty mapping: it is reported as
+    UNKNOWN instead of being read as "nothing set"."""
     try:
-        return yaml.safe_load(path.read_text())
+        doc = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as e:
         raise Unknown(f"cannot read {path}: {e}") from e
+    if not isinstance(doc, dict):
+        raise Unknown(f"{path}: expected a mapping, got {type(doc).__name__}")
+    return doc
 
 
 def _need(cond: bool, msg: str) -> None:
@@ -304,6 +322,11 @@ def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | No
     except (Unknown, OSError) as e:
         print(f"UNKNOWN: {e}", file=sys.stderr)
         return UNKNOWN
+    except (AttributeError, TypeError, KeyError) as e:
+        # A nested key of the wrong shape (`env: null`, `ingress: []`) cannot
+        # be judged either way, so it is UNKNOWN, never a traceback or a pass.
+        print(f"UNKNOWN: staged document has an unexpected shape: {e!r}", file=sys.stderr)
+        return UNKNOWN
     print("glovo-m1: ok")
     return 0
 
@@ -375,6 +398,14 @@ def selftest() -> int:
         lambda r: _edit(r, "provenance.yaml", lambda d: d["images"]["facade"].pop("sbom")))
     add("T6 gate.yaml missing", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").unlink())
     add("T6 gate.yaml unparseable", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").write_text(": : :\n- ["))
+    for rel in (VALUES["facade"], VALUES["provider"], VALUES["control"], TENANT,
+                "provenance.yaml", "target-paths.yaml", "gate.yaml"):
+        add(f"empty {rel}", UNKNOWN, lambda r, rel=rel: (r / STAGED / rel).write_text(""))
+    add("provenance.yaml is a list", UNKNOWN, lambda r: (r / STAGED / "provenance.yaml").write_text("- a\n"))
+    add("facade env: null", UNKNOWN,
+        lambda r: _edit(r, VALUES["facade"], lambda d: d.__setitem__("env", None)))
+    add("provider ingress is a list", UNKNOWN,
+        lambda r: _edit(r, VALUES["provider"], lambda d: d.__setitem__("ingress", [])))
 
     # Exact-line allowlist (runbook "Leak guard at activation").
     a_file = f"{RECONCILED}/services/labs/x/values.yaml"
@@ -382,6 +413,13 @@ def selftest() -> int:
     allow = {a_file: frozenset({a_line})}
     add("allowlist: listed line in listed file passes", 0,
         lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n"), allow)
+    # Host block shape of activation step C: only the host line matches LEAK.
+    h_line = "      - host: glovo.mctl.ai"
+    h_block = f"hosts:\n{h_line}\n        paths:\n          - /mcp\n          - /.well-known/oauth-protected-resource\n"
+    add("allowlist: non-matching path lines under an allowed host need no entry", 0,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset({h_line})})
+    add("allowlist: the host line itself is still required", REFUSED,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset()})
     add("allowlist: same line in another file refuses", REFUSED,
         lambda r: (r / RECONCILED / "services/labs/y.yaml").write_text(f"roles:\n{a_line}\n"), allow)
     add("allowlist: extra Glovo line next to an allowed one refuses", REFUSED,

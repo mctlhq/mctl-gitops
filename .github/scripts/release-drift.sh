@@ -147,6 +147,26 @@ image_block_fields() {
   ' "$1"
 }
 
+# Success iff version $1 is newer than $2 (both without a `v`), in semver
+# order. `sort -V` alone gets pre-releases backwards: it puts 1.2.3-rc.1
+# ABOVE 1.2.3, so a repo that tagged an rc and then the release would be
+# reported at the rc. A `-` suffix is a pre-release and ranks below its own
+# core; a `.` suffix (1.2.3.4) is just another core component.
+version_gt() {
+  local a="$1" b="$2" core_a core_b pre_a="" pre_b=""
+  core_a="${a%%-*}"; core_b="${b%%-*}"
+  [ "$core_a" != "$a" ] && pre_a="${a#*-}"
+  [ "$core_b" != "$b" ] && pre_b="${b#*-}"
+  if [ "$core_a" != "$core_b" ]; then
+    [ "$(printf '%s\n%s\n' "$core_a" "$core_b" | sort -V | tail -1)" = "$core_a" ]
+    return
+  fi
+  [ "$pre_a" = "$pre_b" ] && return 1
+  [ -z "$pre_a" ] && return 0
+  [ -z "$pre_b" ] && return 1
+  [ "$(printf '%s\n%s\n' "$pre_a" "$pre_b" | sort -V | tail -1)" = "$pre_a" ]
+}
+
 # "<tag>\t<date>" of the newest release of <repo>: the GitHub release when
 # the repo publishes them (release-please does), otherwise the newest
 # semver tag with its commit date, for repos that only tag. Fails when the
@@ -159,12 +179,12 @@ latest_release() {
   fi
   tags=$(gh api --paginate "repos/$ORG/$repo/tags?per_page=100" --jq '.[].name' 2>/dev/null) || return 1
   # Newest version wins, pre-release or not: a repo that only ever cuts
-  # pre-releases is "released" at its newest one, and a stable tag sorts
-  # above the pre-releases of the same version anyway.
+  # pre-releases is "released" at its newest one, and a stable tag ranks
+  # above the pre-releases of the same version (version_gt).
   local t best="" best_v=""
   while read -r t; do
     [ -n "$t" ] && is_release_tag "$t" || continue
-    if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best_v" "$(strip_v "$t")" | sort -V | tail -1)" != "$best_v" ]; then
+    if [ -z "$best" ] || version_gt "$(strip_v "$t")" "$best_v"; then
       best="$t"; best_v="$(strip_v "$t")"
     fi
   done <<<"$tags"
@@ -264,6 +284,16 @@ self_test() {
   for t in main-8d2b988 4c7b7d55ec02 latest ""; do
     is_release_tag "$t" && { echo "self-test: '$t' should not be a release tag"; return 1; }
   done
+  # Version order: a stable release outranks its own pre-releases, in
+  # either order of appearance.
+  local pair newer older
+  for pair in "1.2.3 1.2.3-rc.1" "1.2.3 1.2.3-rc.10" "1.2.4-rc.1 1.2.3" "1.10.0 1.9.0" \
+              "1.2.3-rc.10 1.2.3-rc.2" "1.2.3.1 1.2.3" "0.1.0-r2 0.1.0-r1"; do
+    newer="${pair%% *}"; older="${pair#* }"
+    version_gt "$newer" "$older" || { echo "self-test: version_gt $newer $older should hold"; return 1; }
+    version_gt "$older" "$newer" && { echo "self-test: version_gt $older $newer should not hold"; return 1; }
+  done
+  version_gt 1.2.3 1.2.3 && { echo "self-test: a version is not newer than itself"; return 1; }
   # Compare payload: two releasable commits, one not; oldest picked by date.
   out=$(unreleased_from_compare <<'JSON'
 {"commits":[
@@ -354,7 +384,9 @@ case "$argstr" in
   *"tags?per_page=100"*)
     if [[ "$argstr" == *"--paginate"* ]]; then
       for i in $(seq 1 104); do printf '0.0.%d\n' "$i"; done
+      # The rc after its release must not win (sort -V ranks it higher).
       echo "9.9.9"
+      echo "9.9.9-rc.1"
     else
       for i in $(seq 1 100); do printf '0.0.%d\n' "$i"; done
     fi
