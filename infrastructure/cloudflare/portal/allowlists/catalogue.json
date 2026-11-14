@@ -47,6 +47,7 @@
       "mctl_get_commerce_receipt",
       "mctl_get_deploy_plan",
       "mctl_get_dev_loop",
+      "mctl_get_dev_loop_approval",
       "mctl_get_epic_status",
       "mctl_get_incident",
       "mctl_get_lifecycle_ownership",
