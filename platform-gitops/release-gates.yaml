@@ -178,6 +178,24 @@ version_holds:
         grant: mctlhq/mctl-gitops#2649
         approved_by: mashkovd
         expires: 2026-11-28
+      # Eighth grant (owner GO in chat, 2026-11-14): 4.159.0 is 4.158.1 plus
+      # mctlhq/mctl-api#1050 and #1051. #1050 adds an optional Helm slot,
+      # deployApprovalUISecret, that mounts DEPLOY_APPROVAL_UI_CLIENT_ID/SECRET
+      # from a named Secret; it is empty by default and the default render is
+      # unchanged (tested). #1051 refreshes deployplan test snapshots only. No
+      # Go runtime change. The approval page stays off until a separate,
+      # owner-approved PR sets the slot and DEPLOY_APPROVAL_UI_ENABLED.
+      # Covers only the 4.159.0 tag on the merge of mctlhq/mctl-api#1053,
+      # whose first parent is mctl-api main at
+      # db4eb87be3cd5839d42dd15abd8e248e169fdde3 and whose second parent
+      # changes release metadata only. If main moves before #1053 merges,
+      # this record no longer describes the release. Same manual
+      # tag/digest/revision-label check on the release-bump PR; provenance:
+      # chat GO, merge by a Claude agent session.
+      - version: "4.159.0"
+        grant: mctlhq/mctl-gitops#2655
+        approved_by: mashkovd
+        expires: 2026-11-28
 
 gates:
   - name: mctl-agents-workers
