@@ -53,3 +53,13 @@ func TestJoinKVRefusesWhatTheWorkflowWouldSplit(t *testing.T) {
 		t.Errorf("err = %v, want an error that names the key only", err)
 	}
 }
+
+// A malformed --secret entry is usually the bare value: it must not be echoed.
+func TestJoinKVDoesNotEchoMalformedSecret(t *testing.T) {
+	for _, bad := range []string{"sk-live-123", "=sk-live-123"} {
+		_, err := joinKV("secret", []string{bad})
+		if err == nil || strings.Contains(err.Error(), "sk-live-123") {
+			t.Errorf("joinKV(secret, %q) err = %v, want an error without the value", bad, err)
+		}
+	}
+}

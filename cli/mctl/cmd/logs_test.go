@@ -87,3 +87,33 @@ func TestFollowWindowCoversTheGap(t *testing.T) {
 		}
 	}
 }
+
+// Identical lines at one timestamp are distinct events: each prints once,
+// and a later overlapping poll repeats none of them.
+func TestLogCursorKeepsIdenticalLinesAtOneTimestamp(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	hc := logLine{Timestamp: t0, Line: "health ok"}
+	c := &logCursor{}
+	if got := len(c.fresh([]logLine{hc, hc})); got != 2 {
+		t.Fatalf("first poll printed %d lines, want 2", got)
+	}
+	if got := len(c.fresh([]logLine{hc, hc, hc})); got != 1 {
+		t.Errorf("overlapping poll printed %d lines, want only the third one", got)
+	}
+	if got := len(c.fresh([]logLine{hc, hc, hc})); got != 0 {
+		t.Errorf("repeat poll printed %d lines, want 0", got)
+	}
+}
+
+// A failed poll printed nothing, so the next window must still reach back to
+// the last poll that succeeded.
+func TestFollowSinceReachesBackToLastSuccessfulPoll(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	if got := followSince("15m", time.Time{}, t0); got != "15m" {
+		t.Errorf("before any success: %s, want the user's 15m", got)
+	}
+	// Last success at t0, then failures for 3 minutes.
+	if got := followSince("15m", t0, t0.Add(3*time.Minute)); got != "185s" {
+		t.Errorf("after 3m of failures: %s, want 185s", got)
+	}
+}

@@ -15,7 +15,9 @@ func joinKV(flag string, entries []string) (string, error) {
 	for _, e := range entries {
 		key, _, ok := strings.Cut(e, "=")
 		if !ok || strings.TrimSpace(key) == "" {
-			return "", fmt.Errorf("--%s %q: want KEY=VALUE", flag, e)
+			// Never echo the entry: for --secret a malformed one is
+			// usually the bare secret value itself.
+			return "", fmt.Errorf("--%s: an entry has no key or no '=': want KEY=VALUE", flag)
 		}
 		if strings.ContainsAny(e, "\r\n") {
 			return "", fmt.Errorf("--%s %s: a value cannot contain a newline", flag, key)

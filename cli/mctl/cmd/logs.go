@@ -88,19 +88,33 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	// Follow mode: re-poll every 5s. Each poll asks for a window that
 	// overlaps the previous one, so no line falls into a gap between polls;
 	// the cursor drops what was already printed.
-	fmt.Printf("Following logs for %s/%s (Ctrl+C to stop)\n", logsTeam, logsName)
-	fmt.Println(strings.Repeat("─", 50))
+	// Status goes to stderr: stdout carries only log lines, so --json
+	// stays parseable.
+	fmt.Fprintf(os.Stderr, "Following logs for %s/%s (Ctrl+C to stop)\n", logsTeam, logsName)
+	fmt.Fprintln(os.Stderr, strings.Repeat("─", 50))
 
 	cur := &logCursor{}
-	since := logsSince
+	var lastOK time.Time
 	for {
-		polled := time.Now()
-		if err := fetchLogs(client, os.Stdout, since, cur); err != nil {
-			fmt.Printf("Error: %v\n", err)
+		started := time.Now()
+		if err := fetchLogs(client, os.Stdout, followSince(logsSince, lastOK, started), cur); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		} else {
+			lastOK = started
 		}
 		time.Sleep(5 * time.Second)
-		since = followWindow(time.Since(polled))
 	}
+}
+
+// followSince is the window for a poll starting at now. It reaches back to the
+// start of the last successful poll, not the last attempt: a failed poll
+// printed nothing, so the lines it would have covered are still owed. Until a
+// poll succeeds, the user's --since stands.
+func followSince(initial string, lastOK, now time.Time) string {
+	if lastOK.IsZero() {
+		return initial
+	}
+	return followWindow(now.Sub(lastOK))
 }
 
 // minFollowWindow is mctl-api's lower bound for since (minLogWindow in
@@ -120,30 +134,36 @@ func followWindow(elapsed time.Duration) string {
 
 // logCursor remembers what follow mode has printed, so overlapping polls do
 // not print a line twice. Lines are ordered by timestamp; several can share
-// one, so the lines seen at the newest timestamp are kept too.
+// one, so the lines printed at the newest timestamp are counted too: the same
+// text can legitimately appear more than once at one timestamp.
 type logCursor struct {
 	last   time.Time
-	atLast map[string]bool
+	atLast map[string]int
 }
 
 // fresh returns the lines not yet seen, in chronological order, and moves the
 // cursor past them. lines is most-recent-first, as the API returns it.
 func (c *logCursor) fresh(lines []logLine) []logLine {
 	var out []logLine
+	// seen counts this poll's occurrences at c.last; the first atLast[line]
+	// of them were printed by an earlier poll.
+	seen := map[string]int{}
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := lines[i]
 		switch {
 		case l.Timestamp.Before(c.last):
 			continue
 		case l.Timestamp.Equal(c.last):
-			if c.atLast[l.Line] {
+			seen[l.Line]++
+			if seen[l.Line] <= c.atLast[l.Line] {
 				continue
 			}
 		default:
 			c.last = l.Timestamp
-			c.atLast = map[string]bool{}
+			c.atLast = map[string]int{}
+			seen = map[string]int{l.Line: 1}
 		}
-		c.atLast[l.Line] = true
+		c.atLast[l.Line]++
 		out = append(out, l)
 	}
 	return out
