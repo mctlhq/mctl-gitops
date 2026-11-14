@@ -36,7 +36,7 @@ jobs:
     # refused before any step runs. No fallback to another key.
     environment: app-org-read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Self-test the classifiers
         run: .github/scripts/release-drift.sh --self-test
