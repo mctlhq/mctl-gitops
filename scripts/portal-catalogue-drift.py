@@ -73,6 +73,7 @@ import http.client
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import urllib.error
@@ -604,8 +605,15 @@ def waiver_is_wellformed(key, w) -> bool:
     if not isinstance(tools, list) or not all(isinstance(t, str) and t
                                               for t in tools):
         return False
+    # Exactly YYYY-MM-DD, not just what fromisoformat takes: from Python 3.11
+    # it also reads `20261231` and `2026-W53-4`, and apply_waivers() compares
+    # `until` with today's ISO date AS A STRING, where `20261231` sorts after
+    # every `2026-..` date -- a waiver that would never expire.
+    until = w.get("until")
+    if not isinstance(until, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", until):
+        return False
     try:
-        _dt.date.fromisoformat(w["until"])
+        _dt.date.fromisoformat(until)
         return (bool(tools) and bool(w.get("why"))
                 and key[0] in OWNERS and key[1] in KINDS)
     except (KeyError, ValueError, TypeError):
@@ -911,6 +919,12 @@ def selftest() -> int:
          {"until": "2026-10-15", "tools": ["a"], "why": "fixture"}, False),
         ("an undated waiver fails", ("tg", "closed-output-schemas"),
          {"until": "soon", "tools": ["a"], "why": "fixture"}, False),
+        ("a basic-form date fails (never expires as a string)", ("tg", "closed-output-schemas"),
+         {"until": "20261015", "tools": ["a"], "why": "fixture"}, False),
+        ("an ISO week date fails", ("tg", "closed-output-schemas"),
+         {"until": "2026-W42-4", "tools": ["a"], "why": "fixture"}, False),
+        ("an impossible date fails", ("tg", "closed-output-schemas"),
+         {"until": "2026-02-30", "tools": ["a"], "why": "fixture"}, False),
         ("a waiver naming no tools fails", ("tg", "closed-output-schemas"),
          {"until": "2026-10-15", "tools": [], "why": "fixture"}, False),
         ("a key that is not a (server, kind) tuple fails", "seerrsense",

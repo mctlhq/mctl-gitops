@@ -28,6 +28,7 @@ branches from the proposal's tasks.md).
 from __future__ import annotations
 
 import datetime
+import re
 import sys
 from pathlib import Path
 
@@ -39,9 +40,36 @@ VALUES_FILE = ROOT / "platform-gitops/bootstrap/values.yaml"
 MAX_WINDOW_DAYS = 14
 
 
+# Exactly YYYY-MM-DD. date.fromisoformat alone is not the rule: from Python
+# 3.11 it also takes the basic form `20260930` and ISO week dates such as
+# `2026-W40-3`, so the accepted spellings would depend on the runner's Python.
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def parse_date(value: object) -> datetime.date | None:
+    """The date `value` names, or None when it is not a YYYY-MM-DD date.
+
+    An unquoted YAML `2026-09-30` is already a date and is taken as it is; a
+    timestamp (a datetime, which is also a date) is not a date and is refused.
+    """
+    if isinstance(value, datetime.datetime):
+        return None
+    if isinstance(value, datetime.date):
+        return value
+    if not isinstance(value, str) or not ISO_DATE.match(value):
+        return None
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def _today(today_override: str | None) -> datetime.date:
     if today_override:
-        return datetime.date.fromisoformat(today_override)
+        parsed = parse_date(today_override)
+        if parsed is None:
+            raise ValueError(f"--today {today_override!r} is not a YYYY-MM-DD date")
+        return parsed
     return datetime.date.today()
 
 
@@ -77,9 +105,8 @@ def _check_one(doc: dict, enabled_path: tuple, teardown_path: tuple, today: date
             "that opens the sandbox"
         )
 
-    try:
-        teardown_date = datetime.date.fromisoformat(str(teardown_after))
-    except ValueError:
+    teardown_date = parse_date(teardown_after)
+    if teardown_date is None:
         return f"{key}={teardown_after!r} is not a YYYY-MM-DD date"
 
     if teardown_date < today:
@@ -104,7 +131,9 @@ def _check_one(doc: dict, enabled_path: tuple, teardown_path: tuple, today: date
 def check_values(doc: dict, today: datetime.date) -> str | None:
     """Return an error message, or None if every sandbox's teardown state is OK."""
     if not isinstance(doc, dict):
-        return None
+        # An empty or non-mapping values file is unreadable, not "every
+        # sandbox closed".
+        return f"the bootstrap values are a {type(doc).__name__}, not a mapping -- cannot read the sandbox state"
     for enabled_path, teardown_path in SANDBOXES:
         err = _check_one(doc, enabled_path, teardown_path, today)
         if err:
@@ -145,11 +174,31 @@ def selftest() -> int:
             ok = False
             print(f"selftest FAIL: {label}: expected pass={should_pass}, got pass={passed} (err={err!r})", file=sys.stderr)
 
-    # Also prove a malformed date string is refused, not silently accepted.
-    err = check_values(_values(True, "not-a-date"), today)
-    if err is None:
+    # Also prove a malformed date is refused, not silently accepted. The
+    # basic and week forms are what Python 3.11+'s fromisoformat takes; an
+    # int is how YAML reads an unquoted 20260930; a datetime is a timestamp.
+    in_window = today + datetime.timedelta(days=6)
+    for bad in ("not-a-date", in_window.strftime("%Y%m%d"), int(in_window.strftime("%Y%m%d")),
+                in_window.strftime("%G-W%V-%u"), in_window.strftime("%GW%V%u"), "2026-09-30 ",
+                datetime.datetime(in_window.year, in_window.month, in_window.day)):
+        err = check_values(_values(True, bad), today)
+        if err is None:
+            ok = False
+            print(f"selftest FAIL: teardownAfter {bad!r} must fail as not YYYY-MM-DD, not pass", file=sys.stderr)
+    if check_values(_values(True, in_window), today) is not None:
         ok = False
-        print("selftest FAIL: a malformed teardownAfter date must fail, not pass", file=sys.stderr)
+        print("selftest FAIL: an unquoted YAML date (a datetime.date) in the window must pass", file=sys.stderr)
+    for doc in (None, [], "x"):
+        if check_values(doc, today) is None:
+            ok = False
+            print(f"selftest FAIL: a {type(doc).__name__} values document must fail, not pass", file=sys.stderr)
+    try:
+        _today(in_window.strftime("%Y%m%d"))
+    except ValueError:
+        pass
+    else:
+        ok = False
+        print("selftest FAIL: --today in the basic form must be refused", file=sys.stderr)
 
     if not ok:
         return 1
@@ -179,7 +228,11 @@ def main(argv: list[str]) -> int:
         return 2
 
     doc = yaml.safe_load(VALUES_FILE.read_text())
-    today = _today(today_override)
+    try:
+        today = _today(today_override)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     err = check_values(doc, today)
     if err:
         print(f"::error::{err}", file=sys.stderr)

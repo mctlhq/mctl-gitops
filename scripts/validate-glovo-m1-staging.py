@@ -97,11 +97,17 @@ class Unknown(Exception):
     pass
 
 
-def _load(path: Path) -> Any:
+def _load(path: Path) -> dict:
+    """Every staged document is a mapping. An empty file (safe_load gives
+    None) or a list is unreadable, not an empty mapping: it is reported as
+    UNKNOWN instead of being read as "nothing set"."""
     try:
-        return yaml.safe_load(path.read_text())
+        doc = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as e:
         raise Unknown(f"cannot read {path}: {e}") from e
+    if not isinstance(doc, dict):
+        raise Unknown(f"{path}: expected a mapping, got {type(doc).__name__}")
+    return doc
 
 
 def _need(cond: bool, msg: str) -> None:
@@ -262,6 +268,11 @@ def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | No
     except (Unknown, OSError) as e:
         print(f"UNKNOWN: {e}", file=sys.stderr)
         return UNKNOWN
+    except (AttributeError, TypeError, KeyError) as e:
+        # A nested key of the wrong shape (`env: null`, `ingress: []`) cannot
+        # be judged either way, so it is UNKNOWN, never a traceback or a pass.
+        print(f"UNKNOWN: staged document has an unexpected shape: {e!r}", file=sys.stderr)
+        return UNKNOWN
     print("glovo-m1: ok")
     return 0
 
@@ -333,6 +344,14 @@ def selftest() -> int:
         lambda r: _edit(r, "provenance.yaml", lambda d: d["images"]["facade"].pop("sbom")))
     add("T6 gate.yaml missing", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").unlink())
     add("T6 gate.yaml unparseable", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").write_text(": : :\n- ["))
+    for rel in (VALUES["facade"], VALUES["provider"], VALUES["control"], TENANT,
+                "provenance.yaml", "target-paths.yaml", "gate.yaml"):
+        add(f"empty {rel}", UNKNOWN, lambda r, rel=rel: (r / STAGED / rel).write_text(""))
+    add("provenance.yaml is a list", UNKNOWN, lambda r: (r / STAGED / "provenance.yaml").write_text("- a\n"))
+    add("facade env: null", UNKNOWN,
+        lambda r: _edit(r, VALUES["facade"], lambda d: d.__setitem__("env", None)))
+    add("provider ingress is a list", UNKNOWN,
+        lambda r: _edit(r, VALUES["provider"], lambda d: d.__setitem__("ingress", [])))
 
     # Exact-line allowlist (runbook "Leak guard at activation").
     a_file = f"{RECONCILED}/services/labs/x/values.yaml"
