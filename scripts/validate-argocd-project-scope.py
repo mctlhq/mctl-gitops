@@ -23,7 +23,7 @@ Reverse (every permission is used), for each literal entry:
   - each destination namespace is the destination of at least one
     Application, or holds at least one resource an owner in that project
     renders.
-  Entries containing a wildcard (`*`) are exempt from the reverse check, so
+  Entries containing a wildcard (`*`, `?`, `[`, `{`) are exempt from the reverse check, so
   the projects named with --strict may not contain one anywhere: not in
   sourceRepos, not in a destination server, not in a destination namespace.
 
@@ -78,8 +78,22 @@ CLUSTER_SCOPED = {
 
 TEMPLATED = re.compile(r"\{\{.*\}\}")
 
+# Argo CD matches with gobwas/glob, where `*`, `?`, `[...]` and `{a,b}` are
+# all wildcards and `\` escapes. Every one of them makes an entry a pattern,
+# not a literal, so --strict refuses all of them and the reverse check exempts
+# all of them. Only `*` and `?` are evaluated here; the others are refused as
+# unreadable rather than matched as literal characters.
+GLOB_CHARS = set("*?[]{}\\")
+UNSUPPORTED_GLOB = set("[]{}\\")
+
+
+def is_glob(entry: str) -> bool:
+    return any(ch in GLOB_CHARS for ch in entry)
+
 
 def _glob_regex(pattern: str, separator: str | None) -> re.Pattern[str]:
+    if any(ch in UNSUPPORTED_GLOB for ch in pattern):
+        raise CheckError(f"glob {pattern!r} uses syntax this check does not evaluate ([...], {{...}} or \\)")
     out = []
     i = 0
     while i < len(pattern):
@@ -231,9 +245,9 @@ def violations(projects: dict[str, Project], apps: list[App], strict: list[str])
         if proj is None:
             found.append(f"strict project {name!r} is not defined in the render")
             continue
-        if any("*" in p for p in proj.source_repos):
+        if any(is_glob(p) for p in proj.source_repos):
             found.append(f"AppProject {name}: sourceRepos must not contain a wildcard")
-        if any("*" in s or "*" in n for s, n in proj.destinations):
+        if any(is_glob(s) or is_glob(n) for s, n in proj.destinations):
             found.append(f"AppProject {name}: destinations must not contain a wildcard")
 
     for app in apps:
@@ -256,12 +270,12 @@ def violations(projects: dict[str, Project], apps: list[App], strict: list[str])
 
     for proj in projects.values():
         for entry in proj.source_repos:
-            if entry.startswith("!") or "*" in entry:
+            if entry.startswith("!") or is_glob(entry):
                 continue
             if entry not in used_repo[proj.name]:
                 found.append(f"AppProject {proj.name}: sourceRepos entry {entry} is used by no Application")
         for dest in proj.destinations:
-            if "*" in dest[0] or "*" in dest[1]:
+            if is_glob(dest[0]) or is_glob(dest[1]):
                 continue
             if dest not in used_ns[proj.name]:
                 found.append(f"AppProject {proj.name}: destination {dest[0]} / {dest[1]} is used by no Application")
@@ -334,6 +348,16 @@ def selftest(projects: dict[str, Project], apps: list[App], strict: list[str]) -
               "a namespace wildcard in a strict project")
         fires(lambda p, a: p[strict[0]].destinations.append(("*", target.namespace)),
               "a server wildcard in a strict project")
+        # `?` is a wildcard too: a pattern that matches a real Application is
+        # "used", so only the strict refusal catches it.
+        q_repo = normalize_repo(target.sources[0])[:-1] + "?"
+        assert repo_matches(q_repo, target.sources[0]), q_repo
+        fires(lambda p, a: p[strict[0]].source_repos.append(q_repo),
+              "a `?` sourceRepos entry matching a real source in a strict project")
+        q_ns = target.namespace[:-1] + "?"
+        assert plain_matches(q_ns, target.namespace), q_ns
+        fires(lambda p, a: p[strict[0]].destinations.append((target.server, q_ns)),
+              "a `?` namespace matching a real destination in a strict project")
     # Matching semantics: `.git` and case are normalized, `*` does not cross `/`.
     assert repo_matches("https://github.com/mctlhq/mctl-gitops.git", "https://GitHub.com/mctlhq/mctl-gitops")
     assert not repo_matches("https://github.com/mctlhq/*", "https://github.com/mctlhq/a/b")
@@ -341,6 +365,13 @@ def selftest(projects: dict[str, Project], apps: list[App], strict: list[str]) -
     assert repo_matches("*", "https://github.com/mctlhq/a/b")
     assert Project("p", ["*"], []).repo_permitted("https://example.invalid/x/y")
     assert not repo_matches("https://github.com/mctlhq/mctl-gitops.git", "https://github.com/mctlhq/mctl-gitops-fork.git")
+    assert all(is_glob(e) for e in ("a?", "a*", "a[bc]", "{a,b}", "a\\b")) and not is_glob("argocd")
+    try:
+        plain_matches("ns-[ab]", "ns-a")
+    except CheckError:
+        pass
+    else:
+        raise AssertionError("selftest: unsupported glob syntax must be an error, not a literal match")
     print("selftest OK: clean render passes; unlisted source, namespace, resource namespace, server, "
           "undefined project, unused entries, a removed entry and a wildcard all fire")
 
