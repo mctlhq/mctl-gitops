@@ -115,6 +115,11 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_DB_MIGRATION_ROLE: glovo_migrator',
         '            GLOVO_DB_RUNTIME_ROLE: glovo_runtime',
         '            GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"',
+        # Step B1: the basket MCP flags (mctl-api#1006).
+        '            GLOVO_ENABLED: "true"',
+        '            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp',
+        '            GLOVO_BASKET_MCP_ENABLED: "true"',
+        '            # docs/runbooks/glovo-basket-canary.md): its store and schemas are',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
