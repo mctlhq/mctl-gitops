@@ -110,6 +110,58 @@ version_holds:
         grant: mctlhq/mctl-gitops#2628
         approved_by: mashkovd
         expires: 2026-11-28
+      # Fifth grant (owner GO in chat, 2026-11-14, confirmed again for the
+      # full content after mctl-api main moved twice past the first version
+      # of this record in #2639): 4.157.0 is 4.156.2 plus the bug-roadmap
+      # wave 2 fixes mctlhq/mctl-api#1035 (incident create refuses
+      # server-owned lifecycle state; evidence written and read in one
+      # transaction, partial reads fail), #1037 (canonical evidence numbers,
+      # trailing JSON refused, disable of a disabled non-human is a no-op)
+      # and #1038 (support TTL overflow, per-privilege bridge grant check,
+      # no implicit work-item grants), plus #1033 (decide matches the
+      # requester by principal id), #1036 (digest-bound owner grants for
+      # preview apply, dark by default), #1039 (the deploy-plan store opens
+      # on its own DSN, never WORK_ITEMS_DB_URL) and #1040 (the fresh-sign-in
+      # page that decides deploy grants; dark until its env flag and web
+      # client are configured, which must wait for mctlhq/mctl-gitops#2629).
+      # Covers only the 4.157.0 tag on the merge of mctlhq/mctl-api#1034,
+      # whose first parent is mctl-api main at
+      # b5e3ceaa564a861131713ef255d1794407acce30 and whose second parent
+      # changes release metadata only. If main moves before #1034 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.157.0"
+        grant: mctlhq/mctl-gitops#2642
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Sixth grant (owner GO in chat, 2026-11-14, for each change): 4.158.0
+      # is 4.157.0 plus three changes. mctlhq/mctl-api#1041 (closes #1031):
+      # deploy-service and preview-deploy are refused on the generic execute
+      # path for tenants whose values set tenant.profile: agent-deploy,
+      # admins included; CI OIDC and rollback-service pass. No tenant sets
+      # that profile yet (checked on mctl-gitops main 2026-11-14: 7 tenants,
+      # all values parse, no profile, no duplicate names), so the visible
+      # change is only that an unreadable tenant profile now fails a direct
+      # deploy closed with 503 instead of passing. mctlhq/mctl-api#1043:
+      # create-tenant accepts tenant names of 2-31 characters instead of
+      # 2-63, matching every team_name operation; delete and cleanup paths
+      # keep 63, and every existing tenant name is 14 characters or less.
+      # mctlhq/mctl-api#1044 pins the agy review workflow to a commit; it
+      # touches only .github/workflows and changes no runtime code.
+      # Covers only the 4.158.0 tag on the merge of mctlhq/mctl-api#1042,
+      # whose first parent is mctl-api main at
+      # 50198af3c315977138f4907991a0998e35bf550c and whose second parent
+      # changes release metadata only. If main moves before #1042 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.158.0"
+        grant: mctlhq/mctl-gitops#2647
+        approved_by: mashkovd
+        expires: 2026-11-28
 
 gates:
   - name: mctl-agents-workers
