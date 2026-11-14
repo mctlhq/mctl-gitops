@@ -41,6 +41,12 @@ GOOD = {
     "non-semver tags are not ordered": diff(SVC, [("  tag: sha-aaa", "  tag: sha-bbb")]),
     "a prerelease-free upgrade across digits": diff(SVC, [("  tag: 1.9.0", "  tag: 1.10.0")]),
     "two files": diff(SVC, TAGS) + diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]),
+    "two tag moves in one block, git order": diff(SVC, []).replace(
+        " ctx\n", ' ctx\n-  tag: "1.0.0"\n-  tag: "2.0.0"\n+  tag: "1.1.0"\n+  tag: "2.1.0"\n', 1),
+    "two tag moves in separate blocks": diff(SVC, []).replace(
+        " ctx\n", ' a:\n-  tag: "1.0.0"\n+  tag: "1.1.0"\n b:\n-  tag: "2.0.0"\n+  tag: "2.1.0"\n', 1),
+    "tag move on a last line without a newline": diff(SVC, []).replace(
+        " ctx\n", ' ctx\n-  tag: "1.0.0"\n\\ No newline at end of file\n+  tag: "1.1.0"\n\\ No newline at end of file\n', 1),
 }
 BAD = {
     "empty diff": "",
@@ -76,6 +82,14 @@ BAD = {
     "nine files": "".join(diff(f"platform-gitops/services/t/s{i}/values.yaml", TAGS) for i in range(9)),
     "same file twice": diff(SVC, TAGS) + diff(SVC, TAGS),
     "removals outnumber additions": diff(SVC, TAGS).replace("+  tag: \"1.1.0\"\n", ""),
+    # gitops bug report ch. 14: the tag key leaves block `a` and appears
+    # under `b`; pairing per file called that a tag move.
+    "tag key moved to another block": diff(SVC, []).replace(
+        " ctx\n", " a:\n-  tag: 1.0.0\n b:\n+  tag: 1.0.1\n", 1),
+    "tag key moved across hunks": diff(SVC, []).replace(
+        " ctx\n", " a:\n-  tag: 1.0.0\n@@ -9,2 +9,2 @@\n b:\n+  tag: 1.0.1\n", 1),
+    "blocks that only pair across each other": diff(SVC, []).replace(
+        " ctx\n", " a:\n-  tag: 1.0.0\n+  tag: 1.1.0\n+  tag: 1.2.0\n b:\n-  tag: 2.0.0\n", 1),
 }
 
 
@@ -155,7 +169,10 @@ MUT = [
     ("non-tag lines accepted", [("            if s is None:\n                problems.append", "            if s is None:\n                continue\n                problems.append")]),
     ("identity (key, image) not compared", [("            if ri != ai:", "            if False:")]),
     ("same-tag rewrite accepted", [("            elif rt == at:", "            elif False:")]),
-    ("unpaired lines accepted", [("        if len(removed) != len(added):", "        if False:")]),
+    ("unpaired lines accepted (tag lines no longer paired per block)",
+     [("        if cur is not None and len(blk_removed) != len(blk_added):", "        if False:")]),
+    ("context lines do not end a block",
+     [('            end_block()\n            continue\n        if line[0] in "+-":', '            continue\n        if line[0] in "+-":')]),
     ("new/deleted/mode/rename headers accepted (both defences removed)",
      [("            if HEADER_REFUSE.match(line):", "            if HEADER_REFUSE.match(line) and False:"),
       ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")]),

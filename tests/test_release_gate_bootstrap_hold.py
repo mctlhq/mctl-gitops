@@ -253,8 +253,13 @@ def cases(script):
     add("diff pos: only the tag line changes", diff_rc(script, lambda d: set_tag(d, "4.154.2")), 0)
     add("diff neg: values block edited, tag untouched",
         diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("replicaCount: 2", "replicaCount: 9")), marker="content other than the image tag"), REFUSED)
+    # Match whatever commit the chart is pinned to, so moving the pin in a
+    # release PR does not silently turn this mutation into a no-op.
+    evil_pin, n_pin = re.subn(r"targetRevision: [0-9a-f]{40}\b", "targetRevision: evil", REAL_API, count=1)
+    if n_pin != 1:
+        raise SystemExit("fixture: no 40-hex targetRevision pin in the real mctl-api.yaml")
     add("diff neg: targetRevision edited, tag untouched",
-        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("targetRevision: a5b9ef9cf0f880f28b841033a8b2a6d9563ce050", "targetRevision: evil", 1)), marker="content other than the image tag"), REFUSED)
+        diff_rc(script, lambda d: (d / API).write_text(evil_pin), marker="content other than the image tag"), REFUSED)
     add("diff neg: second image reference added",
         diff_rc(script, lambda d: (d / API).write_text(second_ref), marker="content other than the image tag"), REFUSED)
     add("diff neg: repository changed",

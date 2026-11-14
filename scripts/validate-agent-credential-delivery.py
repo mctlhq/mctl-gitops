@@ -60,9 +60,19 @@ def _volumes(spec: dict, tpl: dict) -> dict:
 
 
 def _mode_ok(vol_mode, item_mode) -> bool:
+    """The file mode grants no permission bit outside MAX_MODE.
+
+    "0440 or stricter" is a bitmask relation, not a numeric one: 0o404
+    (other-read) and 0o077 are numerically below 0o440 but grant read to
+    other, or write, that 0440 does not. A bool (YAML `true` is an int
+    subclass), a negative number and anything above 0o777 (not a valid
+    Secret volume mode) are rejected as well. YAML 1.1 reads 0440 as octal
+    int 288; absent means the k8s default 0644.
+    """
     mode = item_mode if item_mode is not None else vol_mode
-    # YAML 1.1 reads 0440 as octal int 288; absent means the k8s default 0644.
-    return isinstance(mode, int) and mode <= MAX_MODE
+    if not isinstance(mode, int) or isinstance(mode, bool):
+        return False
+    return 0 <= mode <= 0o777 and mode & ~MAX_MODE == 0
 
 
 def check_template(where: str, tpl: dict, spec: dict, rows: list[dict]) -> list[str]:
@@ -164,6 +174,11 @@ def selftest() -> int:
         d["spec"]["templates"][0]["container"]["env"].append(
             {"name": "OTHER", "valueFrom": {"secretKeyRef": {"name": "s", "key": "o"}}})
     def mode(d): d["spec"]["volumes"][0]["secret"]["defaultMode"] = 0o644
+
+    def set_mode(value):
+        def mut(d):
+            d["spec"]["volumes"][0]["secret"]["defaultMode"] = value
+        return mut
     def rw(d): del d["spec"]["templates"][0]["container"]["volumeMounts"][0]["readOnly"]
     def init(d):
         d["spec"]["templates"][0]["initContainers"] = [
@@ -176,6 +191,15 @@ def selftest() -> int:
     cases = [("migrated", None, False), ("env seed restored", seed, True),
              ("literal image", literal, False), ("literal image, env seed restored", literal_seed, True),
              ("unlisted secretKeyRef", unknown, True), ("mode 0644", mode, True),
+             # gitops bug report ch. 8: numerically below 0440, wider as bits.
+             ("mode 0404 (other-read)", set_mode(0o404), True),
+             ("mode 0077", set_mode(0o077), True),
+             ("mode 0004", set_mode(0o004), True),
+             ("mode 0400", set_mode(0o400), False), ("mode 0040", set_mode(0o040), False),
+             ("mode 0", set_mode(0), False),
+             ("mode true (bool)", set_mode(True), True), ("mode -1", set_mode(-1), True),
+             ("mode 010440 (out of range)", set_mode(0o10440), True),
+             ("mode as a string", set_mode("0440"), True),
              ("not readOnly", rw, True), ("init mount", init, True)]
     ok = True
     for label, mut, should_fail in cases:
