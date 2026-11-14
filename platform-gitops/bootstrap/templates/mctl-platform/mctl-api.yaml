@@ -54,6 +54,12 @@ spec:
             enabled: true
             className: traefik
             tls: true
+            # Routes the basket approval page (served on api.mctl.ai under the
+            # extra path below) through Traefik. Empty by default in the chart
+            # (mctl-api#1017); set only together with the approval page flag.
+            # Rollback: delete this key.
+            extraPaths:
+              - /glovo
             hosts:
               - host: api.mctl.ai
 
@@ -69,10 +75,10 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout turns the basket MCP on (mctl-api#1006, step B1 of
-            # docs/runbooks/glovo-basket-canary.md): its store and schemas are
-            # read once at start.
-            ROLLOUT_MARKER: "2026-11-14-basket-mcp-b1"
+            # This rollout turns the basket approval page on (mctl-api#1006,
+            # step B2 of the canary runbook): its client id and secret come
+            # from mctl-api-oidc-zitadel and are read only at container start.
+            ROLLOUT_MARKER: "2026-11-14-basket-ui-b2"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -405,6 +411,11 @@ spec:
             GLOVO_ENABLED: "true"
             GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp
             GLOVO_BASKET_MCP_ENABLED: "true"
+            # The owner approval page (mctl-api#1007). Needs the chart slot
+            # below and the ZITADEL client; without them the page stays off
+            # and no approval_url is returned. Requires the basket flag above
+            # (else the boot is refused).
+            GLOVO_BASKET_UI_ENABLED: "true"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -504,6 +515,13 @@ spec:
           # that one does need the keys: mctl-api refuses to start in those
           # modes without them. Rollback: delete this line.
           oauthZitadelSecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the approval page (mctlhq/mctl-api#1007):
+          # the confidential ZITADEL client that zitadel-iac writes into the
+          # same Secret (mctl-gitops#2626). Optional refs, so a Secret without
+          # the keys leaves the page off. Chart slot from mctl-api#1017.
+          # Rollback: delete this line and the approval page flag.
+          glovoBasketUISecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the

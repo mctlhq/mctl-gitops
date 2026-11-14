@@ -119,7 +119,10 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_ENABLED: "true"',
         '            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp',
         '            GLOVO_BASKET_MCP_ENABLED: "true"',
-        '            # docs/runbooks/glovo-basket-canary.md): its store and schemas are',
+        # Step B2: the approval page flag, its route and its chart slot.
+        '              - /glovo',
+        '            GLOVO_BASKET_UI_ENABLED: "true"',
+        '          glovoBasketUISecret: mctl-api-oidc-zitadel',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
