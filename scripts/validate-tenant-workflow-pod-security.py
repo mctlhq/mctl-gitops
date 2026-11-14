@@ -16,10 +16,13 @@ Checked for each entry workflow:
     allowPrivilegeEscalation false and drop ALL capabilities (not inherited
     from the pod securityContext; Argo's own init/wait run as root by
     default).
-  * no template-level securityContext or podSpecPatch that would replace or
-    override the above.
 
-Checked for every step in ENTRY_FILES and REFERENCED_FILES:
+Checked for every template in ENTRY_FILES and REFERENCED_FILES:
+  * no template-level securityContext or podSpecPatch that would replace or
+    override the above. A referenced template's pod runs under the entry
+    workflow's spec, so an override there (say `securityContext:
+    {runAsUser: 0}` on a tpl-git-commit step) escapes the entry checks just
+    the same; this used to be checked in ENTRY_FILES only.
   * nothing installs packages or writes /usr/local/bin at runtime (needs
     root); bake it into mctl-workflow-tools instead.
   * a step that uses ssh runs mctl-workflow-tools: OpenSSH refuses to run
@@ -171,18 +174,17 @@ def check_entry(name: str, doc: dict) -> list[str]:
                 continue
             bad += _check_container_sc(f"{name} spec.podSpecPatch {cname}",
                                        table[cname].get("securityContext"), required=True)
-    for tpl in spec.get("templates") or []:
-        where = f"{name}:{tpl.get('name')}"
-        if "securityContext" in tpl:
-            bad.append(f"{where}: template-level securityContext replaces the workflow's; set it on spec")
-        if "podSpecPatch" in tpl:
-            bad.append(f"{where}: template-level podSpecPatch can override the workflow's; not allowed")
     return bad
 
 
 def check_steps(name: str, doc: dict) -> list[str]:
     bad = []
     for tpl in (doc.get("spec") or {}).get("templates") or []:
+        where = f"{name}:{tpl.get('name')}"
+        if "securityContext" in tpl:
+            bad.append(f"{where}: template-level securityContext replaces the workflow's; set it on spec")
+        if "podSpecPatch" in tpl:
+            bad.append(f"{where}: template-level podSpecPatch can override the workflow's; not allowed")
         body = tpl.get("script") or tpl.get("container")
         if not body:
             continue
@@ -328,6 +330,17 @@ def selftest() -> int:
     def m_tpl_sc(d):
         d["wft-retire-service.yaml"]["spec"]["templates"][0]["securityContext"] = {"runAsUser": 0}
 
+    def m_ref_tpl_sc(d):
+        # gitops bug report ch. 7: a referenced template's override.
+        for tpl in d["tpl-git-commit.yaml"]["spec"]["templates"]:
+            if tpl.get("name") == "commit-service":
+                tpl["securityContext"] = {"runAsUser": 0}
+
+    def m_ref_tpl_patch(d):
+        for tpl in d["tpl-vault-write.yaml"]["spec"]["templates"]:
+            if tpl.get("name") == "write-service-secrets":
+                tpl["podSpecPatch"] = '{"containers":[{"name":"main","securityContext":{"privileged":true}}]}'
+
     def m_tag_only(d):
         s = _step(d, "tpl-git-commit.yaml", "commit-service")
         s["image"] = s["image"].split("@")[0]
@@ -345,6 +358,8 @@ def selftest() -> int:
              ("init keeps caps", m_init_drop, True), ("apk add", m_apk, True),
              ("write /usr/local/bin", m_usrlocal, True), ("ssh on alpine/git", m_ssh_image, True),
              ("template securityContext", m_tpl_sc, True), ("privileged step", m_priv, True),
+             ("referenced template securityContext", m_ref_tpl_sc, True),
+             ("referenced template podSpecPatch", m_ref_tpl_patch, True),
              ("tools image by tag only", m_tag_only, True),
              ("tools image with a malformed digest", m_bad_digest, True)]
     # Mutations of the inputs outside the templates: (label, wft names, Dockerfile, pins).
