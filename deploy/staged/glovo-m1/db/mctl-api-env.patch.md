@@ -38,7 +38,7 @@ operator step and the read-only grants verification of design section 8.
   on. Evidence required (read-only): which role owns the bridge/commerce tables
   and who the grantees are (`pg_class.relowner`, `aclexplode(relacl)` on the
   `bridge_*` relations), and whether any such table exists at all.
-- `DB_POOL_MAX_CONNS` and the `connectionLimit` sizing (see roles.patch.md).
+- `DB_POOL_MAX_CONNS`: stays at the default 8; `connectionLimit` sizing decided in roles.patch.md (2026-11-14).
   mctl-api sizes one pool per distinct `*_DB_URL` per replica (default 8), so
   with `GLOVO_DB_URL` and `WORK_ITEMS_DB_URL` distinct the earlier "8 x 2
   replicas" comment no longer holds. Evidence required: deployed replica count

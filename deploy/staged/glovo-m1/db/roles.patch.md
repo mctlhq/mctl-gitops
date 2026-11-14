@@ -19,7 +19,7 @@ replication. The names are the defaults of `runtimeRole` / the migration role.
       createrole: false
       replication: false
       bypassrls: false
-      connectionLimit: 16          # UNVERIFIED, see "Connection limits"
+      connectionLimit: 36          # owner decision 2026-11-14, see "Connection limits"
       ensure: present
       passwordSecret:
         name: glovo-runtime-db-creds
@@ -31,7 +31,7 @@ replication. The names are the defaults of `runtimeRole` / the migration role.
       createrole: false
       replication: false
       bypassrls: false
-      connectionLimit: 8           # UNVERIFIED sizing, see "Connection limits"
+      connectionLimit: 36          # owner decision 2026-11-14, see "Connection limits"
       ensure: present
       passwordSecret:
         name: workitems-db-creds
@@ -43,7 +43,7 @@ replication. The names are the defaults of `runtimeRole` / the migration role.
       createrole: false
       replication: false
       bypassrls: false
-      connectionLimit: 2           # UNVERIFIED, see "Connection limits"
+      connectionLimit: 2           # owner decision 2026-11-14, see "Connection limits"
       ensure: present
       passwordSecret:
         name: glovo-migrator-db-creds
@@ -67,17 +67,22 @@ database, so the roles are granted into it by `ApplySchema`, not by CNPG.
     SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolreplication
       FROM pg_roles WHERE rolname IN ('glovo_runtime','glovo_migrator','mctl_api_workitems');
 
-## Connection limits: UNVERIFIED, activation blocker
+## Connection limits: decided 2026-11-14
 
-The limits 16 (`glovo_runtime`), 2 (`glovo_migrator`) and 8
-(`mctl_api_workitems`) are placeholders of this staging, not confirmed by the
-#1004 amendment. mctl-api sizes one pool per distinct `*_DB_URL` per replica
-(`DB_POOL_MAX_CONNS`, default 8, plus 3 unpooled connections), so the correct
-figure depends on replica count and rolling-update surge. Required read-only
-evidence before activation: deployed `replicaCount` and surge, the
-`pgshared: pools` startup log line, `mctl_api_db_pool_max_conns`, and the
-current `rolconnlimit` of the legacy role (`SELECT rolname, rolconnlimit FROM
-pg_roles`).
+Limits: 36 (`glovo_runtime`), 36 (`mctl_api_workitems`), 2 (`glovo_migrator`),
+chosen by the owner on 2026-11-14 from this read-only evidence:
+- Deployment `mctl-api`: 2 replicas, RollingUpdate `maxSurge` 25%,
+  `maxUnavailable` 25%, no HPA. So at most 3 pods during a rollout.
+- Startup log of 4.156.x: three `pgshared: pool opened` lines per pod, each
+  `max_conns: 8` (`DB_POOL_MAX_CONNS` unset, default).
+- Legacy role `mctl-api`: `rolconnlimit` 64; 4 idle sessions at inventory time
+  (D0, recorded on mctlhq/mctl-api#1006).
+
+Peak per role: 3 pods x (8 pooled + 3 unpooled) = 33, so 36 leaves a small
+margin. The migrator runs as a single Job connection, 2 allows one retry.
+Note, not changed here: the legacy role already opens three pools of 8 per pod,
+so at 3 pods it can ask for 72 against its own limit of 64. That is pre-existing
+and separate from this activation.
 
 ## Migrator exit codes and flags (mctl-api#1004 design section 1)
 
@@ -194,13 +199,17 @@ activation, because `control.ProveOneDatabase` uses the work-items pool.
 
 ## UNVERIFIED, with the read-only evidence required
 
+D0 (step 0) ran on 2026-11-14 on PostgreSQL 17.11; full output on
+mctlhq/mctl-api#1006. Rows it settled are marked RESOLVED.
+
 | Item | Evidence |
 | --- | --- |
-| Which bridge tables or schema `glovo` exist in production, and their owners | the inventory of step 0 |
-| Other work-items consumers (DevLoop, agents, other pods) under a role other than `mctl-api` | grantees of the 13 relations (`aclexplode`) and `pg_stat_activity` by `usename` |
-| Which of the 13 generic relations exist (version table at most 12 of 13 on older images) | `pg_class` owner listing |
-| Whether the legacy role needs more than `genericGrants` for DevLoop | the inventory of step 0 |
-| Sequence ownership after `ALTER TABLE ... OWNER TO` | `pg_class.relowner` of `work_item_intents_id_seq` after the transfer |
+| Which bridge tables or schema `glovo` exist in production, and their owners | RESOLVED (D0): schema `glovo` absent, no bridge objects |
+| Other work-items consumers (DevLoop, agents, other pods) under a role other than `mctl-api` | RESOLVED (D0): all 12 relations have a NULL ACL (owner only); only `mctl-api` sessions on the database |
+| Which of the 13 generic relations exist (version table at most 12 of 13 on older images) | RESOLVED (D0): 12 present, all owned by `mctl-api`; `work_items_schema_version` absent, so step 2 pre-creation is required |
+| Whether the legacy role needs more than `genericGrants` for DevLoop | still UNVERIFIED: D0 shows only owner privileges, which do not say what DevLoop uses; `-verify` after the transfer is the check |
+| Sequence ownership after `ALTER TABLE ... OWNER TO` | still UNVERIFIED on PG 17: `pg_class.relowner` of `work_item_intents_id_seq` after the transfer (rehearsal first) |
 | `COMMERCE_DB_URL` role | see mctl-api-env.patch.md |
-| Connection limits | see above |
-| Image version production runs | deployed tag vs mctl-api `081bd6b7` |
+| Connection limits | RESOLVED: see above |
+| Image version production runs | RESOLVED: mctl-api 4.156.1 since 2026-11-14 (contains `081bd6b7`) |
+| `glovo_migrator` CREATE on database `mctl-api` and schema `public` | needed: D0 shows `public` owned by `pg_database_owner` (= `mctl-api`) with `UC` for the owner and `U` for PUBLIC only |
