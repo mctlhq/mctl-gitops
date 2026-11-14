@@ -54,7 +54,25 @@ SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
 # keyed by the path relative to the repository root. Empty until the first
 # activation PR; each activation PR adds only its own lines, removal PRs delete
 # them.
-ALLOWED_LINES: dict[str, frozenset[str]] = {}
+ALLOWED_LINES: dict[str, frozenset[str]] = {
+    # Step D1: the Basket canary managed roles (mctlhq/mctl-api#1006).
+    "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml": frozenset({
+        "      - host mctl-api glovo_runtime all scram-sha-256",
+        "      - host mctl-api glovo_migrator all scram-sha-256",
+        "      - name: glovo_runtime",
+        "          name: glovo-runtime-db-creds",
+        "      - name: glovo_migrator",
+        "          name: glovo-migrator-db-creds",
+    }),
+    "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml": frozenset({
+        "  name: glovo-runtime-db-creds",
+        "    name: glovo-runtime-db-creds",
+        "        key: platform/mctl-api/glovo-runtime-database",
+        "  name: glovo-migrator-db-creds",
+        "    name: glovo-migrator-db-creds",
+        "        key: platform/mctl-api/glovo-migrator-database",
+    }),
+}
 
 
 class Refused(Exception):
