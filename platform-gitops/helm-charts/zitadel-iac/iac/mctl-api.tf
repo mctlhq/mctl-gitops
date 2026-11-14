@@ -257,6 +257,36 @@ resource "zitadel_application_oidc" "mctl_api_glovo_basket" {
   id_token_userinfo_assertion = true
 }
 
+# The deploy approval page (mctl-api#1026, deploy grants): an agent asks for
+# a deploy with mctl_request_deploy_approval, mctl-api shows the tenant owner
+# a link to api.mctl.ai/deploy/approvals/{id}, and the owner signs in here,
+# fresh, for that one decision (prompt=login, max_age=0, PKCE, nonce).
+# mctl-api reads the ID token only and resolves the person to their linked
+# principal; the live tenant-owner check decides, the page grants nothing by
+# itself. A client of its own, not a second redirect on mctl-api-decide, so
+# a code or ID token issued for one page is never accepted by another (the
+# ID token's aud is the client id), the secrets rotate apart, and removing
+# this client touches no other decision. Same shape as mctl-api-decide:
+# client secret plus PKCE, one redirect, opaque (BEARER) access token,
+# because a JWT access token of any app in this project would pass
+# mctl-api's JWT bearer check. Do not switch it to JWT. Not in
+# ZITADEL_HOOK_CLAIM_CLIENT_IDS (customers.tf): the page resolves a linked
+# identity by subject and reads no customer claim.
+resource "zitadel_application_oidc" "mctl_api_deploy_approval" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-deploy-approval"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/deploy/approvals/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -310,6 +340,12 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # stays unmounted unless GLOVO_BASKET_UI_ENABLED is "true" (it is unset).
     GLOVO_BASKET_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_basket.client_id
     GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret
+    # The deploy approval page client (mctl-api#1026). Nothing reads these
+    # keys until the mctl-api values mount them and set
+    # DEPLOY_APPROVAL_UI_ENABLED to "true" (it is unset, so the page stays
+    # unmounted).
+    DEPLOY_APPROVAL_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_deploy_approval.client_id
+    DEPLOY_APPROVAL_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_deploy_approval.client_secret
     # The development client above, for an operator to copy into a local
     # run. Not read by mctl-api: the chart references keys by name, and these
     # names are none of them.
