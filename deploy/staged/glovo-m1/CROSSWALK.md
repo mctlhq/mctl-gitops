@@ -167,3 +167,25 @@ login, basket mutation, checkout or payment.
 - Which slice owns the control-worker enqueue route (M7): no proposal names it.
 - That the facade can adopt the #957 `/resolve` shape without a contract
   version bump (M3).
+
+## A15 DB staging vs the mctl-api#1004 amendment (mctl-gitops#2579)
+
+Amendment content digest `sha256:e1d02b3a61e9a803966360873287506652968fca7f3c87ad1c9417b13202236a`
+(#2579 head `ca414193`; it may still change, recheck the digest before completion; earlier digests `2aea7693...` and `ed73eb05...` are superseded). Staged under
+`db/`, inert.
+
+| # | #1004 contract | Staged in `db/` |
+| --- | --- | --- |
+| 1 | `mctl_api_workitems`, explicit `WORK_ITEMS_DB_URL` | managed role, credential ExternalSecrets, env text |
+| 2 | `GLOVO_DB_RUNTIME_ROLE`, `GLOVO_DB_MIGRATION_ROLE` | env text, flags stay off |
+| 3 | `MCTL_GLOVO_MIGRATE_DSN`, `-workitems-role`, `-runtime-role`, `-expect-role`, `-dry-run`; exit codes 0/1/2/3 (1 refused, 2 not ready, 3 could not observe); read-only `-verify` (4.156.1) | suspended Job, `/bin/false`, placeholder image |
+| 4 | database `mctl-api` | pg_hba lines and DSNs |
+| 5 | `COMMERCE_DB_URL` role (UNVERIFIED, activation blocker); connection limits | limits decided 2026-11-14 (36/36/2, roles.patch.md) |
+| 6 | transitional grants, operator ownership transfer | `roles.patch.md`, plan only, not applied; grants follow the owner change in one transaction with the transfer; version-table pre-create is "chosen" in #1004 and needs operator confirmation |
+
+Recorded, not fixed here (follow-up for #2567 / #2457, not part of A15): the
+staged control-worker values differ from the #1044 amendment (#2578). They use
+`TEMPORAL_CLIENT_CREDENTIAL`, port 8080 and image
+`ghcr.io/mctlhq/glovo-control-worker:0.0.0`, and stage no control-audience
+bearer, no mctl-api base URL and no egress, where #2578 names
+`TEMPORAL_TOKEN_FILE` and related settings.
