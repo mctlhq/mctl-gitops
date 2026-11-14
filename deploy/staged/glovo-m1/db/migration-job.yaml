@@ -6,16 +6,14 @@
 # Inert three ways: suspend: true, a placeholder image tag, and a command that
 # fails closed (/bin/false) until cmd/glovo-migrate ships in an image and a
 # separately authorized activation PR sets the real command and tag and
-# unsuspends. Binary contract (mctl-api#1004 design section 1):
-# GLOVO_MIGRATION_DB_URL (one full DSN, required, no fallback),
-# -work-items-role (required), -glovo-runtime-role (default glovo_runtime),
-# -migrator-role (default glovo_migrator), -with-glovo/-bridge/-orders/-join,
-# -confirm (exact value, required, not settable from env). Exit codes: 1 = a
-# read failed (outranks all), 3 = observed but wrong (not the expected migrator,
-# role missing, CREATE absent), 2 = foreign-owned objects; precedence 1, 3, 2.
-# A read-only `-verify` mode (no -confirm, same GLOVO_MIGRATION_DB_URL) is run
-# by the operator, not by this Job. It never transfers ownership and issues no
-# DDL on exit 1, 2 or 3 (see roles.patch.md, "Migrator exit codes and flags").
+# unsuspends. Binary contract as shipped in mctl-api 4.156.1: DSN from env
+# MCTL_GLOVO_MIGRATE_DSN (sslmode=require, never printed), -workitems-role
+# (required), -runtime-role (default glovo_runtime), -expect-role (default
+# glovo_migrator), -dry-run, -verify, -lock-timeout, -statement-timeout.
+# Exit codes: 0 ok, 1 refused (role, ownership, CREATE, newer schema),
+# 2 -verify not ready, 3 could not observe / lock timeout / step failed.
+# The operator runs -dry-run and -verify by hand; see roles.patch.md,
+# "Migrator exit codes and flags".
 # The args below are inert while command is /bin/false.
 apiVersion: batch/v1
 kind: Job
@@ -45,25 +43,17 @@ spec:
           image: ghcr.io/mctlhq/mctl-api:PENDING-1004-GLOVO-MIGRATE
           command: ["/bin/false"]   # activation PR: the cmd/glovo-migrate entry point
           args:
-            - -confirm=apply-glovo-approval-schema
-            - -work-items-role=mctl_api_workitems
-            - -glovo-runtime-role=glovo_runtime
-            - -migrator-role=glovo_migrator
-            # The four -with-* steps are required for activation (the
-            # colocation probe needs the bridge step); they stay staged here.
-            - -with-glovo
-            - -with-bridge
-            - -with-orders
-            - -with-join
+            - -workitems-role=mctl_api_workitems
+            - -runtime-role=glovo_runtime
+            - -expect-role=glovo_migrator
           envFrom:
             - secretRef:
                 name: mctl-api-glovo-migrator-db
           env:
             # One DSN as glovo_migrator on database mctl-api. $(VAR) expands the
-            # envFrom keys above. UNVERIFIED: the password must be URL-safe
-            # (no reserved characters) or the activation PR must compose the
-            # DSN another way.
-            - name: GLOVO_MIGRATION_DB_URL
+            # envFrom keys above. The password is URL-safe (random hex, see
+            # mctl-gitops#2621 / the Vault provisioning step).
+            - name: MCTL_GLOVO_MIGRATE_DSN
               value: "postgresql://$(GLOVO_MIGRATOR_DB_USER):$(GLOVO_MIGRATOR_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
           securityContext:
             allowPrivilegeEscalation: false

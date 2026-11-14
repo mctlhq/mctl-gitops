@@ -84,15 +84,25 @@ Note, not changed here: the legacy role already opens three pools of 8 per pod,
 so at 3 pods it can ask for 72 against its own limit of 64. That is pre-existing
 and separate from this activation.
 
-## Migrator exit codes and flags (mctl-api#1004 design section 1)
+## Migrator exit codes and flags (as shipped in mctl-api 4.156.1)
 
-`cmd/glovo-migrate` exits 1 when any read failed or returned a malformed result
-(outranks everything: an unobserved state is never reported as clean or as a
-foreign owner), 3 when observed but wrong (connecting role is not the expected
-migrator, a named role is missing, a CREATE privilege is absent), 2 when
-foreign-owned objects were observed (it prints the operator transfer text and
-issues no DDL). Precedence: 1, then 3, then 2. `-migrator-role` (default
-`glovo_migrator`) names the expected migrator; there is no env override.
+Source: `cmd/glovo-migrate/main.go` and `internal/glovomigrate/migrate.go` at
+tag `4.156.1`. The DSN is read from the environment variable named by
+`-dsn-env` (default `MCTL_GLOVO_MIGRATE_DSN`) and must use `sslmode=require`
+or stricter; it is never printed. Flags: `-workitems-role` (required),
+`-runtime-role` (default `glovo_runtime`), `-expect-role` (default
+`glovo_migrator`, the role the connection must be), `-dry-run` (read the
+catalog, print what would change, apply nothing), `-verify` (read only, exit
+non-zero unless all three schema steps are ready), `-lock-timeout` (default
+5s) and `-statement-timeout` (default 1m), both applied with `SET LOCAL` in
+every transaction. Steps run in order: `glovo-base`, `approval-v2`,
+`basket-v1`. There is no `-confirm`, no `-with-*` and no `-legacy-role` flag.
+
+Exit codes: 0 ok; 1 refused (wrong connecting role, a precondition such as
+ownership of the generic objects or `CREATE` on the database / schema `public`
+is not met, or the schema is newer than the binary); 2 `-verify` found a step
+not ready; 3 could not observe, lock timeout, a step failed, or any other
+error. An unobserved state is exit 3, never 0 or 2.
 
 ## Privileges the roles themselves need (operator step, un-applied)
 
@@ -111,8 +121,8 @@ Two prerequisites sit outside the code:
 Separately authorized deployment gate (#1004 design section 10, step 2). This
 text is a plan, not a manifest; no script or Job in this PR performs it, and no
 `ALTER ... OWNER TO` is ever automatic (`cmd/glovo-migrate` only prints the text
-for the operator and exits 2 on a foreign-owned object; exit codes 1 and 3
-are described in "Migrator exit codes and flags" above).
+for what it would change and exits 1 when it does not own the generic objects;
+see "Migrator exit codes and flags" above).
 
 0. Assume nothing about existing production objects or owners. Make a complete,
    source-backed catalogue inventory, read-only: for every object that
@@ -169,10 +179,12 @@ are described in "Migrator exit codes and flags" above).
    and runtime roles). The reproduction of the no-op grant and of the sequence
    not moving was done in cross-review on PostgreSQL 16 and is UNVERIFIED here.
 4. Run the read-only verifier, which also probes the legacy role's EFFECTIVE
-   privileges after the transfer: `cmd/glovo-migrate -verify` (flag `-legacy-role`, default `mctl-api`, passed to
-   the `has_*_privilege` calls as a bound value) with
-   `GLOVO_MIGRATION_DB_URL` (the operator-held `glovo_migrator` login; no
-   `-confirm`, READ ONLY transaction, never mounted into the API pod). Output is
+   privileges after the transfer: `cmd/glovo-migrate -verify -workitems-role mctl_api_workitems` with
+   `MCTL_GLOVO_MIGRATE_DSN` (the operator-held `glovo_migrator` login, never
+   mounted into the API pod). The shipped binary has no `-legacy-role` flag:
+   the legacy role's privileges are checked by a separate read-only
+   `has_*_privilege` query as `mctl-api` (done in the D2 rehearsal,
+   mctl-api#1006). Output is
    `ok`, `diverged` or `unknown`; `unknown` outranks `diverged` and never
    counts as a pass. It runs after this gate, after the migration, and before
    wiring.
