@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
@@ -55,8 +54,8 @@ func init() {
 	deployCmd.Flags().StringVar(&deployDockerfile, "dockerfile", "Dockerfile", "Path to Dockerfile")
 	deployCmd.Flags().StringVar(&deployTemplate, "service-template", "default", "Service template to use, e.g. default or worker")
 	deployCmd.Flags().StringVar(&deployImageTag, "image-tag", "", "Pre-built image tag override (skip repo build)")
-	deployCmd.Flags().StringSliceVar(&deployEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
-	deployCmd.Flags().StringSliceVar(&deploySecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
+	deployCmd.Flags().StringArrayVar(&deployEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
+	deployCmd.Flags().StringArrayVar(&deploySecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
 	deployCmd.Flags().BoolVarP(&deployWait, "wait", "w", false, "Wait for workflow to complete")
 	deployCmd.Flags().StringVar(&deployPat, "pat", "", "Repository PAT for private repos (saved to Vault)")
 
@@ -76,6 +75,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	if deployTemplate != "default" && deployHost == "" {
 		deployHost = "auto"
+	}
+
+	envVars, err := joinKV("env", deployEnv)
+	if err != nil {
+		return err
+	}
+	secretVars, err := joinKV("secret", deploySecret)
+	if err != nil {
+		return err
 	}
 
 	token, err := auth.GetToken()
@@ -112,8 +120,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		"image_tag":         deployImageTag,
 		"port":              deployPort,
 		"host":              deployHost,
-		"env_vars":          strings.Join(deployEnv, "\n"),
-		"secret_env_vars":   strings.Join(deploySecret, "\n"),
+		"env_vars":          envVars,
+		"secret_env_vars":   secretVars,
 		"service_template":  deployTemplate,
 	}
 

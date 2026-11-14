@@ -57,6 +57,17 @@ func TestAuthStatusReportsTheCredentialInUse(t *testing.T) {
 			t.Errorf("an explicit token is a choice and gets no sign-in hint: %q", out)
 		}
 	})
+	t.Run("MCTL_TOKEN beside a bad MCTL_AUTH", func(t *testing.T) {
+		// GetToken sends MCTL_TOKEN whatever MCTL_AUTH says, so status
+		// must report it rather than fail on the unknown mode.
+		whoamiAPI(t)
+		t.Setenv("MCTL_TOKEN", "explicit")
+		t.Setenv("MCTL_AUTH", "zitdel")
+		out, err := status(t)
+		if err != nil || !strings.Contains(out, "id-of-explicit") {
+			t.Errorf("out = %q err = %v, want the MCTL_TOKEN identity", out, err)
+		}
+	})
 	t.Run("MCTL_AUTH=github without gh", func(t *testing.T) {
 		whoamiAPI(t)
 		t.Setenv("MCTL_AUTH", "github")

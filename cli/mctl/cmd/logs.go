@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -54,11 +56,11 @@ func init() {
 }
 
 type logsResponse struct {
-	Team  string     `json:"team"`
-	App   string     `json:"app"`
-	Lines []logLine  `json:"lines"`
-	Count int        `json:"count"`
-	Note  string     `json:"note"`
+	Team  string    `json:"team"`
+	App   string    `json:"app"`
+	Lines []logLine `json:"lines"`
+	Count int       `json:"count"`
+	Note  string    `json:"note"`
 }
 
 type logLine struct {
@@ -79,67 +81,129 @@ func runLogs(cmd *cobra.Command, args []string) error {
 
 	client := api.NewClient(token)
 
-	fetch := func() error {
-		path := buildLogsPath(logsTeam, logsName, logsSince, logsLines)
-
-		if logsJSON {
-			body, code, err := client.GetRaw(path)
-			if err != nil {
-				return err
-			}
-			if code >= 400 {
-				return fmt.Errorf("API error (%d): %s", code, string(body))
-			}
-			fmt.Println(string(body))
-			return nil
-		}
-
-		var resp logsResponse
-		if err := client.Get(path, &resp); err != nil {
-			return err
-		}
-
-		if resp.Note != "" && resp.Count == 0 {
-			fmt.Printf("Note: %s\n", resp.Note)
-			return nil
-		}
-
-		if resp.Count == 0 {
-			fmt.Printf("No logs found for %s/%s in the last %s\n", logsTeam, logsName, logsSince)
-			return nil
-		}
-
-		// Print log lines in chronological order (reverse the most-recent-first slice).
-		for i := len(resp.Lines) - 1; i >= 0; i-- {
-			l := resp.Lines[i]
-			ts := l.Timestamp.Format("15:04:05")
-			fmt.Printf("%s  %s\n", ts, l.Line)
-		}
-
-		if resp.Note != "" {
-			fmt.Printf("\nNote: %s\n", resp.Note)
-		}
-
-		return nil
-	}
-
 	if !logsFollow {
-		return fetch()
+		return fetchLogs(client, os.Stdout, logsSince, nil)
 	}
 
-	// Follow mode: re-poll every 5s, shrinking since window to avoid duplicate lines.
+	// Follow mode: re-poll every 5s. Each poll asks for a window that
+	// overlaps the previous one, so no line falls into a gap between polls;
+	// the cursor drops what was already printed.
 	fmt.Printf("Following logs for %s/%s (Ctrl+C to stop)\n", logsTeam, logsName)
 	fmt.Println(strings.Repeat("─", 50))
 
+	cur := &logCursor{}
+	since := logsSince
 	for {
-		if err := fetch(); err != nil {
+		polled := time.Now()
+		if err := fetchLogs(client, os.Stdout, since, cur); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
 		time.Sleep(5 * time.Second)
-		// Tighten the window after first fetch.
-		logsSince = "10s"
+		since = followWindow(time.Since(polled))
 	}
 }
 
-// Ensure json import is used.
-var _ = json.Marshal
+// followWindow is the window for the next poll: the time since the last one
+// started plus a margin, never under 10s, in whole seconds.
+func followWindow(elapsed time.Duration) string {
+	secs := int((elapsed + 5*time.Second + time.Second - 1) / time.Second)
+	if secs < 10 {
+		secs = 10
+	}
+	return fmt.Sprintf("%ds", secs)
+}
+
+// logCursor remembers what follow mode has printed, so overlapping polls do
+// not print a line twice. Lines are ordered by timestamp; several can share
+// one, so the lines seen at the newest timestamp are kept too.
+type logCursor struct {
+	last   time.Time
+	atLast map[string]bool
+}
+
+// fresh returns the lines not yet seen, in chronological order, and moves the
+// cursor past them. lines is most-recent-first, as the API returns it.
+func (c *logCursor) fresh(lines []logLine) []logLine {
+	var out []logLine
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := lines[i]
+		switch {
+		case l.Timestamp.Before(c.last):
+			continue
+		case l.Timestamp.Equal(c.last):
+			if c.atLast[l.Line] {
+				continue
+			}
+		default:
+			c.last = l.Timestamp
+			c.atLast = map[string]bool{}
+		}
+		c.atLast[l.Line] = true
+		out = append(out, l)
+	}
+	return out
+}
+
+// fetchLogs prints one poll. With a cursor (follow mode) it prints only the
+// lines the cursor has not seen, and stays quiet when there are none.
+func fetchLogs(client *api.Client, w io.Writer, since string, cur *logCursor) error {
+	path := buildLogsPath(logsTeam, logsName, since, logsLines)
+
+	if logsJSON && cur == nil {
+		body, code, err := client.GetRaw(path)
+		if err != nil {
+			return err
+		}
+		if code >= 400 {
+			return fmt.Errorf("API error (%d): %s", code, string(body))
+		}
+		fmt.Fprintln(w, string(body))
+		return nil
+	}
+
+	var resp logsResponse
+	if err := client.Get(path, &resp); err != nil {
+		return err
+	}
+
+	if cur != nil {
+		lines := cur.fresh(resp.Lines)
+		if logsJSON {
+			// One JSON object per new line: a whole response per poll
+			// would repeat the overlap.
+			enc := json.NewEncoder(w)
+			for _, l := range lines {
+				if err := enc.Encode(l); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, l := range lines {
+			fmt.Fprintf(w, "%s  %s\n", l.Timestamp.Format("15:04:05"), l.Line)
+		}
+		return nil
+	}
+
+	if resp.Note != "" && resp.Count == 0 {
+		fmt.Fprintf(w, "Note: %s\n", resp.Note)
+		return nil
+	}
+
+	if resp.Count == 0 {
+		fmt.Fprintf(w, "No logs found for %s/%s in the last %s\n", logsTeam, logsName, since)
+		return nil
+	}
+
+	// Print log lines in chronological order (reverse the most-recent-first slice).
+	for i := len(resp.Lines) - 1; i >= 0; i-- {
+		l := resp.Lines[i]
+		fmt.Fprintf(w, "%s  %s\n", l.Timestamp.Format("15:04:05"), l.Line)
+	}
+
+	if resp.Note != "" {
+		fmt.Fprintf(w, "\nNote: %s\n", resp.Note)
+	}
+
+	return nil
+}
