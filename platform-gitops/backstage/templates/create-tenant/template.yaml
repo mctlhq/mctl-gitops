@@ -34,8 +34,8 @@ spec:
         tenantName:
           title: Tenant Name
           type: string
-          description: "Lowercase, DNS-safe slug (e.g. my-team). Used as Kubernetes namespace name."
-          pattern: "^[a-z0-9][a-z0-9-]{1,62}$"
+          description: "Lowercase, DNS-safe slug, 2-31 characters (e.g. my-team). Used as Kubernetes namespace name."
+          pattern: "^[a-z0-9][a-z0-9-]{1,30}$"
           ui:field: TenantNameField
         displayName:
           title: Display Name
