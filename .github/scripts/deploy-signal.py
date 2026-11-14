@@ -154,6 +154,9 @@ def latest_release(repo, token):
     return body["tag_name"], published
 
 
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
 def check(services, token, grace_minutes, now=None):
     now = now or datetime.now(timezone.utc)
     grace = timedelta(minutes=grace_minutes)
@@ -176,6 +179,28 @@ def check(services, token, grace_minutes, now=None):
                 "Resolution below is by fixed priority, so a second kind would be silently "
                 "ignored and the service would read as covered while never being checked."
             )
+            continue
+        # The kind's VALUE must mean that kind. `tracks_main: false` counted
+        # as the one kind above, skipped the main branch below and then
+        # crashed with a KeyError on release_repo it does not have.
+        kind = kinds[0]
+        value = svc[kind]
+        bad = None
+        if kind == "tracks_main" and value is not True:
+            bad = f"tracks_main is {value!r}; it can only be true (otherwise use another kind)"
+        elif kind == "release_repo" and not (
+                isinstance(value, str) and REPO_RE.match(value)):
+            bad = f"release_repo is {value!r}; it must be an owner/repo string"
+        elif kind == "pinned_to" and (
+                isinstance(value, bool) or not isinstance(value, (str, int, float)) or not str(value).strip()):
+            bad = f"pinned_to is {value!r}; it must be a non-empty tag"
+        elif kind == "unmapped" and not (isinstance(value, str) and value.strip()):
+            bad = f"unmapped is {value!r}; it must be a non-empty reason"
+        elif "sha_only" in svc and (kind != "tracks_main" or not isinstance(svc["sha_only"], bool)):
+            bad = f"sha_only is {svc['sha_only']!r}; it is a boolean and only applies to tracks_main"
+        if bad:
+            malformed.add(svc.get("path"))
+            problems.append(f"{svc.get('path', '<no path>')}: {bad}")
 
     on_disk = set(services_on_disk())
     for missing in sorted(on_disk - set(declared)):
@@ -298,6 +323,32 @@ def self_test():
                 "an entry that sets no kind at all",
                 [{"path": "a/values.yaml"}, {"path": "b/values.yaml", "unmapped": "x"}],
                 "exactly one of",
+            ),
+            (
+                "tracks_main: false (a kind whose value means nothing)",
+                [{"path": "a/values.yaml", "tracks_main": False}, {"path": "b/values.yaml", "unmapped": "x"}],
+                "it can only be true",
+            ),
+            (
+                "an empty release_repo",
+                [{"path": "a/values.yaml", "release_repo": ""}, {"path": "b/values.yaml", "unmapped": "x"}],
+                "owner/repo string",
+            ),
+            (
+                "a null pinned_to",
+                [{"path": "a/values.yaml", "pinned_to": None}, {"path": "b/values.yaml", "unmapped": "x"}],
+                "non-empty tag",
+            ),
+            (
+                "an unmapped entry with no reason",
+                [{"path": "a/values.yaml", "unmapped": ""}, {"path": "b/values.yaml", "unmapped": "x"}],
+                "non-empty reason",
+            ),
+            (
+                "sha_only on a release_repo entry",
+                [{"path": "a/values.yaml", "release_repo": "o/r", "sha_only": True},
+                 {"path": "b/values.yaml", "unmapped": "x"}],
+                "only applies to tracks_main",
             ),
             (
                 "the same service declared twice",

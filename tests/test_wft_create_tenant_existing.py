@@ -127,6 +127,14 @@ with tempfile.TemporaryDirectory() as d:
     r = run_validate("kube-system", "false", fixture)
     check("a reserved name is still refused", r.returncode != 0, r.stdout)
 
+    # New tenant names are capped at 31: mctl-api deploy operations and the
+    # portal's Vault secrets routes refuse longer ones.
+    r = run_validate("a" * 31, "false", fixture)
+    check("a 31-character name passes validate", r.returncode == 0, r.stdout + r.stderr)
+    r = run_validate("a" * 32, "false", fixture)
+    check("a 32-character name is refused by validate",
+          r.returncode != 0 and "is invalid" in r.stdout, r.stdout)
+
     r = run_commit_check("fresh", "false", fixture)
     check("commit: a new tenant writes its files",
           r.returncode == 0 and "SKIP_GIT=false" in r.stdout, r.stdout + r.stderr)
@@ -370,6 +378,20 @@ check("create: the tenant's own namespaces pass (reprovision)",
 r, _, _ = run_kube(CREATE_CHECK, "fresh", {}, fail=True)
 check("create: could not list namespaces fails the check",
       r.returncode != 0 and "could not list namespaces" in r.stdout, r.stdout)
+r, _, _ = run_kube(CREATE_CHECK, "a" * 31, {})
+check("create: the namespace check accepts a 31-character name",
+      r.returncode == 0, r.stdout + r.stderr)
+r, log, _ = run_kube(CREATE_CHECK, "a" * 32, {})
+check("create: the namespace check refuses a 32-character name before any lookup",
+      r.returncode != 0 and "is invalid" in r.stdout and log == "", r.stdout + log)
+
+# The Backstage form must refuse exactly what the workflow refuses.
+BACKSTAGE = yaml.safe_load(pathlib.Path(
+    "platform-gitops/backstage/templates/create-tenant/template.yaml").read_text())
+pattern = BACKSTAGE["spec"]["parameters"][0]["properties"]["tenantName"]["pattern"]
+check("Backstage tenantName pattern accepts 31 and refuses 32 characters",
+      re.fullmatch(pattern.strip("^$"), "a" * 31) is not None
+      and re.fullmatch(pattern.strip("^$"), "a" * 32) is None, pattern)
 
 for task in pipeline:
     if task["name"] == "create-vault-policy":
@@ -399,7 +421,9 @@ for name, reprov, want, why in [
         ("shared-pg", "true", False, "reprovision: an exact Application name is still refused"),
         ("labs", "false", False, "without reprovision an existing tenant's prefix is refused"),
         ("gone", "false", False, "a leftover tenant-<T> Application refuses the name"),
-        ("gone", "true", True, "reprovision: the tenant's own tenant-<T> passes")]:
+        ("gone", "true", True, "reprovision: the tenant's own tenant-<T> passes"),
+        ("a" * 31, "false", True, "a 31-character name passes the Application check"),
+        ("a" * 32, "false", False, "a 32-character name is refused by the Application check")]:
     r, _, _ = run_kube(APP_CHECK, name, {}, apps=LIVE_APPS, reprovision=reprov)
     check(f"create: {why}", (r.returncode == 0) == want, r.stdout + r.stderr)
 r, _, _ = run_kube(APP_CHECK, "fresh", {}, apps=LIVE_APPS, appfail=True)
