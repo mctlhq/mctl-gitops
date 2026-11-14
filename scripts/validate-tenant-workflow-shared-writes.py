@@ -53,6 +53,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -152,10 +153,12 @@ class Lexer:
                 line = self.src[self.pos:end]
                 self.pos = end + 1 if end < len(self.src) else end
                 check = line.lstrip("\t") if strip_tabs else line
-                # Argo `script.source` blocks are indented YAML scalars, so
-                # the delimiter commonly carries the block's own indentation
-                # after YAML strips it; tolerate surrounding whitespace.
-                if check.strip() == delim:
+                # POSIX: the delimiter line matches exactly (`<<-` strips
+                # leading tabs only). YAML has already removed the block
+                # indentation, so an indented or padded `EOF` is body text,
+                # and ending the heredoc there would read the rest of the
+                # body as commands (agy P2 on #2616, same lexer shape).
+                if check == delim:
                     break
         self.pending_heredocs = []
 
@@ -781,7 +784,7 @@ def walk_script_sources(doc):
             yield from walk_script_sources(item)
 
 
-OLD_AWK_SOURCE = '''
+OLD_AWK_SOURCE = textwrap.dedent('''
           # ── Append ArgoCD RBAC entries ──────────────────────────────────────
           ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
 
@@ -803,9 +806,9 @@ OLD_AWK_SOURCE = '''
           git add \\
             "platform-gitops/tenants/${TENANT}/values.yaml" \\
             "platform-gitops/argocd/values.yaml"
-'''
+''')
 
-NEW_PER_TENANT_SOURCE = '''
+NEW_PER_TENANT_SOURCE = textwrap.dedent('''
           RBAC_FILE="platform-gitops/argocd/rbac/tenants/${TENANT}.csv"
 
           if [ -f "$RBAC_FILE" ]; then
@@ -823,9 +826,9 @@ NEW_PER_TENANT_SOURCE = '''
             "platform-gitops/tenants/${TENANT}/catalog-info.yaml" \\
             "$RBAC_FILE" \\
             "platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
-'''
+''')
 
-AWK_TMP_SOURCE = '''
+AWK_TMP_SOURCE = textwrap.dedent('''
           CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
           if grep -q "name: ${TENANT}-" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
             awk -v tenant="${TENANT}-" '
@@ -837,7 +840,7 @@ AWK_TMP_SOURCE = '''
               { print }
             ' "${CNPG_DIR}/cluster.yaml" > "${CNPG_DIR}/cluster.yaml.tmp" && mv "${CNPG_DIR}/cluster.yaml.tmp" "${CNPG_DIR}/cluster.yaml"
           fi
-'''
+''')
 
 SHARED = "platform-gitops/argocd/values.yaml"
 
@@ -941,6 +944,8 @@ SELFTEST_CASES = (
      'F="platform-gitops/tenants/${TENANT}/r.csv"\ncommand read F\necho x >> "$F"\n', "$F"),
     ("F+= append is a second value",
      'F="platform-gitops/tenants/${TENANT}"\nF+="/../../argocd/values.yaml"\necho x >> "$F"\n', "$F"),
+    ("indented EOF is still body",
+     f"cat > /tmp/x <<EOF\n  EOF\necho x > {SHARED}\nEOF\n", None),
     ("CRLF script resolves", f'F={SHARED}\r\necho x >> "$F"\r\n', SHARED),
     ("if F=... is a second value",
      'F="platform-gitops/tenants/${TENANT}/r.csv"\n'
@@ -953,6 +958,7 @@ PARSE_ERROR_CASES = (
     ("unterminated single quote", "sed -i 's/a/b/ platform-gitops/argocd/values.yaml\n"),
     ("unterminated heredoc", "cat > /tmp/x <<EOF\nno end\n"),
     ("unterminated $(", "X=$(echo y\n"),
+    ("padded EOF does not end the heredoc", "cat > /tmp/x <<EOF\nx\nEOF \n"),
     ("process substitution", "while read -r l; do :; done < <(cat platform-gitops/a)\n"),
 )
 
