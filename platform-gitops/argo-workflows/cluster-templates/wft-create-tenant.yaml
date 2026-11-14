@@ -42,7 +42,7 @@ spec:
   arguments:
     parameters:
       - name: tenant_name
-        # Lowercase, DNS-safe slug (^[a-z0-9][a-z0-9-]{1,62}$)
+        # Lowercase, DNS-safe slug, 2-31 chars (^[a-z0-9][a-z0-9-]{1,30}$)
       - name: display_name
         value: ""
       - name: description
@@ -215,12 +215,14 @@ spec:
 
           echo "Validating tenant name: $TENANT"
 
-          # Format check: lowercase alphanumeric + hyphens, 2-63 chars, no leading/trailing hyphens.
+          # Format check: lowercase alphanumeric + hyphens, 2-31 chars, no leading hyphen.
+          # 31, not 63: mctl-api deploy operations and the portal's Vault secrets
+          # routes cap tenant names at 31, so a longer tenant could never deploy.
           # grep matches per line, so a multi-line value is refused first.
           if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
-            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,30}$'; then
             echo "ERROR: Tenant name '$TENANT' is invalid."
-            echo "Must match: ^[a-z0-9][a-z0-9-]{1,62}$"
+            echo "Must match: ^[a-z0-9][a-z0-9-]{1,30}$"
             echo "Examples: my-team, team1, dev-platform"
             exit 1
           fi
@@ -358,7 +360,7 @@ spec:
           # Repeated from validate-tenant-name so this template is safe to
           # run on its own via --entrypoint.
           if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
-            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,30}$'; then
             echo "ERROR: Tenant name '$TENANT' is invalid."
             exit 1
           fi
@@ -494,7 +496,7 @@ spec:
           REPROVISION="$PARAM_REPROVISION"
 
           if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
-            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,30}$'; then
             echo "ERROR: Tenant name '$TENANT' is invalid."
             exit 1
           fi
