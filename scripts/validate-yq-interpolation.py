@@ -62,12 +62,14 @@ BASELINE: set[tuple[str, str, str]] = {
 # gitops#1025). Treating a plain switch as one of these does the opposite:
 # `-C` is `--colors` and takes no value, so listing it here made
 # `yq -C ".a = \"$X\"" f` skip the expression and inspect `f` (gitops bug
-# report ch. 9). Source: `yq --help` (mikefarah/yq v4).
-SHORT_VALUE_FLAGS = "opIs"
+# report ch. 9). `-f` is `--front-matter` (PR #2616 review). Source:
+# `yq --help` (mikefarah/yq v4.47): -f -I -o -p -s take a value; -C -e -i
+# -M -N -n -P -r -v do not.
+SHORT_VALUE_FLAGS = "fopIs"
 LONG_VALUE_FLAGS = {
     "--output-format", "--input-format", "--indent", "--split-exp",
     "--expression", "--from-file", "--front-matter", "--lua-prefix",
-    "--lua-suffix", "--properties-separator", "--csv-separator",
+    "--lua-suffix", "--properties-separator", "--split-exp-file", "--csv-separator",
     "--tsv-separator", "--xml-attribute-prefix", "--xml-content-name",
     "--xml-proc-inst-prefix", "--xml-directive-name",
     "--string-interpolation-prefix", "--string-interpolation-suffix",
@@ -103,7 +105,9 @@ class Splitter:
         self.src = src
         self.pos = 0
         self.segments: list[list[str]] = []
-        self.heredocs: list[tuple[str, bool]] = []
+        self.heredocs: list[tuple[str, bool, bool, bool]] = []
+        # Heredoc bodies fed to a shell are code, not data: (body, quoted).
+        self.code_bodies: list[tuple[str, bool]] = []
 
     def peek(self, n: int = 0) -> str:
         i = self.pos + n
@@ -114,7 +118,8 @@ class Splitter:
         return ShellParseError(f"line {line}: {msg}")
 
     def skip_heredoc_bodies(self) -> None:
-        for delim, strip_tabs in self.heredocs:
+        for delim, strip_tabs, quoted, to_shell in self.heredocs:
+            start = self.pos
             while True:
                 if self.pos >= len(self.src):
                     raise self.error(f"unterminated heredoc <<{delim}")
@@ -123,6 +128,9 @@ class Splitter:
                 line = self.src[self.pos:end]
                 self.pos = min(end + 1, len(self.src))
                 if (line.lstrip("\t") if strip_tabs else line).strip() == delim:
+                    if to_shell:
+                        body_end = self.pos - len(line) - (1 if self.src[self.pos - 1:self.pos] == "\n" else 0)
+                        self.code_bodies.append((self.src[start:max(start, body_end)], quoted))
                     break
         self.heredocs = []
 
@@ -244,25 +252,43 @@ class Splitter:
                 while self.peek() in (" ", "\t"):
                     self.pos += 1
                 delim = self.read_word()
-                self.heredocs.append((unquote(delim), strip))
+                self.heredocs.append(
+                    (unquote(delim), strip, unquote(delim) != delim, feeds_shell(words))
+                )
                 words.extend([word, delim])
                 continue
             m = re.match(r"^\d*<<(-?)(.+)$", word)
             if m and not word.startswith("<<<") and "<<<" not in word:
-                self.heredocs.append((unquote(m.group(2)), m.group(1) == "-"))
+                d = m.group(2)
+                self.heredocs.append((unquote(d), m.group(1) == "-", unquote(d) != d, feeds_shell(words)))
             words.append(word)
+
+
+# A word that names a shell makes the rest of the segment code run as a
+# string: `sh -c "yq ..."`, `bash <<EOF`, `kubectl exec ... -- sh <<EOF`.
+SHELLS = {"sh", "bash", "dash", "ash", "zsh", "ksh"}
+RAW_EXPANSION = re.compile(r"(?<!\\)[$`]")
+YQ_WORD = re.compile(r"(?<![\w./-])yq(?![\w.-])")
+
+
+def feeds_shell(words: list[str]) -> bool:
+    return any(unquote(w).rsplit("/", 1)[-1] in SHELLS for w in words)
 
 
 def unquote(word: str) -> str:
     return word.replace("'", "").replace('"', "").replace("\\", "")
 
 
-def segments_of(source: str) -> list[list[str]]:
+def split_source(source: str) -> Splitter:
     splitter = Splitter(source)
     splitter.parse()
     if splitter.heredocs:
         raise splitter.error("unterminated heredoc at end of script")
-    return splitter.segments
+    return splitter
+
+
+def segments_of(source: str) -> list[list[str]]:
+    return split_source(source).segments
 
 
 def has_expansion(word: str) -> bool:
@@ -373,11 +399,35 @@ def expressions_of(words: list[str]) -> list[str]:
 
 
 def scan_source(source: str):
-    """Yield every interpolated yq expression in one script source."""
-    for words in segments_of(source):
+    """Yield every interpolated yq expression in one script source.
+
+    Code run as a string is not split again, so it fails closed instead
+    (PR #2616 review): in a segment that names a shell, any later word that
+    mentions yq and holds a `$` or backtick is reported whole -- even inside
+    single quotes, since the inner shell parses that text again; a heredoc
+    fed to a shell is scanned as code, and when its delimiter is unquoted
+    (so the outer shell expands the body first) any line that mentions yq
+    and holds a `$` or backtick is reported.
+    """
+    splitter = split_source(source)
+    for words in splitter.segments:
         for expr in expressions_of(words):
             if has_expansion(expr):
                 yield expr.strip()
+        shell_at = next(
+            (i for i, w in enumerate(words) if unquote(w).rsplit("/", 1)[-1] in SHELLS), None
+        )
+        if shell_at is not None:
+            for w in words[shell_at + 1:]:
+                if YQ_WORD.search(w) and RAW_EXPANSION.search(w):
+                    yield w.strip()
+    for body, quoted in splitter.code_bodies:
+        if quoted:
+            yield from scan_source(body)
+        else:
+            for line in body.splitlines():
+                if YQ_WORD.search(line) and RAW_EXPANSION.search(line):
+                    yield line.strip()
 
 
 def scan(directory: Path):
@@ -443,6 +493,21 @@ SELFTEST_CASES = (
     ("heredoc body is data", "cat > /tmp/x <<'EOF'\nyq \".a.$X\" f\nEOF\nyq '.a' f", False),
     ("comment is not a call", '# yq ".a.$X" f', False),
     ("word mentioning yq in quotes", 'echo "yq $X"', False),
+    # PR #2616 review: -f is --front-matter and takes a value.
+    ("-f value", 'yq -f process ".a=\\"$X\\"" f', True),
+    ("-fprocess attached", 'yq -fprocess ".a=\\"$X\\"" f', True),
+    ("-f value, safe expression", "yq -f extract '.a' \"$F\"", False),
+    ("--split-exp-file value", 'yq --split-exp-file s.yq ".a.$X" f', True),
+    # Code run as a string fails closed.
+    ("sh -c with yq and expansion", 'sh -c "yq \\".a.$X\\" f"', True),
+    ("bash -c, single-quoted", "bash -c 'yq \".a.$X\" f'", True),
+    ("sh -c, yq without $", "sh -c 'yq .a f'", False),
+    ("sh -c without yq", 'sh -c "echo $X"', False),
+    ("heredoc to sh, unquoted delimiter", 'sh <<EOF\nyq ".a.$X" f\nEOF', True),
+    ("heredoc to sh, quoted delimiter", "bash <<'EOF'\nyq \".a.$X\" f\nEOF", True),
+    ("heredoc to sh, quoted delimiter, safe", "bash <<'EOF'\nyq '.a' \"$F\"\nEOF", False),
+    ("heredoc to kubectl exec sh", 'kubectl exec p -- sh <<EOF\nyq -i ".a=$X" f\nEOF', True),
+    ("heredoc to cat stays data", 'cat > /tmp/x <<EOF\nyq ".a.$X" f\nEOF', False),
 )
 
 PARSE_ERROR_CASES = (
