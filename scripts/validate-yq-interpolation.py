@@ -40,21 +40,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 
-# A yq invocation, and everything up to the end of the line.
-YQ_CALL = re.compile(r"(?<![\w./-])yq\b(.*)$")
-
-# Options that take no value, so the token after them may still be the
-# expression. `-i`/`--inplace` and the eval/eval-all subcommands.
-SKIPPABLE = {"eval", "eval-all", "e", "ea", "-i", "--inplace", "-N", "--no-doc",
-             "-r", "--raw-output", "-P", "--prettyPrint"}
-
-# Options that CONSUME the next token. Listing these among SKIPPABLE would
-# make `yq eval -o json "$EXPR" f.yaml` report `json` as the expression —
-# which contains no `$`, so the real one is never inspected and the check
-# passes silently (agy P2 on gitops#1025).
-VALUE_FLAGS = {"-o", "--output-format", "-I", "--indent", "-p", "--input-format",
-               "-C", "--split-exp", "--from-file"}
-
 # (file, template, expression) that may keep a variable, each with a reason.
 # Shrink this list, never grow it.
 BASELINE: set[tuple[str, str, str]] = {
@@ -70,62 +55,337 @@ BASELINE: set[tuple[str, str, str]] = {
 }
 
 
-def tokenize(line: str) -> list[str]:
-    """Split a shell line into tokens, keeping quotes so `$` stays visible.
+# Options that CONSUME the next word (or take it attached: `-ojson`,
+# `--output-format=json`). Treating one of these as a plain switch makes
+# `yq eval -o json "$EXPR" f.yaml` report `json` as the expression — which
+# contains no `$`, so the real one is never inspected (agy P2 on
+# gitops#1025). Treating a plain switch as one of these does the opposite:
+# `-C` is `--colors` and takes no value, so listing it here made
+# `yq -C ".a = \"$X\"" f` skip the expression and inspect `f` (gitops bug
+# report ch. 9). Source: `yq --help` (mikefarah/yq v4).
+SHORT_VALUE_FLAGS = "opIs"
+LONG_VALUE_FLAGS = {
+    "--output-format", "--input-format", "--indent", "--split-exp",
+    "--expression", "--from-file", "--front-matter", "--lua-prefix",
+    "--lua-suffix", "--properties-separator", "--csv-separator",
+    "--tsv-separator", "--xml-attribute-prefix", "--xml-content-name",
+    "--xml-proc-inst-prefix", "--xml-directive-name",
+    "--string-interpolation-prefix", "--string-interpolation-suffix",
+    "--shell-key-separator",
+}
+# Flags whose value is itself a yq expression, so it is inspected too.
+EXPRESSION_FLAGS = {"--expression", "-s", "--split-exp"}
+SUBCOMMANDS = {"eval", "e", "eval-all", "ea"}
 
-    Backslash escapes are honoured. Without that, `".foo == \\" ${X} \\""`
-    reads the `\\"` as a CLOSING quote, splits at the following space, and
-    leaves `expression_of` inspecting only `".foo == \\"` — which contains no
-    `$`, so an interpolated call would pass this check unseen (agy P2).
+# Words that operate on a whole segment, so `yq` after them is still the
+# command being run.
+SEGMENT_SEPARATORS = ("&&", "||", "|&", ";;", "|", ";", "&", "(", ")")
+
+
+class ShellParseError(ValueError):
+    """The script could not be split; its yq calls are unknown."""
+
+
+class Splitter:
+    """Split a shell script into simple-command segments of raw words.
+
+    A segment ends at `|`, `||`, `&&`, `;`, `&`, a newline or a subshell
+    paren outside quotes, so every `yq` in a pipeline or `&&` chain is its
+    own segment (gitops bug report ch. 10). The body of a `$(...)` or
+    backtick substitution is split as segments of its own as well, while the
+    word that holds it keeps its raw text. Words keep their quotes, so the
+    check below can tell `'$i'` (yq's own variable) from `"$X"` (a shell
+    expansion). Heredoc bodies are data and are skipped. An unterminated
+    quote, substitution or heredoc raises ShellParseError.
     """
-    tokens, cur, quote, escaped = [], "", None, False
-    for ch in line:
-        if escaped:
-            cur += ch
-            escaped = False
-            continue
-        if ch == "\\":
-            cur += ch
-            escaped = True
-            continue
-        if quote:
-            cur += ch
-            if ch == quote:
+
+    def __init__(self, src: str) -> None:
+        self.src = src
+        self.pos = 0
+        self.segments: list[list[str]] = []
+        self.heredocs: list[tuple[str, bool]] = []
+
+    def peek(self, n: int = 0) -> str:
+        i = self.pos + n
+        return self.src[i] if i < len(self.src) else ""
+
+    def error(self, msg: str) -> ShellParseError:
+        line = self.src.count("\n", 0, self.pos) + 1
+        return ShellParseError(f"line {line}: {msg}")
+
+    def skip_heredoc_bodies(self) -> None:
+        for delim, strip_tabs in self.heredocs:
+            while True:
+                if self.pos >= len(self.src):
+                    raise self.error(f"unterminated heredoc <<{delim}")
+                end = self.src.find("\n", self.pos)
+                end = len(self.src) if end == -1 else end
+                line = self.src[self.pos:end]
+                self.pos = min(end + 1, len(self.src))
+                if (line.lstrip("\t") if strip_tabs else line).strip() == delim:
+                    break
+        self.heredocs = []
+
+    def read_single(self) -> None:
+        end = self.src.find("'", self.pos + 1)
+        if end == -1:
+            raise self.error("unterminated single quote")
+        self.pos = end + 1
+
+    def read_double(self) -> None:
+        self.pos += 1
+        while True:
+            c = self.peek()
+            if c == "":
+                raise self.error("unterminated double quote")
+            if c == "\\":
+                self.pos += 2
+            elif c == '"':
+                self.pos += 1
+                return
+            elif c == "$" and self.peek(1) == "(":
+                self.read_substitution()
+            elif c == "`":
+                self.read_backtick()
+            else:
+                self.pos += 1
+
+    def read_substitution(self) -> None:
+        """`$(...)` / `$((...))`: split the body as segments of its own."""
+        self.pos += 2
+        self.parse(until=")")
+
+    def read_backtick(self) -> None:
+        end = self.pos + 1
+        while True:
+            if end >= len(self.src):
+                raise self.error("unterminated backtick substitution")
+            if self.src[end] == "\\":
+                end += 2
+                continue
+            if self.src[end] == "`":
+                break
+            end += 1
+        inner = Splitter(self.src[self.pos + 1:end].replace("\\`", "`"))
+        inner.parse()
+        self.segments.extend(inner.segments)
+        self.pos = end + 1
+
+    def read_word(self) -> str:
+        start = self.pos
+        while True:
+            c = self.peek()
+            if c == "" or c in " \t\n;&|()":
+                break
+            if c == "\\":
+                self.pos += 2
+            elif c == "'":
+                self.read_single()
+            elif c == '"':
+                self.read_double()
+            elif c == "$" and self.peek(1) == "(":
+                self.read_substitution()
+            elif c == "`":
+                self.read_backtick()
+            else:
+                self.pos += 1
+        return self.src[start:self.pos].replace("\\\n", "")
+
+    def parse(self, until: str | None = None) -> None:
+        words: list[str] = []
+
+        def flush() -> None:
+            nonlocal words
+            if words:
+                self.segments.append(words)
+            words = []
+
+        depth = 0  # bare `(` inside a $( ... ), e.g. a `case` pattern list
+        while True:
+            c = self.peek()
+            if c == "":
+                if until is not None:
+                    raise self.error("unterminated $( substitution")
+                flush()
+                return
+            if c in " \t":
+                self.pos += 1
+                continue
+            if c == "\\" and self.peek(1) == "\n":
+                self.pos += 2
+                continue
+            if c == "#":
+                end = self.src.find("\n", self.pos)
+                self.pos = len(self.src) if end == -1 else end
+                continue
+            if c == "\n":
+                self.pos += 1
+                flush()
+                if self.heredocs:
+                    self.skip_heredoc_bodies()
+                continue
+            if until is not None and c == until and depth == 0:
+                self.pos += 1
+                flush()
+                return
+            sep = next((op for op in SEGMENT_SEPARATORS if self.src.startswith(op, self.pos)), None)
+            if sep:
+                if until is not None and sep == "(":
+                    depth += 1
+                elif until is not None and sep == ")":
+                    depth -= 1
+                self.pos += len(sep)
+                flush()
+                continue
+            word = self.read_word()
+            m = re.fullmatch(r"\d*<<(-?)", word)
+            if m or word in ("<<", "<<-"):
+                strip = word.endswith("-")
+                while self.peek() in (" ", "\t"):
+                    self.pos += 1
+                delim = self.read_word()
+                self.heredocs.append((unquote(delim), strip))
+                words.extend([word, delim])
+                continue
+            m = re.match(r"^\d*<<(-?)(.+)$", word)
+            if m and not word.startswith("<<<") and "<<<" not in word:
+                self.heredocs.append((unquote(m.group(2)), m.group(1) == "-"))
+            words.append(word)
+
+
+def unquote(word: str) -> str:
+    return word.replace("'", "").replace('"', "").replace("\\", "")
+
+
+def segments_of(source: str) -> list[list[str]]:
+    splitter = Splitter(source)
+    splitter.parse()
+    if splitter.heredocs:
+        raise splitter.error("unterminated heredoc at end of script")
+    return splitter.segments
+
+
+def has_expansion(word: str) -> bool:
+    """True when the shell would expand something in this raw word.
+
+    `$` and backticks expand outside single quotes only, so yq's own
+    variables (`'.items[] as $i | $i.name'`) are not shell interpolation
+    (gitops bug report ch. 23).
+    """
+    quote = None
+    i = 0
+    while i < len(word):
+        c = word[i]
+        if quote == "'":
+            if c == "'":
                 quote = None
-        elif ch in "\"'":
-            quote = ch
-            cur += ch
-        elif ch.isspace():
-            if cur:
-                tokens.append(cur)
-                cur = ""
-        else:
-            cur += ch
-    if cur:
-        tokens.append(cur)
-    return tokens
+        elif c == "\\":
+            i += 2
+            continue
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c in "$`":
+            return True
+        i += 1
+    return False
 
 
-def expression_of(line: str) -> str | None:
-    """The yq expression argument of a yq call, if the line has one."""
-    m = YQ_CALL.search(line)
-    if not m:
-        return None
-    skip_next = False
-    for tok in tokenize(m.group(1)):
-        if skip_next:
-            skip_next = False
+REDIRECT_WORD = re.compile(r"^\d*(?:[<>]|&>)")
+
+
+def expressions_of(words: list[str]) -> list[str]:
+    """Every yq expression argument in one segment (raw, quotes kept)."""
+    idx = next(
+        (i for i, w in enumerate(words) if unquote(w) == "yq" or unquote(w).endswith("/yq")),
+        None,
+    )
+    if idx is None:
+        return []
+    args = []
+    rest = words[idx + 1:]
+    i = 0
+    while i < len(rest):
+        w = rest[i]
+        if REDIRECT_WORD.match(w):
+            # `> out`, `2>/dev/null`: skip the target too when it is separate.
+            if re.fullmatch(r"\d*(?:[<>]{1,2}|&>{1,2}|[<>]&)", w):
+                i += 1
+            i += 1
             continue
-        if tok in VALUE_FLAGS:
-            skip_next = True
+        args.append(w)
+        i += 1
+
+    exprs: list[str] = []
+    expression_given = False
+    subcommand_seen = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        bare = unquote(a)
+        if bare == "--":
+            ops = args[i + 1:]
+            if not expression_given and ops:
+                exprs.append(ops[0])
+            break
+        if bare.startswith("--") and len(bare) > 2:
+            name, eq, _ = bare.partition("=")
+            if eq:
+                value = a.split("=", 1)[1]
+            elif name in LONG_VALUE_FLAGS and i + 1 < len(args):
+                i += 1
+                value = args[i]
+            else:
+                i += 1
+                continue
+            if name in EXPRESSION_FLAGS:
+                exprs.append(value)
+            if name in ("--expression", "--from-file"):
+                expression_given = True
+            i += 1
             continue
-        if tok in SKIPPABLE or tok.startswith("-"):
+        if bare.startswith("-") and len(bare) > 1:
+            for j in range(1, len(bare)):
+                ch = bare[j]
+                if ch in SHORT_VALUE_FLAGS:
+                    if j + 1 < len(bare):
+                        value = bare[j + 1:]
+                    elif i + 1 < len(args):
+                        i += 1
+                        value = args[i]
+                    else:
+                        value = ""
+                    if "-" + ch in EXPRESSION_FLAGS and value:
+                        exprs.append(value)
+                    break
+            i += 1
             continue
-        return tok
-    return None
+        if not subcommand_seen and not exprs and bare in SUBCOMMANDS:
+            subcommand_seen = True
+            i += 1
+            continue
+        if not expression_given:
+            exprs.append(a)
+            expression_given = True
+        i += 1
+    return exprs
+
+
+def scan_source(source: str):
+    """Yield every interpolated yq expression in one script source."""
+    for words in segments_of(source):
+        for expr in expressions_of(words):
+            if has_expansion(expr):
+                yield expr.strip()
 
 
 def scan(directory: Path):
+    """Yield (file, template, expression) for every interpolated yq call.
+
+    Raises ShellParseError (with the file and template named) when a script
+    cannot be split: a call the check could not see is not a clean call.
+    """
     for path in sorted(directory.glob("*.yaml")):
         for doc in yaml.safe_load_all(path.read_text()):
             if not doc:
@@ -134,20 +394,89 @@ def scan(directory: Path):
                 source = (tmpl.get("script") or {}).get("source")
                 if not source:
                     continue
-                # A yq call split across lines with a trailing backslash
-                # would otherwise be scanned as two fragments, neither of
-                # which matches — the expression line alone carries no `yq`
-                # (agy P2 on gitops#1025).
-                source = source.replace("\\\n", " ")
-                for line in source.splitlines():
-                    expr = expression_of(line)
-                    if expr and "$" in expr:
-                        yield path.name, tmpl.get("name"), expr.strip()
+                try:
+                    for expr in scan_source(source):
+                        yield path.name, tmpl.get("name"), expr
+                except ShellParseError as exc:
+                    raise ShellParseError(f"{path.name} / {tmpl.get('name')}: {exc}") from None
+
+
+# (name, script source, must the check fire?)
+SELFTEST_CASES = (
+    ("double-quoted interpolation", 'yq eval -i ".ingress.hosts += [\\"${DOMAIN}\\"]" values.yaml', True),
+    ("strenv() shape", "export DOMAIN\nyq eval -i '.ingress.hosts += [strenv(DOMAIN)]' \"${DIR}/values.yaml\"", False),
+    # An escaped quote must not end the word early (agy P2).
+    ("escaped quote", 'yq eval -i ".foo == \\" ${INJECT} \\"" values.yaml', True),
+    # `-o json` consumes its argument (agy P2 on gitops#1025).
+    ("-o value flag", 'yq eval -o json ".image.tag = \\"${TAG}\\"" values.yaml', True),
+    ("-ojson attached value", 'yq -ojson ".a = \\"$X\\"" f', True),
+    ("--output-format=json", 'yq --output-format=json ".a = \\"$X\\"" f', True),
+    ("line continuation", 'yq eval -i \\\n  ".image.tag = \\"${TAG}\\"" \\\n  values.yaml', True),
+    # ch. 9: -C is --colors and takes no value.
+    ("-C is a switch", 'yq -C ".a = \\"$X\\"" f', True),
+    ("-s takes a value", 'yq -s \'.name\' ".a = \\"$X\\"" f', True),
+    ("-s expression interpolated", 'yq -s ".$X" \'.a\' f', True),
+    # ch. 10: every yq in a chain is checked.
+    ("second yq in a pipe", 'cat f | yq . | yq -i ".a=\\"$X\\"" f', True),
+    ("yq after &&", 'true && yq -i ".a=\\"$X\\"" f', True),
+    ("yq after ;", 'echo x; yq -i ".a=\\"$X\\"" f', True),
+    ("yq inside $(...)", 'V=$(yq ".a.\\"$X\\"" f)', True),
+    ("yq inside quoted $(...)", 'V="$(yq ".a.\\"$X\\"" f)"', True),
+    ("yq inside backticks", 'V=`yq ".a.$X" f`', True),
+    ("clean chain", "cat f | yq '.a' | yq -i '.b = strenv(B)' f && yq '.c' g", False),
+    # ch. 11: value flags hide nothing.
+    ("--front-matter value", 'yq --front-matter process ".a=\\"$X\\"" f', True),
+    ("--expression value", 'yq --expression ".a=\\"$X\\"" f', True),
+    ("--expression= value", 'yq --expression=".a=\\"$X\\"" f', True),
+    ("--expression, $ only in file", "yq --expression '.a' \"$F\"", False),
+    ("--from-file, $ only in file", 'yq --from-file prog.yq "$F"', False),
+    # ch. 23: yq's own variables inside single quotes are not shell expansion.
+    ("yq variable in single quotes", "yq eval '.items[] as $i | $i.name' f.yaml", False),
+    ("yq $__ in single quotes", "yq -i '.x as $v | .y = $v' f", False),
+    ("shell var in a file argument only", 'yq -i \'.a = 1\' "$DIR/values.yaml"', False),
+    ("unquoted $X expression", "yq $X f", True),
+    ("single-then-double concatenation", "yq '.a = \"'\"$X\"'\"' f", True),
+    ("multi-line single-quoted expression", "yq -i '\n  .a = 1 |\n  .b = 2\n' f", False),
+    ("multi-line double-quoted expression", 'yq -i "\n  .a = 1 |\n  .b = \\"$X\\"\n" f', True),
+    ("redirect before expression", 'yq 2>/dev/null ".a.$X" f', True),
+    ("stdin only, no expression", "yq -p json -o yaml < in.json > out.yaml", False),
+    ("heredoc body is data", "cat > /tmp/x <<'EOF'\nyq \".a.$X\" f\nEOF\nyq '.a' f", False),
+    ("comment is not a call", '# yq ".a.$X" f', False),
+    ("word mentioning yq in quotes", 'echo "yq $X"', False),
+)
+
+PARSE_ERROR_CASES = (
+    ("unterminated double quote", 'yq ".a = $X f'),
+    ("unterminated single quote", "yq '.a f"),
+    ("unterminated $(", 'V=$(yq ".a" f'),
+    ("unterminated heredoc", "cat <<EOF\nyq x\n"),
+)
 
 
 def selftest() -> int:
     """A checker that has never been seen to fail is not known to work."""
-    bad = """
+    failed = 0
+    for name, source, should_fire in SELFTEST_CASES:
+        try:
+            found = list(scan_source(source))
+        except ShellParseError as exc:
+            print(f"❌ selftest [{name}]: unexpected parse error: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        if bool(found) != should_fire:
+            verb = "did not fire" if should_fire else f"fired on a clean call: {found}"
+            print(f"❌ selftest [{name}]: detector {verb}", file=sys.stderr)
+            failed += 1
+    for name, source in PARSE_ERROR_CASES:
+        try:
+            found = list(scan_source(source))
+        except ShellParseError:
+            continue
+        print(f"❌ selftest [{name}]: split without error, found {found}", file=sys.stderr)
+        failed += 1
+
+    # End to end through scan(): template walking and file/template naming.
+    doc = """
 apiVersion: argoproj.io/v1alpha1
 kind: ClusterWorkflowTemplate
 metadata: {name: selftest}
@@ -158,85 +487,15 @@ spec:
         source: |
           yq eval -i ".ingress.hosts += [\\"${DOMAIN}\\"]" values.yaml
 """
-    good = """
-apiVersion: argoproj.io/v1alpha1
-kind: ClusterWorkflowTemplate
-metadata: {name: selftest}
-spec:
-  templates:
-    - name: t
-      script:
-        source: |
-          export DOMAIN
-          yq eval -i '.ingress.hosts += [strenv(DOMAIN)]' "${DIR}/values.yaml"
-"""
-    escaped = """
-apiVersion: argoproj.io/v1alpha1
-kind: ClusterWorkflowTemplate
-metadata: {name: selftest}
-spec:
-  templates:
-    - name: t
-      script:
-        source: |
-          yq eval -i ".foo == \\" ${INJECT} \\"" values.yaml
-"""
-    # `-o json` consumes its argument; a naive skip returns `json` as the
-    # expression and the real one is never seen.
-    value_flag = """
-apiVersion: argoproj.io/v1alpha1
-kind: ClusterWorkflowTemplate
-metadata: {name: selftest}
-spec:
-  templates:
-    - name: t
-      script:
-        source: |
-          yq eval -o json ".image.tag = \\"${TAG}\\"" values.yaml
-"""
-    # The same call split over two lines with a trailing backslash.
-    continued = """
-apiVersion: argoproj.io/v1alpha1
-kind: ClusterWorkflowTemplate
-metadata: {name: selftest}
-spec:
-  templates:
-    - name: t
-      script:
-        source: |
-          yq eval -i \\
-            ".image.tag = \\"${TAG}\\"" \\
-            values.yaml
-"""
-    for name, doc in (("value_flag.yaml", value_flag), ("continued.yaml", continued)):
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / name).write_text(doc)
-            if not list(scan(Path(d))):
-                print(f"❌ selftest: {name} hid the interpolation from the "
-                      "detector", file=sys.stderr)
-                return 1
-
     with tempfile.TemporaryDirectory() as d:
-        tmp = Path(d)
-        (tmp / "escaped.yaml").write_text(escaped)
-        if not list(scan(tmp)):
-            print("❌ selftest: an escaped quote split the token and hid the "
-                  "interpolation from the detector", file=sys.stderr)
-            return 1
-        (tmp / "escaped.yaml").unlink()
-        (tmp / "bad.yaml").write_text(bad)
-        if not list(scan(tmp)):
-            print("❌ selftest: detector did not fire on an interpolated yq call",
-                  file=sys.stderr)
-            return 1
-        (tmp / "bad.yaml").unlink()
-        (tmp / "good.yaml").write_text(good)
-        found = list(scan(tmp))
-        if found:
-            print(f"❌ selftest: detector fired on the strenv() shape: {found}",
-                  file=sys.stderr)
-            return 1
-    print("✅ selftest: detector fires on interpolation and not on strenv()")
+        (Path(d) / "bad.yaml").write_text(doc)
+        if [k[:2] for k in scan(Path(d))] != [("bad.yaml", "t")]:
+            print("❌ selftest: scan() did not report the template", file=sys.stderr)
+            failed += 1
+    if failed:
+        return 1
+    print(f"✅ selftest: {len(SELFTEST_CASES)} call shapes and "
+          f"{len(PARSE_ERROR_CASES)} unparseable scripts behave as expected")
     return 0
 
 
@@ -249,7 +508,15 @@ def main() -> int:
         return 2
 
     new, stale = [], set(BASELINE)
-    for fname, tname, expr in scan(TEMPLATES):
+    try:
+        found = list(scan(TEMPLATES))
+    except ShellParseError as exc:
+        # A script the check could not split has unknown yq calls in it:
+        # that is not "no interpolation".
+        print(f"❌ could not split a script source ({exc}); its yq calls are unknown",
+              file=sys.stderr)
+        return 2
+    for fname, tname, expr in found:
         key = (fname, tname, expr)
         stale.discard(key)
         if key in BASELINE:
