@@ -10,10 +10,15 @@ refusal or an unknown, never a pass.
 Two independent halves:
   1. The staged package under deploy/staged/glovo-m1 must render, stay private
      where it must, and keep the fail-closed defaults.
-  2. A deny-only leak guard: no Glovo host, workload, image or assistant
-     namespace may appear in reconciled paths (platform-gitops/**, excluding
-     agents-state/). gate.yaml is informational and is NEVER consulted as an
-     unlock: a PR author can edit it, so it proves nothing.
+  2. A leak guard: no Glovo host, workload, image or assistant namespace may
+     appear in reconciled paths (platform-gitops/**, excluding agents-state/),
+     except an exact line listed for its exact file in ALLOWED_LINES. Each
+     activation PR adds only its own lines there, as its first commit, and
+     the reviewer reads that diff first (runbook "Leak guard at activation").
+     A matching path name, a matching line not in the set, or a match in a
+     file not in the map still refuses; a provenance image never passes.
+     gate.yaml is informational and is NEVER consulted as an unlock: a PR
+     author can edit it, so it proves nothing.
 """
 
 from __future__ import annotations
@@ -44,6 +49,12 @@ VALUES = {
 }
 TENANT = "provider-tenant/values.yaml"
 SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
+
+# Exact lines (whitespace included) that may match LEAK in one reconciled file,
+# keyed by the path relative to the repository root. Empty until the first
+# activation PR; each activation PR adds only its own lines, removal PRs delete
+# them.
+ALLOWED_LINES: dict[str, frozenset[str]] = {}
 
 
 class Refused(Exception):
@@ -134,8 +145,11 @@ def check_provenance(root: Path) -> None:
             _need(bool(img.get(key)), f"provenance {name}.{key} missing")
 
 
-def leak_guard(root: Path) -> None:
-    """Deny-only. Ignores gate.yaml and every local marker on purpose."""
+def leak_guard(root: Path, allowed_lines: dict[str, frozenset[str]] | None = None) -> None:
+    """Deny unless the exact line is listed for the exact file. Ignores
+    gate.yaml and every local marker on purpose."""
+    if allowed_lines is None:
+        allowed_lines = ALLOWED_LINES
     repos = []
     try:
         images = _load(root / STAGED / "provenance.yaml").get("images", {})
@@ -153,8 +167,13 @@ def leak_guard(root: Path) -> None:
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
             continue  # binary content cannot carry a values file
-        if LEAK.search(text) or LEAK.search(str(p.relative_to(top))) or any(r in text for r in repos):
-            raise Refused(f"Glovo/assistants reference in reconciled path {p.relative_to(root)}")
+        rel = str(p.relative_to(root))
+        if LEAK.search(str(p.relative_to(top))) or any(r in text for r in repos):
+            raise Refused(f"Glovo/assistants reference in reconciled path {rel}")
+        allowed = allowed_lines.get(rel, frozenset())
+        for line in text.splitlines():
+            if LEAK.search(line) and line not in allowed:
+                raise Refused(f"Glovo/assistants reference in reconciled path {rel}")
 
 
 def _run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess:
@@ -198,11 +217,11 @@ def render_checks(root: Path) -> None:
         _need(k.returncode == 0, f"kubeconform failed for {p.name}")
 
 
-def run(root: Path, render: bool = True) -> int:
+def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | None = None) -> int:
     try:
         check_staged_values(root)
         check_provenance(root)
-        leak_guard(root)
+        leak_guard(root, allowed)
         if render:
             render_checks(root)
     except Refused as e:
@@ -229,10 +248,10 @@ def _edit(root: Path, rel: str, fn: Any) -> None:
 
 
 def selftest() -> int:
-    cases: list[tuple[str, int, Any]] = []
+    cases: list[tuple[str, int, Any, Any]] = []
 
-    def add(name: str, want: int, mutate: Any) -> None:
-        cases.append((name, want, mutate))
+    def add(name: str, want: int, mutate: Any, allowed: Any = None) -> None:
+        cases.append((name, want, mutate, allowed))
 
     add("baseline passes", 0, lambda r: None)
     add("T2 host in reconciled labs values", REFUSED,
@@ -283,13 +302,37 @@ def selftest() -> int:
     add("T6 gate.yaml missing", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").unlink())
     add("T6 gate.yaml unparseable", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").write_text(": : :\n- ["))
 
+    # Exact-line allowlist (runbook "Leak guard at activation").
+    a_file = f"{RECONCILED}/services/labs/x/values.yaml"
+    a_line = "  - name: glovo_runtime"
+    allow = {a_file: frozenset({a_line})}
+    add("allowlist: listed line in listed file passes", 0,
+        lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n"), allow)
+    add("allowlist: same line in another file refuses", REFUSED,
+        lambda r: (r / RECONCILED / "services/labs/y.yaml").write_text(f"roles:\n{a_line}\n"), allow)
+    add("allowlist: extra Glovo line next to an allowed one refuses", REFUSED,
+        lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n  - name: glovo_extra\n"), allow)
+    add("allowlist: changed whitespace refuses", REFUSED,
+        lambda r: (r / a_file).write_text(f"roles:\n {a_line}\n"), allow)
+    add("allowlist: Glovo path name refuses even with allowed lines", REFUSED,
+        lambda r: (r / RECONCILED / "services/labs/glovo.yaml").write_text(f"{a_line}\n"),
+        {f"{RECONCILED}/services/labs/glovo.yaml": frozenset({a_line})})
+    add("allowlist: provenance image refuses even on an allowed line", REFUSED,
+        lambda r: (r / a_file).write_text("  repository: ghcr.io/mctlhq/glovo-provider-worker\n"),
+        {a_file: frozenset({"  repository: ghcr.io/mctlhq/glovo-provider-worker"})})
+    add("allowlist: forged gate.yaml unlocks nothing", REFUSED,
+        lambda r: (_edit(r, "gate.yaml", lambda d: d["phases"].update(
+            p1={"state": "approved", "approval": "https://github.com/x/y/issues/1"})),
+            (r / a_file).write_text("ns: mctl-assistants\n")), allow)
+    add("allowlist: real ALLOWED_LINES on an untouched tree passes", 0, lambda r: None)
+
     failed = 0
-    for name, want, mutate in cases:
+    for name, want, mutate, allowed in cases:
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _fixture(root)
             mutate(root)
-            got = run(root, render=False)
+            got = run(root, render=False, allowed=allowed)
         ok = got == want
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {got}, want {want}", file=sys.stderr)
