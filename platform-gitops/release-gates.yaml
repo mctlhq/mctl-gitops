@@ -198,7 +198,7 @@ version_holds:
       # tag/digest/revision-label check on the release-bump PR; provenance:
       # chat GO, merge by a Claude agent session.
       - version: "4.159.0"
-        grant: mctlhq/mctl-gitops#PENDING
+        grant: mctlhq/mctl-gitops#2656
         approved_by: mashkovd
         expires: 2026-11-28
 
