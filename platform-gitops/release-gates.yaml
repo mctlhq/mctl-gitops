@@ -183,13 +183,14 @@ version_holds:
       # #1052. #1050 adds an optional Helm slot, deployApprovalUISecret, that
       # mounts DEPLOY_APPROVAL_UI_CLIENT_ID/SECRET from a named Secret; empty
       # by default, default render unchanged (tested). #1051 refreshes
-      # deployplan test snapshots only. #1052 (Glovo basket split, phase P1)
-      # is dark: the join routes mount only with GLOVO_BASKET_JOIN_ENABLED,
-      # which nothing sets; the binary accepts basket schema 1 and 2, and the
-      # schema 2 upgrade runs only from glovo-migrate under the migration
-      # role, which no Job here runs. The deploy approval page stays off
-      # until a separate, owner-approved PR enables it. The first record
-      # (#2655) was bound to db4eb87be and no longer described the release.
+      # deployplan test snapshots only. #1052 (basket service split, phase
+      # P1) is dark: its join routes mount only behind a feature flag that
+      # nothing here sets; the binary accepts basket schema 1 and 2, and the
+      # schema 2 upgrade runs only from the separate migration command under
+      # the migration role, which no Job here runs. The deploy approval page
+      # stays off until a separate, owner-approved PR enables it. The first
+      # record (#2655) was bound to db4eb87be and no longer described the
+      # release.
       # Covers only the 4.159.0 tag on the merge of mctlhq/mctl-api#1053,
       # whose first parent is mctl-api main at
       # fcfdfc2b8ac0657ca5f4af13e151a13daac6e59e and whose second parent
