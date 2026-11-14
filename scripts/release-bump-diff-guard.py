@@ -74,13 +74,28 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
     removed = added = None
     changed = 0
     in_header = False  # between `diff --git` and the first `@@`
+    # One change block: the run of -/+ lines between two context lines (or a
+    # hunk boundary). Removed and added tag lines pair by POSITION, so they
+    # must pair inside the block. Pairing across the whole file let
+    # ` a:` `-  tag: 1.0.0` ` b:` `+  tag: 1.0.1` pass as a tag move
+    # although the tag key left block `a` and appeared under `b`.
+    blk_removed, blk_added = [], []
+
+    def end_block():
+        if cur is not None and len(blk_removed) != len(blk_added):
+            problems.append(
+                f"{cur}: a change block removes {len(blk_removed)} and adds "
+                f"{len(blk_added)} lines; tag lines must pair in place"
+            )
+        blk_removed.clear()
+        blk_added.clear()
 
     def close():
+        end_block()
         if cur is None:
             return
         if len(removed) != len(added):
-            problems.append(f"{cur}: {len(removed)} removed and {len(added)} added lines do not pair")
-            return
+            return  # already refused by end_block(): some block does not pair
         if collect is not None:
             collect[cur] = [(ai, at) for (ai, at) in added]
         for (ri, rt), (ai, at) in zip(removed, added):
@@ -131,10 +146,14 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
                 continue
             problems.append(f"{cur}: unrecognised header line {line[:80]}")
             continue
-        if line.startswith("@@") or line.startswith("\\ ") or line.startswith(" ") or line == "":
+        if line.startswith("\\ "):
+            continue  # "\ No newline at end of file" belongs to the line above
+        if line.startswith("@@") or line.startswith(" ") or line == "":
+            end_block()
             continue
         if line[0] in "+-":
             changed += 1
+            (blk_removed if line[0] == "-" else blk_added).append(line)
             s = shape(line[1:])
             if s is None:
                 problems.append(f"{cur}: not a tag line: {line[:100]}")

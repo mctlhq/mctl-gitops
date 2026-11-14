@@ -12,6 +12,9 @@
 #
 # Default mode is dry-run. Pass --apply to actually mutate.
 # Idempotent: re-running on a clean cluster prints summary with 0 stripped.
+# Exit: 0 done, 1 an annotate failed, 2 the scan itself could not be read
+# (kubectl or jq failed: no summary at all; or an annotation is not JSON:
+# the summary counts it as unreadable). A failed scan is never "clean".
 
 set -euo pipefail
 
@@ -49,9 +52,53 @@ candidate=0
 stripped=0
 already=0
 errored=0
+unreadable=0
+
+# Read the list and parse it as two checked steps, before the loop. The loop
+# used to read from `< <(kubectl ... | jq ...)`: a process substitution's exit
+# status is invisible to set -e and pipefail, so a kubectl that could not
+# reach the cluster (or a jq that could not parse its answer) produced no
+# rows, and the script printed "scanned: 0 ... already-clean: 0" and exited
+# 0 -- a scan that never happened reported as a clean cluster (gitops bug
+# report ch. 2). Capturing only kubectl would still hide a jq failure.
+if ! es_json=$(kubectl get externalsecrets.external-secrets.io -A -o json); then
+  echo "ERROR: cannot list ExternalSecrets; nothing was scanned" >&2
+  exit 2
+fi
+if [[ -z "$es_json" ]]; then
+  # jq reads an empty input as zero documents and exits 0 with no rows.
+  echo "ERROR: kubectl returned an empty answer; nothing was scanned" >&2
+  exit 2
+fi
+if ! rows=$(printf '%s' "$es_json" | jq -r '
+    if (.items | type) != "array" then error("no .items array") else . end
+    | .items[]
+    | . as $o
+    | ($o.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"] // "") as $lac
+    | (if $lac == "" then {ok: true, j: {}}
+       else (try ($lac | fromjson | {ok: true, j: .}) catch {ok: false})
+       end) as $p
+    | [
+        $o.metadata.namespace,
+        $o.metadata.name,
+        (if $p.ok then (($p.j.apiVersion // "") == "external-secrets.io/v1") else "unknown" end),
+        (if $p.ok then ($p.j.metadata.resourceVersion != null) else "unknown" end)
+      ] | @tsv
+  '); then
+  echo "ERROR: cannot parse the ExternalSecret list; nothing was scanned" >&2
+  exit 2
+fi
 
 while IFS=$'\t' read -r ns name has_v1 has_rv; do
+  [[ -z "$ns$name" ]] && continue  # an empty list gives one empty line
   scanned=$((scanned+1))
+  if [[ "$has_v1" == "unknown" ]]; then
+    # An annotation that is not JSON is neither stale nor clean: it is
+    # unread. Counting it as already-clean is what `fromjson? // {}` did.
+    unreadable=$((unreadable+1))
+    printf '  %s/%s: last-applied-configuration is not JSON, not judged\n' "$ns" "$name" >&2
+    continue
+  fi
   if [[ "$has_v1" != "true" || "$has_rv" != "true" ]]; then
     continue
   fi
@@ -67,23 +114,10 @@ while IFS=$'\t' read -r ns name has_v1 has_rv; do
       errored=$((errored+1))
     fi
   fi
-done < <(
-  kubectl get externalsecrets.external-secrets.io -A -o json | jq -r '
-    .items[]
-    | . as $o
-    | ($o.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"] // "") as $lac
-    | (if $lac == "" then {} else ($lac | fromjson? // {}) end) as $j
-    | [
-        $o.metadata.namespace,
-        $o.metadata.name,
-        (($j.apiVersion // "") == "external-secrets.io/v1"),
-        ($j.metadata.resourceVersion != null)
-      ] | @tsv
-  '
-)
+done <<< "$rows"
 
 # Healthy ESs (no LAC at all OR LAC without v1+RV) are counted as already-clean
-already=$((scanned - candidate))
+already=$((scanned - candidate - unreadable))
 
 echo
 echo "Summary:"
@@ -96,8 +130,12 @@ else
   echo "  would-strip:   $candidate (re-run with --apply)"
 fi
 echo "  already-clean: $already"
+echo "  unreadable:    $unreadable (annotation is not JSON; not judged)"
 echo
 
 if [[ "$APPLY" == "1" && "$errored" != "0" ]]; then
   exit 1
+fi
+if [[ "$unreadable" != "0" ]]; then
+  exit 2
 fi
