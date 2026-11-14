@@ -380,7 +380,8 @@ class Lexer:
 
 
 def tokenize(source: str) -> list[Command]:
-    lexer = Lexer(source)
+    # A CRLF template must not leave `\r` in words or hide a `\` continuation.
+    lexer = Lexer(source.replace("\r\n", "\n"))
     lexer.parse()
     if lexer.pending_heredocs:
         raise lexer.error("unterminated heredoc at end of script")
@@ -507,11 +508,11 @@ def sed_targets(args: list[str]) -> list[str]:
     return operands if has_script else operands[1:]
 
 
-YQ_SHORT_VALUE = "opIs"
+YQ_SHORT_VALUE = "fopIs"  # -f is --front-matter (yq v4.47 --help)
 YQ_LONG_VALUE = (
     "--output-format", "--input-format", "--indent", "--split-exp",
     "--expression", "--from-file", "--front-matter", "--lua-prefix",
-    "--lua-suffix", "--properties-separator", "--csv-separator",
+    "--lua-suffix", "--properties-separator", "--split-exp-file", "--csv-separator",
     "--tsv-separator", "--xml-attribute-prefix", "--xml-content-name",
     "--xml-proc-inst-prefix", "--xml-directive-name", "--string-interpolation-prefix",
     "--string-interpolation-suffix", "--shell-key-separator",
@@ -599,6 +600,8 @@ def write_targets(cmd: Command) -> list[str]:
 
 RESERVED_PREFIX_WORDS = ("then", "else", "do", "{", "!", "if", "elif", "while", "until")
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# `F+=x` appends, so F has no single literal value afterwards.
+APPEND_WORD_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+=")
 
 
 def dynamic_bindings(words: list[str]) -> list[str]:
@@ -608,18 +611,25 @@ def dynamic_bindings(words: list[str]) -> list[str]:
     Over-reporting (an option value that looks like a name) only leaves
     that name unresolved, which fails closed.
     """
+    # `while IFS= read -r F`, `command read F`: skip prefix assignments and
+    # wrappers to reach the command that binds.
+    i = 0
+    while i < len(words) and (ASSIGNMENT_WORD_RE.match(words[i]) or words[i] in ("command", "builtin")):
+        i += 1
+    names = [m.group(1) for w in words if (m := APPEND_WORD_RE.match(w))]
+    words = words[i:]
     if not words:
-        return []
+        return names
     cmd = words[0]
     if cmd in ("for", "select") and len(words) > 1:
-        return [words[1]]
+        return names + [words[1]]
     if cmd in ("read", "mapfile", "readarray"):
-        return [w for w in words[1:] if NAME_RE.match(w)]
+        return names + [w for w in words[1:] if NAME_RE.match(w)]
     if cmd == "getopts" and len(words) > 2:
-        return [words[2]]
+        return names + [words[2]]
     if cmd == "printf":
-        return [words[i + 1] for i, w in enumerate(words[:-1]) if w == "-v"]
-    return []
+        return names + [words[j + 1] for j, w in enumerate(words[:-1]) if w == "-v"]
+    return names
 
 
 def extract_var_map(commands: list[Command]) -> dict[str, str]:
@@ -924,6 +934,14 @@ SELFTEST_CASES = (
      'F="platform-gitops/tenants/${TENANT}/r.csv"\nprintf -v F %s x\necho x >> "$F"\n', "$F"),
     ("getopts rebinds a name",
      'F="platform-gitops/tenants/${TENANT}/r.csv"\ngetopts ab F\necho x >> "$F"\n', "$F"),
+    ("IFS= read rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\n'
+     'while IFS= read -r F; do echo x >> "$F"; done < list\n', "$F"),
+    ("command read rebinds a name",
+     'F="platform-gitops/tenants/${TENANT}/r.csv"\ncommand read F\necho x >> "$F"\n', "$F"),
+    ("F+= append is a second value",
+     'F="platform-gitops/tenants/${TENANT}"\nF+="/../../argocd/values.yaml"\necho x >> "$F"\n', "$F"),
+    ("CRLF script resolves", f'F={SHARED}\r\necho x >> "$F"\r\n', SHARED),
     ("if F=... is a second value",
      'F="platform-gitops/tenants/${TENANT}/r.csv"\n'
      f'if F={SHARED}; then echo x >> "$F"; fi\n', "$F"),
