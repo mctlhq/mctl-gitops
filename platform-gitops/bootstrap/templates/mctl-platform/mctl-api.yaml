@@ -48,7 +48,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.156.1"
+            tag: "4.156.2"
 
           ingress:
             enabled: true
@@ -340,6 +340,13 @@ spec:
             # Keep it byte-identical to AUDIT_DB_URL unless the OAuth store is
             # deliberately moved.
             OAUTH_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # Basket canary store (mctlhq/mctl-api#1006, step W): inert. The
+            # binary reads these three only when the feature flag is true,
+            # which no line here sets. $(VAR) expands keys of the optional
+            # runtime secret above; the password is random hex (URL-safe).
+            GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            GLOVO_DB_RUNTIME_ROLE: glovo_runtime
+            GLOVO_DB_MIGRATION_ROLE: glovo_migrator
             # The lifecycle ownership store (ADR-010) gets its OWN database,
             # not mctl-api's: it is the source of truth for who may act on an
             # entity, and its neighbours in mctl-api -- the audit log, the
@@ -407,6 +414,12 @@ spec:
           # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
+            # Basket canary DB logins (mctlhq/mctl-api#1006, step W). Optional,
+            # like the hook secret: a pod that starts before ESO syncs boots
+            # without them; the step that first consumes them bumps
+            # ROLLOUT_MARKER.
+            - mctl-api-glovo-runtime-db
+            - mctl-api-workitems-db
             {{- if (default dict .Values.securityCodeScanning).receiver }}
             - mctl-api-security-code-scanning
             {{- end }}
