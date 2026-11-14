@@ -733,37 +733,6 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
-                  # Tenant erpact's shared MariaDB (vm-rules/erpact-alerts.yaml,
-                  # group erpact.capacity). Telegram only, no ticket: the remedy
-                  # is raising mariadb-0's memory limit in Forgejo
-                  # erpact/mctl-apps infra/mariadb.yaml, a repo mctl-agent cannot
-                  # write. Unrouted, an OOM-risk warning for the database behind
-                  # every ERPact site reached only the agent and notified nobody.
-                  # Prefix match so the Absent twin is covered too.
-                  - receiver: telegram
-                    matchers:
-                      - alertname =~ "ErpactMariadbMemory.*"
-                  # Tenant erpact's off-cluster backup and its daily restore
-                  # drill (vm-rules/erpact-alerts.yaml, group erpact.backup).
-                  # Telegram only, same reasoning as the MariaDB route above:
-                  # both CronJobs live in Forgejo erpact/mctl-apps, which
-                  # mctl-agent cannot write, and a backup that stopped or does
-                  # not restore is the one failure nobody notices until it is
-                  # needed. Prefix matches cover the Stale, NeverSucceeded and
-                  # MetricAbsent variants of each.
-                  - receiver: telegram
-                    matchers:
-                      - alertname =~ "ErpactBackup.*|ErpactRestoreDrill.*"
-                  # Tenant erpact's site probes (vm-rules/erpact-alerts.yaml,
-                  # group erpact.availability; #1773). Telegram only, same
-                  # reasoning as the two routes above: a broken site is fixed
-                  # in Forgejo erpact/mctl-apps, which mctl-agent cannot write,
-                  # and until now ErpactSiteDown reached only the agent and
-                  # notified nobody. Prefix match so ErpactSiteProbeAbsent is
-                  # covered too.
-                  - receiver: telegram
-                    matchers:
-                      - alertname =~ "ErpactSite.*"
                   # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
                   # Telegram only, no ticket: every remedy is a human's -- the
                   # dashboard's "Re-authenticate server", a token, or a sync

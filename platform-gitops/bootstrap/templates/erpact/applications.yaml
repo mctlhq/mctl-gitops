@@ -1,3 +1,11 @@
+# SCALED TO ZERO 2026-11-14. ERPact now runs on its own CLO cluster, whose
+# ArgoCD reads git.mctl.ai/erpact/clo-apps, so Forgejo stays. This copy is kept
+# but stopped: automated sync is off so ArgoCD does not restore the replicas,
+# tenants/erpact/values.yaml caps pods at 0, every Deployment/StatefulSet was
+# scaled to 0 and every CronJob suspended. The PVCs erpact-mariadb and
+# erpact-sites keep their data. To bring it back: restore the automated block
+# below (prune, selfHeal) on each Application and the pods quota, then sync.
+#
 # Applications of the ERPact copy (tenant erpact). Their manifests live in
 # the private Forgejo repository git.mctl.ai/erpact/mctl-apps (see
 # projects/project-erpact.yaml for why and for what they may create).
@@ -40,9 +48,7 @@ spec:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    # automated removed 2026-11-14: scaled to zero (see the header).
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
@@ -78,9 +84,7 @@ spec:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    # automated removed 2026-11-14: scaled to zero (see the header).
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
@@ -110,9 +114,7 @@ spec:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    # automated removed 2026-11-14: scaled to zero (see the header).
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
@@ -142,9 +144,7 @@ spec:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    # automated removed 2026-11-14: scaled to zero (see the header).
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
