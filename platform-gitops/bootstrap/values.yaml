@@ -572,6 +572,8 @@ reservedPlatformHosts:
   sso.mctl.ai: [zitadel]
   accounts.mctl.ai: [zitadel]
   api.mctl.ai: [mctl-api]
+  # Basket MCP host, served by mctl-api itself (host-routed, mctl-api#1006).
+  glovo.mctl.ai: [mctl-api]
   app.mctl.ai: [backstage]
   ops.mctl.ai: [argocd]
   secrets.mctl.ai: [vault]
