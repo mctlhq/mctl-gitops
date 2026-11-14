@@ -96,7 +96,7 @@ version_holds:
       # Fourth grant (owner GO in chat, 2026-11-14): 4.156.2 is 4.156.1 plus
       # the mctl-api P2 bug wave: mctlhq/mctl-api#1027 (Loki logs by exact
       # release; service status scoped to the caller's tenant and read in
-      # project apps), #1028 (security observation dedup per tenant) and
+      # its ArgoCD project), #1028 (security observation dedup per tenant) and
       # #1029 (argoarchive step order; partial reads in argoarchive and
       # agentregistry fail instead of returning shorter lists). Covers only
       # the 4.156.2 tag on the merge of mctlhq/mctl-api#1030, whose first
