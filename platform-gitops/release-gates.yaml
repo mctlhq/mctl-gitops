@@ -168,7 +168,7 @@ version_holds:
       # 127.0.0.1 and [::1] already could; the host is still compared as
       # exact text and localhost never matches a 127.0.0.1 entry. It unblocks
       # Claude Code, whose document lists http://localhost/callback, signing
-      # in to glovo.mctl.ai/mcp. OAuth paths only; no schema or config change.
+      # in to MCP resources. OAuth paths only; no schema or config change.
       # Covers only the 4.158.1 tag on the merge of mctlhq/mctl-api#1046
       # (35c2318664d7a2a1cadb15ed4aca6527572ca8f2), whose first parent is the
       # merge of mctlhq/mctl-api#1045 and whose second parent changes release
