@@ -1,0 +1,1 @@
+allowlists/catalogue.json: 'unvendored': catalogue tool(s) with no decision in the allowlist: ['a', 'b']
