@@ -30,7 +30,7 @@ Requires the platform to be running with Loki enabled (in-cluster deployment).`,
   mctl logs -t billing -n payment-api --json
 
   # Follow (re-poll every 5s)
-  mctl logs -t billing -n payment-api --lines 20 --since 30s --follow`,
+  mctl logs -t billing -n payment-api --lines 20 --since 1m --follow`,
 	RunE: runLogs,
 }
 
@@ -109,9 +109,14 @@ func runLogs(cmd *cobra.Command, args []string) error {
 // followSince is the window for a poll starting at now. It reaches back to the
 // start of the last successful poll, not the last attempt: a failed poll
 // printed nothing, so the lines it would have covered are still owed. Until a
-// poll succeeds, the user's --since stands.
+// poll succeeds, the user's --since stands, raised to the API's floor: a
+// shorter one would be refused on every poll and follow mode would never
+// recover.
 func followSince(initial string, lastOK, now time.Time) string {
 	if lastOK.IsZero() {
+		if d, err := time.ParseDuration(initial); err == nil && d < minFollowWindow*time.Second {
+			return fmt.Sprintf("%ds", minFollowWindow)
+		}
 		return initial
 	}
 	return followWindow(now.Sub(lastOK))
@@ -144,6 +149,9 @@ type logCursor struct {
 // fresh returns the lines not yet seen, in chronological order, and moves the
 // cursor past them. lines is most-recent-first, as the API returns it.
 func (c *logCursor) fresh(lines []logLine) []logLine {
+	if c.atLast == nil {
+		c.atLast = map[string]int{}
+	}
 	var out []logLine
 	// seen counts this poll's occurrences at c.last; the first atLast[line]
 	// of them were printed by an earlier poll.

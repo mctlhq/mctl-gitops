@@ -117,3 +117,22 @@ func TestFollowSinceReachesBackToLastSuccessfulPoll(t *testing.T) {
 		t.Errorf("after 3m of failures: %s, want 185s", got)
 	}
 }
+
+// A --since under the API's 1m floor would be refused on every poll, and with
+// no successful poll follow mode would never move off it.
+func TestFollowSinceRaisesShortInitialWindowToFloor(t *testing.T) {
+	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	for in, want := range map[string]string{"30s": "60s", "59s": "60s", "1m": "1m", "1h": "1h", "not-a-duration": "not-a-duration"} {
+		if got := followSince(in, time.Time{}, now); got != want {
+			t.Errorf("followSince(%q) before any success = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// A line with a zero timestamp on the very first poll must not panic.
+func TestLogCursorFirstLineWithZeroTimestamp(t *testing.T) {
+	c := &logCursor{}
+	if got := len(c.fresh([]logLine{{Line: "no timestamp"}})); got != 1 {
+		t.Errorf("printed %d lines, want 1", got)
+	}
+}
