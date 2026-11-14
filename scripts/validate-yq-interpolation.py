@@ -108,6 +108,10 @@ class Splitter:
         self.heredocs: list[tuple[str, bool, bool, bool]] = []
         # Heredoc bodies fed to a shell are code, not data: (body, quoted).
         self.code_bodies: list[tuple[str, bool]] = []
+        # First segment of the current line: a heredoc opened on this line
+        # feeds a shell when any segment on the line names one, which covers
+        # `cat <<EOF | sh` where the shell is in the next pipeline stage.
+        self.line_start = 0
 
     def peek(self, n: int = 0) -> str:
         i = self.pos + n
@@ -118,7 +122,9 @@ class Splitter:
         return ShellParseError(f"line {line}: {msg}")
 
     def skip_heredoc_bodies(self) -> None:
+        line_shell = any(feeds_shell(seg) for seg in self.segments[self.line_start:])
         for delim, strip_tabs, quoted, to_shell in self.heredocs:
+            to_shell = to_shell or line_shell
             start = self.pos
             while True:
                 if self.pos >= len(self.src):
@@ -231,6 +237,7 @@ class Splitter:
                 flush()
                 if self.heredocs:
                     self.skip_heredoc_bodies()
+                self.line_start = len(self.segments)
                 continue
             if until is not None and c == until and depth == 0:
                 self.pos += 1
@@ -425,8 +432,10 @@ def scan_source(source: str):
         if quoted:
             yield from scan_source(body)
         else:
-            for line in body.splitlines():
-                if YQ_WORD.search(line) and RAW_EXPANSION.search(line):
+            # The outer shell joins continuations and turns `\$X` into `$X`
+            # before the inner shell runs the body, so both count here.
+            for line in body.replace("\\\n", " ").splitlines():
+                if YQ_WORD.search(line) and re.search(r"[$`]", line):
                     yield line.strip()
 
 
@@ -508,6 +517,11 @@ SELFTEST_CASES = (
     ("heredoc to sh, quoted delimiter, safe", "bash <<'EOF'\nyq '.a' \"$F\"\nEOF", False),
     ("heredoc to kubectl exec sh", 'kubectl exec p -- sh <<EOF\nyq -i ".a=$X" f\nEOF', True),
     ("heredoc to cat stays data", 'cat > /tmp/x <<EOF\nyq ".a.$X" f\nEOF', False),
+    ("heredoc piped to sh", 'cat <<EOF | sh\nyq ".a.$X" f\nEOF', True),
+    ("heredoc piped to bash, quoted", "cat <<'EOF' | bash\nyq \".a.$X\" f\nEOF", True),
+    ("unquoted heredoc to sh, continuation", 'sh <<EOF\nyq -i \\\n  ".a=$X" f\nEOF', True),
+    ("unquoted heredoc to sh, escaped $", 'sh <<EOF\nyq ".a=\\$X" f\nEOF', True),
+    ("heredoc piped to grep stays data", 'cat <<EOF | grep x\nyq ".a.$X" f\nEOF', False),
 )
 
 PARSE_ERROR_CASES = (
