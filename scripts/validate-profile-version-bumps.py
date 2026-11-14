@@ -30,6 +30,7 @@ Run with --selftest to prove the detector still detects.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -89,6 +90,9 @@ def resolve_base(explicit: str | None = None, cwd: Path | None = None) -> str:
     base_ref = os.environ.get("GITHUB_BASE_REF", "").strip()
     if base_ref:
         candidates += [f"origin/{base_ref}", base_ref]
+    default_branch = _origin_head(cwd)
+    if default_branch:
+        candidates.append(default_branch)
     candidates += ["origin/main", "main"]
 
     tried: list[str] = []
@@ -105,6 +109,32 @@ def resolve_base(explicit: str | None = None, cwd: Path | None = None) -> str:
         f"{tried}. On a shallow clone, fetch the base branch first "
         "(actions/checkout with fetch-depth: 0)."
     )
+
+
+def _origin_head(cwd: Path | None = None) -> str | None:
+    """The remote default branch origin/HEAD points at, e.g. `origin/main`.
+
+    None only on git's own "not a symbolic ref" answer (exit 1, nothing on
+    stderr: origin/HEAD was never set). Any other failure is an error, not a
+    missing candidate: falling through to origin/main would compare against a
+    branch nobody chose.
+    """
+    result = subprocess.run(
+        ["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+        cwd=str(cwd or ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    if result.returncode == 1 and not result.stderr.strip():
+        return None
+    raise BaseUnavailable(f"git symbolic-ref refs/remotes/origin/HEAD failed: {result.stderr.strip()}")
+
+
+# _version_at's answer for "the file does not exist at that rev".
+ABSENT = object()
 
 
 def _spec_version(document: object) -> str | None:
@@ -125,8 +155,16 @@ def _spec_version(document: object) -> str | None:
     return version if isinstance(version, str) else None
 
 
-def _version_at(rev: str, path: str, cwd: Path | None = None) -> str | None:
-    """`spec.version` of `path` at `rev`, or None if the file is absent there."""
+def _version_at(rev: str, path: str, cwd: Path | None = None) -> object:
+    """`spec.version` of `path` at `rev`, as written; ABSENT if the file is not there.
+
+    The base side is read with BaseLoader, so every scalar comes back as the
+    string it is spelled as: an unquoted `version: 1.0` is the YAML float 1.0
+    under safe_load, which is not a string, and reading that as "no version"
+    made the profile look newly added and skipped the check entirely. None
+    means the file exists but has no scalar spec.version, which is still a
+    profile to compare against, never a new one.
+    """
     # Absence must be established POSITIVELY, not inferred from any git
     # failure. `_git` raises on every non-zero exit, so a corrupt repository,
     # an unreadable object or an out-of-memory git would all have read as
@@ -135,10 +173,10 @@ def _version_at(rev: str, path: str, cwd: Path | None = None) -> str | None:
     # to remove (agy P3 on gitops#1014).
     listing = _git("ls-tree", "--name-only", rev, "--", path, cwd=cwd).strip()
     if not listing:
-        return None  # genuinely absent at `rev` — added in this change
+        return ABSENT  # genuinely absent at `rev` — added in this change
     blob = _git("show", f"{rev}:{path}", cwd=cwd)
     try:
-        document = yaml.safe_load(blob)
+        document = yaml.load(blob, Loader=yaml.BaseLoader)  # noqa: S506 - BaseLoader builds no objects
     except yaml.YAMLError as exc:
         raise BaseUnavailable(f"{path} at {rev} is not valid YAML: {exc}") from exc
     return _spec_version(document)
@@ -174,7 +212,7 @@ def check(base: str | None = None, cwd: Path | None = None) -> list[str]:
     errors: list[str] = []
     for path in changed_profiles(resolved, cwd=cwd):
         before = _version_at(resolved, path, cwd=cwd)
-        if before is None:
+        if before is ABSENT:
             continue  # newly added profile
         after_path = (cwd or ROOT) / path
         if not after_path.is_file():
@@ -326,6 +364,63 @@ def selftest() -> int:
         finally:
             blob_path.parent.mkdir(parents=True, exist_ok=True)
             blob_path.write_bytes(saved)
+
+        # 4d. an unquoted base version is a YAML float. It must still be
+        #     compared, never read as "no version" and so as a new profile.
+        float_rel = "platform-gitops/agent-platform/execution-profiles/float-base/profile.yaml"
+        float_target = repo / float_rel
+        float_target.parent.mkdir(parents=True)
+        float_target.write_text(
+            "apiVersion: agents.mctl.ai/v1alpha2\nkind: ExecutionProfile\n"
+            "metadata: {name: float-base, owner: platform}\n"
+            "spec:\n  version: 1.0\n  tools: [Read]\n",
+            encoding="utf-8",
+        )
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "add", "-A", cwd=repo)
+        _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "float", cwd=repo)
+        float_base = _git("rev-parse", "HEAD", cwd=repo).strip()
+        for version, want in (("1.0", "not a string"), ('"1.0"', "still '1.0'"), ("1.1", "not a string"), ('"1.1"', None)):
+            float_target.write_text(
+                "apiVersion: agents.mctl.ai/v1alpha2\nkind: ExecutionProfile\n"
+                "metadata: {name: float-base, owner: platform}\n"
+                f"spec:\n  version: {version}\n  tools: [Read, Grep]\n",
+                encoding="utf-8",
+            )
+            errors = check(base=float_base, cwd=repo)
+            if want is None and errors:
+                print(f"❌ selftest: a float base bumped to a string version fired; got {errors}", file=sys.stderr)
+                return 1
+            if want is not None and not any(want in e for e in errors):
+                print(f"❌ selftest: float base, version {version}: want {want!r}; got {errors}", file=sys.stderr)
+                return 1
+
+        # 4e. origin/HEAD names the default branch when it is not `main`;
+        #     without it there is no base and the check could not run.
+        other = repo.parent / (repo.name + "-origin-head")
+        other.mkdir()
+        try:
+            _git("init", "-q", "-b", "trunk", cwd=other)
+            _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "t", cwd=other)
+            trunk = _git("rev-parse", "HEAD", cwd=other).strip()
+            _git("update-ref", "refs/remotes/origin/trunk", trunk, cwd=other)
+            if _origin_head(cwd=other) is not None:
+                print("❌ selftest: an unset origin/HEAD was not reported as unset", file=sys.stderr)
+                return 1
+            _git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk", cwd=other)
+            saved_ref = os.environ.pop("GITHUB_BASE_REF", None)
+            try:
+                got = resolve_base(None, cwd=other)
+            except BaseUnavailable as exc:
+                print(f"❌ selftest: origin/HEAD was not tried as a base: {exc}", file=sys.stderr)
+                return 1
+            finally:
+                if saved_ref is not None:
+                    os.environ["GITHUB_BASE_REF"] = saved_ref
+            if got != trunk:
+                print(f"❌ selftest: origin/HEAD resolved to {got}, want {trunk}", file=sys.stderr)
+                return 1
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
 
         # 5. an unresolvable base must RAISE, never pass. This is the branch
         #    that decides whether the check works in CI at all.

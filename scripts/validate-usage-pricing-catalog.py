@@ -27,8 +27,11 @@ round-trip render check needs a real `helm` binary and the real chart, so
 from __future__ import annotations
 
 import json
+import math
+import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -40,6 +43,42 @@ CONFIGMAP_NAME = "mctl-api-usage-pricing"
 ISSUE = "mctlhq/mctl-gitops#1409"
 
 REQUIRED_FIELDS = ("version", "canonical_model", "effective_from")
+# Go's time.Time JSON decoding: RFC 3339, optional fractional seconds.
+RFC3339 = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$")
+
+
+def _instant(value: object) -> tuple[datetime, int] | None:
+    """The UTC instant an effective_from names, as (seconds, nanoseconds), or
+    None when Go's time.Time would refuse it. NewCatalog compares instants,
+    not spellings: `...T02:00:00+02:00` and `...T00:00:00Z` are one instant."""
+    if not isinstance(value, str):
+        return None
+    m = RFC3339.match(value)
+    if not m:
+        return None
+    try:
+        base = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    zone = m.group(3)
+    if zone != "Z":
+        sign = 1 if zone[0] == "+" else -1
+        hours, minutes = int(zone[1:3]), int(zone[4:6])
+        if hours > 23 or minutes > 59:
+            return None
+        base -= sign * timedelta(hours=hours, minutes=minutes)
+    nanos = int((m.group(2) or ".0")[1:].ljust(9, "0"))
+    return base.replace(tzinfo=timezone.utc), nanos
+
+
+def _reject_constant(name: str) -> object:
+    # json.loads accepts NaN, Infinity and -Infinity; Go's encoding/json
+    # does not, so the whole card would fail to decode in mctl-api.
+    raise ValueError(f"{name} is not valid JSON (Go's encoding/json rejects it)")
+
+
+def load_catalog(text: str) -> object:
+    return json.loads(text, parse_constant=_reject_constant)
 # internal/usage/pricing.go's Pricing JSON tags for the five rate fields.
 RATE_FIELDS = (
     "input_per_mtok",
@@ -63,9 +102,23 @@ def violations(entries) -> list[str]:
             continue
 
         version = entry.get("version")
-        for field in REQUIRED_FIELDS:
-            if not entry.get(field):
+        # Types as Go decodes them: a non-string in a string field fails the
+        # whole json.Unmarshal (null is the one exception: it leaves the zero
+        # value), and NewCatalog trims before its emptiness check.
+        for field in ("version", "canonical_model", "provider"):
+            value = entry.get(field)
+            if value is not None and not isinstance(value, str):
+                found.append(f"version {version!r}: {field} is {value!r}, must be a string")
+        for field in ("version", "canonical_model"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value.strip():
                 found.append(f"version {version!r}: missing required field {field!r}")
+        instant = _instant(entry.get("effective_from"))
+        if instant is None:
+            found.append(
+                f"version {version!r}: effective_from is {entry.get('effective_from')!r}, "
+                "must be an RFC 3339 timestamp"
+            )
 
         for field in RATE_FIELDS:
             if field not in entry:
@@ -73,12 +126,19 @@ def violations(entries) -> list[str]:
             value = entry[field]
             # bool is a subclass of int in Python; NewCatalog has no bool
             # rate, so True/False would silently pass an isinstance(int) test.
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            if value is None:
+                continue  # Go leaves the zero value for null
+            # NaN fails `value < 0` and Infinity passes it, so finiteness is
+            # checked explicitly.
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
                 found.append(f"version {version!r}: {field} is {value!r}, must be a non-negative number")
 
-        model = str(entry.get("canonical_model", "")).strip().lower()
-        provider = str(entry.get("provider", "")).strip().lower()
-        key = (model, provider, entry.get("effective_from"))
+        if instant is None:
+            continue  # no instant to compare; already reported
+        model = str(entry.get("canonical_model") or "").strip().lower()
+        provider = str(entry.get("provider") or "").strip().lower()
+        key = (model, provider, instant)
         if key in seen:
             found.append(
                 f"versions {seen[key]!r} and {version!r} both claim (canonical_model={model!r}, "
@@ -137,6 +197,26 @@ def selftest() -> int:
         ("negative rate", [dict(good[0], input_per_mtok=-1.0)], True),
         ("non-numeric rate", [dict(good[0], output_per_mtok="lots")], True),
         ("bool rate", [dict(good[0], cache_read_per_mtok=True)], True),
+        ("NaN rate", [dict(good[0], input_per_mtok=float("nan"))], True),
+        ("Infinity rate", [dict(good[0], output_per_mtok=float("inf"))], True),
+        ("null rate is Go's zero value", [dict(good[0], web_search_per_call=None)], False),
+        ("numeric version", [dict(good[0], version=1)], True),
+        ("whitespace version", [dict(good[0], version="  ")], True),
+        ("list canonical_model", [dict(good[0], canonical_model=["claude-opus-5"])], True),
+        ("numeric provider", [dict(good[0], provider=7)], True),
+        ("numeric effective_from", [dict(good[0], effective_from=20260901)], True),
+        ("date-only effective_from", [dict(good[0], effective_from="2026-09-01")], True),
+        ("impossible effective_from", [dict(good[0], effective_from="2026-02-30T00:00:00Z")], True),
+        (
+            "same instant in another offset is a duplicate",
+            good + [dict(good[0], version="v2", effective_from="2026-09-01T02:00:00+02:00")],
+            True,
+        ),
+        (
+            "fractional seconds make a different instant",
+            good + [dict(good[0], version="v2", effective_from="2026-09-01T00:00:00.5Z")],
+            False,
+        ),
         (
             "different effective_from is not a duplicate",
             good + [dict(good[0], version="v2", effective_from="2026-10-01T00:00:00Z")],
@@ -148,6 +228,13 @@ def selftest() -> int:
             False,
         ),
     ]
+    for text in ("[NaN]", '[{"input_per_mtok": Infinity}]', "[-Infinity]"):
+        try:
+            load_catalog(text)
+        except ValueError:
+            continue
+        print(f"selftest FAIL: {text!r} parsed, but Go's encoding/json rejects it", file=sys.stderr)
+        return 1
     for name, entries, should_fire in cases:
         found = violations(entries)
         if bool(found) != should_fire:
@@ -155,8 +242,9 @@ def selftest() -> int:
             return 1
     print(
         "selftest OK: detector fires on an empty/malformed catalog, a missing required field, a "
-        "duplicate (canonical_model, provider, effective_from) triple, and a negative, non-numeric "
-        "or boolean rate; stays quiet on a well-formed catalog"
+        "duplicate (canonical_model, provider, effective_from instant) triple, a mistyped or "
+        "non-RFC 3339 field, NaN/Infinity, and a negative, non-numeric or boolean rate; stays "
+        "quiet on a well-formed catalog"
     )
     return 0
 
@@ -168,7 +256,11 @@ def main() -> int:
     if not CATALOG.is_file():
         print(f"::error::{CATALOG} does not exist", file=sys.stderr)
         return 1
-    entries = json.loads(CATALOG.read_text())
+    try:
+        entries = load_catalog(CATALOG.read_text())
+    except ValueError as exc:
+        print(f"::error::{CATALOG.relative_to(ROOT)}: not valid JSON: {exc}", file=sys.stderr)
+        return 1
 
     found = violations(entries)
     if found:

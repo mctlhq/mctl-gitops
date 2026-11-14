@@ -420,8 +420,11 @@ def check_catalogue(files: dict, servers: dict, catalogue, errors: list[str]) ->
             continue  # already reported by coverage
         tools = files.get(sid, {}).get("tools") if s.get("vendored") is True and isinstance(files.get(sid), dict) \
             else (s.get("updated_tools") if s.get("vendored") is not True else None)
-        if not isinstance(tools, list) or not tools:
+        if not isinstance(tools, list):
             continue  # already reported by shape/coverage
+        # An EMPTY list is not skipped: a literal `updated_tools: []` passes
+        # every shape check and decides nothing, so each catalogue tool is
+        # undecided and must be reported here.
         decided = {t.get("name") for t in tools if isinstance(t, dict)}
         undecided = [n for n in names if n not in decided]
         if undecided:
