@@ -72,6 +72,20 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         "    name: glovo-migrator-db-creds",
         "        key: platform/mctl-api/glovo-migrator-database",
     }),
+    # Step W1: inert runtime DB env and the mctl-api ExternalSecrets.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml": frozenset({
+        '            - mctl-api-glovo-runtime-db',
+        '            GLOVO_DB_MIGRATION_ROLE: glovo_migrator',
+        '            GLOVO_DB_RUNTIME_ROLE: glovo_runtime',
+        '            GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"',
+    }),
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
+        '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
+        '        GLOVO_DB_USER: "{{ `{{ .username }}` }}"',
+        '        key: platform/mctl-api/glovo-runtime-database',
+        '    name: mctl-api-glovo-runtime-db',
+        '  name: mctl-api-glovo-runtime-db',
+    }),
 }
 
 
