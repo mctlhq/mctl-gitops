@@ -48,7 +48,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.156.2"
+            tag: "4.157.0"
 
           ingress:
             enabled: true
@@ -362,6 +362,13 @@ spec:
             GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
             GLOVO_DB_RUNTIME_ROLE: glovo_runtime
             GLOVO_DB_MIGRATION_ROLE: glovo_migrator
+            # Work items on the least-privilege login mctl_api_workitems (DML
+            # only; its grants come from the schema migrator, D2) instead of
+            # the AUDIT_DB_URL fallback to the legacy owner role. Read on every
+            # boot (cmd/api/main.go workItemsStoreSource). Rollback: delete
+            # this line; the store falls back to the legacy role, which keeps
+            # its grants.
+            WORK_ITEMS_DB_URL: "postgresql://$(WORKITEMS_DB_USER):$(WORKITEMS_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
             # The lifecycle ownership store (ADR-010) gets its OWN database,
             # not mctl-api's: it is the source of truth for who may act on an
             # entity, and its neighbours in mctl-api -- the audit log, the
