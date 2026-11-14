@@ -927,6 +927,18 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_preview_delete_tls_secret.py
 
+      - name: preview-deploy renders the preview id and gitops commit a plan binds
+        # An approved deploy plan binds its preview id, host and the values at
+        # one gitops commit (.github#254); the workflow used to derive its id
+        # from its own name and read the default branch. Runs the deploy
+        # script with stub git/python3, under bash and busybox sh.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_server_set_id.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_server_set_id.py'
+
       - name: Preview ttl_hours is stamped and enforced
         # Nothing deleted expired previews before preview-reaper; a May
         # preview release was still on record in October. Runs the reaper's
