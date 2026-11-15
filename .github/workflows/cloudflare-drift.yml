@@ -460,8 +460,11 @@ jobs:
           permission-contents: read
           permission-metadata: read
 
-      # What each open allowlist bump PR (portal-allowlist/<id>-<sha7>) would
-      # vendor, as {id: [tool names]}, for the catalogue check's --pending. A
+      # What each open allowlist bump PR (portal-allowlist/<id>-<sha7>, from
+      # this repository -- a fork's branch cannot be read here and is not a
+      # bump PR) would vendor, as {id: [[tool names of one PR], ...]}, for the
+      # catalogue check's --pending. One list per PR, never a union: two
+      # partial PRs together do not carry a lag. A
       # catalogue lag whose every live tool is already named there is waiting
       # on review, not drift: the check exits 6, the job stays green and the
       # land job names the PR. Written only when every listing and every read
@@ -477,8 +480,8 @@ jobs:
           out="$RUNNER_TEMP/pending.json"
           rm -f "$out"
           limit=500
-          if ! prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit "$limit" --json headRefName \
-                       --jq '[.[].headRefName]') \
+          if ! prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit "$limit" --json headRefName,isCrossRepository \
+                       --jq '[.[] | select(.isCrossRepository | not) | .headRefName]') \
              || ! total=$(jq -e 'if type == "array" then length else error("not a list") end' <<<"$prs") \
              || [ "$total" -ge "$limit" ]; then
             echo "::warning::could not list open PRs completely; no catalogue lag counts as awaiting review"
@@ -493,10 +496,10 @@ jobs:
               echo "::warning::could not read ${sid}.json on ${br}; no catalogue lag counts as awaiting review"
               exit 0
             fi
-            doc=$(jq -c --arg s "$sid" --argjson n "$names" '.[$s] = ((.[$s] // []) + $n | unique)' <<<"$doc")
+            doc=$(jq -c --arg s "$sid" --argjson n "$names" '.[$s] = ((.[$s] // []) + [$n])' <<<"$doc")
           done
           printf '%s\n' "$doc" > "$out"
-          echo "open bump PRs name tools for: $(jq -r 'keys | join(", ")' "$out")"
+          echo "open bump PRs name tools for: $(jq -r 'to_entries | map("\(.key) (\(.value | length) PR)") | join(", ")' "$out")"
 
       - name: Check the tool catalogue against the upstreams
         id: catalogue

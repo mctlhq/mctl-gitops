@@ -655,11 +655,13 @@ def apply_catalogue_fix(cat_doc: dict, updates: dict[str, list[str]]) -> dict:
     return cat_doc
 
 
-def load_pending(path: str | None) -> tuple[dict[str, set[str]], str | None]:
-    """The --pending file: {server: [tool names in its open bump PR's allowlist]}.
+def load_pending(path: str | None) -> tuple[dict[str, list[set[str]]], str | None]:
+    """The --pending file: {server: [[tool names in one open bump PR], ...]}.
 
-    Anything other than a readable object of string lists covers nothing and
-    says why: a bump PR this run could not observe is not one it may assume.
+    One list per PR, never a union: two partial PRs together are not a PR
+    that carries the lag. Anything other than a readable object of lists of
+    string lists covers nothing and says why: a bump PR this run could not
+    observe is not one it may assume.
     """
     if not path:
         return {}, None
@@ -667,26 +669,33 @@ def load_pending(path: str | None) -> tuple[dict[str, set[str]], str | None]:
         doc = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
         if not isinstance(doc, dict):
             raise ValueError("not an object")
-        out: dict[str, set[str]] = {}
-        for server, names in doc.items():
-            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-                raise ValueError(f"{server!r} is not a list of tool names")
-            out[server] = set(names)
+        out: dict[str, list[set[str]]] = {}
+        for server, prs in doc.items():
+            if not isinstance(prs, list) or not all(
+                    isinstance(names, list) and all(isinstance(n, str) for n in names) for names in prs):
+                raise ValueError(f"{server!r} is not a list of per-PR tool-name lists")
+            out[server] = [set(names) for names in prs]
         return out, None
     except Exception as e:  # noqa: BLE001 - unreadable means no coverage
         return {}, f"{path}: --pending could not be read, so no lag counts as awaiting review: {e!r}"
 
 
-def split_lag(lag_live: dict[str, list[str]], pending: dict[str, set[str]]
-              ) -> tuple[set[str], set[str]]:
+def split_lag(lag_live: dict[str, list[str]], pending: dict[str, list[set[str]]],
+              committed: dict | None = None) -> tuple[set[str], set[str]]:
     """(covered, uncovered) lagging servers.
 
-    Covered only when an open bump PR for that server names every tool the
-    portal now lists. A server with no readable live list is never covered.
+    Covered only when the lag is additions alone -- every tool committed in
+    catalogue.json is still live, since a bump PR adds tools and never
+    explains one that left the portal -- and ONE open bump PR for that server
+    names every tool the portal now lists. A server with no readable live
+    list, or whose committed entry cannot be read as a list, is never covered.
     """
+    committed = committed or {}
     covered, uncovered = set(), set()
     for server, live in lag_live.items():
-        if live and server in pending and set(live) <= pending[server]:
+        was = committed.get(server, [])
+        only_added = isinstance(was, list) and set(was) <= set(live)
+        if live and only_added and any(set(live) <= names for names in pending.get(server, [])):
             covered.add(server)
         else:
             uncovered.add(server)
@@ -1134,12 +1143,25 @@ def selftest() -> int:
     # A lag counts as awaiting review only when an open bump PR names every
     # live tool -- and even then it never hides another finding.
     for label, lag_live, pending, want in (
-        ("a lag whose bump PR names every live tool is covered", {"s": ["a", "b"]}, {"s": {"a", "b", "c"}}, ({"s"}, set())),
-        ("a lag with a live tool its bump PR lacks is not covered", {"s": ["a", "b"]}, {"s": {"a"}}, (set(), {"s"})),
+        ("a lag whose bump PR names every live tool is covered", {"s": ["a", "b"]}, {"s": [{"a", "b", "c"}]}, ({"s"}, set())),
+        ("a lag with a live tool its bump PR lacks is not covered", {"s": ["a", "b"]}, {"s": [{"a"}]}, (set(), {"s"})),
+        ("two partial bump PRs together do not cover a lag", {"s": ["a", "b"]}, {"s": [{"a"}, {"b"}]}, (set(), {"s"})),
+        ("one full bump PR next to a partial one covers it", {"s": ["a", "b"]}, {"s": [{"a"}, {"a", "b"}]}, ({"s"}, set())),
         ("a lag with no bump PR is not covered", {"s": ["a"]}, {}, (set(), {"s"})),
-        ("a lag with no readable live list is not covered", {"s": []}, {"s": {"a"}}, (set(), {"s"})),
+        ("a lag with no readable live list is not covered", {"s": []}, {"s": [{"a"}]}, (set(), {"s"})),
     ):
         ok = split_lag(lag_live, pending) == want
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
+    # A tool that left the portal is never explained by a bump PR, even one
+    # that still names it alongside every live tool.
+    for label, committed_cat, want in (
+        ("a lag that only adds tools is covered", {"s": ["a"]}, ({"s"}, set())),
+        ("a lag where a committed tool left the portal is not covered", {"s": ["a", "gone"]}, (set(), {"s"})),
+        ("a lag with an unreadable committed entry is not covered", {"s": "a"}, (set(), {"s"})),
+    ):
+        ok = split_lag({"s": ["a", "b"]}, {"s": [{"a", "b", "gone"}]}, committed_cat) == want
         print(f"{'ok  ' if ok else 'FAIL'} {label}")
         if not ok:
             failures.append(label)
@@ -1157,12 +1179,12 @@ def selftest() -> int:
             failures.append(label)
     with tempfile.TemporaryDirectory() as d:
         good = pathlib.Path(d) / "p.json"
-        good.write_text(json.dumps({"s": ["a"]}))
-        ok = load_pending(str(good)) == ({"s": {"a"}}, None)
-        print(f"{'ok  ' if ok else 'FAIL'} --pending is read as tool-name sets")
+        good.write_text(json.dumps({"s": [["a"], ["b"]]}))
+        ok = load_pending(str(good)) == ({"s": [{"a"}, {"b"}]}, None)
+        print(f"{'ok  ' if ok else 'FAIL'} --pending is read as one tool-name set per PR")
         if not ok:
             failures.append("pending read")
-        for name, body in (("missing.json", None), ("list.json", "[]"), ("bad.json", '{"s": "a"}'), ("junk.json", "{")):
+        for name, body in (("missing.json", None), ("list.json", "[]"), ("bad.json", '{"s": "a"}'), ("flat.json", '{"s": ["a"]}'), ("junk.json", "{")):
             f = pathlib.Path(d) / name
             if body is not None:
                 f.write_text(body)
@@ -1184,7 +1206,7 @@ def main() -> int:
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
     ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
     ap.add_argument("--lag-out", help="write {server: [live tool names]} of the lagging servers here, for portal-catalogue-land.py")
-    ap.add_argument("--pending", help="JSON {server: [tool names]} of each server's open allowlist bump PR; a lag it fully names exits 6, not 5")
+    ap.add_argument("--pending", help="JSON {server: [[tool names], ...]}, one list per open allowlist bump PR; a lag one PR fully names exits 6, not 5")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1311,7 +1333,7 @@ def main() -> int:
     pending, pending_problem = load_pending(args.pending)
     if pending_problem:
         print(pending_problem, file=sys.stderr)
-    covered, uncovered = split_lag(lag_live, pending)
+    covered, uncovered = split_lag(lag_live, pending, committed)
     covered_lines = [lag for lag in lagging if lag.split(":", 1)[0] in covered]
     lagging = [lag for lag in lagging if lag.split(":", 1)[0] not in covered]
 
