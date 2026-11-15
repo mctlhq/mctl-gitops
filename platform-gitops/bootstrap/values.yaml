@@ -572,8 +572,9 @@ reservedPlatformHosts:
   sso.mctl.ai: [zitadel]
   accounts.mctl.ai: [zitadel]
   api.mctl.ai: [mctl-api]
-  # Basket MCP host, served by mctl-api itself (host-routed, mctl-api#1006).
-  glovo.mctl.ai: [mctl-api]
+  # Glovo MCP host; served through a Cloudflare tunnel since 2026-11-15,
+  # never from the cluster. Kept reserved so no tenant can claim it.
+  glovo.mctl.ai: []
   app.mctl.ai: [backstage]
   ops.mctl.ai: [argocd]
   secrets.mctl.ai: [vault]
