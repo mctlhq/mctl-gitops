@@ -46,19 +46,26 @@ and are not touched.
 | Workflow files | `git ls-files .github/workflows` | 29 |
 | `uses:` lines in `.github/workflows` | `git grep -h -E "uses:[[:space:]]" -- .github/workflows` | 101 |
 | Of those, `@` + 40 hex SHA | `git grep -h -E "uses:[[:space:]]+[^[:space:]@]+@[0-9a-f]{40}([[:space:]]|$)" -- .github/workflows` | 93 |
-| Movable refs | the 101 minus the 93 | 8 |
+| Non-SHA refs (not 40-hex) | the 101 minus the 93 | 8: 7 movable external + 1 local same-commit reusable (below) |
 | Local actions (`.github/actions/`, root `action.yml`) | `git grep -n -E "uses:\|docker://" -- .github/actions action.yml action.yaml` | none exist |
 | `pull_request_target` or `workflow_run` triggers | `git grep -n -E "pull_request_target\|workflow_run" -- .github/workflows` | none |
 | Dependabot ecosystems | `.github/dependabot.yml` | `github-actions` at `/`, weekly, limit 5; no `pip`, `docker`, `gitsubmodule` |
 | `actions.lock` or any lockfile mention in `docs/`, `AGENTS.md`, `.github` | `git grep -l -i -E "actions[ -]lock\|actions\.lock" -- docs AGENTS.md .github` | none (no duplicate spike) |
 
-The 8 movable refs:
+The 8 non-SHA refs, classified by what they are, not by regex:
 
-| Ref | Where |
-|---|---|
-| `actions/checkout@v7` | `app-key-ratchet.yml:38,48`, `argocd-freshness.yml:33`, `deploy-signal.yml:44`, `no-root-yaml.yml:17`, `release-drift.yml:39` (6 lines) |
-| `mctlhq/.github/.github/workflows/agy-review.yml@main` (reusable) | `agy-review.yml:17` |
-| `./.github/workflows/build-image.yaml` (local reusable) | `release-deploy.yaml:154` |
+| Ref | Class | Where |
+|---|---|---|
+| `actions/checkout@v7` | movable external (tag), 6 lines | `app-key-ratchet.yml:38,48`, `argocd-freshness.yml:33`, `deploy-signal.yml:44`, `no-root-yaml.yml:17`, `release-drift.yml:39` |
+| `mctlhq/.github/.github/workflows/agy-review.yml@main` (reusable) | movable external (branch), 1 line | `agy-review.yml:17` |
+| `./.github/workflows/build-image.yaml` (local reusable) | local, resolves at the caller's commit; not movable, not external, separate category | `release-deploy.yaml:154` |
+
+So: 6 checkout tags + 1 external reusable `@main` = 7 movable external refs;
+the local same-commit reusable is the 8th non-SHA ref and is valid as written.
+Counting method matters: the 101/93/8 figures are regex line counts; the
+class split above is a semantic (YAML `uses:` value) classification. Any
+future guard must classify semantically, because a blanket "not 40-hex" rule
+would wrongly reject valid local `./` calls and local actions.
 
 The same `actions/checkout` v7 is pinned by SHA (`3d3c42e5…`) in 11 other
 workflows, so the 6 `@v7` lines are an inconsistency inside the repo, not a
@@ -86,7 +93,7 @@ on the OpenTofu jobs, and the catalog-commit pin at `validate-manifests.yml:27`.
 
 Gap: no check in `validate-manifests.yml` enforces SHA pinning of `uses:`
 (grep for pin patterns found only the pip-hash, OCI-revision and provider
-checks). The 8 movable refs therefore arrived and persist unchecked.
+checks). The 7 movable external refs therefore arrived and persist unchecked.
 
 ### 1.3 Account and settings (`UNKNOWN`)
 
@@ -100,7 +107,7 @@ checks). The 8 movable refs therefore arrived and persist unchecked.
 
 ## 2. Interaction with SHA pinning, Dependabot and reusable owners
 
-- SHA pinning already covers 93 of 101 lines. A lockfile does not replace it:
+- SHA pinning already covers 93 of 101 `uses:` lines (the other 8: 7 movable external, 1 local). A lockfile does not replace it:
   the docs say the reusable call itself must still be pinned by full SHA.
   What the lock adds is the transitive layer under a pinned action.
 - Dependabot: it keeps bumping SHA pins today. For an onboarded workflow it
@@ -111,13 +118,15 @@ checks). The 8 movable refs therefore arrived and persist unchecked.
   lock in this repo cannot cover their internals. Reuse of that workflow by
   other repositories means one lockfile there serves all callers.
 - `gitops-bump.yaml` and `release-deploy.yaml` push to `main` with a deploy
-  key that bypasses the ruleset (see `AGENTS.md`). They touch only
+  key that bypasses the ruleset (`REPORTED` by `AGENTS.md`/`CLAUDE.md`, not
+  re-verified against live settings). They touch only
   `image.tag`. A lockfile in `.github/workflows/` must not be written by that
   path; an `actions.lock` change stays a normal PR.
 - `CODEOWNERS` routes review but does not require it
-  (`require_code_owner_review: false`, one write account). A lockfile PR
-  would be reviewed by the same single owner. That is an owner gate, not a
-  control.
+  (`require_code_owner_review: false`, one write account). This is `REPORTED`
+  from repo `AGENTS.md`/docs, not proof from a fresh settings API read; the
+  live ruleset is `UNKNOWN` until an admin reads it. If accurate, a lockfile PR
+  would be reviewed by the same single owner: an owner gate, not a control.
 
 ## 3. Scope boundaries
 
@@ -154,17 +163,17 @@ Exact conditions are `NOT_RUN`.
 
 | Option | What it means | Assessment |
 |---|---|---|
-| REUSE_SHA_PINNING | Keep the current model. Separately pin the 6 `@v7` lines and the `@main` reusable call, optionally add a `validate` check that rejects non-40-hex `uses:` | Cheapest, no account dependency. Does not add transitive coverage |
+| REUSE_SHA_PINNING | Keep the current model. Separately pin the 6 `@v7` lines and the `@main` reusable call (7 movable refs), optionally add a `validate` check that parses YAML and rejects movable external refs while allowing valid local `./` calls and actions | Cheapest, no account dependency. Does not add transitive coverage |
 | BOUNDED_NONPROD_POC | One throwaway workflow in a sandbox repository, section 6 | Blocked until section 1.3 plan and setting evidence exists |
 | DEFER | Make no lockfile change; collect the `UNKNOWN` evidence first | Matches the evidence: feature availability for this account is unproven |
-| REJECT | Close the idea | Not supported: the feature is GA and the repo has 8 movable refs and a real transitive gap |
+| REJECT | Close the idea | Not supported: the feature is GA and the repo has 7 movable external refs and a real transitive gap |
 
 ### PROPOSED verdict: `DEFER`
 
 Reason: all four decisive facts are `UNKNOWN` (plan, policy setting, runner
 support, `mctlhq/.github` participation), and the repo is already 93/101
 SHA-pinned. The marginal gain (transitive layer) cannot be weighed against its
-cost while the cost, `NOT_RUN`, is unmeasured. The 8 movable refs are worth
+cost while the cost, `NOT_RUN`, is unmeasured. The 7 movable external refs are worth
 fixing regardless, as a separate issue under the REUSE_SHA_PINNING option; that
 is not part of this verdict.
 
@@ -187,14 +196,19 @@ Generation boundary:
 
 Untrusted PR boundary:
 
-- No `pull_request_target` or `workflow_run` workflow exists, so a fork PR
-  cannot run with base-repo secrets via that route today. Adopting a lockfile
-  must not introduce one.
-- On `pull_request`, the lock a PR carries is read from the PR head. A PR can
-  edit both a workflow and its lock. Whether the runner then verifies the PR's
-  own lock, or one from the base branch, is `UNKNOWN` and `NOT_RUN`. Until
-  that is known the lock is not a barrier against a malicious PR author, only
-  against upstream drift.
+- Source claim, narrowed: no workflow in this checkout uses the
+  `pull_request_target` or `workflow_run` triggers. That does not prove a fork
+  PR cannot reach secrets by any path (other triggers, repo/org settings,
+  artifacts from other workflows, or a later workflow change). Separate
+  analysis stays needed for checked-out code, secrets exposure and artifact
+  trust per workflow; it is not done here. Adopting a lockfile must not
+  introduce either trigger.
+- On `pull_request`, whether the runner verifies the lock from the PR head or
+  from the base branch is `UNKNOWN` and `NOT_RUN`. Only if it reads the PR
+  head could a PR edit a workflow and its lock together; that is a hypothesis
+  to test, not an established fact. Until known, do not rely on the lock as a
+  barrier against a malicious PR author, only (possibly) against upstream
+  drift.
 - `merge_group` workflows (`validate`, `cloudflare-plan`, `agy-formal-queue`)
   run on the queue commit, which is where required checks are gated. Any
   lock-verification check would have to report from that trigger too, inside
@@ -207,23 +221,59 @@ Not performed here. It would need its own approval, a sandbox repository (not
 
 - One new workflow `lockfile-poc.yml` on `workflow_dispatch` only, `permissions: {}`
   plus `contents: read`, one job.
-- Exact allowlist, two actions, both by the SHAs already in this repo:
-  `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` and
-  `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9`.
-  Nothing else may appear in the lock.
-- Lock generated for that one workflow only, reviewed as a diff, committed by
-  a human in the sandbox.
-- No change to the 29 production workflows, Dependabot, rulesets or CODEOWNERS.
+This section is a provisional design only. It does not approve execution and
+adds no code. Every "expected" below is a hypothesis from the paraphrased
+vendor docs, marked `NOT_RUN`; none is a vendor guarantee.
 
-| Test | Setup | Expected | Mutation oracle (must turn the test red) |
-|---|---|---|---|
-| Positive | Workflow and lock agree | Run passes | Delete one allowlist entry from the lock: run must fail |
-| Stale | Change the `checkout` SHA in the workflow, keep old lock | Run blocked | Regenerate the lock: run must pass again |
-| Missing | Remove `actions.lock` | Run blocked in Active, reported in Evaluate | Restore the file: passes |
-| Tampered | Edit one hash in the lock by hand | Run blocked | Revert the byte: passes |
-| Transitive ref | Pin a test composite action whose nested `uses:` is moved to another SHA | Lock detects the nested change | Move the nested ref back: passes |
-| Local action | Add a `./` composite with its own `uses:` | Record that the lock does not follow it | Confirms the documented gap (expected to pass without coverage) |
-| Reusable | Call a reusable workflow pinned by SHA; change its internal action | Caller lock unchanged; callee's lock owns the change | Pin the call to a branch: must be rejected by the review rule |
+- Baseline workflow `lockfile-poc.yml`: `workflow_dispatch` only, `permissions`
+  limited to `contents: read`, one job.
+- Baseline file/ref allowlist (provisional): workflow `lockfile-poc.yml`,
+  `.github/workflows/actions.lock`; actions
+  `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` and
+  `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9`
+  (the SHAs already used here). The baseline lock is expected to list these
+  and whatever transitive dependencies they legitimately have; no claim that
+  nothing else may appear.
+- Isolated fixture variants, each explicitly listed and separate from the
+  baseline, each with its own provisional file/ref allowlist to be completed
+  when approved: (V1) a test composite action with a nested `uses:`
+  (transitive); (V2) a `./` local composite action with its own `uses:`;
+  (V3) a reusable workflow called by full SHA whose callee changes its
+  internal action; (V4) a Dependabot-style update of a workflow line plus its
+  lock entry. Their extra files/refs are allowed only inside their variant.
+- Lock generated for one workflow at a time, reviewed as a diff, committed by
+  a human in the sandbox. No change to the 29 production workflows,
+  Dependabot, rulesets or CODEOWNERS.
+
+Case separation (all outcomes `NOT_RUN`, hypotheses only):
+
+| Case | Setup | Hypothesised outcome |
+|---|---|---|
+| Missing coverage | Workflow with no lock / no entry | Evaluate: reported finding, not blocking. Active: potentially blocking. Exact behaviour unknown |
+| Stale coverage | Workflow `uses:` changed, old lock kept | As above, by policy mode |
+| Malformed commit in lock | Non-hex or wrong-length hash | Expected invalid; mode decides report vs block |
+| Nonexistent / unreachable commit | Well-formed hash not in the repo network | Expected resolution failure; exact conditions unknown |
+| Valid but unreviewed new lock hash | Lock hash changed to another real, reachable commit | Not intrinsically rejected by the lock; needs another control (human diff review, CODEOWNERS, a check) |
+| Upstream tag moved | Tag the workflow names now points elsewhere | Locked old commit may still be used if reachable: the lock protects resolution, it does not have to fail on any move |
+| Reusable callee changed | Callee action changed | SHA of the callee is immutable; a changed callee needs a new commit and a new reference in the caller; callee's own lock owns its dependencies |
+| `./` nested dependency | V2 | Not a blanket pass: docs mention an error for local actions with extensions and missing-pin cases at runtime; exact condition unknown from the excerpt, to be recorded |
+| policyActive / Evaluate | Same fixtures under each mode | Evaluate findings are not blocking; Active is potentially blocking |
+
+Positive controls (must pass, not just fail-closed tests): (1) upstream tag
+moved but the lock still resolves the old locked code; (2) the same reviewed
+valid pin re-run passes; (3) a compatible Dependabot-style workflow-plus-lock
+update passes.
+
+Mutation test plan: each test names the guard removed and the assertion that
+then fails; restoring the file is not an oracle.
+
+| Guard removed | Assertion that must fail |
+|---|---|
+| Lock entry for `checkout` deleted from `actions.lock` | Positive baseline run assertion "lock covers every `uses:`" fails |
+| Workflow SHA changed while lock hash left as is | "workflow pin equals lock entry" assertion fails (stale case) |
+| Lock-hash well-formedness check (40-hex) bypassed with a bad hash | "malformed hash is rejected" assertion fails |
+| Human-diff-review step skipped for a valid-but-new hash | "unreviewed lock change is not merged" assertion fails |
+| SHA-pin requirement dropped for the reusable call (branch ref) | "reusable pinned by full SHA" assertion fails |
 
 Performance, friction, cost and runtime compatibility (runner support, run-time
 overhead, Dependabot PR behaviour, queue interaction): `NOT_RUN`.
