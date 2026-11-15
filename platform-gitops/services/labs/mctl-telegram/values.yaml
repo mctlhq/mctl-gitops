@@ -92,13 +92,13 @@ env:
   # active from 0.41.0). Requests with no Origin pass (server-to-server MCP
   # clients send none); a present browser Origin MUST be on this list or it is
   # rejected with 403. When ALLOWED_ORIGINS is unset the server defaults to the
-  # PUBLIC_BASE_URL origin only, which would 403 chatgpt.com / claude.ai — so
+  # PUBLIC_BASE_URL origin only, which would 403 chatgpt.com / claude.ai / gemini.google.com — so
   # they are listed explicitly. 0.40.0 has no OriginGuard and ignores this key,
   # so landing it ahead of the 0.41.0 deploy is safe. NOTE: the values carry
   # "https://" (colons); if mctl_deploy_service ever rewrites this file, verify
   # the key survived the yq round-trip (it is known to strip colon-bearing env
   # vars) and hand-edit to restore if dropped.
-  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google
+  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com
   # redirect_uri host allowlist for unregistered client_ids and for every
   # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
   # images ignore this key and use the built-in list). Setting it REPLACES the
@@ -119,9 +119,12 @@ env:
   # with https://www.town.com/api/mcp/oauth/callback (its client metadata
   # document at https://www.town.com/.well-known/oauth-client-id lists only
   # that one); town.com is listed too for the apex form of the same callback.
+  # Gemini (gemini.google.com): Google's web client for Gemini Custom MCP
+  # Connectors registers callbacks hosted on oauth-redirect.googleusercontent.com
+  # (e.g. https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-...).
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,gemini.google.com,oauth-redirect.googleusercontent.com,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
   # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
   # client whose client_id is an https URL on a listed host gets its redirect
   # URIs from the document at that URL instead of registering. ADVERTISE
