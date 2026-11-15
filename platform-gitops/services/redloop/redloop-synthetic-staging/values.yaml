@@ -47,7 +47,7 @@ envFrom: []
 dbSecret: null
 
 ingress:
-  enabled: true
+  enabled: false
   hosts:
     - staging-redloop.mctl.ai
   annotations:
