@@ -179,8 +179,8 @@
       "recorded": "2026-09-25"
     },
     "tg": {
-      "tools_total": 46,
-      "tools_enabled": 43,
+      "tools_total": 50,
+      "tools_enabled": 47,
       "enabled_tools": [
         "cancel_broadcast",
         "delete_fork",
@@ -204,7 +204,10 @@
         "list_assistants",
         "list_broadcasts",
         "list_dialogs",
+        "list_folders",
         "list_telegram_identities",
+        "list_topics",
+        "mark_read",
         "mint_worker_token",
         "pin_message",
         "prepare_broadcast",
@@ -214,6 +217,7 @@
         "revoke_local_bridge_device",
         "revoke_telegram_session",
         "revoke_worker_token",
+        "save_draft",
         "search_messages",
         "send_media",
         "send_message",
@@ -228,7 +232,7 @@
       ],
       "prompts_total": 0,
       "prompts_enabled": 0,
-      "recorded": "2026-11-01"
+      "recorded": "2026-11-15"
     }
   }
 }
