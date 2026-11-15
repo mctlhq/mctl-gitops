@@ -61,9 +61,15 @@ things:
        infrastructure/cloudflare/portal/allowlists/catalogue.json no longer
        matches it (a server re-synced) -- update that file in a PR, which is
        what mcp-portal.tf builds updated_tools from. Do NOT re-snapshot
+    6  the only finding is a status-5 lag, and for every lagging server an open
+       allowlist bump PR (--pending) already names every live tool: the
+       update exists and waits on review, so the remedy is merging that PR.
+       Lowest priority on purpose: any other finding returns its own status.
+       A --pending file that is absent or unreadable covers nothing (status 5)
 
-Every non-zero status is a failure a caller must surface. The numbers say
-which one happened, never that any of them is ignorable.
+Every non-zero status is a finding a caller must surface. 6 is the one a
+caller may surface without paging -- cloudflare-drift.yml hands it to the land
+job, which names the PR -- never one it may drop.
 """
 from __future__ import annotations
 
@@ -649,6 +655,61 @@ def apply_catalogue_fix(cat_doc: dict, updates: dict[str, list[str]]) -> dict:
     return cat_doc
 
 
+def load_pending(path: str | None) -> tuple[dict[str, set[str]], str | None]:
+    """The --pending file: {server: [tool names in its open bump PR's allowlist]}.
+
+    Anything other than a readable object of string lists covers nothing and
+    says why: a bump PR this run could not observe is not one it may assume.
+    """
+    if not path:
+        return {}, None
+    try:
+        doc = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            raise ValueError("not an object")
+        out: dict[str, set[str]] = {}
+        for server, names in doc.items():
+            if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                raise ValueError(f"{server!r} is not a list of tool names")
+            out[server] = set(names)
+        return out, None
+    except Exception as e:  # noqa: BLE001 - unreadable means no coverage
+        return {}, f"{path}: --pending could not be read, so no lag counts as awaiting review: {e!r}"
+
+
+def split_lag(lag_live: dict[str, list[str]], pending: dict[str, set[str]]
+              ) -> tuple[set[str], set[str]]:
+    """(covered, uncovered) lagging servers.
+
+    Covered only when an open bump PR for that server names every tool the
+    portal now lists. A server with no readable live list is never covered.
+    """
+    covered, uncovered = set(), set()
+    for server, live in lag_live.items():
+        if live and server in pending and set(live) <= pending[server]:
+            covered.add(server)
+        else:
+            uncovered.add(server)
+    return covered, uncovered
+
+
+def exit_status(vanished, failing, uncovered_lag, undetermined, maintenance, covered_lag) -> int:
+    """Ordered by how loud the finding is; a covered lag never hides another."""
+    if vanished:
+        return 4
+    if failing:
+        return 1
+    if uncovered_lag:
+        return 5
+    if undetermined:
+        return 2
+    if maintenance:
+        return 3
+    if covered_lag:
+        return 6
+    return 0
+
+
 def write_lag(path: str, updates: dict[str, list[str]]) -> str | None:
     """The --lag-out file, or why it could not be written."""
     try:
@@ -1070,6 +1131,47 @@ def selftest() -> int:
         if not ok:
             failures.append("lag-out failure")
 
+    # A lag counts as awaiting review only when an open bump PR names every
+    # live tool -- and even then it never hides another finding.
+    for label, lag_live, pending, want in (
+        ("a lag whose bump PR names every live tool is covered", {"s": ["a", "b"]}, {"s": {"a", "b", "c"}}, ({"s"}, set())),
+        ("a lag with a live tool its bump PR lacks is not covered", {"s": ["a", "b"]}, {"s": {"a"}}, (set(), {"s"})),
+        ("a lag with no bump PR is not covered", {"s": ["a"]}, {}, (set(), {"s"})),
+        ("a lag with no readable live list is not covered", {"s": []}, {"s": {"a"}}, (set(), {"s"})),
+    ):
+        ok = split_lag(lag_live, pending) == want
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
+    for label, args_, want in (
+        ("a covered lag alone exits 6", ([], [], [], [], [], ["c"]), 6),
+        ("an uncovered lag next to a covered one exits 5", ([], [], ["u"], [], [], ["c"]), 5),
+        ("a covered lag does not hide an undetermined server", ([], [], [], ["x"], [], ["c"]), 2),
+        ("a covered lag does not hide a waiver to fix", ([], [], [], [], ["m"], ["c"]), 3),
+        ("a covered lag does not hide a stale catalogue", ([], ["f"], [], [], [], ["c"]), 1),
+        ("nothing at all exits 0", ([], [], [], [], [], []), 0),
+    ):
+        ok = exit_status(*args_) == want
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
+    with tempfile.TemporaryDirectory() as d:
+        good = pathlib.Path(d) / "p.json"
+        good.write_text(json.dumps({"s": ["a"]}))
+        ok = load_pending(str(good)) == ({"s": {"a"}}, None)
+        print(f"{'ok  ' if ok else 'FAIL'} --pending is read as tool-name sets")
+        if not ok:
+            failures.append("pending read")
+        for name, body in (("missing.json", None), ("list.json", "[]"), ("bad.json", '{"s": "a"}'), ("junk.json", "{")):
+            f = pathlib.Path(d) / name
+            if body is not None:
+                f.write_text(body)
+            got, problem = load_pending(str(f))
+            ok = got == {} and bool(problem)
+            print(f"{'ok  ' if ok else 'FAIL'} an unusable --pending ({name}) covers nothing and says so")
+            if not ok:
+                failures.append(f"pending {name}")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -1082,6 +1184,7 @@ def main() -> int:
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
     ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
     ap.add_argument("--lag-out", help="write {server: [live tool names]} of the lagging servers here, for portal-catalogue-land.py")
+    ap.add_argument("--pending", help="JSON {server: [tool names]} of each server's open allowlist bump PR; a lag it fully names exits 6, not 5")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1157,6 +1260,7 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001 - the exit code is the point
         undetermined.append(f"{CATALOGUE_FILE.name}: could not be read, so it was not compared: {e!r}")
     fix_updates: dict[str, list[str]] = {}
+    lag_live: dict[str, list[str]] = {}
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
@@ -1167,11 +1271,13 @@ def main() -> int:
                 lag = catalogue_file_lag(server, snapshot, committed)
                 if lag:
                     lagging.append(lag)
+                    lag_live[server] = []
                     # Replace the catalogue entry wholesale with the portal's live tools in portal order.
                     # An empty or non-array tool list is left to compare() to report as undetermined.
                     live_tools = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict) and t.get("name")]
                     if live_tools:
                         fix_updates[server] = live_tools
+                        lag_live[server] = live_tools
             allowlist = owner_allowlist(server)
             findings += compare(server, snapshot, allowlist)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
@@ -1194,11 +1300,20 @@ def main() -> int:
                 print(f"[fix] updated {s} in {CATALOGUE_FILE.name} ({len(tools)} tools)")
             # Retain any lag findings that were not fixed by this run; clear only the fixed servers.
             lagging = [lag for lag in lagging if not any(lag.startswith(f"{s}:") for s in fix_updates)]
+            for s in fix_updates:
+                lag_live.pop(s, None)
         except Exception as e:  # noqa: BLE001 - record write failure as undetermined
             undetermined.append(f"{CATALOGUE_FILE.name}: could not write --fix update: {e!r}")
 
     failing, waived, maintenance = apply_waivers(
         findings, _dt.date.today().isoformat(), compared)
+
+    pending, pending_problem = load_pending(args.pending)
+    if pending_problem:
+        print(pending_problem, file=sys.stderr)
+    covered, uncovered = split_lag(lag_live, pending)
+    covered_lines = [lag for lag in lagging if lag.split(":", 1)[0] in covered]
+    lagging = [lag for lag in lagging if lag.split(":", 1)[0] not in covered]
 
     # Waived findings print on stdout even on a clean run. They are the
     # difference between "nothing is stale" and "nothing is stale that we have
@@ -1244,6 +1359,12 @@ def main() -> int:
             print(f"  (and {quieter} other finding(s) in this output -- servers that could "
                   "not be compared, waivers to fix -- which this exit status "
                   "does not name)", file=sys.stderr)
+    if covered_lines:
+        print("the committed catalogue lags the portal, and an open allowlist "
+              "bump PR already names every live tool of each server below "
+              "(awaiting review -- merge that PR; do NOT re-snapshot):", file=sys.stderr)
+        for line in covered_lines:
+            print(f"  {line}", file=sys.stderr)
     if maintenance:
         # Its own heading and its own exit status: this one is fixed in this
         # file, not on the portal.
@@ -1265,17 +1386,7 @@ def main() -> int:
     # that lags the portal (the nightly plan is red for the same reason, and
     # this names it), which outranks a server that could not be read, which
     # outranks a waiver needing a delete.
-    if vanished:
-        return 4
-    if failing:
-        return 1
-    if lagging:
-        return 5
-    if undetermined:
-        return 2
-    if maintenance:
-        return 3
-    return 0
+    return exit_status(vanished, failing, lagging, undetermined, maintenance, covered_lines)
 
 
 if __name__ == "__main__":
