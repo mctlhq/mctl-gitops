@@ -21,6 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Validate pinned digest format
+        run: |
+          input="${{ inputs.image_ref }}"
+          if [[ ! "$input" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::image_ref must be pinned to an immutable SHA-256 digest (@sha256:<64-hex>)"
+            exit 1
+          fi
+
       - name: Scan Image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
