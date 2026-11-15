@@ -9,6 +9,12 @@ on:
   # detectors here catch drift on that path after the fact (#1037, #1057).
   push:
     branches: [main]
+  # The merge queue (mctlhq/.github#351) tests the exact commit main will get
+  # and requires `validate` and `reserved-hosts` on it. Nothing below reads
+  # the pull request payload, so the jobs run unchanged. Inert until the
+  # ruleset enables the queue.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
