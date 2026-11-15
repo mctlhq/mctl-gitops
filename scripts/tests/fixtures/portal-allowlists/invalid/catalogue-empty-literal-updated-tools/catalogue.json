@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "widget": [
+      "alpha",
+      "beta",
+      "gamma"
+    ],
+    "unvendored": [
+      "a",
+      "b"
+    ]
+  }
+}

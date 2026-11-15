@@ -50,6 +50,8 @@ services:
     sha_only: true  # bare commit sha, no main- prefix
 
   # --- deliberately held ---
+  - path: platform-gitops/services/admins/umami/values.yaml
+    pinned_to: "3.4.0@sha256:85909afc45bdcda1917394594a087421fdbb05610fded0fa9f6fb861abb2f367"
 
   # --- not watched ---
   # These repositories publish no GitHub releases, so there is no release tag
@@ -90,3 +92,10 @@ services:
     unmapped: "no source repository recorded; deployed from staging-<n> builds"
   - path: platform-gitops/services/labs/projects-mcp/values.yaml
     unmapped: "mctlhq/projects-mcp releases stop at 0.1.1 while deploys follow tags"
+  # Added 2026-11-15: verified empty releases via gh api repos/mctlhq/<repo>/releases
+  - path: platform-gitops/services/admins/mctl-support/values.yaml
+    unmapped: "mctlhq/mctl-support publishes git tags but no GitHub releases"
+  - path: platform-gitops/services/labs/mctl-rules/values.yaml
+    unmapped: "mctlhq/mctl-rules publishes git tags but no GitHub releases"
+  - path: platform-gitops/services/namax66/news-factory/values.yaml
+    unmapped: "tenant repository NaMax66/sales-with.ai publishes no accessible GitHub releases"

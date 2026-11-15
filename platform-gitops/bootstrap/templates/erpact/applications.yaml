@@ -19,7 +19,10 @@
 #
 # To bring it back:
 # 1. Restore the pods quota in tenants/erpact/values.yaml and the automated
-#    block below (prune, selfHeal) on each Application. Merge.
+#    block below (prune, selfHeal) on each Application, and remove the
+#    project!="erpact" matcher from ArgoCDApplicationDegraded and
+#    ArgoCDApplicationOutOfSyncLong (vm-rules/mctl-alerts.yaml, #2672) and
+#    its tests. Merge.
 # 2. Sync erpact-infra only. It recreates the two PVCs empty and starts
 #    MariaDB with a fresh datadir. Keep erpact-shared/erpact-control (the
 #    benches) and the CronJobs stopped until step 4, so nothing writes into

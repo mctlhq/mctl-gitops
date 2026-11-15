@@ -110,6 +110,98 @@ version_holds:
         grant: mctlhq/mctl-gitops#2628
         approved_by: mashkovd
         expires: 2026-11-28
+      # Fifth grant (owner GO in chat, 2026-11-14, confirmed again for the
+      # full content after mctl-api main moved twice past the first version
+      # of this record in #2639): 4.157.0 is 4.156.2 plus the bug-roadmap
+      # wave 2 fixes mctlhq/mctl-api#1035 (incident create refuses
+      # server-owned lifecycle state; evidence written and read in one
+      # transaction, partial reads fail), #1037 (canonical evidence numbers,
+      # trailing JSON refused, disable of a disabled non-human is a no-op)
+      # and #1038 (support TTL overflow, per-privilege bridge grant check,
+      # no implicit work-item grants), plus #1033 (decide matches the
+      # requester by principal id), #1036 (digest-bound owner grants for
+      # preview apply, dark by default), #1039 (the deploy-plan store opens
+      # on its own DSN, never WORK_ITEMS_DB_URL) and #1040 (the fresh-sign-in
+      # page that decides deploy grants; dark until its env flag and web
+      # client are configured, which must wait for mctlhq/mctl-gitops#2629).
+      # Covers only the 4.157.0 tag on the merge of mctlhq/mctl-api#1034,
+      # whose first parent is mctl-api main at
+      # b5e3ceaa564a861131713ef255d1794407acce30 and whose second parent
+      # changes release metadata only. If main moves before #1034 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.157.0"
+        grant: mctlhq/mctl-gitops#2642
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Sixth grant (owner GO in chat, 2026-11-14, for each change): 4.158.0
+      # is 4.157.0 plus three changes. mctlhq/mctl-api#1041 (closes #1031):
+      # deploy-service and preview-deploy are refused on the generic execute
+      # path for tenants whose values set tenant.profile: agent-deploy,
+      # admins included; CI OIDC and rollback-service pass. No tenant sets
+      # that profile yet (checked on mctl-gitops main 2026-11-14: 7 tenants,
+      # all values parse, no profile, no duplicate names), so the visible
+      # change is only that an unreadable tenant profile now fails a direct
+      # deploy closed with 503 instead of passing. mctlhq/mctl-api#1043:
+      # create-tenant accepts tenant names of 2-31 characters instead of
+      # 2-63, matching every team_name operation; delete and cleanup paths
+      # keep 63, and every existing tenant name is 14 characters or less.
+      # mctlhq/mctl-api#1044 pins the agy review workflow to a commit; it
+      # touches only .github/workflows and changes no runtime code.
+      # Covers only the 4.158.0 tag on the merge of mctlhq/mctl-api#1042,
+      # whose first parent is mctl-api main at
+      # 50198af3c315977138f4907991a0998e35bf550c and whose second parent
+      # changes release metadata only. If main moves before #1042 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.158.0"
+        grant: mctlhq/mctl-gitops#2647
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Seventh grant (owner GO in chat, 2026-11-14): 4.158.1 is 4.158.0 plus
+      # one change, mctlhq/mctl-api#1045. CIMD (client metadata document)
+      # clients may now use http://localhost redirect URIs with any port, as
+      # 127.0.0.1 and [::1] already could; the host is still compared as
+      # exact text and localhost never matches a 127.0.0.1 entry. It unblocks
+      # Claude Code, whose document lists http://localhost/callback, signing
+      # in to MCP resources. OAuth paths only; no schema or config change.
+      # Covers only the 4.158.1 tag on the merge of mctlhq/mctl-api#1046
+      # (35c2318664d7a2a1cadb15ed4aca6527572ca8f2), whose first parent is the
+      # merge of mctlhq/mctl-api#1045 and whose second parent changes release
+      # metadata only. Same manual tag/digest/revision-label check on the
+      # release-bump PR; provenance: chat GO, merge by a Claude agent session.
+      - version: "4.158.1"
+        grant: mctlhq/mctl-gitops#2649
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Eighth grant (owner GO in chat, 2026-11-14; re-GO 2026-11-15 after
+      # main moved): 4.159.0 is 4.158.1 plus mctlhq/mctl-api#1050, #1051 and
+      # #1052. #1050 adds an optional Helm slot, deployApprovalUISecret, that
+      # mounts DEPLOY_APPROVAL_UI_CLIENT_ID/SECRET from a named Secret; empty
+      # by default, default render unchanged (tested). #1051 refreshes
+      # deployplan test snapshots only. #1052 (basket service split, phase
+      # P1) is dark: its join routes mount only behind a feature flag that
+      # nothing here sets; the binary accepts basket schema 1 and 2, and the
+      # schema 2 upgrade runs only from the separate migration command under
+      # the migration role, which no Job here runs. The deploy approval page
+      # stays off until a separate, owner-approved PR enables it. The first
+      # record (#2655) was bound to db4eb87be and no longer described the
+      # release.
+      # Covers only the 4.159.0 tag on the merge of mctlhq/mctl-api#1053,
+      # whose first parent is mctl-api main at
+      # fcfdfc2b8ac0657ca5f4af13e151a13daac6e59e and whose second parent
+      # changes release metadata only. If main moves before #1053 merges,
+      # this record no longer describes the release. Same manual
+      # tag/digest/revision-label check on the release-bump PR; provenance:
+      # chat GO, merge by a Claude agent session.
+      - version: "4.159.0"
+        grant: mctlhq/mctl-gitops#2656
+        approved_by: mashkovd
+        expires: 2026-11-28
 
 gates:
   - name: mctl-agents-workers

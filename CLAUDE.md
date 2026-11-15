@@ -57,6 +57,25 @@ wiring, or ApplicationSet/Application specs — still goes through a feature
 branch and a PR, reviewed by `claude-review.yml` and validated by
 `validate-manifests.yml`, same as any other repo.
 
+## Merging PRs — merge queue
+
+`main` merges through a merge queue (ruleset `main-protection`, since
+2026-11-15, mctlhq/.github#351). Required checks no longer need the PR
+branch to be up to date with `main`, so do not "update branch" to chase
+BEHIND. Once the PR is approved and green, enqueue it with the GraphQL
+`enqueuePullRequest` mutation, passing the PR node id
+(`gh pr view <N> --json id`) and `expectedHeadOid` set to the reviewed head.
+`gh pr merge` does not work here: on a queued branch it goes through
+auto-merge, which this repository has turned off (`allow_auto_merge: false`).
+The queue always merges with a merge commit; never use `--admin`.
+
+The queue builds `gh-readonly-queue/main/pr-<N>-<sha>` and runs the
+required checks on that commit: `validate`, `reserved-hosts` and
+`cloudflare-plan` through their `merge_group` triggers, and
+`agy-formal-review` through `agy-formal-queue.yml`, which dispatches the
+formal reviewer in mctlhq/.github for the queue commit. A queue entry whose
+checks do not report within 120 minutes is removed from the queue.
+
 ## Common Operations
 
 ### Deploy a new image tag
