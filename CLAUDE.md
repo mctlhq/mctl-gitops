@@ -62,9 +62,12 @@ branch and a PR, reviewed by `claude-review.yml` and validated by
 `main` merges through a merge queue (ruleset `main-protection`, since
 2026-11-15, mctlhq/.github#351). Required checks no longer need the PR
 branch to be up to date with `main`, so do not "update branch" to chase
-BEHIND. Once the PR is approved and green, enqueue it with
-`gh pr merge <N> --repo mctlhq/mctl-gitops` (the queue merges with a merge
-commit; do not pass `--squash`, `--rebase` or `--admin`).
+BEHIND. Once the PR is approved and green, enqueue it with the GraphQL
+`enqueuePullRequest` mutation, passing the PR node id
+(`gh pr view <N> --json id`) and `expectedHeadOid` set to the reviewed head.
+`gh pr merge` does not work here: on a queued branch it goes through
+auto-merge, which this repository has turned off (`allow_auto_merge: false`).
+The queue always merges with a merge commit; never use `--admin`.
 
 The queue builds `gh-readonly-queue/main/pr-<N>-<sha>` and runs the
 required checks on that commit: `validate`, `reserved-hosts` and
