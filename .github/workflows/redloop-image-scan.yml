@@ -1,14 +1,24 @@
 name: RedLoop Image Security Assessment (Gate 1)
 
 # One-off, workflow_dispatch-only workflow for Trivy container image assessment.
-# Pinned Target: docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
-# Platform: linux/amd64 (matches Hetzner cx43 worker architecture)
+# Author: Agent: agy
+# Canonical Gate 1 Target: docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+# Platform: linux/amd64 (passed via TRIVY_PLATFORM env var, matching Hetzner cx43 worker architecture)
+#
+# Credentials & Permissions:
+# - Uses the automatic GITHUB_TOKEN scoped strictly to read-only ('permissions: contents: read').
+# - Zero cluster kubeconfigs, zero Vault tokens, zero Cloudflare API credentials.
+#
+# Evidence Retention:
+# - SARIF and JSON vulnerability reports are retained as workflow artifacts for 90 days.
+# - NOTE: In a public repository, workflow artifacts are downloadable by anyone with read access to the repository.
+# - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
 
 on:
   workflow_dispatch:
     inputs:
       image_ref:
-        description: "Exact pinned OCI image digest to scan"
+        description: "Exact pinned OCI image digest to scan (locked to Gate 1 target)"
         required: true
         default: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
 
@@ -21,33 +31,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Validate pinned digest format
+      - name: Validate pinned digest format and Gate 1 lock
         env:
+          EXPECTED_IMAGE_REF: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
           IMAGE_REF: ${{ inputs.image_ref }}
         run: |
-          if [[ ! "$IMAGE_REF" =~ ^[^@]+@sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::image_ref must be pinned to an immutable SHA-256 digest (<repo>@sha256:<64-hex>)"
+          if [[ "$IMAGE_REF" != "$EXPECTED_IMAGE_REF" ]]; then
+            echo "::error::For Gate 1, image_ref is locked to $EXPECTED_IMAGE_REF (received: $IMAGE_REF)"
             exit 1
           fi
 
       - name: Scan Image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
           image-ref: ${{ inputs.image_ref }}
-          platform: linux/amd64
           format: sarif
           output: trivy-image-results.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           exit-code: "0"
           version: v0.69.3
 
       - name: Scan Image (JSON)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
           image-ref: ${{ inputs.image_ref }}
-          platform: linux/amd64
           format: json
           output: trivy-image-results.json
           severity: CRITICAL,HIGH
