@@ -79,7 +79,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
             arts = [{**a, "archive_download_url": a["archive_download_url"].replace("BASE", base)} for a in arts]
             return self.reply(200, json.dumps({"artifacts": arts}).encode())
         if self.path.endswith("/actions/artifacts/9/zip"):
-            return self.reply(302, headers={"Location": base + "/blob"})
+            return self.reply(302, headers={"Location": sc.get("redirect", base + "/blob")})
         if self.path == "/blob":
             return self.reply(200, zipped(sc.get("zip", {"image-ref.txt": f"{IMAGE}@{DIGEST}\n"})))
         self.reply(404)
@@ -97,7 +97,10 @@ def run_trigger(source, git_ref="feat/x", **scenario):
     src = (source.replace('API = "https://api.github.com"', f'API = "{BASE}"')
                  .replace("time.sleep(", "(lambda _s: None)(")
                  .replace("/tmp/image_digest", str(out))
-                 .replace("{{workflow.name}}", "wf-abc"))
+                 .replace("{{workflow.name}}", "wf-abc")
+                 # The stand-in serves plain http, so "https://" is narrowed to its own
+                 # base URL: a redirect anywhere else stands for a non-https target.
+                 .replace('location.startswith("https://")', f'location.startswith("{BASE}/")'))
     (d / "t.py").write_text(src)
     env = {**os.environ, "GITHUB_PAT": "test-token", "GITOPS_ORG": "mctlhq", "GITOPS_REPO": "mctl-gitops",
            "PARAM_DOCKERFILE_REPO": "mctlhq/foo", "PARAM_GIT_REF": git_ref, "PARAM_IMAGE_TAG": "1.0",
@@ -140,6 +143,8 @@ def cases(trigger, deploy, dag):
     off = [{"name": "image-digest", "expired": False, "archive_download_url": "BASE/repos/evil/x/actions/artifacts/9/zip"}]
     code, _, _, _ = run_trigger(trigger, artifacts=off)
     want("refuses a download URL outside mctl-gitops", code != 0)
+    code, _, _, _ = run_trigger(trigger, redirect=f"http://localhost:{SERVER.server_port}/blob")
+    want("refuses a redirect to a non-https URL", code != 0)
     code, _, _, _ = run_trigger(trigger, zip={"image-ref.txt": f"ghcr.io/mctlhq/other@{DIGEST}\n"})
     want("refuses a digest of another image", code != 0)
     code, _, _, _ = run_trigger(trigger, zip={"image-ref.txt": f"{IMAGE}@sha256:{'AB' * 32}\n"})
@@ -174,6 +179,7 @@ MUTANTS_TRIGGER = [
     ("image not checked", 're.escape(image_name) + r"@(sha256', 'r"[^@]+@(sha256'),
     ("digest charset loose", r'@(sha256:[0-9a-f]{64})"', r'@(sha256:[0-9a-fA-F]{64})"'),
     ("extra files accepted", 'if z.namelist() != ["image-ref.txt"]:', 'if "image-ref.txt" not in z.namelist():'),
+    ("redirect scheme unchecked", 'if not location.startswith("https://"):', "if False:"),
     ("no early exit without git_ref", "if not git_ref:\n", "if False:\n"),
 ]
 MUTANTS_DEPLOY = [

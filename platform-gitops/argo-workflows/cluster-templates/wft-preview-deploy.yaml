@@ -295,8 +295,10 @@ spec:
                   if e.code not in (301, 302, 303, 307, 308) or not e.headers.get("Location"):
                       sys.exit(f"artifact download failed: HTTP {e.code}")
                   location = e.headers["Location"]
-              with urllib.request.urlopen(location) as resp:
-                  blob = resp.read(1 << 16)
+              if not location.startswith("https://"):
+                  sys.exit(f"artifact download redirected to a non-https URL: {location!r}")
+              with urllib.request.urlopen(location, timeout=60) as resp:
+                  blob = resp.read(65536)
               with zipfile.ZipFile(io.BytesIO(blob)) as z:
                   if z.namelist() != ["image-ref.txt"]:
                       sys.exit(f"unexpected image-digest artifact content: {z.namelist()}")
