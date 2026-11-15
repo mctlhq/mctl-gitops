@@ -1,0 +1,55 @@
+name: RedLoop Image Security Assessment (Gate 1)
+
+# One-off, workflow_dispatch-only workflow for Trivy container image assessment.
+# Pinned Target: docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+# Platform: linux/amd64 (matches Hetzner cx43 worker architecture)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Exact pinned OCI image digest to scan"
+        required: true
+        default: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+
+permissions:
+  contents: read
+
+jobs:
+  trivy-image-scan:
+    name: Trivy Image Assessment
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Scan Image (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image_ref }}
+          platform: linux/amd64
+          format: sarif
+          output: trivy-image-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          version: v0.69.3
+
+      - name: Scan Image (JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image_ref }}
+          platform: linux/amd64
+          format: json
+          output: trivy-image-results.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          version: v0.69.3
+
+      - name: Archive Assessment Evidence Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: redloop-gate1-trivy-evidence
+          path: |
+            trivy-image-results.sarif
+            trivy-image-results.json
+          retention-days: 90
