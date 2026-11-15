@@ -99,3 +99,5 @@ services:
     unmapped: "mctlhq/mctl-rules publishes git tags but no GitHub releases"
   - path: platform-gitops/services/namax66/news-factory/values.yaml
     unmapped: "tenant repository NaMax66/sales-with.ai publishes no accessible GitHub releases"
+  - path: platform-gitops/services/redloop/redloop-synthetic-staging/values.yaml
+    unmapped: "synthetic staging target with pinned upstream nginx-unprivileged image"

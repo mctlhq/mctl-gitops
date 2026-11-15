@@ -1,0 +1,27 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: redloop-synthetic-staging
+  namespace: redloop
+  description: "Minimal synthetic Nginx service for RedLoop Phase P2 security audit testing"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=redloop-redloop-synthetic-staging
+    backstage.io/kubernetes-id: redloop-synthetic-staging
+    backstage.io/kubernetes-namespace: redloop
+    argocd/app-name: redloop-redloop-synthetic-staging
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/redloop-redloop-synthetic-staging
+      title: ArgoCD
+      icon: dashboard
+    - url: https://staging-redloop.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: redloop
+    env: apps
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/redloop
+  system: system:default/team-redloop
