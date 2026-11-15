@@ -215,6 +215,15 @@ version_holds:
         grant: mctlhq/mctl-gitops#2681
         approved_by: mashkovd
         expires: 2026-11-29
+      # Tenth grant (owner GO in chat, 2026-11-15): 4.161.1 is 4.160.0 plus
+      # mctlhq/mctl-api#1065 (CSP form-action allowlist for Google redirects,
+      # stripping CSP on redirects, and required/formnovalidate on team consent).
+      # Covers only the 4.161.1 tag on the merge of mctlhq/mctl-api#1066.
+      # Provenance: chat GO, merge by an agy session.
+      - version: "4.161.1"
+        grant: mctlhq/mctl-gitops#PENDING
+        approved_by: mashkovd
+        expires: 2026-11-29
 
 gates:
   - name: mctl-agents-workers
