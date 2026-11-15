@@ -5,6 +5,10 @@ tenant:
   name: namax66
   displayName: "namax66"
   description: "ai news"
+  # Deploys only through a stored plan and an owner grant decided on the
+  # fresh-sign-in page (mctl-api#1031, mctl-api#1026). CI OIDC deploys and
+  # rollback-service are unaffected; the chart does not read this field yet.
+  profile: agent-deploy
   members:
     - userId: NaMax66
       principalId: prn_01M5SBQPSN5MTH8N1TTY4PPT6X
