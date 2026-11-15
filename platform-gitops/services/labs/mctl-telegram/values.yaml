@@ -120,13 +120,12 @@ env:
   # document at https://www.town.com/.well-known/oauth-client-id lists only
   # that one); town.com is listed too for the apex form of the same callback.
   # Gemini (gemini.google.com): Google's web client for Gemini Custom MCP
-  # Connectors uses user-bound redirect URIs on oauth-redirect.googleusercontent.com.
-  # To avoid opening the entire shared multi-tenant host to arbitrary Google Cloud
-  # projects in OAUTH_ALLOWED_IMPLICIT_HOSTS, exact Gemini connector redirect URIs
-  # are admitted via OAUTH_DCR_REDIRECT_URIS below.
+  # Connectors registers callbacks on oauth-redirect.googleusercontent.com
+  # under the /r/user_bound_custom-mcp- namespace (mctl-telegram 0.139.0+).
+  # Path-prefix scoping prevents admitting arbitrary Google Cloud projects.
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
   # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
   # client whose client_id is an https URL on a listed host gets its redirect
   # URIs from the document at that URL instead of registering. ADVERTISE
@@ -162,11 +161,14 @@ env:
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
   # client from OAUTH_DCR_REDIRECT_URIS below (mctlhq/mctl-gitops#1363).
   # Exact redirect URIs a Dynamic Client Registration may claim (0.69.0,
-  # mctlhq/mctl-telegram#691): the Cloudflare portal's two callbacks, plus
-  # user-bound Gemini Connected Apps callback (mctlhq/mctl-gitops#2665).
-  # Byte-exact, separate from the host allowlist above; a registration whose
-  # redirects are all listed gets a pinned client with a server-assigned name.
-  OAUTH_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg,https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-281712b859b6752b580bc9da"
+  # mctlhq/mctl-telegram#691): the Cloudflare portal's two callbacks, so the
+  # `tg` upstream can run in automatic (DCR) mode (mctlhq/.github#137,
+  # mctlhq/mctl-gitops#1363). Byte-exact, separate from the host allowlist
+  # above; a registration whose redirects are all listed gets a pinned client
+  # with a server-assigned name. List the portal's exact callbacks and nothing
+  # else: each entry is a standing pinned client anyone can register
+  # (docs/cloudflare-portal-compat.md in mctl-telegram).
+  OAUTH_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg"
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
