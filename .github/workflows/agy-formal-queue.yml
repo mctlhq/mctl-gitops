@@ -1,0 +1,47 @@
+name: Agy formal review (merge queue)
+
+# The merge queue (mctlhq/.github#351) requires agy-formal-review on the
+# commit it builds. This run executes the workflow file from that commit,
+# which is PR content, so it holds no reviewer App key: it only asks the
+# trusted publisher in mctlhq/.github to review the queued commit.
+# The publisher treats every input as untrusted and re-checks the live queue
+# ref, the commit's parents and the PR head before posting anything. If this
+# dispatch fails, agy-formal-review never reports and the queue times the
+# entry out instead of merging it.
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: dispatch agy formal review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the trusted formal review for the queued commit
+        env:
+          # Fine-grained token: Actions read/write on mctlhq/.github only.
+          GH_TOKEN: ${{ secrets.AGY_FORMAL_DISPATCH_TOKEN }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::AGY_FORMAL_DISPATCH_TOKEN is not set; agy-formal-review will not report on this queue entry"
+            exit 1
+          fi
+          re='^refs/heads/gh-readonly-queue/[A-Za-z0-9_.-]+/pr-([1-9][0-9]*)-[0-9a-f]{40}$'
+          if ! [[ "$HEAD_REF" =~ $re ]]; then
+            echo "::error::unexpected merge queue ref: $HEAD_REF"
+            exit 1
+          fi
+          gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main \
+            -f repository="$GITHUB_REPOSITORY" \
+            -f pr_number="${BASH_REMATCH[1]}" \
+            -f queue_head_ref="$HEAD_REF" \
+            -f queue_head_sha="$HEAD_SHA" \
+            -f queue_base_sha="$BASE_SHA"
+          echo "dispatched formal review for PR #${BASH_REMATCH[1]} queue commit $HEAD_SHA"
