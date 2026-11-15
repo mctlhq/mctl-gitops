@@ -16,11 +16,13 @@ tenant:
   preview:
     enabled: false
   quotas:
-    requests.cpu: "50m"
-    requests.memory: "128Mi"
-    limits.cpu: "200m"
-    limits.memory: "256Mi"
-    pods: "2"
+    # Quotas sized for up to 4 pods (steady state + rolling update surge + cert-manager HTTP-01 solver).
+    # Sized for 4x pod requests (25m CPU, 64Mi memory) and limits (100m CPU, 128Mi memory).
+    requests.cpu: "100m"
+    requests.memory: "256Mi"
+    limits.cpu: "400m"
+    limits.memory: "512Mi"
+    pods: "4"
     persistentvolumeclaims: "0"
     requests.storage: "0"
     services: "2"
