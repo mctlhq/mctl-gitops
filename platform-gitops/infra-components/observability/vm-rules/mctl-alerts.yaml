@@ -395,9 +395,18 @@ spec:
     # reference_eso_storedversion_recovery.md for the recovery drill.
     - name: mctl.argocd
       rules:
+        # project!="erpact" in both rules below: the mctl copy of ERPact is
+        # parked (#2615): automated sync is off and the workloads were scaled
+        # to zero by hand, so its four Applications stay OutOfSync on purpose.
+        # Without the exclusion they open a ticket every hour, and the
+        # incident responder auto-accepts proposals to "fix" the drift by
+        # editing the ERPact manifests (#2672). Drop the matcher in the same
+        # PR that brings the copy back or deletes the Applications. Step 1 of
+        # the bring-back procedure in bootstrap/templates/erpact/applications.yaml
+        # says so.
         - alert: ArgoCDApplicationDegraded
           expr: |
-            argocd_app_info{health_status="Degraded"} == 1
+            argocd_app_info{health_status="Degraded", project!="erpact"} == 1
           for: 30m
           labels:
             severity: warning
@@ -421,7 +430,7 @@ spec:
         # operationState for the actual error reason.
         - alert: ArgoCDApplicationOutOfSyncLong
           expr: |
-            argocd_app_info{sync_status="OutOfSync"} == 1
+            argocd_app_info{sync_status="OutOfSync", project!="erpact"} == 1
           for: 1h
           labels:
             severity: warning
