@@ -657,6 +657,10 @@ jobs:
           python3 tests/test_gitops_tenant_template_write_set.py
       - name: Unit-test gitops-bump inputs and its edit check
         run: python3 tests/test_gitops_bump_inputs.py
+      - name: Preview deploys the image its build pushed, by digest
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_preview_deploy_digest.py
 
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against

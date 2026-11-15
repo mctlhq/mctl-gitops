@@ -130,7 +130,9 @@ spec:
           - name: build-image
             template: trigger-github-build
             dependencies: [image-name]
-            when: "\"{{workflow.parameters.git_ref}}\" != \"\""
+            # Runs on both paths so its digest output always exists: an
+            # output of a Skipped task cannot be referenced. Without git_ref
+            # it writes an empty digest and makes no API call.
             arguments:
               parameters:
                 - name: dockerfile_repo
@@ -148,9 +150,7 @@ spec:
 
           - name: deploy-preview
             template: deploy
-            # `dependencies` (not `depends`) treats a Skipped build — no
-            # git_ref, deploying an existing image_tag — as satisfied, as it
-            # did before this task existed; a Failed image-name stops it.
+            # A Failed image-name or build-image stops it.
             dependencies: [image-name, build-image]
             arguments:
               parameters:
@@ -168,6 +168,8 @@ spec:
                   value: "{{workflow.parameters.preview_id}}"
                 - name: gitops_ref
                   value: "{{workflow.parameters.gitops_ref}}"
+                - name: image_digest
+                  value: "{{tasks.build-image.outputs.parameters.digest}}"
 
     # ── Build: trigger build-image.yaml in mctl-gitops, poll until done ─────────
     - name: trigger-github-build
@@ -180,6 +182,13 @@ spec:
             default: "Dockerfile"
           - name: team_name
           - name: component_name
+      outputs:
+        parameters:
+          # sha256 digest of the image this run built, read from the build
+          # run's image-digest artifact. Empty without git_ref.
+          - name: digest
+            valueFrom:
+              path: /tmp/image_digest
       script:
         image: python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 # python:3.12-alpine
         command: [python3]
@@ -205,7 +214,7 @@ spec:
                 name: github-actions-pat
                 key: token
         source: |
-          import os, json, time, urllib.request, urllib.error, sys
+          import io, os, re, json, time, urllib.request, urllib.error, sys, zipfile
 
           PAT = os.environ["GITHUB_PAT"]
           GITOPS_ORG = os.environ["GITOPS_ORG"]
@@ -225,6 +234,13 @@ spec:
           team_name       = os.environ["PARAM_TEAM_NAME"]
           component_name  = os.environ["PARAM_COMPONENT_NAME"]
           build_id        = "{{workflow.name}}"
+
+          if not git_ref:
+              # Existing image_tag: nothing to build, nothing to pin.
+              with open("/tmp/image_digest", "w") as f:
+                  f.write("")
+              print("No git_ref: deploying the existing image_tag, no build")
+              sys.exit(0)
 
           # Image name derived from org + component — consistent with deploy-service
           image_name = f"ghcr.io/{GITOPS_ORG}/{component_name}"
@@ -249,6 +265,48 @@ spec:
                   body_text = e.read().decode()
                   print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
                   raise
+
+          class _NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          def read_built_digest(run_id):
+              """The digest build-image.yaml pushed, from its image-digest artifact.
+
+              Anything but exactly one readable artifact naming this image is a
+              failed read and fails the task: deploying by tag instead would
+              deploy whatever the tag points at now, not what this run built."""
+              arts = api_request("GET",
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}/artifacts?name=image-digest")
+              found = [a for a in (arts or {}).get("artifacts", [])
+                       if a.get("name") == "image-digest" and not a.get("expired")]
+              if len(found) != 1:
+                  sys.exit(f"build run {run_id} has {len(found)} image-digest artifacts, expected 1")
+              url = found[0].get("archive_download_url", "")
+              if not url.startswith(f"{API}/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/artifacts/"):
+                  sys.exit(f"unexpected artifact download URL: {url!r}")
+              # The API answers with a redirect to blob storage. Followed by
+              # hand so the GitHub token is not sent to that other host.
+              opener = urllib.request.build_opener(_NoRedirect)
+              try:
+                  opener.open(urllib.request.Request(url, headers=headers))
+                  sys.exit("artifact download did not redirect")
+              except urllib.error.HTTPError as e:
+                  if e.code not in (301, 302, 303, 307, 308) or not e.headers.get("Location"):
+                      sys.exit(f"artifact download failed: HTTP {e.code}")
+                  location = e.headers["Location"]
+              if not location.startswith("https://"):
+                  sys.exit(f"artifact download redirected to a non-https URL: {location!r}")
+              with urllib.request.urlopen(location, timeout=60) as resp:
+                  blob = resp.read(65536)
+              with zipfile.ZipFile(io.BytesIO(blob)) as z:
+                  if z.namelist() != ["image-ref.txt"]:
+                      sys.exit(f"unexpected image-digest artifact content: {z.namelist()}")
+                  ref = z.read("image-ref.txt").decode().strip()
+              m = re.fullmatch(re.escape(image_name) + r"@(sha256:[0-9a-f]{64})", ref)
+              if not m:
+                  sys.exit(f"image-digest artifact names {ref!r}, not {image_name}@sha256:<64 hex>")
+              return m.group(1)
 
           print(f"Building: {dockerfile_repo}@{git_ref} -> {image_name}:{image_tag}")
           dispatch_path = f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/dispatches"
@@ -296,6 +354,10 @@ spec:
               if status == "completed":
                   if conclusion == "success":
                       print(f"Build succeeded: {image_name}:{image_tag}")
+                      digest = read_built_digest(run_id)
+                      with open("/tmp/image_digest", "w") as f:
+                          f.write(digest)
+                      print(f"Built {image_name}@{digest}")
                       sys.exit(0)
                   else:
                       print(f"Build failed: {conclusion} — {run_url}", file=sys.stderr)
@@ -327,6 +389,8 @@ spec:
             value: "{{workflow.parameters.preview_id}}"
           - name: gitops_ref
             value: "{{workflow.parameters.gitops_ref}}"
+          - name: image_digest
+            value: ""
       outputs:
         parameters:
           - name: preview_id
@@ -353,6 +417,8 @@ spec:
             value: "{{inputs.parameters.preview_id}}"
           - name: PARAM_GITOPS_REF
             value: "{{inputs.parameters.gitops_ref}}"
+          - name: PARAM_IMAGE_DIGEST
+            value: "{{inputs.parameters.image_digest}}"
           - name: ARGO_WORKFLOW_NAME
             value: "{{workflow.name}}"
         envFrom:
@@ -452,6 +518,28 @@ spec:
               exit 1
               ;;
           esac
+          # The digest of the image this workflow built, or empty when it
+          # deploys an existing image_tag. Always passed to helm, empty
+          # included: the service values may pin the production digest
+          # (mctl-gitops#2652), and inheriting it would render
+          # repository:<preview tag>@<production digest>, which runs the
+          # production image under the preview's tag.
+          DIGEST="$PARAM_IMAGE_DIGEST"
+          case "$DIGEST" in
+            "") ;;
+            sha256:???????????????????????????????????????????????????????????????? )
+              case "${DIGEST#sha256:}" in
+                *[!0-9a-f]* )
+                  echo "❌ image_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            * )
+              echo "❌ image_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2
+              exit 1
+              ;;
+          esac
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
           HOST="${COMPONENT}-${PREVIEW_ID}.${PLATFORM_DOMAIN}"
 
@@ -509,6 +597,7 @@ spec:
             --namespace "${NS}" \
             --values "${PREVIEW_VALUES}" \
             --set image.tag="${TAG}" \
+            --set-string image.digest="${DIGEST}" \
             --set ingress.enabled=true \
             --set ingress.className=traefik \
             --set "ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod" \

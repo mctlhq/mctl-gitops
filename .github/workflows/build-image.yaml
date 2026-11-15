@@ -679,6 +679,21 @@ jobs:
           fi
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "pushed ${IMAGE_NAME}@${DIGEST}"
+          mkdir -p "$RUNNER_TEMP/image-digest"
+          printf '%s@%s\n' "${IMAGE_NAME}" "${DIGEST}" > "$RUNNER_TEMP/image-digest/image-ref.txt"
+
+      # A dispatched build has no outputs a caller can read, so the digest is
+      # also left as a run artifact. preview-deploy (trigger-github-build)
+      # downloads it and deploys name@digest instead of re-reading the tag,
+      # which another push could have moved in between. Missing = failed read
+      # on that side, never "deploy by tag".
+      - name: Upload image digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-digest
+          path: ${{ runner.temp }}/image-digest/image-ref.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Summary
         # Same reason as the Vault step: these land in a shell command, so
