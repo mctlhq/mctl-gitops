@@ -99,11 +99,11 @@ tests:
                 operationState for the actual cause.
 
   - interval: 1m
-    name: a parked erpact app Degraded for 1h stays quiet, a tenant app fires
+    name: a parked erpact app Degraded for 1h stays quiet, a non-erpact app fires
     input_series:
       - series: 'argocd_app_info{name="erpact-shared",project="erpact",dest_namespace="erpact",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Degraded"}'
         values: '1x70'
-      - series: 'argocd_app_info{name="labs-mctl-telegram",project="apps",dest_namespace="labs",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
+      - series: 'argocd_app_info{name="labs-mctl-telegram",project="default",dest_namespace="labs",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
         values: '1x70'
     alert_rule_test:
       - eval_time: 1h
@@ -112,7 +112,7 @@ tests:
           - exp_labels:
               severity: warning
               name: labs-mctl-telegram
-              project: apps
+              project: default
               dest_namespace: labs
               dest_server: https://kubernetes.default.svc
               sync_status: Synced
@@ -122,7 +122,7 @@ tests:
                 ArgoCD application labs-mctl-telegram has been Degraded for 30m
               description: >-
                 labs/labs-mctl-telegram (project
-                apps) on
+                default) on
                 https://kubernetes.default.svc is reporting Health=Degraded. Check
                 `argocd app get labs-mctl-telegram` for stuck resources.
 
