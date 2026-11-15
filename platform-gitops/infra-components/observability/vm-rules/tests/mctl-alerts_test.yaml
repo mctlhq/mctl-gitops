@@ -60,6 +60,73 @@ tests:
         exp_alerts: []
 
   # ---------------------------------------------------------------------
+  # ArgoCDApplicationOutOfSyncLong / ArgoCDApplicationDegraded and the
+  # parked ERPact copy (#2615, #2672)
+  #
+  # Both directions: an erpact-project app that is OutOfSync/Degraded stays
+  # quiet, and a non-erpact app in the same state, evaluated at the same
+  # time, still fires. Removing the project!="erpact" matcher makes the
+  # quiet cases fail; making the matcher too broad makes the firing ones fail.
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a parked erpact app OutOfSync for 2h stays quiet, a platform app fires
+    input_series:
+      - series: 'argocd_app_info{name="erpact-infra",project="erpact",dest_namespace="erpact",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
+        values: '1x130'
+      - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
+        values: '1x130'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ArgoCDApplicationOutOfSyncLong
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: mctl-api
+              project: platform
+              dest_namespace: admins
+              dest_server: https://kubernetes.default.svc
+              sync_status: OutOfSync
+              health_status: Healthy
+            exp_annotations:
+              summary: >-
+                ArgoCD application mctl-api OutOfSync for 1h
+              description: >-
+                admins/mctl-api has been
+                OutOfSync for 1h. Either auto-sync has exhausted retries
+                and the latest operation failed, or the app legitimately
+                has unsynced manual changes / ignored differences. Check
+                `argocd app get mctl-api` and the latest sync
+                operationState for the actual cause.
+
+  - interval: 1m
+    name: a parked erpact app Degraded for 1h stays quiet, a tenant app fires
+    input_series:
+      - series: 'argocd_app_info{name="erpact-shared",project="erpact",dest_namespace="erpact",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Degraded"}'
+        values: '1x70'
+      - series: 'argocd_app_info{name="labs-mctl-telegram",project="apps",dest_namespace="labs",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: ArgoCDApplicationDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: labs-mctl-telegram
+              project: apps
+              dest_namespace: labs
+              dest_server: https://kubernetes.default.svc
+              sync_status: Synced
+              health_status: Degraded
+            exp_annotations:
+              summary: >-
+                ArgoCD application labs-mctl-telegram has been Degraded for 30m
+              description: >-
+                labs/labs-mctl-telegram (project
+                apps) on
+                https://kubernetes.default.svc is reporting Health=Degraded. Check
+                `argocd app get labs-mctl-telegram` for stuck resources.
+
+  # ---------------------------------------------------------------------
   # NodeMemoryHeadroomLow (group mctl.node-health)
   #
   # The tier below NodeHighMemory. Both directions are asserted: a node at
