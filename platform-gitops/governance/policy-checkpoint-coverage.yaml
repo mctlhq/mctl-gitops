@@ -12,8 +12,9 @@
 # the `run` surface) run no mctl-agents image and need no entry.
 #
 # boundary (closed set), for governed: false entries (a transport entry is
-# bypass-open, or no-mctl-token with min_image_version when its surface maps
-# no MCTL_TOKEN):
+# bypass-open; no-mctl-token with min_image_version when its surface maps
+# no MCTL_TOKEN; or no-shell-session with min_image_version when its surface
+# has fixed_run_mode and a literal image):
 #   no-model-session  no SDK session, so no model-selected actions
 #   no-mctl-token     cannot call mctl-api as the admin principal
 #   operator-operation deterministic step behind an admin-only mctl-api operation
@@ -86,7 +87,8 @@ surfaces:
     # The one mctl-agents-run template holding MCTL_TOKEN. CI requires the
     # literal RUN_MODE and a profile that does not list Bash. The profile is a
     # declaration: the session still exposes Bash, which is the run-bash entry
-    # below. Its static admin token is mctlhq/mctl-agents#737, a separate gap.
+    # below. CI also requires a literal image, so no caller picks the release.
+    # Its static admin token is mctlhq/mctl-agents#737, a separate gap.
     fixed_run_mode: incident-responder
     execution_profile: agent-platform/execution-profiles/incident-responder-default/profile.yaml
     note: RUN_MODE incident-responder only; resolving incidents needs mctl-api
@@ -149,4 +151,7 @@ surfaces:
     boundary: bypass-open
     tracked_by: mctlhq/mctl-gitops#1980
     related: mctlhq/mctl-agents#717
+    # Flips to no-shell-session once the literal image is at or above the
+    # release carrying mctlhq/mctl-agents#1024 and a real run shows no Bash
+    # (runbook: policy-checkpoint-coverage.md).
     reason: run-incident-responder maps MCTL_TOKEN and its session still exposes Bash; only the CLI permission mode limits what that Bash runs, so no setting of ours removes it until the image builds the session without it

@@ -1,0 +1,38 @@
+{{- /*
+Read-only permissions of the base-service pre-pull PreSync Job (see base-service
+templates/prepull.yaml). They live here because the `apps` project that deploys
+base-service does not allow RBAC objects. The ServiceAccount itself is a PreSync
+hook of the base-service app (same app and an earlier wave than the Job), so it
+is not created here; the RoleBinding names it. The name `prepull-verifier` is a
+constant on both sides (base-service templates/prepull.yaml has no knob for it);
+tests/test_prepull_render.py fails if the two disagree.
+*/ -}}
+{{- if .Values.tenant.prepullVerifier.enabled }}
+{{- $ns := include "tenant.name" . }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prepull-verifier
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prepull-verifier
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prepull-verifier
+subjects:
+  - kind: ServiceAccount
+    name: prepull-verifier
+    namespace: {{ $ns }}
+{{- end }}

@@ -5,6 +5,7 @@
 #   - the bump names some but not all of a group's paths (partial bump);
 #   - the group's tags differ, or a file names another image.repository;
 #   - a `requires` condition does not hold in the current file;
+#   - a file in `prepull_paths` is bumped automatically, or its digests are malformed;
 #   - the new tag, or any current tag, is below `min_tag` (image floor);
 #   - this file, a listed file, or a required key cannot be read (an
 #     unreadable gate is a refusal, never a pass).
@@ -13,6 +14,195 @@
 # of an unknown shape: argo-workflows/scripts/release-gate-guard.sh.
 # If a group's tags have already drifted apart every bump is refused, including
 # one that would reunite them: recover with a reviewed PR that aligns the group.
+#
+# `version_holds` (below `gates`) guard a version that must not ship without an
+# explicit, recorded allow. The section is REQUIRED (an empty list is allowed,
+# an absent one is a refusal). A held file is judged on the tag that would be
+# written (bump) or that is in the tree (verify), also when that tag sits in a
+# `values: |` block scalar of a bootstrap Application. Refused (exit 6):
+#   - a tag >= `held_from` with no `allow` record naming exactly that version;
+#   - an allow record that has no `grant` or `approved_by`, names a version
+#     below `held_from`, or appears twice for one version;
+#   - a NEW write of a held version (bump, or a pushed tag change) whose allow
+#     is expired. Expiry gates writes only: a held version already in the tree
+#     stays verifiable while its record exists, so a lapsed record never freezes
+#     every other release and PR. Recovery after expiry is a reviewed PR that
+#     renews the record or moves mctl-api to an allowed version;
+#   - a file whose single image tag cannot be read: no `values: |` block, an
+#     unparseable block, a duplicate key, two image references, a repository
+#     other than `repository`, a tag that is not a string X.Y.Z.
+# Adding an `allow` record is a reviewed PR to this file (the grant is the
+# human decision); the workflows read this file from origin/main, never from
+# the commit they are about to push (`--policy-rev origin/main`). A bump names
+# its image (`--image`): a hold for another repository is not judged.
+version_holds:
+  - name: mctl-api-bootstrap
+    issue: mctlhq/mctl-gitops#2528
+    file: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
+    repository: ghcr.io/mctlhq/mctl-api
+    # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
+    held_from: "4.155.0"
+    # Record shape, added in a reviewed PR once the owner grants the release:
+    #   - version: "4.155.0"
+    #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given
+    #     approved_by: mashkovd
+    #     expires: 2026-12-31              # the date after which the allow lapses
+    allow:
+      # One-time bootstrap grant (owner decision 2026-11-13): 4.155.0 is the
+      # release that has to carry the human step-up (mctlhq/mctl-api#1022)
+      # the #2528 gate will rely on, so it cannot wait for that gate. Covers
+      # only the 4.155.0 tag on the merge of mctlhq/mctl-api#934: parents
+      # a5b9ef9cf0f880f28b841033a8b2a6d9563ce050 (main, frozen) and
+      # 5820073f20abc78ab1db2b1b42c146c70ac8cbf3 (release metadata only).
+      # The GHCR digest and its revision label were checked by hand against
+      # that tag commit on the release-bump PR (#2608) before it merged; the
+      # evidence packet is in the PR that adds this record. The GO was
+      # given by the owner in a chat session on 2026-11-13 and the merge was
+      # carried out by a Claude agent session on that explicit instruction:
+      # the grant rests on that chat decision, not on the merge identity
+      # (the gap mctlhq/mctl-api#1022 closes).
+      - version: "4.155.0"
+        grant: mctlhq/mctl-gitops#2607
+        approved_by: mashkovd
+        expires: 2026-11-27
+      # Second bootstrap grant (owner GO in chat, 2026-11-13): 4.156.0
+      # carries the Basket canary code of mctlhq/mctl-api#1006 (#1007, #1008,
+      # #1014, #1017, #1018), every part of it off unless its env chain is set,
+      # and still precedes #1022. Covers only the 4.156.0 tag on the merge
+      # of mctlhq/mctl-api#1023, whose first parent is mctl-api main at
+      # 373e237823294f832353cacd83ab5a4d6f8e4cd4 and whose second parent
+      # changes release metadata only. Same manual tag/digest/revision-label
+      # check on the release-bump PR; same provenance as above (chat GO,
+      # merge by a Claude agent session).
+      - version: "4.156.0"
+        grant: mctlhq/mctl-gitops#2611
+        approved_by: mashkovd
+        expires: 2026-11-27
+      # Third grant (owner GO in chat, 2026-11-14): 4.156.1 is 4.156.0 plus
+      # one fix, mctlhq/mctl-api#1024 (incident list and summary scoped by
+      # tenant in SQL; two P1s where a non-admin saw too few or no
+      # incidents). Covers only the 4.156.1 tag on the merge of
+      # mctlhq/mctl-api#1025, whose first parent is mctl-api main at
+      # 828e4ef2d857eadb4e2169dcd419d4c00d1bfed8 and whose second parent
+      # changes release metadata only. If main moves before #1025 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.156.1"
+        grant: mctlhq/mctl-gitops#2617
+        approved_by: mashkovd
+        expires: 2026-11-27
+      # Fourth grant (owner GO in chat, 2026-11-14): 4.156.2 is 4.156.1 plus
+      # the mctl-api P2 bug wave: mctlhq/mctl-api#1027 (Loki logs by exact
+      # release; service status scoped to the caller's tenant and read in
+      # its ArgoCD project), #1028 (security observation dedup per tenant) and
+      # #1029 (argoarchive step order; partial reads in argoarchive and
+      # agentregistry fail instead of returning shorter lists). Covers only
+      # the 4.156.2 tag on the merge of mctlhq/mctl-api#1030, whose first
+      # parent is mctl-api main at bf5f0d9bba376678f3236cb29f6e1091e0518bd1
+      # and whose second parent changes release metadata only. If main moves
+      # before #1030 merges, this record no longer describes the release and
+      # a new review is needed. Same manual tag/digest/revision-label check
+      # on the release-bump PR; same provenance as above (chat GO, merge by
+      # a Claude agent session).
+      - version: "4.156.2"
+        grant: mctlhq/mctl-gitops#2628
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Fifth grant (owner GO in chat, 2026-11-14, confirmed again for the
+      # full content after mctl-api main moved twice past the first version
+      # of this record in #2639): 4.157.0 is 4.156.2 plus the bug-roadmap
+      # wave 2 fixes mctlhq/mctl-api#1035 (incident create refuses
+      # server-owned lifecycle state; evidence written and read in one
+      # transaction, partial reads fail), #1037 (canonical evidence numbers,
+      # trailing JSON refused, disable of a disabled non-human is a no-op)
+      # and #1038 (support TTL overflow, per-privilege bridge grant check,
+      # no implicit work-item grants), plus #1033 (decide matches the
+      # requester by principal id), #1036 (digest-bound owner grants for
+      # preview apply, dark by default), #1039 (the deploy-plan store opens
+      # on its own DSN, never WORK_ITEMS_DB_URL) and #1040 (the fresh-sign-in
+      # page that decides deploy grants; dark until its env flag and web
+      # client are configured, which must wait for mctlhq/mctl-gitops#2629).
+      # Covers only the 4.157.0 tag on the merge of mctlhq/mctl-api#1034,
+      # whose first parent is mctl-api main at
+      # b5e3ceaa564a861131713ef255d1794407acce30 and whose second parent
+      # changes release metadata only. If main moves before #1034 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.157.0"
+        grant: mctlhq/mctl-gitops#2642
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Sixth grant (owner GO in chat, 2026-11-14, for each change): 4.158.0
+      # is 4.157.0 plus three changes. mctlhq/mctl-api#1041 (closes #1031):
+      # deploy-service and preview-deploy are refused on the generic execute
+      # path for tenants whose values set tenant.profile: agent-deploy,
+      # admins included; CI OIDC and rollback-service pass. No tenant sets
+      # that profile yet (checked on mctl-gitops main 2026-11-14: 7 tenants,
+      # all values parse, no profile, no duplicate names), so the visible
+      # change is only that an unreadable tenant profile now fails a direct
+      # deploy closed with 503 instead of passing. mctlhq/mctl-api#1043:
+      # create-tenant accepts tenant names of 2-31 characters instead of
+      # 2-63, matching every team_name operation; delete and cleanup paths
+      # keep 63, and every existing tenant name is 14 characters or less.
+      # mctlhq/mctl-api#1044 pins the agy review workflow to a commit; it
+      # touches only .github/workflows and changes no runtime code.
+      # Covers only the 4.158.0 tag on the merge of mctlhq/mctl-api#1042,
+      # whose first parent is mctl-api main at
+      # 50198af3c315977138f4907991a0998e35bf550c and whose second parent
+      # changes release metadata only. If main moves before #1042 merges,
+      # this record no longer describes the release and a new review is
+      # needed. Same manual tag/digest/revision-label check on the
+      # release-bump PR; same provenance as above (chat GO, merge by a
+      # Claude agent session).
+      - version: "4.158.0"
+        grant: mctlhq/mctl-gitops#2647
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Seventh grant (owner GO in chat, 2026-11-14): 4.158.1 is 4.158.0 plus
+      # one change, mctlhq/mctl-api#1045. CIMD (client metadata document)
+      # clients may now use http://localhost redirect URIs with any port, as
+      # 127.0.0.1 and [::1] already could; the host is still compared as
+      # exact text and localhost never matches a 127.0.0.1 entry. It unblocks
+      # Claude Code, whose document lists http://localhost/callback, signing
+      # in to MCP resources. OAuth paths only; no schema or config change.
+      # Covers only the 4.158.1 tag on the merge of mctlhq/mctl-api#1046
+      # (35c2318664d7a2a1cadb15ed4aca6527572ca8f2), whose first parent is the
+      # merge of mctlhq/mctl-api#1045 and whose second parent changes release
+      # metadata only. Same manual tag/digest/revision-label check on the
+      # release-bump PR; provenance: chat GO, merge by a Claude agent session.
+      - version: "4.158.1"
+        grant: mctlhq/mctl-gitops#2649
+        approved_by: mashkovd
+        expires: 2026-11-28
+      # Eighth grant (owner GO in chat, 2026-11-14; re-GO 2026-11-15 after
+      # main moved): 4.159.0 is 4.158.1 plus mctlhq/mctl-api#1050, #1051 and
+      # #1052. #1050 adds an optional Helm slot, deployApprovalUISecret, that
+      # mounts DEPLOY_APPROVAL_UI_CLIENT_ID/SECRET from a named Secret; empty
+      # by default, default render unchanged (tested). #1051 refreshes
+      # deployplan test snapshots only. #1052 (basket service split, phase
+      # P1) is dark: its join routes mount only behind a feature flag that
+      # nothing here sets; the binary accepts basket schema 1 and 2, and the
+      # schema 2 upgrade runs only from the separate migration command under
+      # the migration role, which no Job here runs. The deploy approval page
+      # stays off until a separate, owner-approved PR enables it. The first
+      # record (#2655) was bound to db4eb87be and no longer described the
+      # release.
+      # Covers only the 4.159.0 tag on the merge of mctlhq/mctl-api#1053,
+      # whose first parent is mctl-api main at
+      # fcfdfc2b8ac0657ca5f4af13e151a13daac6e59e and whose second parent
+      # changes release metadata only. If main moves before #1053 merges,
+      # this record no longer describes the release. Same manual
+      # tag/digest/revision-label check on the release-bump PR; provenance:
+      # chat GO, merge by a Claude agent session.
+      - version: "4.159.0"
+        grant: mctlhq/mctl-gitops#2656
+        approved_by: mashkovd
+        expires: 2026-11-28
+
 gates:
   - name: mctl-agents-workers
     issue: mctlhq/mctl-agents#1007
@@ -25,7 +215,16 @@ gates:
     min_tag: "1.117.0"
     # A different image at a high tag must not satisfy the floor.
     repository: ghcr.io/mctlhq/mctl-agents
-    # No `requires` yet: Recreate on the control worker (mctl-gitops#2394) lands
-    # only after the preview rehearsal, and that PR adds the requirement here.
-    # tests/test_release_gate.py fails if the values file declares Recreate
-    # while this gate does not require it.
+    requires:
+      # Recreate on the control worker: no old and new build polling together.
+      - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
+        key: strategy.type
+        equals: Recreate
+      # The cached rollout is not optional once Recreate is on.
+      - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
+        key: prepull.enabled
+        equals: true
+    # Deployed through two reviewed PRs (see the values file): refuses automated
+    # bumps of the group and checks the shape of prepull.ref and image.digest.
+    prepull_paths:
+      - platform-gitops/services/admins/mctl-agents-worker/values.yaml

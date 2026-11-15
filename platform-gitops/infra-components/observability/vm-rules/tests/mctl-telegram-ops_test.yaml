@@ -401,6 +401,56 @@ tests:
                 flows or bot-scan traffic against /oauth/authorize.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
 
+  # ------------------------------------------------------------ memory limit
+  - interval: 1m
+    name: telegram pod memory at 50% stays quiet despite duplicate resource series
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
+        values: '500x10'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service",metrics_path="/metrics/resource"}'
+        values: '500x10'
+      - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service"}'
+        values: '1000x10'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: MctlTelegramMemoryNearLimit, exp_alerts: []}
+
+  - interval: 1m
+    name: telegram pod memory above 85% fires MctlTelegramMemoryNearLimit after 5m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
+        values: '900x10'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service",metrics_path="/metrics/resource"}'
+        values: '900x10'
+      - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service"}'
+        values: '1000x10'
+    alert_rule_test:
+      - {eval_time: 4m, alertname: MctlTelegramMemoryNearLimit, exp_alerts: []}
+      - eval_time: 6m
+        alertname: MctlTelegramMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              namespace: labs
+              pod: labs-mctl-telegram-base-service-abc
+            exp_annotations:
+              summary: "mctl-telegram pod labs-mctl-telegram-base-service-abc memory is above 85% of limit"
+              description: >-
+                Working set memory for pod labs-mctl-telegram-base-service-abc is at 90%
+                of its container memory limit. Each MTProto session consumes memory; this approaches
+                the OOM threshold. Consider increasing memory limit or pruning inactive sessions.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramnearcapacity"
+
+  - interval: 1m
+    name: telegram pod memory at 80% stays quiet
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service",metrics_path="/metrics/cadvisor"}'
+        values: '800x10'
+      - series: 'container_spec_memory_limit_bytes{namespace="labs",pod="labs-mctl-telegram-base-service-abc",container="base-service"}'
+        values: '1000x10'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: MctlTelegramMemoryNearLimit, exp_alerts: []}
+
   # ------------------------------------------------------- communication agent
   #
   # Ported from mctlhq/mctl-telegram#589 together with the three rules above.

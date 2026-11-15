@@ -22,3 +22,14 @@ path "secret/data/platform/*" {
 path "secret/metadata/platform/*" {
   capabilities = ["read", "list", "delete"]
 }
+
+# Explicit deny on the dedicated writer prefix. A deny wins over any grant, so
+# a later broadening of a neighbouring glob cannot reach it. Served only by the
+# gitops-writer-read policy.
+path "secret/data/writers/*" {
+  capabilities = ["deny"]
+}
+
+path "secret/metadata/writers/*" {
+  capabilities = ["deny"]
+}

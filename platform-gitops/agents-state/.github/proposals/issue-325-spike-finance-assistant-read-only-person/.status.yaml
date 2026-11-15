@@ -1,0 +1,62 @@
+status: merged
+updated_at: '2026-11-08T16:19:27Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-d0a0352945d301c7
+  trace_id: 4a7d4a81ae4142aa887b587a39dfcc53
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 325
+  url: https://github.com/mctlhq/.github/issues/325
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-b3b25e0ca941745d
+  content_hash: sha256:b3b25e0ca941745de846aaa4b80289108eb9d236a6823a63b5e6a76e21a39098
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-11-08T12:45:47Z'
+  content_digest: sha256:72aa83f41ca73abf0434f7671d59a6ad8601d79c29d0291397ea821e6823d8db
+  digest_binding: reviewed
+  approval_ref: aar_7ea331280251461789b6e6298b47ba2e
+attempt:
+  id: 6c69784cbceddcaf27c52cfba39cfa10270d75f63d169c77278128608ac940b6
+  started_at: '2026-11-08T12:47:28Z'
+  expires_at: '2026-11-08T14:57:28Z'
+  finished_at: '2026-11-08T12:52:03Z'
+pr: https://github.com/mctlhq/.github/pull/326
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-147f3f46
+  authoritative:
+    completion_id: ic-cdf0186e162acc0d
+    content_hash: sha256:cdf0186e162acc0d09f48c920d5c8658f61f7f855140a963f614906af3ff142a
+    proposal_digest: sha256:72aa83f41ca73abf0434f7671d59a6ad8601d79c29d0291397ea821e6823d8db
+    attempt_id: 6c69784cbceddcaf27c52cfba39cfa10270d75f63d169c77278128608ac940b6
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 81d08585b30cc86debb5cdd83cb1b8611182c66a
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Finding 1 already addressed: baseline/rules-digest.json
+  was regenerated in commit 6d3d83c (contains currency key, 6 occurrences). Re-running
+  python3 -I docs/spikes/finance-assistant/model.py yields zero git diff, and python3
+  -I -m unittest discover -s docs/spikes/finance-assistant/tests passes 18/18 including
+  test_baseline_digest_is_committed_and_reproducible.'
+github:
+  state: merged
+  head_sha: 6d3d83cf8c12284cabc1af6515cadaad391c2499
+  observed_at: '2026-11-08T16:19:27Z'
+merged_at: '2026-11-08T16:19:27Z'
+merge_commit: 5b3fb9ca9f85a2b3344a4755990f10712ca8b54b

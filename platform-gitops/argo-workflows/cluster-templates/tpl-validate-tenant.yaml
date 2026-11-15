@@ -253,7 +253,9 @@ spec:
     # Image-name check alone, for preview-deploy (which builds without
     # running `validate`). mctl-gitops is public, so an anonymous HTTPS clone
     # of main is enough: no deploy key in this pod. Parameters arrive as env,
-    # never interpolated into the script text.
+    # never interpolated into the script text. A service in a release-gated
+    # group is refused here as in `validate`, before anything is built; the
+    # shared guard needs yq, so this step runs the same pinned tools image.
     - name: image-name
       inputs:
         parameters:
@@ -263,7 +265,7 @@ spec:
             default: ""
             # non-empty: preview-deploy will build, so the check is --build
       script:
-        image: alpine/git:2.43.0
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         envFrom:
           - configMapRef:
@@ -278,6 +280,10 @@ spec:
         source: |
           set -e
           git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          # Release gate: a gated service is not previewed. Any non-zero exit,
+          # a missing script included, refuses.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME" || exit 1
           BUILD_FLAG=""
           [ -n "$PARAM_GIT_REF" ] && BUILD_FLAG="--build"
           # preview-deploy builds ghcr.io/<org>/<component_name>.

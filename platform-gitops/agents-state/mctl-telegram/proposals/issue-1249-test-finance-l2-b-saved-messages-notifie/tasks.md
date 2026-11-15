@@ -1,0 +1,46 @@
+# Tasks: issue-1249-test-finance-l2-b-saved-messages-notifie
+
+- [ ] 0. Governance gate (no code). Confirm that PR #1247 has an explicit disposition (a reviewed, labelled partial-evidence merge, a closure, or another owner-approved sequencing change). Confirm that this exact proposal has a fresh human approval, distinct from grant `aar_5dc0456105f442829583adaa101516c6`. Re-pin to current `main` and record its SHA. — DoD: the PR description cites the #1247 disposition, the new approval reference and the pinned SHA. If any of the three is missing, stop without writing code.
+- [ ] 1. (depends on 0) Add `internal/agent/listener/l2finance_harness_test.go` (`//go:build l2finance`). It holds the outcome constants, plus `l2Record`/`expectGap` reading `L2FINANCE_SOURCE_REV` (the run fails unless the value is 40-hex). It also holds `TestMain` with the offline dial/DNS guard, `l2NewHarness` (in-memory store via `newListenerTestStore`, owner Alice with `selfTG=100`, observe profile, real `control.NewRouter` + `control.NewNotifier` over `l2SelfSink`), `l2PeerSink`, constant `l2BobTG=600`, and the error-returning helpers `l2CheckRoutedOnce`, `l2CheckNotRouted` and `l2CheckSavedEvents`. — DoD: `go vet -tags l2finance ./internal/agent/listener/` is clean, there are no symbol collisions with existing untagged tests, and every identifier is prefixed `l2`.
+- [ ] 2. (depends on 1) Add `internal/agent/listener/l2finance_listener_test.go` with `TestL2Finance_*` cases T1.listener_status, T2.bob_dm, T2.spoof_from, T4.group_chat, T4.channel, T4.forwarded, T4.saved_peer, T5.1.push_then_history, T5.3.cursor_monotonic, T6.out_false_push, T6.reconnect_replay, T6.gap (CANNOT-OBSERVE) and M1. Push updates go through `l.dispatcherFor(acct).Handle(ctx, &tg.Updates{...})`. History goes through `l.pollSavedHistory` with `fakeSavedHistoryAPI`. Reconnect/restart is simulated with a second `New(...)` on the same store. — DoD: each case emits exactly one `L2RESULT` line; M1 passes only because `l2CheckNotRouted` returns non-nil under the bypass.
+- [ ] 3. (depends on 0) Add `internal/agent/control/l2finance_harness_test.go`. It duplicates the result helpers and offline guard, and adds `l2NotifierHarness` (unique `file:l2_<nanos>?mode=memory&cache=shared` DSN, owners Alice and Carol via `EnsureUser` plus observe profiles). It also adds `l2SelfSink` (records userID, randomID, text, with programmable per-call errors and `executor.ErrAlreadyDelivered` on a seen random_id), `l2PeerSink`, `l2LeakySink`, and the helpers `l2CheckOnlyOwnUser`, `l2CheckNoSend` and `l2CheckNoPeerSink`. — DoD: `go vet -tags l2finance ./internal/agent/control/` is clean, with no collisions against `router_test.go`/`notifier_test.go`.
+- [ ] 4. (depends on 3) Add `internal/agent/control/l2finance_notifier_test.go` with cases T1.notifier_self_only, T3.per_user, T3.finance_source (NOT-IMPLEMENTED), T5.2.random_id, T8.kill, T8.mode_off_after_queue, T8.mode_off_before_queue.delivery, T8.revoked_after_queue, T8.revoked_pool_fence (CANNOT-OBSERVE), T8.reply_kill, M2 and M3. Gap rows use `expectGap`. No runtime fix is made. — DoD: every gap row reproduces and records FAIL/GAP; M2 and M3 pass only by detection.
+- [ ] 5. (depends on 2, 4) Run the offline command from design.md with `L2FINANCE_SOURCE_REV=$(git rev-parse HEAD)`, and also run plain `go test ./internal/agent/...` (must be unchanged and green). Write `docs/reports/finance-assistant-l2-slice-b.md`. It contains the command, the pinned SHA, Go version, the case table with observed outcomes (copied from `L2RESULT` lines; any deviation from design.md's expected column is explained), and the text `FINANCE_SECURITY_GATE=BLOCKED`, `#325 RESEARCH_ONLY_DEFER`, "slice B only; not L2 completion; no aggregation". — DoD: the report lists every case id from design.md exactly once, and nothing in `docs/reports/finance-assistant-l2-results.md` is touched.
+- [ ] 6. (depends on 5) Open a test-only PR referencing #1249, #1244 and #1247. Run `git diff --stat origin/main` and confirm it shows only the 4 `*_test.go` files plus the addendum. Request independent review. Merge only after CI, review and human approval, using a merge commit. — DoD: the PR is approved by a human; no production path is in the diff.
+
+## AMEND tasks: sequencing, hermetic evidence and reviewer gate
+
+- [ ] A. Resolve #1247 as explicitly partial test evidence and confirm
+  the previous `dev-loop-mctlhq-mctl-telegram-1244` PR owner has
+  released/reconciled; record final PR disposition and commit SHA
+  before coding B. Re-pin `mctl-telegram/main` after that transition.
+- [ ] B. Obtain independent review of the final #1249 spec and a
+  distinct **reviewed-digest** owner grant through its existing
+  Temporal workflow. Never reuse the #1244 approval; no implementer
+  start before the grant is reflected in `.status.yaml`.
+- [ ] C. Prove that every test adapter is a fake and non-loopback
+  external dials/DNS are refused by the tested paths. Explicitly
+  document that a `DefaultTransport`/`DefaultResolver` hook does
+  not constitute a universal egress firewall; record any whole-process
+  assurance not observable in this slice as `CANNOT-OBSERVE`.
+  No network-enabled gotd client or real credentials are allowed.
+- [ ] D. Pass current HEAD as `L2FINANCE_SOURCE_REV`, emit source SHA
+  for each case, and publish a slice-only report with case IDs,
+  outcomes, negative-control detections, `harness_status`, and
+  `FINANCE_SECURITY_GATE=BLOCKED` regardless of green test exit.
+  Do not alter the canonical partial A report or claim full L2 PASS.
+
+## Tests
+- [ ] T1. `TestL2Finance_T1_ListenerStatus` and `TestL2Finance_T1_NotifierSelfOnly`: a real `/mctl status` via the dispatcher yields one Alice reply, and the peer sink stays empty.
+- [ ] T2. `TestL2Finance_T2_BobDM` and `TestL2Finance_T2_SpoofFrom`: never routed and no `saved_command` event.
+- [ ] T3. `TestL2Finance_T3_PerUser` (PASS expected) and `TestL2Finance_T3_FinanceSource` (NOT-IMPLEMENTED).
+- [ ] T4. `TestL2Finance_T4_{GroupChat,Channel,Forwarded,SavedPeer}`: never routed.
+- [ ] T5. `TestL2Finance_T5_1_PushThenHistory`, `TestL2Finance_T5_2_RandomID` and `TestL2Finance_T5_3_CursorMonotonic`: exactly-once routing and delivery, with a monotonic cursor.
+- [ ] T6. `TestL2Finance_T6_OutFalsePush`, `TestL2Finance_T6_ReconnectReplay` and `TestL2Finance_T6_Gap` (CANNOT-OBSERVE).
+- [ ] T8. `TestL2Finance_T8_Kill` (PASS), plus `TestL2Finance_T8_ModeOffAfterQueue`, `TestL2Finance_T8_ModeOffBeforeQueueDelivery`, `TestL2Finance_T8_RevokedAfterQueue` and `TestL2Finance_T8_ReplyKill` (FAIL/GAP via `expectGap`), plus `TestL2Finance_T8_RevokedPoolFence` (CANNOT-OBSERVE).
+- [ ] M. `TestL2Finance_M1_ClassifierBypass`, `TestL2Finance_M2_KillHookOmitted` and `TestL2Finance_M3_PeerLeak`: each fails the run if its helper does not detect the mutation.
+- [ ] O. `TestL2Finance_OfflineGuard`: TEST-NET-1 dial and external DNS are refused; an `httptest` loopback dial succeeds.
+- [ ] R. A run without `L2FINANCE_SOURCE_REV` fails before any `L2RESULT` is printed.
+
+## Rollback
+The change is additive and tag-gated. Revert the merge commit (`git revert -m 1 <merge>`), or delete the four `internal/agent/{listener,control}/l2finance_*_test.go` files and `docs/reports/finance-assistant-l2-slice-b.md`. No production binary, schema, configuration or deployment is affected, so no service rollback is needed. The parent gate stays BLOCKED either way.

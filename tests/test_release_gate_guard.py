@@ -27,6 +27,7 @@ GATE_TEXT = (ROOT / GATE_REL).read_text()
 REAL_GIT = shutil.which("git")
 SVC = "platform-gitops/services"
 WORKERS = ["mctl-agents-worker", "mctl-agents-worker-exec", "mctl-agents-worker-implement"]
+READ_ONLY = ("validate", "preview")
 TARGET_CALL = "sh " + GUARD_REL + " target"
 OUTGOING_CALL = "sh " + GUARD_REL + " outgoing origin/main || exit 1"
 
@@ -48,6 +49,8 @@ TEMPLATES = {
     "commit": template("tpl-git-commit.yaml", "commit-service"),
     "delete": template("tpl-git-commit.yaml", "delete-service"),
     "validate": template("tpl-validate-tenant.yaml", "validate"),
+    "rollback": template("wft-rollback-service.yaml", "patch-values"),
+    "preview": template("tpl-validate-tenant.yaml", "image-name"),
     "autoscale": template("wft-deploy-service.yaml", "patch-autoscaling-values"),
     "add-domain": template("wft-add-custom-domain.yaml", "do-add-domain"),
     "remove-domain": template("wft-remove-custom-domain.yaml", "do-remove-domain"),
@@ -193,8 +196,8 @@ RACE_EOF
         src = t["script"]["source"]
         if mutate:
             src = mutate(src)
-        # validate clones anonymously, so it has no key to redirect.
-        assert src.count("/secrets/deploy-key/ssh-privatekey") == (0 if name == "validate" else 1)
+        # validate and preview clone anonymously, so they have no key to redirect.
+        assert src.count("/secrets/deploy-key/ssh-privatekey") == (0 if name in READ_ONLY else 1)
         # /tmp first: on Linux the temporary directory itself lives under /tmp.
         src = src.replace("/tmp/", str(self.tmp) + "/w-")
         src = src.replace("/secrets/deploy-key/ssh-privatekey", str(self.key))
@@ -216,7 +219,7 @@ RACE_EOF
         # These run under busybox ash in production and use its ${x//a/b} and
         # pipefail; dash, sh on Ubuntu, has neither. The guard they call still
         # runs under plain sh.
-        shell = "bash" if name in ("add-domain", "remove-domain", "autoscale") else "sh"
+        shell = "bash" if name in ("add-domain", "remove-domain", "autoscale", "rollback") else "sh"
         r = subprocess.run([shell, str(script)], env=env, capture_output=True, text=True,
                            cwd=self.tmp, timeout=120)
         return r.returncode, r.stdout + r.stderr
@@ -353,6 +356,24 @@ def validate_gated(mutate=None):
     return boxed(body)
 
 
+def preview_params(team, service):
+    return {"PARAM_TEAM_NAME": team, "PARAM_COMPONENT_NAME": service, "PARAM_GIT_REF": ""}
+
+
+def preview_gated(mutate=None):
+    def body(b):
+        rc, out = b.run("preview", preview_params("admins", WORKERS[0]), mutate)
+        return rc != 0 and "release gate" in out
+    return boxed(body)
+
+
+def preview_other():
+    def body(b):
+        rc, out = b.run("preview", preview_params("labs", "app"))
+        return rc == 0 and "release gate" not in out
+    return boxed(body)
+
+
 def validate_other():
     def body(b):
         rc, out = b.run("validate", validate_params("labs", "app"))
@@ -419,7 +440,12 @@ def database_params(team, service):
             "VAULT_TOKEN": "t"}
 
 
-WRITERS = {"add-domain": domain_params, "remove-domain": domain_params, "database": database_params}
+def rollback_params(team, service):
+    return {"PARAM_TEAM_NAME": team, "PARAM_COMPONENT_NAME": service, "PARAM_TARGET_TAG": "1.100.0"}
+
+
+WRITERS = {"add-domain": domain_params, "remove-domain": domain_params, "database": database_params,
+           "rollback": rollback_params}
 
 
 def writer_gated(name, mutate=None):
@@ -456,9 +482,8 @@ def writer_other_pushes(name):
     return boxed(body, seed=writer_seed)
 
 
-# wft-rollback-service refuses gated files with its own inline guard, which
-# tests/test_release_gate.py covers.
-EXEMPT_WRITERS = {"wft-rollback-service.yaml"}
+# wft-rollback-service calls the shared guard like the others; nothing is exempt.
+EXEMPT_WRITERS = set()
 
 
 def unguarded_writers(docs):
@@ -496,6 +521,7 @@ check("update-config of another service still pushes",
 check("retire of another service still removes it", retire_other())
 check("autoscaling of another service still pushes", scale_other())
 check("validate lets another service through", validate_other())
+check("preview lets another service through", preview_other())
 check("a concurrent worker bump does not refuse another service", race_unrelated())
 check("onboard of a new service still pushes",
       boxed(lambda b: (lambda res: res[0] == 0 and b.read(f"{SVC}/labs/fresh/values.yaml") is not None)(
@@ -510,11 +536,15 @@ check("onboard onto a gated worker is refused", deploy_gated(WORKERS[0], "onboar
 check("retire of a gated directory already missing is refused, not exit 0", retire_gated_dir_gone())
 check("autoscaling of a gated worker is refused", scale_gated())
 check("validate refuses a gated worker before any build or Vault step", validate_gated())
+for w in WORKERS:
+    check(f"preview refuses gated worker {w} before any build",
+          boxed(lambda b, w=w: (lambda res: res[0] != 0 and "release gate" in res[1])(
+              b.run("preview", preview_params("admins", w)))))
 
 for name in WRITERS:
     check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
     # provision-database uses GNU/busybox sed syntax, so it cannot finish on macOS.
-    if name == "database" and sys.platform == "darwin":
+    if name in ("database", "rollback") and sys.platform == "darwin":
         print(f"SKIP  {name}: another service still pushes (needs Linux sed)")
     else:
         check(f"{name}: another service still pushes", writer_other_pushes(name))
@@ -690,7 +720,7 @@ check("outgoing does not confuse a name sharing a gated prefix",
 
 # ── Wiring: every push in these templates sits behind the check ──────────────
 for name, tmpl in TEMPLATES.items():
-    if name == "validate":
+    if name in READ_ONLY:
         continue
     lines = tmpl["script"]["source"].split("\n")
     pushes = [i for i, ln in enumerate(lines) if ln.strip().startswith(("git push", "if git push"))]
@@ -704,9 +734,42 @@ tasks = {t["name"]: t for t in
          [x for x in retire["spec"]["templates"] if x["name"] == "retire-pipeline"][0]["dag"]["tasks"]}
 check("retire: Vault secrets wait for the git step that can refuse",
       "delete-from-git" in tasks["delete-vault-secrets"]["dependencies"])
-preview = template("tpl-validate-tenant.yaml", "image-name")
-check("preview's image-name step has no release-gate call",
-      "release-gate-guard" not in yaml.safe_dump(preview))
+_rb = TEMPLATES["rollback"]["script"]["source"]
+check("rollback calls the shared guard before and after the edit",
+      TARGET_CALL in _rb and OUTGOING_CALL in _rb and _rb.find(TARGET_CALL) < _rb.find("sed -i") < _rb.find(OUTGOING_CALL))
+check("rollback has no reader of the gate file of its own",
+      "release-gates.yaml" not in _rb and "GATED_PATHS" not in _rb)
+
+
+def rollback_with_gate(gate, mutate=None):
+    """Rollback of an ordinary service: True when it finishes with a push."""
+    def body(b):
+        before = b.head()
+        rc, out = b.run("rollback", rollback_params("labs", "app"), mutate)
+        return rc == 0 and b.head() != before
+    return boxed(body, gate=gate)
+
+
+def rollback_refuses_unreadable_gate(gate, mutate=None):
+    def body(b):
+        before = b.head()
+        rc, out = b.run("rollback", rollback_params("labs", "app"), mutate)
+        return rc != 0 and b.head() == before and "release gate" in out
+    return boxed(body, gate=gate)
+
+
+if sys.platform == "darwin":
+    print("SKIP  rollback of another service still pushes (needs GNU/busybox sed -i)")
+else:
+    check("rollback of another service still pushes", rollback_with_gate(GATE_TEXT))
+check("rollback refuses when the gate file is missing", rollback_refuses_unreadable_gate(None))
+check("rollback refuses when the gate names no values file", rollback_refuses_unreadable_gate("gates: []\n"))
+check("rollback refuses when the gate file cannot be parsed", rollback_refuses_unreadable_gate("gates: [\n"))
+check("preview's image-name step carries the target check",
+      TARGET_CALL in TEMPLATES["preview"]["script"]["source"])
+check("preview's target check runs before the image-name check",
+      0 <= TEMPLATES["preview"]["script"]["source"].find(TARGET_CALL)
+      < TEMPLATES["preview"]["script"]["source"].find("check-image-name.sh"))
 
 
 # ── Mutants: remove each layer, the matching scenario must stop holding ──────
@@ -750,6 +813,10 @@ MUTANTS = {
         lambda: scale_gated(mutate=no_guard, wrote_nothing=False),
     "validate: target call removed":
         lambda: validate_gated(mutate=no_target),
+    "rollback: unreadable gate no longer refuses (guard exits 0 on a missing file)":
+        lambda: rollback_refuses_unreadable_gate(None, mutate=no_guard),
+    "preview: target call removed":
+        lambda: preview_gated(mutate=no_target),
     **{f"{n}: target call removed": (lambda n=n: writer_gated(n, mutate=no_target)) for n in WRITERS},
     "guard: shape check off, a glob is accepted":
         lambda: bad_gate_refuses(GLOB_GATE, guard=SHAPE_OFF),

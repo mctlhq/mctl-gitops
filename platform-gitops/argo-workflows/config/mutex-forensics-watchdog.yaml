@@ -81,7 +81,7 @@ spec:
             - name: watchdog
               # Reuse the cluster's proven kubectl+jq image (also used by the
               # PVC/PV janitors); avoid retired bitnami/kubectl tags.
-              image: alpine/k8s:1.33.12
+              image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
               # The script loads every Workflow in the namespace as one JSON
               # document and runs jq over it. With ~100 live Workflows that
               # document is ~15 MB and jq's in-memory tree is several times

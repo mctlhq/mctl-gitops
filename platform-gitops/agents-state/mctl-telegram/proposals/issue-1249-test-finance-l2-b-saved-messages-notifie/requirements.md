@@ -1,0 +1,74 @@
+# Finance L2 slice B: Saved Messages listener, owner notifier and replay fake-transport evidence (test-only)
+
+## Context
+Issue mctlhq/mctl-telegram#1249 is slice B of the already-accepted L2 research question from #1244. That run's 10-case harness was too large for one Tier 2 run, and PR #1247 (head `4aad292`, still OPEN, owned by DevLoop `dev-loop-mctlhq-mctl-telegram-1244`) contains only policy-package tests (`internal/agent/policy/l2finance_test.go`, `l2finance_result_test.go`). Those tests also hardcode `rev=248db4f`. This slice asks whether the Saved Messages listener (`internal/agent/listener`) and the owner notification/control path (`internal/agent/control`) can prove their current T1-T6 and T8 boundaries. The proof may use only `//go:build l2finance` Go tests, fake MTProto updates, a fake `SelfSender` and in-memory SQLite.
+
+This is application-security evidence, not a product capability. The parent verdict mctlhq/.github#325 stays `RESEARCH_ONLY_DEFER` and `FINANCE_SECURITY_GATE=BLOCKED`. Nothing this slice reports may promote the gate or be read as L2 completion. The code reading for this proposal already predicts several FAIL/GAP rows. `control.Notifier.DeliverPending` has no delivery-time per-user mode or session-revocation fence. `control.Notifier.Reply` is not gated by the kill switch. These rows must be recorded honestly, not fixed.
+
+## User stories
+- AS the platform owner I WANT reproducible, offline evidence of how the listener and notifier treat owner commands, foreign senders, replays, kill switch, mode and revocation SO THAT the finance-assistant security gate is decided on observed behaviour, not on assumptions.
+- AS an independent reviewer I WANT each case to emit one machine-readable `L2RESULT` line with a pinned source revision and an explicit outcome SO THAT I can audit the result without rerunning anything against live Telegram.
+- AS the maintainer of PR #1247 I WANT this slice to write only to new files and a slice-specific report SO THAT it never conflicts with the canonical #1247 report or helpers.
+
+## Acceptance criteria (EARS)
+- WHILE PR #1247 is unresolved and owned by `dev-loop-mctlhq-mctl-telegram-1244` THE SYSTEM SHALL NOT implement, merge or run this slice. The implementer task is gated on an explicit disposition of #1247 plus a fresh, exact-content human approval of this proposal. Grant `aar_5dc0456105f442829583adaa101516c6` SHALL NOT be reused.
+- WHEN the slice is implemented THE SYSTEM SHALL add only new `*_test.go` files carrying `//go:build l2finance`, plus one new Markdown addendum `docs/reports/finance-assistant-l2-slice-b.md`. No production `.go` file, migration, config, CI workflow or deployment file SHALL change.
+- WHEN `go test -tags l2finance -count=1 -run L2Finance -v ./internal/agent/listener/ ./internal/agent/control/` runs THE SYSTEM SHALL emit exactly one `L2RESULT id=<case> outcome=<PASS|FAIL/GAP|NOT-IMPLEMENTED|CANNOT-OBSERVE> rev=<sha> evidence=<text>` line per case id in the design's case table, with no case id missing.
+- IF the env var `L2FINANCE_SOURCE_REV` is unset or not a 40-character lowercase hex SHA THEN THE SYSTEM SHALL fail the run rather than print a placeholder or hardcoded revision.
+- WHEN an owner-authored `/mctl status` arrives in the primary Saved Messages dialog through the live dispatcher (`Listener.dispatcherFor`), with `Out=true` or `Out=false` THE SYSTEM SHALL record PASS only if the real `control.Router` (real `ParseCommand`, real `classifySavedCommand`) produces exactly one reply through the fake `SelfSender` and exactly one `saved_command` incoming event (T1, T6).
+- WHEN a `/mctl status` text arrives as a DM from Bob, as a group message (`PeerChat`/`PeerChannel`), as a forward into Saved Messages, as a Saved Messages message with a foreign `FromID`, or with a foreign `SavedPeerID` THE SYSTEM SHALL record PASS only if the router is never invoked and no `saved_command` event exists (T2, T4).
+- WHEN the same Saved Messages command is delivered by push and then by the history poller, or redelivered after a simulated reconnect/restart on the same store THE SYSTEM SHALL record PASS only if it routes exactly once and the durable cursor (`GetSavedCommandCursor`) advances monotonically and never crosses a command whose routing failed (T5.1, T5.3, T6).
+- WHEN `Notifier.DeliverPending` delivers queued notifications for two owners (Alice, Carol) THE SYSTEM SHALL record PASS only if each text reaches the fake `SelfSender` only under its own UserID and the fake peer sink receives nothing (T1, T3). Finance-source isolation SHALL be recorded `NOT-IMPLEMENTED`.
+- WHEN a claimed notification's first send fails after reaching the fake transport and is retried THE SYSTEM SHALL record PASS only if the retry reuses the identical persisted `random_id` and the row ends `sent` exactly once (T5.2).
+- WHILE `GlobalKill` returns true THE SYSTEM SHALL record PASS for queued delivery only if zero sends occur and rows stay `pending`, then deliver after the switch is cleared (T8.kill).
+- IF a notification is delivered after the owner's profile mode becomes `off` (before or after queueing), or after `RevokeActiveSession`, or a `/mctl` Reply is sent while `GlobalKill` is true THEN THE SYSTEM SHALL record `FAIL/GAP` through an `expectGap` helper. That helper fails the test when the gap stops reproducing, so a gap is never silently renamed PASS and is never fixed in this slice.
+- WHEN negative controls M1 (classifier bypass), M2 (kill hook omitted) and M3 (fake `SelfSender` leaking to a fake peer sink) run THE SYSTEM SHALL show that the same assertion helpers used by the real cases report a violation for each mutation. A mutation the helpers do not detect SHALL fail the run.
+- WHILE any l2finance test runs THE SYSTEM SHALL refuse every non-loopback dial and DNS lookup made through `net.DefaultResolver` and `http.DefaultTransport`. A self-test SHALL prove that the guard rejects a TEST-NET-1 address (192.0.2.1).
+- THE SYSTEM SHALL use only synthetic identities (Alice, Bob, Carol, Dana) and ids already used by the package tests (`selfTG=100` as the owner Alice's account). Bob is the new constant `l2BobTG=600`, which has no hits in `git grep` under `internal/agent`. `recruit=555` is not reused, because it is labelled Alice in `listener` tests and Bob in `control` tests.
+- THE SYSTEM SHALL state in the addendum `FINANCE_SECURITY_GATE=BLOCKED`, that #325 remains `RESEARCH_ONLY_DEFER`, and that slice B is not L2 completion.
+
+## AMEND: owner and evidence gates (required before implementation)
+
+- **Dependency/ownership:** before any `#1249` implementation, prove PR
+  `mctl-telegram#1247` is actually merged or explicitly closed with a
+  reviewed partial-evidence disposition, and that the original DevLoop's
+  PR lifecycle has been reconciled/released. An `APPROVED` review or
+  `CLEAN` PR alone is not sufficient. Record the final #1247 commit
+  and current `mctl-telegram/main` SHA in the slice B report.
+- **Independent exact-content review:** require independent review of
+  this amended `requirements.md`, `design.md` and `tasks.md`
+  followed by a **fresh, separately bound owner approval** on the
+  reviewed proposal digest for #1249. Do not reuse #1244's grant,
+  authorise an implementer via a plain issue comment, or hand-edit
+  `.status.yaml` while its Temporal workflow is running.
+- **No-egress evidence:** replacing `net.DefaultResolver` or
+  `http.DefaultTransport` in a tagged test process proves only that
+  these *default* paths are guarded. It does **not** block every custom
+  dialer or direct MTProto client. Run all cases using fake adapters,
+  prohibit construction of live Telegram clients, and explicitly
+  test refusal of non-loopback and DNS through reachable paths. If
+  a stronger external egress boundary cannot be demonstrated, label
+  the relevant *whole-process* assurance `CANNOT-OBSERVE`; never
+  assert a blanket network prohibition merely because the default
+  transport self-test passed. No live external dial is authorised.
+- **Per-case evidence:** `L2FINANCE_SOURCE_REV` must be the exact 40-hex
+  source commit tested, obtained from the current checkout and echoed
+  in every `L2RESULT` and the final addendum. The slice may report
+  reproduced `FAIL/GAP` as a harness execution success, but must
+  explicitly keep `FINANCE_SECURITY_GATE=BLOCKED` with IDs and counts.
+  Full T1–T10 aggregation remains dependent slice D, never inferred
+  from slice B's green Go command.
+
+## Out of scope
+- Agent API and wire-layer cases T7, T9 and T10, mutation M4, and the global result aggregator across slices.
+- Any runtime fix, including the delivery-time mode/revocation fence and the kill-switch gate on `Reply`, even though this slice is expected to record them as FAIL/GAP.
+- Bank linking, CSV store, consent/permission implementation, live personal financial data, Finance Assistant deployment.
+- Edits to PR #1247's files (`internal/agent/policy/l2finance*_test.go`, `docs/reports/finance-assistant-l2-results.md`).
+- gotd `updates.Manager` gap recovery against a real or fake MTProto server (see T6.gap).
+
+## Open questions
+- Sequencing: #1247 is still OPEN (head `4aad292`). This proposal assumes it will be dispositioned first, as a labelled partial-evidence merge or a closure. If it is closed unmerged, should this slice's `L2RESULT` helper later be hoisted into a shared location? This proposal duplicates a small helper per package because test-only helpers cannot be shared across packages without production source.
+- Is `Notifier.Reply` deliberately exempt from `GlobalKill`, as a synchronous answer to an owner command? The `Notifier.GlobalKill` doc says the switch silences "every owner-facing message". This proposal records the behaviour as FAIL/GAP (`T8.reply_kill`) and leaves the owner to decide whether the rubric should treat it as accepted behaviour.
+- Revocation is fenced in production at the transport layer (`ClientPool.Borrow` calls `Store.CheckSessionValid`), not in the `Notifier`. A fake `SelfSender` bypasses that layer by construction. This proposal records the Notifier boundary as FAIL/GAP and the pool-layer fence as CANNOT-OBSERVE in this slice. Should the rubric accept the pool fence as sufficient?
+- Should the mode-off queue-time gate (`T8.mode_off_before_queue`, already PASS in #1247's policy tests) be cross-referenced only? Or must the notifier-layer delivery outcome be its own row? This proposal records both, with distinct ids.
+- This run did not check whether `dev-loop-mctlhq-mctl-telegram-1244` is still alive; no DevLoop read was made. Its ownership of #1247 comes from the issue text. Task 0 must confirm the current owner and disposition before any code is written.

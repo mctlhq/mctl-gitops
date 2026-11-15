@@ -15,6 +15,9 @@ tenant:
   # Degraded for 684 reconciliations over 7 days.
   ghcrCredentials:
     enabled: false
+  # The control worker's Recreate rollout proves its image is cached first.
+  prepullVerifier:
+    enabled: true
   # cwft-rotate-github-token force-refreshes these ExternalSecrets after minting
   # each 1h GitHub App token. Workflow RBAC on ExternalSecrets is read-only
   # everywhere else, and resourceNames keeps the grant to exactly these objects.
@@ -63,7 +66,9 @@ tenant:
     # cluster-wide memory-limit quota ceiling for onboarding more tenants
     # (docs/audit/PLATFORM_ASSESSMENT_2026-07.md capacity note).
     limits.memory: "5Gi"
-    pods: "12"
+    # Bumped for the control worker's pre-pull: 3 DaemonSet pods and the PreSync
+    # Job on top of 10 steady-state pods (mctl-agents#1007).
+    pods: "16"
     persistentvolumeclaims: "2"
     # Added 2026-10-20: a PVC count alone does not bound storage; every
     # PVC on the default class is a billed Hetzner volume.

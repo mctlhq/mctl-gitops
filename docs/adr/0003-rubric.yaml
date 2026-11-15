@@ -1,0 +1,13 @@
+# Scoring rubric for ADR 0003 (Temporal client authz). Scores are filled only
+# from live evidence recorded in docs/runbooks/temporal-client-auth.md.
+candidates:
+  - vault-jwt-default-authorizer
+  - mtls-custom-claim-mapper
+  - projected-sa-token-custom-claim-mapper
+  - authorizing-gateway
+dimensions:
+  - {key: namespace_isolation, name: Namespace and role isolation, weight: 30}
+  - {key: stock_binary, name: Works on the stock Temporal server binary, weight: 25}
+  - {key: revocation, name: Revocation and rotation, weight: 20}
+  - {key: operability, name: Operational cost and rollback, weight: 15}
+  - {key: bypass_risk, name: Bypass resistance, weight: 10}

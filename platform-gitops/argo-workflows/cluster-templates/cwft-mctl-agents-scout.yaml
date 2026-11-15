@@ -35,7 +35,7 @@ spec:
         # "true" prints the digest to the step log and sends nothing; the
         # Telegram secrets are then not needed.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.117.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.1
         # 1.100.0 predates the scout. Bump to the first release that ships
         # orchestrator.run_scout before un-suspending the CronWorkflow.
 
@@ -62,7 +62,7 @@ spec:
         # window is dropped (gitops#2164). Hold the pod until the proxy
         # accepts a TCP connect, at most ~90s.
         - name: wait-egress-proxy
-          image: alpine:3.19
+          image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
           command: [sh, -c]
           args:
             - |
@@ -192,7 +192,7 @@ spec:
         # window is dropped (gitops#2164). Hold the pod until the proxy
         # accepts a TCP connect, at most ~90s.
         - name: wait-egress-proxy
-          image: alpine:3.19
+          image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
           command: [sh, -c]
           args:
             - |
@@ -214,7 +214,7 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 50m, memory: 16Mi}
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         env:
           - name: HTTPS_PROXY

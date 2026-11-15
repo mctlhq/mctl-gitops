@@ -1,0 +1,130 @@
+{
+  "_comment": "Workflow files allowed to reference the GitHub App signing keys (#1033). A reference outside this list is a finding. Keep in step with the containment plan; remove entries as consumers migrate.",
+  "keys": [
+    "AGENTS_APP_PRIVATE_KEY",
+    "APP_PRIVATE_KEY"
+  ],
+  "repos": {
+    ".github": {
+      ".github/workflows/roadmap-publish.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-academy": {
+      ".github/workflows/content-replenish.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/source-drift.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-agent": {
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-agents": {
+      ".github/workflows/diagrams-refresh.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-alice": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-deploy.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-api": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-claude-remote": {
+      ".github/workflows/build.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-coolify-mcp": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-design": {
+      ".github/workflows/deploy.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-docs": {
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-gitops": {
+      ".github/workflows/app-key-ratchet.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/build-image.yaml": [
+        "APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-deploy.yaml": [
+        "APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-portal": {
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-telegram": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "mctl-web": {
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "portfolio": {
+      ".github/workflows/journal-closure.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/weekly-refresh.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "projects-mcp": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/sync-docs.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
+    "seerrsense": {
+      ".github/workflows/portal-allowlist-dispatch.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    }
+  }
+}

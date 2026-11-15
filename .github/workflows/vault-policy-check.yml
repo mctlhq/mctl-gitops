@@ -1,0 +1,30 @@
+name: vault-policy-check
+
+# Offline consistency check of the committed Vault policy HCL against an
+# expected-capability table (mctlhq/mctl-gitops#1033). It reads repository
+# text only and never contacts Vault. A policy file that is missing or cannot
+# be parsed fails the job: an unobserved file is not a clean one.
+
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/k3s-preview/cluster-bootstrap/vault-config/**'
+      - scripts/check-vault-policy-capabilities.py
+      - scripts/vault-policy-expectations.json
+      - tests/test_vault_policy_capabilities.py
+      - .github/workflows/vault-policy-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Unit-test the capability check (green and red cases)
+        run: python3 tests/test_vault_policy_capabilities.py
+
+      - name: Check committed policy files against the capability table
+        run: python3 scripts/check-vault-policy-capabilities.py

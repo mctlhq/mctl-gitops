@@ -4,6 +4,17 @@ metadata:
   name: argo-workflow-sa
   namespace: argo-workflows
 ---
+# Identity for the GitHub App token rotation only (Vault role
+# argo-workflow-rotator, infrastructure/k3s-preview/cluster-bootstrap/vault-config/
+# vault-role-argo-workflow-rotator.json). Nothing runs as it yet: the
+# rotate-github-app-tokens template still uses argo-workflow-sa, and the executor
+# RBAC this account needs is added together with that switch.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow-rotator-sa
+  namespace: argo-workflows
+---
 # Identities for the mctl-agents step pods (cwft-mctl-agents-*.yaml).
 #
 # The agent step runs a model-driven session, some with a shell, on input it

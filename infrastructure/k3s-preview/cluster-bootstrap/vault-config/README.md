@@ -8,9 +8,56 @@ Apply after Vault is initialized and unsealed.
 Used by the ExternalSecrets Operator (ESO) service account.
 Grants read access to all platform and team secrets.
 
+The policy file also carries an explicit `deny` on `platform/github-app-agents*`
+(data and metadata). A deny overrides the `platform/*` read grant, so the
+GitHub App signing key is not readable through the ClusterSecretStore. Apply
+with the command below and verify with a canary secret first (#1033).
+
 ```bash
 vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
 ```
+
+### gitops-writer-read, plus `writers/*` denies (policy files only)
+Policy files for a dedicated writer path, `secret/{data,metadata}/writers/*`.
+This change only adds the files; nothing here has been applied to Vault, and no
+workload reads the path yet.
+
+- `vault-policy-gitops-writer-read.hcl` (new): read on `secret/data/writers/gitops/*`
+  and read/list on the matching metadata path. Nothing else.
+- `vault-policy-external-secrets-read.hcl` and
+  `vault-policy-argo-workflow-teams-rw.hcl`: an explicit `deny` on
+  `secret/{data,metadata}/writers/*` appended. The existing grants are unchanged.
+
+Owner steps, to run later and in this order (read-only check first, new policy,
+then the two updated policies; canary before the denies on a shared policy):
+
+```bash
+cd infrastructure/k3s-preview/cluster-bootstrap/vault-config
+
+# 1. Before: record what the two existing policies grant today.
+vault policy read external-secrets-read > /tmp/esr.before.hcl
+vault policy read argo-workflow-teams-rw > /tmp/awtrw.before.hcl
+
+# 2. New policy (additive, affects no existing token).
+vault policy write gitops-writer-read vault-policy-gitops-writer-read.hcl
+
+# 3. Updated policies (only the appended deny blocks differ from step 1).
+vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
+vault policy write argo-workflow-teams-rw vault-policy-argo-workflow-teams-rw.hcl
+
+# 4. After: the diff must show only the appended deny blocks.
+diff /tmp/esr.before.hcl <(vault policy read external-secrets-read)
+diff /tmp/awtrw.before.hcl <(vault policy read argo-workflow-teams-rw)
+
+# 5. Existing platform reads must still work for the ESO identity, for example:
+vault token capabilities secret/data/platform/<existing-secret> # expect: read
+```
+
+Rollback: write the saved `*.before.hcl` files back with `vault policy write`
+and remove the new policy with `vault policy delete gitops-writer-read`.
+
+`tests/test_vault_policy_files.py` checks the repo text only (structure and
+the grants described above). It does not prove how a live Vault evaluates them.
 
 ### backstage-teams-rw
 Used by `vault-secrets-backend` in Backstage to read and write service secrets

@@ -64,7 +64,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ required "image.tag must be pinned per service (semver or @sha256 digest)" .Values.image.tag }}"
+          image: {{ include "base-service.imageRef" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.containerSecurityContext }}
           securityContext:

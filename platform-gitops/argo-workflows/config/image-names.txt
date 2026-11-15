@@ -27,6 +27,8 @@ registry ghcr.io/mctlhq
 
 # --- Platform images: built by release-deploy or by hand, never by a tenant.
 reserved-prefix mctl-
+reserved agent-worker
+reserved agent-worker-preview
 reserved grafana-iac
 reserved mc
 reserved newton-mcp-gateway
@@ -63,6 +65,7 @@ grant admins mctl-support
 grant admins mctl-web
 
 # labs: platform-owned products deployed as labs services.
+grant labs agent-worker-preview
 grant labs mctl-academy
 grant labs mctl-alice
 grant labs mctl-loyalty

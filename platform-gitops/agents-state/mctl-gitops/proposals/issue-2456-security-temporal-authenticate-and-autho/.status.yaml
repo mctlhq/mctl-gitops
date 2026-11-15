@@ -1,0 +1,51 @@
+status: merged
+updated_at: '2026-11-08T12:09:35Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-27301b41917d1bb0
+  trace_id: 59adb03c3cfa181fea288a573ce3a25d
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 2456
+  url: https://github.com/mctlhq/mctl-gitops/issues/2456
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-df26a3d5342c0606
+  content_hash: sha256:df26a3d5342c0606034611beb7d08f84a99835252045c168281a5bfa666bccbc
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-11-08T11:13:25Z'
+  content_digest: sha256:df478acfbe14127d78c31f1fd439dddc5a19501d98627bc91192a4baa07d1d7e
+  digest_binding: reviewed
+  approval_ref: aar_dd62e132219145a9a1567bf344a3dc61
+attempt:
+  id: 1eeb919abf5b22da3e3faa837f016946c4ed2f10660970220c9f26a86bc04c0f
+  started_at: '2026-11-08T11:15:07Z'
+  expires_at: '2026-11-08T13:25:07Z'
+  finished_at: '2026-11-08T11:16:18Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/2467
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-4ba62d09
+  authoritative:
+    completion_id: ic-675bbcd431e863db
+    content_hash: sha256:675bbcd431e863dbf02632926f5d31d27591cd489f85a35ea926067604b9528a
+    proposal_digest: sha256:df478acfbe14127d78c31f1fd439dddc5a19501d98627bc91192a4baa07d1d7e
+    attempt_id: 1eeb919abf5b22da3e3faa837f016946c4ed2f10660970220c9f26a86bc04c0f
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 0d72ef34266628c95c6a5e049ce087eb567b34b9
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+merged_at: '2026-11-08T12:09:35Z'
+merge_commit: f799c247743979e98c27cbe5d7c1d37753bb9057

@@ -35,6 +35,10 @@ tenant:
     # Maximum number of services
     services: "10"
 
+  # -- Identity of the base-service pre-pull PreSync Job (mctl-agents#1007).
+  prepullVerifier:
+    enabled: false
+
   # -- GHCR pull credentials ExternalSecret (targets Secret "ghcr-credentials",
   # which base-service's Deployment always references via imagePullSecrets).
   # Defaults on so every current/future tenant gets it automatically. Set to

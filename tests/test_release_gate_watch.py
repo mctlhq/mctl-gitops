@@ -37,6 +37,9 @@ def tree(tmp):
         for p in g["paths"]:
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / p, tmp / p)
+    for h in gate["version_holds"]:
+        (tmp / h["file"]).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / h["file"], tmp / h["file"])
     return gate["gates"][0]["paths"]
 
 
@@ -97,6 +100,17 @@ other = by_name["Notify Telegram - the check itself failed"]["if"]
 check("the violation alert needs the violated state", "== 'violated'" in viol and "failure()" in viol)
 check("the other alert excludes it", "!= 'violated'" in other and "failure()" in other)
 check("a pull request never alerts", "!= 'pull_request'" in viol and "!= 'pull_request'" in other)
+
+conc = doc["concurrency"]["group"]
+check("a push gets its own concurrency group per commit",
+      "github.sha" in conc and "github.event_name == 'push'" in conc, conc)
+check("other triggers share one group per ref", "github.ref" in conc, conc)
+check("no run is cancelled mid-flight", doc["concurrency"]["cancel-in-progress"] is False)
+vif = by_name["Verify"].get("if", "")
+check("Verify runs after a failed comparison and not when cancelled",
+      "success()" in vif and "failure()" in vif and "always()" not in vif, vif)
+dif = by_name["Compare content with the parent"].get("if", "")
+check("the comparison runs only on a push", "github.event_name == 'push'" in dif, dif)
 
 print()
 if failures:

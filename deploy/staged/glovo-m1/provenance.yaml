@@ -1,0 +1,25 @@
+# One entry per image. P0 allows <digest-pending>; P1 policy (separately
+# approved) must require a real sha256 digest, commit and SBOM.
+# Repository names are placeholders until the images are built.
+images:
+  facade:
+    repository: ghcr.io/mctlhq/glovo-mcp-facade
+    digest: "<digest-pending>"
+    sourceRepo: mctlhq/mctl-telegram
+    commit: "<commit-pending>"
+    sbom: "<sbom-pending>"
+    buildRun: "<build-run-url-pending>"
+  provider:
+    repository: ghcr.io/mctlhq/glovo-provider-worker
+    digest: "<digest-pending>"
+    sourceRepo: mctlhq/mctl-telegram
+    commit: "<commit-pending>"
+    sbom: "<sbom-pending>"
+    buildRun: "<build-run-url-pending>"
+  control:
+    repository: ghcr.io/mctlhq/glovo-control-worker
+    digest: "<digest-pending>"
+    sourceRepo: mctlhq/mctl-agents
+    commit: "<commit-pending>"
+    sbom: "<sbom-pending>"
+    buildRun: "<build-run-url-pending>"

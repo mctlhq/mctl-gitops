@@ -1,0 +1,22 @@
+# Tasks: AMEND #328 — bounded research, without implementation
+
+**Status:** amendment proposal only. The existing Temporal DevLoop for mctlhq/.github#328 remains Running with `.status.yaml = proposed`; this AMEND must be reviewed and merged via a mctl-gitops PR before separately authorized, digest-bound human approval. Do **not** change status, signal approval, launch implementer, or merge this PR automatically.
+
+- [ ] **1. Re-observe 0.20.2 and pin evidence (R0).** Pin 40-hex SHAs for mctl-web, mctl-telegram, mctl-docs, mctl-academy, mctl-alice, seerrsense, mctl-design and mctl-gitops. Check publication/deploy vs each consumer PR/release, desired GitOps image and observed ArgoCD version. DoD: cited source/runtime table; the now-resolved mctl-design image drift is not repeated; a merged PR is not called deployed.
+- [ ] **2. Six-surface inventory (R0).** Catalog runtimes, versions, CSS/JS dependency pins, actual public/auth/consent/connect/manage/redirect/error CSP, CI/security tests, packaging, rollback and owner issues. DoD: complete 6-by-N matrix; every missing route/header labelled `unknown (not observed)`, and CDN vs vendored mode explicit.
+- [ ] **3. Responsive header behavior and shared-contract proposal (R1).** Verify Escape, outside click, focus return, tab order/ARIA, resize, reduced motion and no-JS. Compare Nuxt/Vue, Academy Vue, Docs/VitePress, Alice/SeerrSense plain JS, and Telegram strict Go routes. DoD: behavior/a11y acceptance matrix and a non-executable proposal for a tiny vendor-pinned JS **only** on script-permitted Alice/SeerrSense public routes; strict OAuth/consent CSP remains unchanged.
+- [ ] **4. CSS integrity and release contract (R1).** Propose immutable exact-version manifest, source/provenance, per-file SHA-256/SRI SHA-384, `crossorigin` + CDN CORS + cache preconditions, vendored sync/check and recovery/rollback. DoD: route-level CDN/local compatibility and security threat table; references to existing design#34/#78, telegram#599, academy#210, gitops#500, not duplicated implementation tickets.
+- [ ] **5. Optional light baseline and conditional framework triggers.** Measure homepage total transfer/JS bytes and selected load metrics only if the observation is reproducible/non-disruptive; otherwise record `not-run`. Inventory actual Hono/Fastify/native-http dependencies and permissions, no runtime ports. DoD: explicit separately authorized trigger/plan for any future Nuxt-vs-Astro or Hono-vs-Fastify benchmark, not a mandatory harness.
+- [ ] **6. Report and ADR (R4 research output).** Create `mctlhq/.github/docs/spikes/web-platform-unification.md` with evidence, CSP/header/integrity matrices, dedup ownership, options and R0–R5 plan. Proposed ADR remains **PROPOSED / RESEARCH ONLY**, with retain-runtime hypothesis and no owner decision.
+- [ ] **7. Optional roadmap wiring and review.** If appropriate, add `roadmap/spikes/web-platform-unification.yaml` with `lifecycle: proposed`, binding `mctlhq/.github#328`, five existing outcomes, `execution.devloop: true`, evidence report path and no `decision`/epic; optionally add AGENTS.md index entry. Run `python roadmap/scripts/validate.py roadmap/epics roadmap/spikes` when a manifest exists. Open the **research-only** PR for human review; no merge/approval/rollout in this task.
+
+## Review checks
+- [ ] Correct source pins, status of all six consumer bump PRs and accurate desired vs live deployment separation.
+- [ ] Header behavior contract covers keyboard, focus, outside click, resize and no-JS; strict script/CSS CSP routes stay closed.
+- [ ] SRI/CORS/cache and local-vendoring integrity expectations are explicit, conditional and rollback-aware.
+- [ ] Missing performance and route observations are `not-run` or `unknown`; no unbenchmarked framework-migration conclusion.
+- [ ] Research scope changes only report/optional roadmap + index; no executable framework benchmark, Python model, test fixtures, new workflow wiring, JavaScript implementation, design release or service configuration.
+- [ ] The owner has not accepted an outcome; the DevLoop proposal remains proposed.
+
+## Rollback
+Close the AMEND PR while unmerged or revert its documentary commits after merge. This research amendment makes no live change. A later research deliverable PR can also be closed/reverted without runtime rollback.

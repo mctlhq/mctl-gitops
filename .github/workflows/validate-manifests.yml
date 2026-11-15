@@ -9,6 +9,12 @@ on:
   # detectors here catch drift on that path after the fact (#1037, #1057).
   push:
     branches: [main]
+  # The merge queue (mctlhq/.github#351) tests the exact commit main will get
+  # and requires `validate` and `reserved-hosts` on it. Nothing below reads
+  # the pull request payload, so the jobs run unchanged. Inert until the
+  # ruleset enables the queue.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -123,6 +129,21 @@ jobs:
             "$tmpdir/bootstrap.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
+
+      # Validate project scope for generated applications: expand the `apps`
+      # and `tenants` ApplicationSets over the real directories, render
+      # base-service per service and check each object against the resolved
+      # project, check directory and reserved-name consistency and the
+      # inventory of places that spell the project name `apps`. The unit tests
+      # prove each check green on this tree and red on a mutation.
+      - name: Validate project scope for generated applications
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_scope.py
+          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
 
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
@@ -300,6 +321,12 @@ jobs:
 
       # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
       # seed must not come back and every agent secretKeyRef must be classified.
+      # mctl-agents#1007 B4: the required checks of the main-protection ruleset
+      # are matched by job id. Renaming `validate`, adding a job-level `if` or
+      # a paths filter would block every PR (or let a skipped check pass).
+      - name: Pin required-check job ids
+        run: python3 tests/test_required_check_job_ids.py
+
       - name: Validate agent credential delivery
         run: |
           set -euo pipefail
@@ -507,6 +534,12 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
+      - name: Unit-test the ExternalSecret annotation healer's failure paths
+        # scripts/heal-eso-lac.sh used to print a clean summary and exit 0
+        # when kubectl or jq failed, because the scan ran in a process
+        # substitution. Runs the script against a fake kubectl on PATH.
+        run: python3 tests/test_heal_eso_lac.py
+
       - name: Check the k3s-preview kured and SUC manifests follow the module inputs
         # kube-hetzner re-applies its own kured DaemonSet and
         # system-upgrade-controller Deployment, without resources, whenever
@@ -546,6 +579,26 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: Pre-pull PreSync verifier
+        run: python3 tests/test_prepull_verify.py
+
+      - name: Pre-pull verifier identity renders in order
+        # mctl-agents#1007: the ServiceAccount is a PreSync hook of the same app
+        # at an earlier wave than the Job; the tenant chart carries only the
+        # Role. Red on each mutation of a copied chart. Needs helm.
+        run: python3 tests/test_prepull_render.py
+
+      - name: CI pip installs are hash-pinned
+        # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
+        # only install with --require-hashes from the pinned requirements file.
+        run: python3 tests/test_pip_installs_hashed.py
+
+      - name: Submit contract fixtures match the repository
+        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
+        # fixtures, the shipped templates and the per-tenant write mode must
+        # agree. Red on each named mutation, exit 2 when a file cannot be read.
+        run: python3 -I tests/test_submit_contract_fixtures.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control
@@ -557,6 +610,16 @@ jobs:
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
 
+      - name: Release gate holds a bootstrap-embedded version
+        # mctl-api keeps its tag in a values block scalar; a held version needs
+        # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
+        run: python3 tests/test_release_gate_bootstrap_hold.py
+
+      - name: Release gate diff judges a push by content
+        # Includes the two sanctioned steps of a pre-pulled deploy (green) and
+        # every other change to the pre-pulled file (red), with mutants.
+        run: python3 tests/test_release_gate_diff.py
+
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
       - name: Release gate in the shared workflow templates
@@ -565,8 +628,33 @@ jobs:
         # retire, and each guard layer is removed in turn to prove a test fails.
         run: python3 tests/test_release_gate_guard.py
 
+      - name: Auto-merge protected paths
+        run: python3 tests/test_auto_merge_protected_paths.py
+      - name: Release bump PR route (routes file, tag-only diff guard, wiring)
+        # #2543 stage 1 fast track: the route decision fails closed, the guard
+        # accepts only image tag moves, and the workflows can write only to a
+        # release-bump/* ref on the PR route. Each test carries its own mutants.
+        run: |
+          python3 tests/test_release_bump_route.py
+          python3 tests/test_release_bump_diff_guard.py
+          python3 tests/test_release_bump_pr_route.py
+          python3 tests/test_release_bump_supersede.py
+          python3 tests/test_release_bump_apply.py
+      - name: Unit-test the release preflight
+        run: python3 tests/test_release_preflight.py
       - name: Read-only workflow steps hold no write credential
         run: python3 tests/test_read_steps_no_credential.py
+      - name: Ledger of references to the gitops write credentials
+        # Shrink-only: a new reference, or a ledger row whose reference is
+        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
+        # chart, so it needs the Helm install above.
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_write_credential_holders.py
+      - name: Tenant-class templates and Secret readers, by credential name
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_tenant_template_write_set.py
       - name: Unit-test gitops-bump inputs and its edit check
         run: python3 tests/test_gitops_bump_inputs.py
 
@@ -604,6 +692,12 @@ jobs:
         # unreachable mctl-api or a missing OIDC token must refuse.
         run: python3 tests/test_build_image_source_repo_check.py
 
+      - name: Test that build-image stamps the source revision label
+        # org.opencontainers.image.revision is the 40-hex commit of the
+        # checkout, never the input ref; an unresolvable revision refuses the
+        # build (mctlhq/mctl-gitops#2528, task 13).
+        run: python3 tests/test_build_image_revision_label.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists
@@ -638,11 +732,22 @@ jobs:
         # being reported as "not found, skipping".
         run: python3 tests/test_wft_delete_tenant_vault.py
 
+      - name: Vault policy files parse and carry the writer-prefix rules
+        # Repo text only: structure of every vault-policy-*.hcl, the read-only
+        # writer policy, and the deny on the writer prefix in two policies.
+        run: python3 tests/test_vault_policy_files.py
+
       - name: Tenant workflows log in to Vault with their own tenant role
         # A template reachable from a tenant namespace picks its Vault role
         # from the pod's namespace and never asks for the platform role
         # argo-workflow; create/delete-tenant manage the per-tenant role.
         run: python3 tests/test_vault_login_role.py
+
+      - name: Pin the argo-workflow-rotator Vault role's reach
+        # The dedicated rotation role grants exactly the KV paths the
+        # rotate-github-app-tokens template names (derived from it), is bound to
+        # one ServiceAccount, and nothing else. Not yet used by the template.
+        run: python3 tests/test_vault_rotator_role.py
 
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
@@ -827,6 +932,18 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_preview_delete_tls_secret.py
+
+      - name: preview-deploy renders the preview id and gitops commit a plan binds
+        # An approved deploy plan binds its preview id, host and the values at
+        # one gitops commit (.github#254); the workflow used to derive its id
+        # from its own name and read the default branch. Runs the deploy
+        # script with stub git/python3, under bash and busybox sh.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_server_set_id.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_server_set_id.py'
 
       - name: Preview ttl_hours is stamped and enforced
         # Nothing deleted expired previews before preview-reaper; a May
@@ -1048,6 +1165,38 @@ jobs:
         run: |
           set -euo pipefail
           scripts/test-tenant-workflow-sa-argocd-policy.sh
+
+  # Glovo M1 P0 (#2470): the staged package under deploy/staged/glovo-m1 must
+  # render and keep its fail-closed defaults, and no Glovo host, workload,
+  # image or assistant namespace may reach a reconciled path. The leak guard
+  # ignores deploy/staged/glovo-m1/gate.yaml on purpose. --selftest first: a
+  # detector never seen to fire is not known to work.
+  glovo-m1:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate the staged Glovo M1 package
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-glovo-m1-staging.py --selftest
+          scripts/validate-glovo-m1-staging.py
+          scripts/test-mctl-api-egress-policy.py --selftest
+          scripts/test-mctl-api-egress-policy.py
 
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not

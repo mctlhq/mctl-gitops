@@ -19,10 +19,12 @@ run-name: "portal-allowlist-vendor ${{ inputs.server }} @ ${{ inputs.source_sha 
 # --vendor-check closes the loop nightly against the recorded sha and main.
 #
 # Caller requirements: a token with actions: write on mctl-gitops. Callers
-# mint it from the mctl-agents App (org variable AGENTS_APP_CLIENT_ID, org
-# secret AGENTS_APP_PRIVATE_KEY, `repositories: mctl-gitops`,
-# `permission-actions: write`), the way their release workflows already
-# dispatch here since mctlhq/mctl-gitops#761. No other secret.
+# mint it from their dispatch App (currently the mctl-agents App: org variable
+# AGENTS_APP_CLIENT_ID, org secret AGENTS_APP_PRIVATE_KEY, `repositories:
+# mctl-gitops`, `permission-actions: write`; moving to mctl-gitops-dispatch in
+# #1033 Stage 4), the way their release workflows already dispatch here since
+# mctlhq/mctl-gitops#761. This workflow's own token comes from the
+# mctl-gitops-pr App through the main-only `app-gitops-pr` environment.
 on:
   workflow_dispatch:
     inputs:
@@ -53,6 +55,11 @@ permissions:
 jobs:
   vendor:
     runs-on: ubuntu-latest
+    # Main-only environment (mctlhq/mctl-gitops#1033, Stage 3). It holds
+    # GITOPS_PR_APP_PRIVATE_KEY and its deployment-branch policy allows only
+    # main: a dispatch at a branch or an old ref is refused before any step
+    # runs, and cannot reach the key. No fallback to another key.
+    environment: app-gitops-pr
     # A checkout, a validator run and a handful of gh calls; a hang must
     # not hold the job for GitHub's 6-hour default.
     timeout-minutes: 10
@@ -61,8 +68,8 @@ jobs:
         id: app_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
           permission-contents: write

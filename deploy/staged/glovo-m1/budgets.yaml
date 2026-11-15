@@ -1,0 +1,17 @@
+rateLimits:
+  perUserRequestsPerMinute: 30
+  perTeamRequestsPerMinute: 120
+costCap:
+  currency: USD
+  perTeamPerDay: 5
+canary:
+  teams: 1
+  users: 3
+killSwitch:
+  # Fail closed: the facade denies everything unless the first is "true"
+  # and the user is on the allowlist of an explicit team.
+  keys:
+    - GLOVO_ENABLED
+    - GLOVO_ALLOWLIST
+    - GLOVO_TEAM_FALLBACK
+  ingressFlag: ingress.enabled

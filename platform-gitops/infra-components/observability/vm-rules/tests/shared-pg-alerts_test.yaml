@@ -380,8 +380,9 @@ tests:
 
   # Per-role budget: summed across pods, datname and state, compared with 80%
   # of each role's connectionLimit. mctl-api 52 > 51 fires (three pods of a
-  # rolling update), temporal at exactly 112 does not (strictly above), and
-  # backstage 81 > 80 fires. A role the rule does not list (forgejo, 90) stays
+  # rolling update), temporal at exactly 112 does not (strictly above),
+  # backstage 81 > 80 fires, labs-mctl-alice 9 > 8 fires, and labs-mctl-telegram
+  # at exactly 8 does not. A role the rule does not list (forgejo, 90) stays
   # quiet even though it is above every threshold.
   - interval: 1m
     name: a role above 80% of its connectionLimit fires SharedPgRoleConnectionsHigh
@@ -396,6 +397,10 @@ tests:
         values: '12x30'
       - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="backstage",usename="backstage",state="idle"}'
         values: '81x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="labs-mctl-alice",usename="labs-mctl-alice",state="active"}'
+        values: '9x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="labs-mctl-telegram",usename="labs-mctl-telegram",state="active"}'
+        values: '8x30'
       - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="forgejo",usename="forgejo",state="idle"}'
         values: '90x30'
     alert_rule_test:
@@ -420,4 +425,13 @@ tests:
               summary: "shared-pg role backstage is above 80% of its connectionLimit"
               description: >-
                 Role backstage holds 81 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              usename: labs-mctl-alice
+            exp_annotations:
+              summary: "shared-pg role labs-mctl-alice is above 80% of its connectionLimit"
+              description: >-
+                Role labs-mctl-alice holds 9 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
                 Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh

@@ -158,7 +158,7 @@ spec:
       # implementer subprocess, and therefore no TMPDIR clone directory.
       initContainers:
         - name: clone-gitops
-          image: alpine/git:2.43.0
+          image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
           # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off.
           # Escalation is off and every capability except the file-ownership
           # ones is dropped (mctl-gitops#1717).

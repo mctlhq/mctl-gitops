@@ -13,6 +13,16 @@ spec:
     targetRevision: 0.47.5
     helm:
       values: |
+        # CVE-2026-42296 (incomplete fix for CVE-2026-31892): a principal with
+        # create-Workflow bypasses `templateReferencing: Strict` and can change
+        # serviceAccountName, hostNetwork, securityContext and tolerations.
+        # Fixed in v3.7.14 (v3 line); chart 0.47.5 ships v3.7.11 and the 0.x
+        # chart line ends there, so the app version is raised through the
+        # chart's global image tag (controller, server and argoexec together).
+        # Drop this override when the chart moves to a release that carries
+        # >= v3.7.14 by itself.
+        images:
+          tag: v3.7.14
         server:
           enabled: true
           resources:

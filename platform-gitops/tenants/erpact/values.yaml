@@ -45,7 +45,10 @@ tenant:
     requests.memory: "6Gi"
     limits.cpu: "14"
     limits.memory: "11Gi"
-    pods: "30"
+    # 0 since 2026-11-14: the copy is scaled to zero (ERPact moved to its
+    # CLO cluster). Restore "30" together with automated sync in
+    # bootstrap/templates/erpact/applications.yaml.
+    pods: "0"
     persistentvolumeclaims: "5"
     # Added 2026-10-20: a PVC count alone does not bound storage; every
     # PVC on the default class is a billed Hetzner volume.

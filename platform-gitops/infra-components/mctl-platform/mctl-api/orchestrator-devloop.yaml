@@ -1,0 +1,61 @@
+# The orchestrator DevLoop principal (mctlhq/mctl-api#963). The zitadel-iac
+# Job (helm-charts/zitadel-iac/iac/orchestrator-devloop.tf) creates the
+# machine user and writes, with server-side apply as field manager
+# `zitadel-iac`:
+#   - mctl-api-orchestrator-devloop: MCTL_ORCHESTRATOR_DEVLOOP_PROVIDER and
+#     _SUBJECT, which mctl-api reads through envFromOptionalSecrets;
+#   - mctl-api-orchestrator-devloop-ids: the machine user and key ids, for the
+#     operator who configures the Mac mini. Nothing in it is a credential.
+#
+# Argo CD creates both without data and never owns `.data`
+# (ignoreDifferences in bootstrap/templates/mctl-platform/mctl-api.yaml). The
+# Job may only read and patch these two objects by name.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mctl-api-orchestrator-devloop
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: orchestrator-devloop
+type: Opaque
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-api-orchestrator-devloop-ids
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: orchestrator-devloop
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-orchestrator-devloop
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: orchestrator-devloop
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mctl-api-orchestrator-devloop"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["mctl-api-orchestrator-devloop-ids"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-orchestrator-devloop
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: orchestrator-devloop
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-orchestrator-devloop
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel

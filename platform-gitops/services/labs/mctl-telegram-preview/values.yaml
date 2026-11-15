@@ -15,7 +15,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-4ccb257"
+  tag: "main-82623cd"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -78,7 +78,7 @@ env:
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
   # same change ships to stable tg.mctl.ai. Arbitrary origins still get 403.
-  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google"
+  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com"
   # redirect_uri host allowlist for unregistered client_ids and for every
   # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
   # images ignore this key and use the built-in list). Setting it REPLACES the
@@ -88,7 +88,7 @@ env:
   # redirect on its own hosted domain, and without it every attempt 400s,
   # leaving a hand-pasted static bearer token as the only way in.
   # Loopback hosts are accepted regardless of this list.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,localhost,127.0.0.1"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).
@@ -294,15 +294,7 @@ env:
   # replicaCount 0, revoke the pool jti, then this flag back to "false".
   MANAGED_RUNTIME_ENABLED: "true"
   MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
-  # 2.00 for the #889 Part B window by owner decision (2026-11-05), so that it
-  # can start before the UTC day ends. Back to 1.00 after the window.
-  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "2.00"
-  # #889 Part B limit of $3 (mctl-telegram docs/plans/gate-889-managed-soak.md):
-  # the November ledger before the window is 2.3033, so 5.00 leaves at most
-  # 2.70 of claims and the month cap is the window cap. Remove both after the
-  # window.
-  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "5.00"
-  MANAGED_CLAIM_NOT_AFTER: "2026-11-08T14:00:00Z"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:

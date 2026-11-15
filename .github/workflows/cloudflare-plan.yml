@@ -24,6 +24,13 @@ on:
   # the `changes` job alone.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # The merge queue (mctlhq/.github#351) tests the exact commit main will get
+  # and requires this same context on it. Inert until the ruleset enables the
+  # queue. The payload has no pull request, so the base comes from
+  # merge_group.base_sha and the root-removal label is read from the API and
+  # bound to the queued commit (.github/scripts/merge-group-pr-labels.sh).
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 # Nothing here writes to the GitHub API — the plan summary goes to
@@ -35,6 +42,10 @@ jobs:
   changes:
     name: detect changes
     runs-on: ubuntu-latest
+    # pull-requests: read only for the merge_group label lookup below.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
     steps:
@@ -44,7 +55,7 @@ jobs:
 
       - id: diff
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           set -euo pipefail
           if [ -z "${BASE:-}" ]; then
@@ -134,9 +145,14 @@ jobs:
       # loses its backend, or configuration is added that no root covers.
       - name: Guard root coverage
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # workflow_dispatch carries neither payload field, and an early
@@ -262,6 +278,14 @@ jobs:
           done <<< "$local_state_roots"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
+
+          # A merge_group payload carries no labels. Read them for the queued
+          # pull request only now that one is needed; a failed or unbound read
+          # exits non-zero here (plain assignment under set -e), so the guard
+          # fails rather than treating "could not read" as "not labelled".
+          if [ "$EVENT_NAME" = merge_group ]; then
+            LABELS=$(.github/scripts/merge-group-pr-labels.sh)
+          fi
 
           if jq -e 'if type == "array" then index("cloudflare-root-removal") else null end' \
                <<< "${LABELS:-[]}" > /dev/null; then
@@ -622,6 +646,10 @@ jobs:
         env:
           CLOUDFLARE_GUARD_SELF_TEST: '1'
         run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh
+      # Proven both ways: labels only when bound to the queued commit, and a
+      # failure (never []) on a failed, malformed or mismatched read.
+      - name: Merge-group label lookup
+        run: scripts/test-merge-group-pr-labels.sh
 
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has

@@ -1,0 +1,19 @@
+# Which source repository may publish each image through release-deploy.yaml
+# (mctlhq/mctl-agents#1007). Read from main by scripts/release-preflight.py, not
+# from anything a dispatch chooses. An image not listed here cannot be released
+# by that workflow: changing this file is a reviewed PR.
+bindings:
+  ghcr.io/mctlhq/agent-worker: mctlhq/mctl-telegram
+  ghcr.io/mctlhq/agent-worker-preview: mctlhq/mctl-telegram
+  ghcr.io/mctlhq/mctl-academy: mctlhq/mctl-academy
+  ghcr.io/mctlhq/mctl-agent: mctlhq/mctl-agent
+  ghcr.io/mctlhq/mctl-agents: mctlhq/mctl-agents
+  ghcr.io/mctlhq/mctl-alice: mctlhq/mctl-alice
+  ghcr.io/mctlhq/mctl-api: mctlhq/mctl-api
+  ghcr.io/mctlhq/mctl-design: mctlhq/mctl-design
+  ghcr.io/mctlhq/mctl-docs: mctlhq/mctl-docs
+  ghcr.io/mctlhq/mctl-portal: mctlhq/mctl-portal
+  ghcr.io/mctlhq/mctl-telegram: mctlhq/mctl-telegram
+  ghcr.io/mctlhq/mctl-web: mctlhq/mctl-web
+  ghcr.io/mctlhq/portfolio: mctlhq/portfolio
+  ghcr.io/mctlhq/seerrsense: mctlhq/seerrsense

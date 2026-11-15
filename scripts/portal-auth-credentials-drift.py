@@ -27,9 +27,12 @@ Exit status: 0 in sync, 1 drifted, 2 could not be determined.
 from __future__ import annotations
 
 import argparse
+import http.client
+import io
 import json
 import os
 import sys
+import traceback
 import urllib.error
 import urllib.request
 
@@ -134,21 +137,56 @@ def desired_from_state(state: dict) -> dict[str, dict]:
     return out
 
 
-def live_summary(account: str, server: str, token: str) -> dict:
+def live_summary(account: str, server: str, token: str, opener=None) -> dict:
+    """The live auth_config_summary, or Undetermined when there is no answer.
+
+    Only a well-formed success body is an answer. A timeout while reading the
+    body, a reset connection, a body that is not JSON or not the documented
+    envelope used to escape as an uncaught exception, which Python exits with
+    status 1 -- "drifted" -- so the scheduled workflow announced "someone
+    changed it outside Git" for a Cloudflare hiccup (gitops bug report
+    ch. 18). `opener` is for the selftest.
+    """
+    opener = opener or urllib.request.urlopen
     req = urllib.request.Request(
         f"{API}/accounts/{account}/access/ai-controls/mcp/servers/{server}",
         headers={"Authorization": f"Bearer {token}"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with opener(req, timeout=30) as r:
             body = json.load(r)
     except urllib.error.HTTPError as e:  # noqa: PERF203 - one call, one error
-        raise Undetermined(f"{server}: API answered {e.code}: {e.read()[:200]!r}")
+        try:
+            detail = e.read()[:200]
+        except (OSError, http.client.HTTPException):
+            detail = b"<body unreadable>"
+        raise Undetermined(f"{server}: API answered {e.code}: {detail!r}")
     except urllib.error.URLError as e:
         raise Undetermined(f"{server}: cannot reach the API: {e.reason}")
-    if not body.get("success"):
+    except (OSError, http.client.HTTPException) as e:
+        # TimeoutError and ConnectionResetError are OSError subclasses that
+        # urlopen does not wrap once the body is being read.
+        raise Undetermined(f"{server}: no complete API answer: {type(e).__name__}: {e}")
+    except ValueError as e:
+        # json.JSONDecodeError and UnicodeDecodeError: an answer we cannot read.
+        raise Undetermined(f"{server}: API answer is not JSON: {e}")
+    if not isinstance(body, dict):
+        raise Undetermined(f"{server}: API answer is not an object: {type(body).__name__}")
+    if body.get("success") is not True:
         raise Undetermined(f"{server}: API refused: {body.get('errors')}")
-    return (body.get("result") or {}).get("auth_config_summary") or {}
+    result = body.get("result")
+    if not isinstance(result, dict):
+        # A success without a server object says nothing about the server.
+        # Reading it as {} would make every DCR server "quiet" (an empty
+        # projection is the DCR state) without anything having been seen.
+        raise Undetermined(f"{server}: API answer has no result object")
+    summary = result.get("auth_config_summary")
+    if summary is None:
+        # Absent is the documented DCR state (measured 2026-09-26).
+        return {}
+    if not isinstance(summary, dict):
+        raise Undetermined(f"{server}: auth_config_summary is not an object")
+    return summary
 
 
 # Keys the live projection may carry that the applied blob never names. They
@@ -164,6 +202,13 @@ SERVER_POPULATED = {("config", "resource")}
 # in state. A secret that vanished, or a version that moved without an apply,
 # is exactly the kind of change this check exists to surface.
 SECRET_BOOKKEEPING = ("has_client_secret", "client_secret_version")
+
+# Top-level keys compare() knows how to judge. Any other top-level key, on
+# either side, is reported: the docstring promises that a field this script
+# does not know about is reported rather than ignored, and before this only
+# the two sections below were walked, so a new top-level key was invisible
+# (gitops bug report ch. 17).
+KNOWN_TOP_LEVEL = {"auth_mode", "config", "registration_info", *SECRET_BOOKKEEPING}
 
 
 def compare(server: str, want: dict, live: dict, applied_summary: dict | None = None) -> list[str]:
@@ -184,6 +229,13 @@ def compare(server: str, want: dict, live: dict, applied_summary: dict | None = 
             diffs.append(
                 f"{server}: {key} live={json.dumps(live.get(key))} "
                 f"applied={json.dumps(applied_summary.get(key))}"
+            )
+
+    for key in sorted((set(want) | set(live)) - KNOWN_TOP_LEVEL):
+        if want.get(key) != live.get(key):
+            diffs.append(
+                f"{server}: unknown top-level key {key} live={json.dumps(live.get(key))} "
+                f"applied={json.dumps(want.get(key))}"
             )
 
     for section in ("config", "registration_info"):
@@ -374,6 +426,82 @@ def selftest() -> int:
     if not ok:
         failures.append("dcr with credentials")
 
+    # gitops bug report ch. 17: a top-level key the live side grew, or one
+    # the applied blob names and the live side lost, is reported.
+    top = live_with()
+    top["new_policy"] = {"x": 1}
+    got = compare("s", base, top)
+    ok = any("new_policy" in d for d in got)
+    print(f"{'ok  ' if ok else 'FAIL'} an unknown live top-level key is reported")
+    if not ok:
+        failures.append("unknown top-level key")
+    want_top = json.loads(json.dumps(base))
+    want_top["pinned"] = True
+    got = compare("s", want_top, live_with())
+    ok = any("pinned" in d for d in got)
+    print(f"{'ok  ' if ok else 'FAIL'} an applied top-level key missing live is reported")
+    if not ok:
+        failures.append("missing top-level key")
+    ok = not compare("s", want_top, dict(live_with(), pinned=True))
+    print(f"{'ok  ' if ok else 'FAIL'} an equal unknown top-level key is quiet")
+    if not ok:
+        failures.append("equal top-level key")
+
+    # gitops bug report ch. 18: every way of not getting an answer is
+    # Undetermined (exit 2), never a crash (exit 1, read as drift).
+    def opener_returning(raw: bytes):
+        def opener(req, timeout):
+            return io.BytesIO(raw)
+        return opener
+
+    def opener_raising(exc: BaseException):
+        def opener(req, timeout):
+            raise exc
+        return opener
+
+    class SlowBody(io.BytesIO):
+        def read(self, *a):
+            raise TimeoutError("The read operation timed out")
+
+    no_answer = [
+        ("a timeout while connecting", opener_raising(TimeoutError("timed out"))),
+        ("a timeout while reading the body", lambda req, timeout: SlowBody()),
+        ("a reset connection", opener_raising(ConnectionResetError(104, "reset"))),
+        ("a truncated body", opener_raising(http.client.IncompleteRead(b"{"))),
+        ("an HTML error page", opener_returning(b"<html>502 Bad Gateway</html>")),
+        ("a non-UTF-8 body", opener_returning(b"\xff\xfe")),
+        ("a JSON list", opener_returning(b"[]")),
+        ("success false", opener_returning(b'{"success": false, "errors": ["x"]}')),
+        ("success without a result", opener_returning(b'{"success": true, "result": null}')),
+        ("a summary that is not an object",
+         opener_returning(b'{"success": true, "result": {"auth_config_summary": "x"}}')),
+        ("an unreachable host", opener_raising(urllib.error.URLError("no route"))),
+    ]
+    for name, opener in no_answer:
+        try:
+            live_summary("a", "s", "t", opener=opener)
+            ok = False
+        except Undetermined:
+            ok = True
+        except Exception as e:  # noqa: BLE001 - this is what the case checks
+            ok = False
+            name += f" (escaped as {type(e).__name__})"
+        print(f"{'ok  ' if ok else 'FAIL'} {name} is undetermined")
+        if not ok:
+            failures.append(name)
+
+    got = live_summary("a", "s", "t", opener=opener_returning(
+        b'{"success": true, "result": {"auth_config_summary": {"auth_mode": "manual"}}}'))
+    ok = got == {"auth_mode": "manual"}
+    print(f"{'ok  ' if ok else 'FAIL'} a well-formed answer is read")
+    if not ok:
+        failures.append("well-formed answer")
+    got = live_summary("a", "s", "t", opener=opener_returning(b'{"success": true, "result": {"id": "s"}}'))
+    ok = got == {}
+    print(f"{'ok  ' if ok else 'FAIL'} an absent summary is the DCR state")
+    if not ok:
+        failures.append("absent summary")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(failures)}")
         return 1
@@ -382,6 +510,20 @@ def selftest() -> int:
 
 
 def main() -> int:
+    """Exit 2 on any failure this script did not classify.
+
+    An uncaught exception exits 1, which callers read as "drifted"; a crash
+    is not a finding, so it is reported as "could not be determined".
+    """
+    try:
+        return _main()
+    except Exception:  # noqa: BLE001 - see docstring
+        traceback.print_exc()
+        print("[2] the check crashed; nothing was determined", file=sys.stderr)
+        return 2
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--account", help="Cloudflare account id (default: from state)")
     ap.add_argument("--selftest", action="store_true")

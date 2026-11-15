@@ -173,7 +173,10 @@ def main(argv: list[str]) -> int:
             files.append(Path(argv[i + 1]))
             i += 2
         elif argv[i] == "--today" and i + 1 < len(argv):
-            today = datetime.date.fromisoformat(argv[i + 1])
+            today = _eval.parse_date(argv[i + 1])
+            if today is None:
+                print(f"--today {argv[i + 1]!r} is not a YYYY-MM-DD date", file=sys.stderr)
+                return 2
             i += 2
         else:
             print(f"unknown or incomplete argument: {argv[i]}", file=sys.stderr)
