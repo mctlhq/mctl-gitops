@@ -126,12 +126,11 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '              - /glovo',
         '            GLOVO_BASKET_UI_ENABLED: "true"',
         '          glovoBasketUISecret: mctl-api-oidc-zitadel',
-        # Step C: the host, restricted to the MCP and its metadata path.
-        '              - host: glovo.mctl.ai',
     }),
-    # Step C: the host is reserved for mctl-api in the same PR as its Ingress.
+    # The host stays reserved with no owner: since 2026-11-15 it is served
+    # outside the cluster, and mctl-api no longer routes it.
     "platform-gitops/bootstrap/values.yaml": frozenset({
-        '  glovo.mctl.ai: [mctl-api]',
+        '  glovo.mctl.ai: []',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
