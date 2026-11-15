@@ -451,6 +451,19 @@ jobs:
 
           print(f"Total: {total_replaced} occurrence(s) bumped across {len(files)} file(s)")
           PYEOF
+      # Pins the digest the build just pushed next to the tag it moved
+      # (mctl-gitops#2652), on exactly the files the step above rewrote. With
+      # no digest, a file that already pins one is refused rather than left
+      # deploying the old image under the new tag.
+      - name: Pin image digest
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-bump-digest.py --image "$IMAGE_NAME" --tag "$NEW_TAG" \
+            --digest "$IMAGE_DIGEST" --changed-files /tmp/gitops-bump-changed-files.txt
 
       # Commits locally only and hands the commit over as a patch. Nothing is
       # pushed from this job.

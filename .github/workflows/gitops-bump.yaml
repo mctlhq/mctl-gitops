@@ -24,6 +24,10 @@ on:
         description: "New image tag (e.g. 1.15.0)"
         required: true
         type: string
+      image_digest:
+        description: "Optional sha256 digest of image_name:image_tag (sha256:<64 hex>); pinned next to the tag in services values"
+        required: false
+        type: string
       values_path:
         description: "Single file to bump (e.g. platform-gitops/services/labs/claude-remote/values.yaml). Mutually exclusive with values_glob."
         required: false
@@ -52,16 +56,18 @@ jobs:
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
           INPUT_VALUES_PATH: ${{ inputs.values_path }}
           INPUT_VALUES_GLOB: ${{ inputs.values_glob }}
+          INPUT_IMAGE_DIGEST: ${{ inputs.image_digest }}
         run: |
           set -euo pipefail
           fail() { echo "::error::invalid $1"; exit 1; }
           nl=$'\n'
-          for name in IMAGE_NAME IMAGE_TAG VALUES_PATH VALUES_GLOB; do
+          for name in IMAGE_NAME IMAGE_TAG VALUES_PATH VALUES_GLOB IMAGE_DIGEST; do
             v="INPUT_${name}"
             [[ "${!v}" != *"$nl"* && "${!v}" != *$'\r'* ]] || fail "$name: contains a newline"
           done
           [[ "$INPUT_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] || fail "image_tag"
           [[ "$INPUT_IMAGE_NAME" =~ ^ghcr\.io/mctlhq/[a-z0-9][a-z0-9._-]*$ ]] || fail "image_name"
+          [[ -z "$INPUT_IMAGE_DIGEST" || "$INPUT_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "image_digest"
           # Mirrors ALLOWED_PREFIXES in the bump script below;
           # tests/test_gitops_bump_inputs.py asserts they match.
           ALLOWED_PREFIXES=(
@@ -360,6 +366,19 @@ jobs:
 
           print(f"Total: {total_replaced} occurrence(s) bumped across {len(files)} file(s)")
           PYEOF
+      # Pins the digest the build just pushed next to the tag it moved
+      # (mctl-gitops#2652), on exactly the files the step above rewrote. With
+      # no digest, a file that already pins one is refused rather than left
+      # deploying the old image under the new tag.
+      - name: Pin image digest
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-bump-digest.py --image "$IMAGE_NAME" --tag "$NEW_TAG" \
+            --digest "$IMAGE_DIGEST" --changed-files /tmp/gitops-bump-changed-files.txt
 
       # Commits locally only and hands the commit over as a patch. Nothing is
       # pushed from this job.
