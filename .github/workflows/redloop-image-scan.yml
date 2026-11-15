@@ -68,6 +68,18 @@ jobs:
           exit-code: "0"
           version: v0.69.3
 
+      - name: Verify Scan Evidence Integrity
+        run: |
+          if [[ ! -s "trivy-image-results.sarif" ]]; then
+            echo "::error::SARIF report is missing or empty"
+            exit 1
+          fi
+          if [[ ! -s "trivy-image-results.json" ]]; then
+            echo "::error::JSON report is missing or empty"
+            exit 1
+          fi
+          echo "Assessment evidence files verified non-empty."
+
       - name: Archive Assessment Evidence Artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -75,4 +87,5 @@ jobs:
           path: |
             trivy-image-results.sarif
             trivy-image-results.json
+          if-no-files-found: error
           retention-days: 90
