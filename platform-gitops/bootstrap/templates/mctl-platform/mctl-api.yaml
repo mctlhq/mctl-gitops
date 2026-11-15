@@ -10,11 +10,12 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. f54c5b96 is the 4.156.0 release commit; it renders
-      # identically to a5b9ef9c (the 4.155.0 pin) with these bootstrap values
-      # (helm template, empty diff). Move this pin in the same reviewed PR that
-      # bumps the image tag.
-      targetRevision: f54c5b963b97740cab99d2165e2df4b12c363951
+      # a GitOps change. 9895c76f is the 4.159.0 release commit. With the
+      # previous bootstrap values it renders identically to f54c5b96 (the
+      # 4.156.0 pin; helm template, empty diff); its one chart change is the
+      # optional deployApprovalUISecret slot (mctlhq/mctl-api#1050), used
+      # below. Move this pin in the same reviewed PR that bumps the image tag.
+      targetRevision: 9895c76fc45b2d7046e46308871a994d8dc6eb81
       path: helm
       helm:
         releaseName: mctl-api
@@ -48,7 +49,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.158.1"
+            tag: "4.159.0"
 
           ingress:
             enabled: true
@@ -60,6 +61,10 @@ spec:
             # Rollback: delete this key.
             extraPaths:
               - /glovo
+              # Deploy approval page (mctlhq/mctl-api#1026, #1050): the
+              # fresh-login decide page for agent deploy plans. Rollback:
+              # delete this line together with DEPLOY_APPROVAL_UI_ENABLED.
+              - /deploy
             hosts:
               - host: api.mctl.ai
               # Basket MCP host (mctlhq/mctl-api#1006). Only the MCP and its
@@ -84,10 +89,10 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout turns the basket approval page on (mctl-api#1006,
-            # step B2 of the canary runbook): its client id and secret come
-            # from mctl-api-oidc-zitadel and are read only at container start.
-            ROLLOUT_MARKER: "2026-11-14-basket-ui-b2"
+            # This rollout turns the deploy approval page on (mctl-api#1026):
+            # its client id and secret come from mctl-api-oidc-zitadel
+            # (mctl-gitops#2651) and are read only at container start.
+            ROLLOUT_MARKER: "2026-11-14-deploy-approval-ui"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -425,6 +430,16 @@ spec:
             # and no approval_url is returned. Requires the basket flag above
             # (else the boot is refused).
             GLOVO_BASKET_UI_ENABLED: "true"
+            # Deploy approval page (mctlhq/mctl-api#1026): the tenant owner
+            # decides a deploy.apply plan only here, after a fresh ZITADEL
+            # login (prompt=login, max_age=0, PKCE); no bearer-token path
+            # decides that kind. Needs SELF_URL, the deployApprovalUISecret
+            # slot below and the /deploy extra path. If any input is missing
+            # (client id/secret, SELF_URL, principal mode, OAUTH_DB_URL,
+            # stores) the page stays off and the pod logs "deploy approval
+            # page disabled" at Error level; the boot is not refused.
+            # Rollback: delete this line and the /deploy extra path.
+            DEPLOY_APPROVAL_UI_ENABLED: "true"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -531,6 +546,13 @@ spec:
           # the keys leaves the page off. Chart slot from mctl-api#1017.
           # Rollback: delete this line and the approval page flag.
           glovoBasketUISecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the deploy approval page
+          # (mctlhq/mctl-api#1026): the confidential ZITADEL client
+          # mctl-api-deploy-approval that zitadel-iac writes into the same
+          # Secret (mctl-gitops#2651). Optional refs. Chart slot from
+          # mctl-api#1050 (4.159.0). Rollback: delete this line and the flag.
+          deployApprovalUISecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
