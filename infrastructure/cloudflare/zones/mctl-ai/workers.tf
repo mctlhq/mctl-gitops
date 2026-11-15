@@ -18,3 +18,13 @@ resource "cloudflare_workers_route" "landing_form_api" {
   pattern = "mctl.ai/api/*"
   script  = "mctl-landing-form"
 }
+
+# glovo.mctl.ai/ -- the landing page, served by the glovo-landing worker
+# (mctlhq/mctl-glovo, landing-worker/). The pattern has no wildcard, so it
+# matches the root path alone: /mcp and /.well-known/* keep going through the
+# tunnel to the origin, which serves the same page if this route is removed.
+resource "cloudflare_workers_route" "glovo_landing" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/"
+  script  = "glovo-landing"
+}
