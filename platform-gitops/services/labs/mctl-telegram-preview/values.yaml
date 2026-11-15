@@ -88,7 +88,10 @@ env:
   # redirect on its own hosted domain, and without it every attempt 400s,
   # leaving a hand-pasted static bearer token as the only way in.
   # Loopback hosts are accepted regardless of this list.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,gemini.google.com,oauth-redirect.googleusercontent.com,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1"
+  # Exact redirect URIs a Dynamic Client Registration may claim (0.69.0).
+  # Exact matching prevents opening the multi-tenant oauth-redirect host.
+  OAUTH_DCR_REDIRECT_URIS: "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-281712b859b6752b580bc9da"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).
