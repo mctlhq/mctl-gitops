@@ -586,6 +586,8 @@ reservedPlatformHosts:
   # mctl-telegram, a platform product deployed in the labs tenant.
   tg.mctl.ai: [labs]
   tg-preview.mctl.ai: [labs]
+  # Dedicated synthetic staging endpoint for RedLoop Phase P2 security audits.
+  staging-redloop.mctl.ai: [redloop]
   # The Cloudflare MCP portal; never served from the cluster.
   mcp.mctl.ai: []
 
