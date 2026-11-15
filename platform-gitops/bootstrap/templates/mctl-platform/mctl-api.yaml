@@ -67,9 +67,6 @@ spec:
               - /deploy
             hosts:
               - host: api.mctl.ai
-              # glovo.mctl.ai is no longer routed here: since 2026-11-15 it is
-              # served outside the cluster through a Cloudflare tunnel, and
-              # mctl-api stays only its OAuth authorization server.
 
           env:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git
