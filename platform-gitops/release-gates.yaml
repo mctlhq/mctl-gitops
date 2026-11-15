@@ -212,7 +212,7 @@ version_holds:
       # main at 64e44c9aff36bea74190a882f5605631fa0baa92 and whose second parent
       # changes release metadata only. Provenance: chat GO, merge by an agy session.
       - version: "4.160.0"
-        grant: mctlhq/mctl-gitops#PENDING
+        grant: mctlhq/mctl-gitops#2681
         approved_by: mashkovd
         expires: 2026-11-29
 
