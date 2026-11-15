@@ -1,5 +1,10 @@
-status: accepted
-updated_at: 2026-11-14T10:11:27+00:00
-updated_by: _incident-responder
+status: rejected
+updated_at: '2026-11-15T13:30:00Z'
+updated_by: mashkovd
 notes: >-
-  auto-accepted: diagnosis from mctl incident 16d5f2db-3cb1-43ea-84fd-a8ce3eee2a41
+  Rejected by the owner. Auto-accepted from mctl incident 16d5f2db-3cb1-43ea-84fd-a8ce3eee2a41, an
+  ArgoCDApplicationOutOfSyncLong ticket for a parked erpact-* Application.
+  The drift is intended: #2615 turned off automated sync and scaled the
+  ERPact copy to zero on purpose. The proposed fix (edit or remove the
+  Application manifest) would break the #2615 rollback. The alert is
+  silenced for project erpact in #2673 (issue #2672). Do not implement.
