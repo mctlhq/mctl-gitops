@@ -315,7 +315,7 @@ spec:
             # appear in OAUTH_ALLOWED_REDIRECT_URIS, but neither reads the API
             # from a browser page — they call it server-side, where CORS does
             # not apply. Add one only when a real preflight is observed failing.
-            ALLOWED_ORIGINS: "https://claude.ai,https://claude.com,https://gemini.google.com"
+            ALLOWED_ORIGINS: "https://claude.ai,https://claude.com"
             # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"
