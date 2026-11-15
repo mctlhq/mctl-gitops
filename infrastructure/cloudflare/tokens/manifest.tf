@@ -311,6 +311,13 @@ locals {
       name     = "mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)"
       policies = [{ permission_groups = [local.pg.ai_gateway_run], resources = { (local.account) = "*" } }]
     },
+    # mctl-glovo landing-worker.yml: `wrangler deploy` of the glovo-landing
+    # script (repository secret CLOUDFLARE_API_TOKEN). Scripts only: its
+    # route is owned by ../zones/mctl-ai/workers.tf, not by the deploy.
+    {
+      name     = "mctl-glovo-landing-worker deploy (mctl-glovo CLOUDFLARE_API_TOKEN)"
+      policies = [{ permission_groups = [local.pg.workers_scripts_write], resources = { (local.account) = "*" } }]
+    },
     {
       name = "pelican-catalog-worker CI deploy"
       policies = [{
