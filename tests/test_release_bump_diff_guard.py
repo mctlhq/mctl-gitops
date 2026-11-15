@@ -48,7 +48,38 @@ GOOD = {
     "tag move on a last line without a newline": diff(SVC, []).replace(
         " ctx\n", ' ctx\n-  tag: "1.0.0"\n\\ No newline at end of file\n+  tag: "1.1.0"\n\\ No newline at end of file\n', 1),
 }
+D1 = '  digest: "sha256:' + "1" * 64 + '"'
+D2 = '  digest: "sha256:' + "2" * 64 + '"'
+
+
+def block(path, body):
+    """A one-hunk diff whose change block is `body` (lines with their +/-/space prefix)."""
+    return diff(path, []).replace(" ctx\n", " ctx\n" + "".join(l + "\n" for l in body), 1)
+
+
+GOOD.update({
+    "digest introduced with a tag move": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]),
+    "digest moves with its tag": block(SVC, ['-  tag: "1.0.0"', "-" + D1, '+  tag: "1.1.0"', "+" + D2]),
+    "digest unquoted": block(SVC, ["-  tag: 1.0.0", "+  tag: 1.1.0", "+  digest: sha256:" + "a" * 64]),
+    "digest line followed by context": block(SVC, ['-  tag: "1.0.0"', "-" + D1, '+  tag: "1.1.0"', "+" + D2, "   pullPolicy: IfNotPresent"]),
+})
 BAD = {
+    "digest without a tag move": block(SVC, ["-" + D1, "+" + D2]),
+    "digest added alone": block(SVC, ["+" + D1]),
+    "digest outside a service values file": block(API, ['-        tag: "4.154.0"', '+        tag: "4.155.0"', "+        digest: \"sha256:" + "1" * 64 + '"']),
+    "digest on an inline image reference":
+        block(CWFT, ["-        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "+        image: ghcr.io/mctlhq/mctl-agents:1.2.0", "+        digest: sha256:" + "1" * 64]),
+    "digest indented differently from its tag": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', '+    digest: "sha256:' + "1" * 64 + '"']),
+    "digest not directly under its tag": block(SVC, ['-  tag: "1.0.0"', "-  x: 1", '+  tag: "1.1.0"', "+  x: 1", "+" + D1]),
+    "two digests for one tag": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1, "+" + D2]),
+    "pinned digest dropped": block(SVC, ['-  tag: "1.0.0"', "-" + D1, '+  tag: "1.1.0"']),
+    "tag moves under an unchanged digest": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', " " + D1]),
+    "digest too short": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', '+  digest: "sha256:' + "1" * 63 + '"']),
+    "digest uppercase hex": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', '+  digest: "sha256:' + "A" * 64 + '"']),
+    "digest other algorithm": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', '+  digest: "sha512:' + "1" * 64 + '"']),
+    "digest empty": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', '+  digest: ""']),
+    "digest with a trailing comment": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1 + " # x"]),
+    "digest under a tag that keeps its value": block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.0.0"', "+" + D1]),
     "empty diff": "",
     "no file header": "-  tag: 1\n+  tag: 2\n",
     "another key changed": diff(SVC, [("  replicas: 1", "  replicas: 3")]),
@@ -130,6 +161,13 @@ def option_verdicts(script):
          run_opts(script, diff(SVC, [('  tag: "1.0.0"', '  tag: "1.2.0"')]), [], patch=patch), "refuse")
     case("same-lines-as refuses a different file", run_opts(script, diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]), [], patch=patch), "refuse")
     case("same-lines-as refuses a different identity", run_opts(script, diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]), [], patch=PATCH_HEAD + diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]) + SIG), "refuse")
+    DPATCH = PATCH_HEAD + block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]) + SIG
+    case("same-lines-as accepts the same tag and digest",
+         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]), [], patch=DPATCH), "accept")
+    case("same-lines-as refuses the same tag with another digest",
+         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D2]), [], patch=DPATCH), "refuse")
+    case("same-lines-as refuses a patch digest the resolution left out",
+         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"']), [], patch=DPATCH), "refuse")
     case("same-lines-as refuses a patch that changes no line", run_opts(script, diff(SVC, TAGS), [], patch=PATCH_HEAD + SIG), "refuse")
     r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as", "/nonexistent/bump.patch"])
     out.append(("same-lines-as with an unreadable patch exits 2", r.returncode == 2, r))
@@ -186,7 +224,14 @@ MUT = [
     ("strict-order ignored", [("    strict_order = \"--strict-order\" in argv", "    strict_order = False")]),
     ("unorderable tags pass strict-order", [("elif strict_order and (_semver(rt) is None or _semver(at) is None):", "elif False:")]),
     ("same-lines comparison skipped", [("        elif got != want:", "        elif False:")]),
-    ("same-lines compares identities only", [("collect[cur] = [(ai, at) for (ai, at) in added]", "collect[cur] = [(ai, None) for (ai, at) in added]")]),
+    ("same-lines compares identities only", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, None, None) for (ai, at, ad) in added]")]),
+    ("same-lines ignores the digest", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, at, None) for (ai, at, ad) in added]")]),
+    ("a digest line accepted anywhere in the repo", [("                if not cur.startswith(DIGEST_PREFIX):", "                if False:")]),
+    ("a digest line accepted away from its tag line",
+     [('                elif not (isinstance(last, tuple) and last == ("tag", d.group("ind"))):', "                elif False:")]),
+    ("a pinned digest may be dropped", [("            if rd is not None and ad is None:", "            if False:")]),
+    ("a tag may move under an unchanged digest", [('            if stale and blk_last["+"] == ("tag", stale.group("ind")):', "            if False:")]),
+    ("digest charset loosened", [("(?P<digest>sha256:[0-9a-f]{64})", "(?P<digest>[^\\n]+)")]),
     ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")]),
     ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")]),
     ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')]),
