@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse a release-bump diff that does anything but move an image tag.
+"""Refuse a release-bump diff that does anything but move an image tag (and its digest).
 
     git diff <base>..<head> | release-bump-diff-guard.py
     gh pr diff N            | release-bump-diff-guard.py
@@ -7,7 +7,11 @@
 Reads a unified diff on stdin. Exit 0 only when every change is a tag move on a
 values or manifest file under an allowed platform-gitops prefix: the removed
 and the added lines pair up one to one, keep their key, indentation and image
-name, and differ only in the tag. Exit 1 refuses; exit 2 means the diff could
+name, and differ only in the tag. A `digest: "sha256:<64 hex>"` line may move with a
+tag (mctl-gitops#2652): only in a service values file, only directly under a
+changed `tag:` line of the same side and indentation, and a tag that had a
+digest must keep one, so a bump never silently falls back from a pinned image
+to its tag. Exit 1 refuses; exit 2 means the diff could
 not be read. Both are a refusal for the callers (publish-pr, auto-merge.yml):
 "could not read" is never "nothing to object to", and an empty diff is not a
 pass either.
@@ -38,6 +42,11 @@ REF_LINE = re.compile(
     r'^(?P<key>\s*(?:-\s+)?(?:image|value):)\s*(?P<q>["\']?)'
     r'(?P<img>[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+):(?P<tag>' + TAG + r')(?P=q)\s*$'
 )
+# `digest: "sha256:..."` directly under a `tag:` line (base-service image.digest).
+DIGEST_LINE = re.compile(r'^(?P<ind>\s*)digest:\s*(?P<q>["\']?)(?P<digest>sha256:[0-9a-f]{64})(?P=q)\s*$')
+# Only the base-service chart renders image.digest; elsewhere a digest line is
+# not something a bump may write.
+DIGEST_PREFIX = "platform-gitops/services/"
 HEADER_REFUSE = re.compile(
     r"^(new file mode|deleted file mode|old mode|new mode|rename |copy |similarity index|dissimilarity index|Binary files|GIT binary patch)"
 )
@@ -80,6 +89,9 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
     # ` a:` `-  tag: 1.0.0` ` b:` `+  tag: 1.0.1` pass as a tag move
     # although the tag key left block `a` and appeared under `b`.
     blk_removed, blk_added = [], []
+    # The last changed line of each side in the current block, for the rule
+    # that a digest line sits directly under the tag line it belongs to.
+    blk_last = {"-": None, "+": None}
 
     def end_block():
         if cur is not None and len(blk_removed) != len(blk_added):
@@ -89,6 +101,7 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
             )
         blk_removed.clear()
         blk_added.clear()
+        blk_last["-"] = blk_last["+"] = None
 
     def close():
         end_block()
@@ -97,8 +110,10 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
         if len(removed) != len(added):
             return  # already refused by end_block(): some block does not pair
         if collect is not None:
-            collect[cur] = [(ai, at) for (ai, at) in added]
-        for (ri, rt), (ai, at) in zip(removed, added):
+            collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]
+        for (ri, rt, rd), (ai, at, ad) in zip(removed, added):
+            if rd is not None and ad is None:
+                problems.append(f"{cur}: a pinned digest is dropped ({rt} -> {at})")
             if ri != ai:
                 problems.append(f"{cur}: a changed line moves more than the tag ({ri} -> {ai})")
             elif rt == at:
@@ -149,16 +164,39 @@ def judge(diff: str, strict_order: bool = False, collect: dict = None) -> list:
         if line.startswith("\\ "):
             continue  # "\ No newline at end of file" belongs to the line above
         if line.startswith("@@") or line.startswith(" ") or line == "":
+            # A tag that moves while the digest under it stays put still
+            # deploys the old image: the chart renders tag@digest and the
+            # digest wins, so the bump would silently change nothing.
+            stale = DIGEST_LINE.match(line[1:]) if line.startswith(" ") else None
+            if stale and blk_last["+"] == ("tag", stale.group("ind")):
+                problems.append(f"{cur}: a tag moves under an unchanged digest")
             end_block()
             continue
         if line[0] in "+-":
             changed += 1
-            (blk_removed if line[0] == "-" else blk_added).append(line)
+            side = line[0]
+            seq = removed if side == "-" else added
+            d = DIGEST_LINE.match(line[1:])
+            if d:
+                # Not counted in blk_removed/blk_added: those pair tag lines.
+                last, blk_last[side] = blk_last[side], "digest"
+                if not cur.startswith(DIGEST_PREFIX):
+                    problems.append(f"{cur}: a digest line outside a service values file")
+                elif not (isinstance(last, tuple) and last == ("tag", d.group("ind"))):
+                    problems.append(f"{cur}: a digest line not directly under its tag line: {line[:100]}")
+                else:
+                    # A second digest cannot reach here: the line under a
+                    # digest is not a tag line, so the check above refuses it.
+                    seq[-1] = (seq[-1][0], seq[-1][1], d.group("digest"))
+                continue
+            (blk_removed if side == "-" else blk_added).append(line)
+            t = TAG_LINE.match(line[1:])
+            blk_last[side] = ("tag", t.group("key")[:-len("tag:")]) if t else "other"
             s = shape(line[1:])
             if s is None:
                 problems.append(f"{cur}: not a tag line: {line[:100]}")
                 continue
-            (removed if line[0] == "-" else added).append(s)
+            seq.append((s[0], s[1], None))
             continue
         problems.append(f"{cur}: unrecognised diff line {line[:80]}")
     close()
