@@ -8,6 +8,13 @@ name: Agy formal review (merge queue)
 # ref, the commit's parents and the PR head before posting anything. If this
 # dispatch fails, agy-formal-review never reports and the queue times the
 # entry out instead of merging it.
+#
+# The dispatch token comes from the mctl-gitops-dispatch App (actions:write
+# and metadata only, installed on mctl-gitops and mctlhq/.github), minted for
+# mctlhq/.github alone. Its key sits in the app-dispatch-queue environment,
+# whose branch policy admits only gh-readonly-queue/main/* refs: GitHub
+# creates those for a PR that already passed review and the required checks,
+# so a pull_request run from an arbitrary branch cannot read the key.
 on:
   merge_group:
     types: [checks_requested]
@@ -19,20 +26,26 @@ jobs:
     name: dispatch agy formal review
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: app-dispatch-queue
     steps:
+      - name: Mint a dispatch token for mctlhq/.github
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: .github
+          permission-actions: write
+
       - name: Dispatch the trusted formal review for the queued commit
         env:
-          # Fine-grained token: Actions read/write on mctlhq/.github only.
-          GH_TOKEN: ${{ secrets.AGY_FORMAL_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
           HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::AGY_FORMAL_DISPATCH_TOKEN is not set; agy-formal-review will not report on this queue entry"
-            exit 1
-          fi
           re='^refs/heads/gh-readonly-queue/[A-Za-z0-9_.-]+/pr-([1-9][0-9]*)-[0-9a-f]{40}$'
           if ! [[ "$HEAD_REF" =~ $re ]]; then
             echo "::error::unexpected merge queue ref: $HEAD_REF"
