@@ -120,12 +120,13 @@ env:
   # document at https://www.town.com/.well-known/oauth-client-id lists only
   # that one); town.com is listed too for the apex form of the same callback.
   # Gemini (gemini.google.com): Google's web client for Gemini Custom MCP
-  # Connectors registers callbacks on oauth-redirect.googleusercontent.com
-  # under the /r/user_bound_custom-mcp- namespace (mctl-telegram 0.139.0+).
-  # Path-prefix scoping prevents admitting arbitrary Google Cloud projects.
+  # Connectors registers callbacks across production, sandbox, and test
+  # domains under /r/ and /a/ for the /user_bound_custom-mcp- namespace
+  # (mctl-telegram 0.139.0+). Path-prefix scoping prevents admitting arbitrary
+  # Google Cloud projects (which cannot contain underscores).
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1"
   # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
   # client whose client_id is an https URL on a listed host gets its redirect
   # URIs from the document at that URL instead of registering. ADVERTISE

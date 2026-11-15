@@ -88,7 +88,7 @@ env:
   # redirect on its own hosted domain, and without it every attempt 400s,
   # leaving a hand-pasted static bearer token as the only way in.
   # Loopback hosts are accepted regardless of this list.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,localhost,127.0.0.1"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).
