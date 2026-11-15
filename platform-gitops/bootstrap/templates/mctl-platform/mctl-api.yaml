@@ -49,7 +49,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.159.0"
+            tag: "4.160.0"
 
           ingress:
             enabled: true
@@ -229,7 +229,7 @@ spec:
             # user's own machine; www.cursor.com is Cursor's hosted agent
             # callback, the same class of entry as claude.ai and chatgpt.com.
             # Windsurf needs nothing here: it registers a loopback callback.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback,https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-*,https://oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-*,https://oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-*"
             # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
             # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
             # 2026-09-26 after the `api` upstream moved to automatic (DCR)
@@ -315,7 +315,7 @@ spec:
             # appear in OAUTH_ALLOWED_REDIRECT_URIS, but neither reads the API
             # from a browser page — they call it server-side, where CORS does
             # not apply. Add one only when a real preflight is observed failing.
-            ALLOWED_ORIGINS: "https://claude.ai,https://claude.com"
+            ALLOWED_ORIGINS: "https://claude.ai,https://claude.com,https://gemini.google.com"
             # Allow git operations on emptyDir volume (owned by root, run as uid=1000)
             GIT_CONFIG_COUNT: "1"
             GIT_CONFIG_KEY_0: "safe.directory"

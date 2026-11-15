@@ -202,6 +202,19 @@ version_holds:
         grant: mctlhq/mctl-gitops#2656
         approved_by: mashkovd
         expires: 2026-11-28
+      # Ninth grant (owner GO in chat, 2026-11-15): 4.160.0 is 4.159.0 plus
+      # mctlhq/mctl-api#1059 and agent-deploy profile error logging.
+      # #1059 adds path-scoped wildcard prefix matching in AllowedRedirectURIs
+      # to support Google Gemini custom connector redirects with strict host
+      # equality and path-traversal hardening.
+      # Covers only the 4.160.0 tag on the merge of mctlhq/mctl-api#1057
+      # (5533021d8aeb244ffa6ac13969cc578321a67ef3), whose first parent is mctl-api
+      # main at 64e44c9aff36bea74190a882f5605631fa0baa92 and whose second parent
+      # changes release metadata only. Provenance: chat GO, merge by an agy session.
+      - version: "4.160.0"
+        grant: mctlhq/mctl-gitops#PENDING
+        approved_by: mashkovd
+        expires: 2026-11-29
 
 gates:
   - name: mctl-agents-workers
