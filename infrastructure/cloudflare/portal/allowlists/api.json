@@ -145,6 +145,11 @@
       "reason": "Liveness of one DevLoop workflow by id: status and phase only, no code, no secrets; the upstream refuses ids outside the caller's tenants."
     },
     {
+      "name": "mctl_get_dev_loop_approval",
+      "enabled": false,
+      "reason": "Reads a DevLoop's approval grant and decision context by workflow id (mctl-api#936). Off the shared portal until the owner decides: the portal switch is user-blind, and reviewers can use the direct MCP endpoint meanwhile."
+    },
+    {
       "name": "mctl_get_incident",
       "enabled": true,
       "reason": "Incident record with collected evidence (log excerpts, analysis, PR links); tenant-scoped by the upstream. Excerpts can carry application log text, acceptable on a private admin-only aggregate."
@@ -213,6 +218,16 @@
       "name": "mctl_get_deploy_plan",
       "enabled": false,
       "reason": "Read-only lookup of a stored preview deploy plan (mctlhq/mctl-api#866); enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_request_deploy_approval",
+      "enabled": false,
+      "reason": "Opens a pending deploy.apply grant request for a stored plan (mctlhq/mctl-api#1026); grants nothing. Enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_deploy_apply",
+      "enabled": false,
+      "reason": "Spends a tenant owner's deploy.apply grant and submits preview-deploy (mctlhq/mctl-api#1026); enabling it on the shared portal is a separate owner decision."
     },
     {
       "name": "mctl_get_repo_binding",
