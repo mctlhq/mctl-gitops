@@ -92,6 +92,19 @@ on:
         required: false
       GH_PACKAGES_TOKEN:
         required: false
+    # What was pushed, for a caller that must deploy or promote exactly this
+    # image rather than whatever the tag points at later (mctl-gitops#2652).
+    # The digest is the one the registry returned for this push (the image
+    # index when the build carries attestations), checked below to be a
+    # sha256 digest that resolves in the registry, so a caller never receives
+    # an empty or unverified value from a successful run.
+    outputs:
+      digest:
+        description: "sha256 digest of the pushed image (index digest when the push is multi-manifest)"
+        value: ${{ jobs.build.outputs.digest }}
+      revision:
+        description: "Full commit SHA of the source the image was built from"
+        value: ${{ jobs.build.outputs.revision }}
 
 env:
   REGISTRY: ghcr.io
@@ -100,6 +113,9 @@ jobs:
   build:
     name: Build & Push
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+      revision: ${{ steps.source_rev.outputs.revision }}
     permissions:
       contents: read
       packages: write
@@ -611,6 +627,7 @@ jobs:
           rm -rf .release-policy
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -640,6 +657,29 @@ jobs:
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
             ${{ steps.caller.outputs.direct != 'true' && format('{0}:latest', inputs.image_name) || '' }}
 
+      # The digest is the identity a later deploy or promote pins
+      # (mctl-gitops#2652). An empty or malformed value is a failed read, not
+      # "no digest": the step fails rather than hand a caller something that
+      # would quietly fall back to the tag. Resolving name@digest in the
+      # registry confirms the push the digest names actually landed.
+      - name: Record image digest
+        id: digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::build-push-action returned no usable digest (got '${DIGEST}')"
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "${IMAGE_NAME}@${DIGEST}" >/dev/null; then
+            echo "::error::${IMAGE_NAME}@${DIGEST} does not resolve in the registry"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "pushed ${IMAGE_NAME}@${DIGEST}"
+
       - name: Summary
         # Same reason as the Vault step: these land in a shell command, so
         # they are bound rather than interpolated. The step summary is
@@ -651,6 +691,7 @@ jobs:
           INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
           INPUT_BUILD_ID: ${{ inputs.build_id }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           echo "## ✅ Image Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -660,3 +701,4 @@ jobs:
           echo "| **Ref** | \`${INPUT_GIT_REF}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Image** | \`${INPUT_IMAGE_NAME}:${INPUT_IMAGE_TAG}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build ID** | \`${INPUT_BUILD_ID}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${IMAGE_DIGEST}\` |" >> $GITHUB_STEP_SUMMARY
