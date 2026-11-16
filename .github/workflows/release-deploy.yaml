@@ -300,6 +300,11 @@ jobs:
                   print(f"ERROR: path must not contain '..' segments: {path}", file=sys.stderr)
                   sys.exit(4)
               normalized = os.path.normpath(path)
+              # A symlink could name an allowed path and write somewhere else.
+              # Globs have no real path yet; their matches come through here too.
+              if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), normalized):
+                  print(f"ERROR: path goes through a symlink: {path}", file=sys.stderr)
+                  sys.exit(4)
               if not normalized.startswith(ALLOWED_PREFIXES):
                   print(
                       f"ERROR: path '{path}' is not under an allowed prefix. "
@@ -363,6 +368,35 @@ jobs:
           for f in files:
               print(f"  {f}")
 
+          import yaml
+
+          def same_but_tags(a, b):
+              """The parsed documents differ only in strings that are new_tag or end in :new_tag."""
+              if isinstance(a, dict) and isinstance(b, dict):
+                  return a.keys() == b.keys() and all(same_but_tags(a[k], b[k]) for k in a)
+              if isinstance(a, list) and isinstance(b, list):
+                  return len(a) == len(b) and all(same_but_tags(x, y) for x, y in zip(a, b))
+              return a == b or (isinstance(b, str) and (b == new_tag or b.endswith(":" + new_tag)))
+
+          def only_tags_changed(before, after):
+              """Refuse anything but a tag edit, whatever produced it. Text first, because
+              Helm templates under bootstrap do not parse as YAML; parsed as well where
+              the file did parse before."""
+              old, new = before.split("\n"), after.split("\n")
+              if len(old) != len(new):
+                  return False
+              for o, n in zip(old, new):
+                  if o != n and (o.split(":", 1)[0] != n.split(":", 1)[0] or new_tag not in n):
+                      return False
+              try:
+                  parsed = list(yaml.safe_load_all(before))
+              except yaml.YAMLError:
+                  return True
+              try:
+                  return same_but_tags(parsed, list(yaml.safe_load_all(after)))
+              except yaml.YAMLError:
+                  return False
+
           total_replaced = 0
           total_already = 0
           changed_files = []
@@ -389,7 +423,8 @@ jobs:
                       r'\n\s+repository:\s*' + re.escape(repo) +
                       r'\n\s+tag:)[^\n]+'
                   )
-                  out, n3 = p3.subn(lambda m: m.group(1) + ' ' + new_tag, out)
+                  # Quoted like pattern 1: a tag such as 1042 must stay a string.
+                  out, n3 = p3.subn(lambda m: m.group(1) + ' "' + new_tag + '"', out)
               # Pattern 3: inline image: <image>:<old> (CWFT style, quoted or unquoted)
               p2 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
               out, n2 = p2.subn(lambda m: m.group(1) + ':' + new_tag, out)
@@ -406,6 +441,9 @@ jobs:
               if n == 0:
                   print(f"  {path}: WARN — no image pattern matched (skipped)")
                   continue
+              if not only_tags_changed(content, out):
+                  print(f"ERROR: refusing to write {path}: the edit is not limited to image tags", file=sys.stderr)
+                  sys.exit(7)
               if out == content:
                   print(f"  {path}: already at {new_tag} (no diff)")
                   total_already += n
