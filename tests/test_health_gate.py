@@ -279,7 +279,9 @@ check(not (c.fx / "curl.log").exists(), "ingress path prefix: probed HTTP anyway
 # ── Red on each failure shape ───────────────────────────────────────────────
 c = Case(WORKER)
 c.pods([pod("p1", digest=D_OLD)])
-expect("old digest", c, 1, "unhealthy", "do not run")
+res, _ = expect("old digest", c, 1, "unhealthy", "do not run")
+check(res.get("image_digest") == D_NEW,
+      f"old digest: a red verdict must still carry the expected digest, got {res.get('image_digest')!r}")
 
 c = Case(WORKER)
 c.pods([pod("p1", ready=False, restarts=4)])
@@ -318,15 +320,19 @@ expect("url no answer", c, 1, "unhealthy", "did not answer")
 
 c = Case(WORKER)
 c.app(revisions=[c.base, c.base])
-expect("argo behind the commit", c, 1, "unhealthy", "does not contain")
+res, _ = expect("argo behind the commit", c, 1, "unhealthy", "does not contain")
+check(res.get("argo_revision") == "", f"argo behind: no revision contains the commit, got {res.get('argo_revision')!r}")
 
 c = Case(WORKER)
 c.app(sync="OutOfSync")
-expect("argo out of sync", c, 1, "unhealthy", "OutOfSync")
+res, _ = expect("argo out of sync", c, 1, "unhealthy", "OutOfSync")
+check(res.get("argo_revision") == c.head, f"argo out of sync: argo_revision {res.get('argo_revision')!r}")
 
 c = Case(WORKER)
 c.app(health="Degraded")
-expect("argo degraded", c, 1, "unhealthy", "Degraded")
+res, _ = expect("argo degraded", c, 1, "unhealthy", "Degraded")
+check(res.get("argo_revision") == c.head, f"argo degraded: argo_revision {res.get('argo_revision')!r}")
+check(res.get("image_digest") == D_NEW, f"argo degraded: image_digest {res.get('image_digest')!r}")
 
 c = Case(WORKER)
 c.pods([])
