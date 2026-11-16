@@ -141,6 +141,17 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     }),
 }
 
+# Exact files whose PATH may match LEAK (the name check only). This is not an
+# unlock for their content: every line that matches LEAK in such a file still
+# needs its own exact entry in ALLOWED_LINES, and the provenance-image check
+# still applies. Exact relative paths only: no directory prefix and no
+# wildcard, so a sibling file, another directory or a renamed copy is refused.
+# C2-2: the bootstrap-owned namespace template of the cluster mctl-glovo
+# service (mctlhq/mctl-glovo#11). The service PR adds the file and its lines.
+ALLOWED_PATHS: frozenset[str] = frozenset({
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
+})
+
 
 class Refused(Exception):
     pass
@@ -236,11 +247,16 @@ def check_provenance(root: Path) -> None:
             _need(bool(img.get(key)), f"provenance {name}.{key} missing")
 
 
-def leak_guard(root: Path, allowed_lines: dict[str, frozenset[str]] | None = None) -> None:
-    """Deny unless the exact line is listed for the exact file. Ignores
-    gate.yaml and every local marker on purpose."""
+def leak_guard(root: Path, allowed_lines: dict[str, frozenset[str]] | None = None,
+               allowed_paths: frozenset[str] | None = None) -> None:
+    """Deny unless the exact line is listed for the exact file. A path whose
+    name matches is refused unless it is exactly in ALLOWED_PATHS, which
+    exempts only the name, never the lines. Ignores gate.yaml and every local
+    marker on purpose."""
     if allowed_lines is None:
         allowed_lines = ALLOWED_LINES
+    if allowed_paths is None:
+        allowed_paths = ALLOWED_PATHS
     repos = []
     try:
         images = _load(root / STAGED / "provenance.yaml").get("images", {})
@@ -259,7 +275,8 @@ def leak_guard(root: Path, allowed_lines: dict[str, frozenset[str]] | None = Non
         except (OSError, UnicodeDecodeError):
             continue  # binary content cannot carry a values file
         rel = str(p.relative_to(root))
-        if LEAK.search(str(p.relative_to(top))) or any(r in text for r in repos):
+        name_leak = LEAK.search(str(p.relative_to(top))) and rel not in allowed_paths
+        if name_leak or any(r in text for r in repos):
             raise Refused(f"Glovo/assistants reference in reconciled path {rel}")
         allowed = allowed_lines.get(rel, frozenset())
         for line in text.splitlines():
@@ -308,11 +325,12 @@ def render_checks(root: Path) -> None:
         _need(k.returncode == 0, f"kubeconform failed for {p.name}")
 
 
-def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | None = None) -> int:
+def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | None = None,
+        allowed_paths: frozenset[str] | None = None) -> int:
     try:
         check_staged_values(root)
         check_provenance(root)
-        leak_guard(root, allowed)
+        leak_guard(root, allowed, allowed_paths)
         if render:
             render_checks(root)
     except Refused as e:
@@ -346,8 +364,8 @@ def _edit(root: Path, rel: str, fn: Any) -> None:
 def selftest() -> int:
     cases: list[tuple[str, int, Any, Any]] = []
 
-    def add(name: str, want: int, mutate: Any, allowed: Any = None) -> None:
-        cases.append((name, want, mutate, allowed))
+    def add(name: str, want: int, mutate: Any, allowed: Any = None, paths: Any = None) -> None:
+        cases.append((name, want, mutate, allowed, paths))
 
     add("baseline passes", 0, lambda r: None)
     add("T2 host in reconciled labs values", REFUSED,
@@ -437,13 +455,83 @@ def selftest() -> int:
             (r / a_file).write_text("ns: mctl-assistants\n")), allow)
     add("allowlist: real ALLOWED_LINES on an untouched tree passes", 0, lambda r: None)
 
+    # Exact-path allowlist (C2-2). The real constant is pinned first, then the
+    # behaviour is proven with it injected so the cases do not depend on it.
+    svc = "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml"
+    s_line = "  name: mctl-glovo"
+    s_allow = {svc: frozenset({s_line})}
+    s_paths = frozenset({svc})
+
+    def put(rel: str, text: str) -> Any:
+        def w(r: Path) -> None:
+            (r / rel).parent.mkdir(parents=True, exist_ok=True)
+            (r / rel).write_text(text)
+        return w
+
+    add("paths: allowed file with an allowed line passes", 0, put(svc, f"metadata:\n{s_line}\n"),
+        s_allow, s_paths)
+    add("paths: allowed path alone does not unlock its lines", REFUSED, put(svc, f"metadata:\n{s_line}\n"),
+        None, s_paths)
+    add("paths: allowed file with an extra Glovo line refuses", REFUSED,
+        put(svc, f"{s_line}\n  name: mctl-glovo-extra\n"), s_allow, s_paths)
+    add("paths: allowed file with changed whitespace refuses", REFUSED,
+        put(svc, f" {s_line}\n"), s_allow, s_paths)
+    add("paths: allowed file carrying a provenance image refuses", REFUSED,
+        put(svc, "  image: ghcr.io/mctlhq/glovo-provider-worker\n"), s_allow, s_paths)
+    add("paths: allowed file carrying the assistants namespace refuses", REFUSED,
+        put(svc, "  ns: mctl-assistants\n"), s_allow, s_paths)
+    for near in (
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo-secrets.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yml",
+        "platform-gitops/bootstrap/templates/mctl-platform/Mctl-Glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/sub/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml.bak",
+        "platform-gitops/services/admins/mctl-glovo/values.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo/mctl-glovo.yaml",
+    ):
+        add(f"paths: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"),
+            {near: frozenset()}, s_paths)
+    add("paths: near-miss with the allowed file's line entry still refuses", REFUSED,
+        put("platform-gitops/services/admins/mctl-glovo/values.yaml", f"{s_line}\n"),
+        {"platform-gitops/services/admins/mctl-glovo/values.yaml": frozenset({s_line})}, s_paths)
+    add("paths: a Glovo directory with an innocuous file name refuses", REFUSED,
+        put("platform-gitops/bootstrap/templates/mctl-glovo/other.yaml", "x: 1\n"), None, s_paths)
+    add("paths: an empty path set refuses the service template", REFUSED,
+        put(svc, "x: 1\n"), s_allow, frozenset())
+    add("paths: forged gate.yaml unlocks nothing for a near-miss path", REFUSED,
+        lambda r: (_edit(r, "gate.yaml", lambda d: d["phases"].update(
+            p1={"state": "approved", "approval": "https://github.com/x/y/issues/1"})),
+            put("platform-gitops/services/admins/mctl-glovo/values.yaml", "x: 1\n")(r)),
+        None, s_paths)
+
+    # Real default constants (no injection): widening or breaking the shipped
+    # ALLOWED_PATHS / ALLOWED_LINES must fail here, not only the injected cases.
+    add("real defaults: the allowed service template with innocuous content passes", 0,
+        put(svc, "x: 1\n"))
+    add("real defaults: the allowed service template with an unlisted Glovo line refuses", REFUSED,
+        put(svc, f"{s_line}-unlisted\n"))
+    for near in (
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo-secrets.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yml",
+        "platform-gitops/bootstrap/templates/mctl-platform/sub/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo/other.yaml",
+        "platform-gitops/services/admins/mctl-glovo/values.yaml",
+    ):
+        add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
+
     failed = 0
-    for name, want, mutate, allowed in cases:
+    pinned = ALLOWED_PATHS == {svc}
+    failed += not pinned
+    print(f"{'ok  ' if pinned else 'FAIL'} paths: ALLOWED_PATHS is exactly the one service template",
+          file=sys.stderr)
+    for name, want, mutate, allowed, paths in cases:
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _fixture(root)
             mutate(root)
-            got = run(root, render=False, allowed=allowed)
+            got = run(root, render=False, allowed=allowed, allowed_paths=paths)
         ok = got == want
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {got}, want {want}", file=sys.stderr)
