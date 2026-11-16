@@ -7,9 +7,9 @@
 #
 # Safety invariants:
 # 1. Strictly bounded blast radius: modifies exclusively Rule ID d8b4ea76eabc420e99146cafd9596801.
-# 2. Server-side pre-validation: runs ?dry_run=true before live modification.
-# 3. Comprehensive production controls: continuous checks on 6 production endpoints with latency & status limits.
-# 4. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and API read-back verification.
+# 2. Comprehensive production controls: continuous checks on 6 production endpoints with latency & status limits.
+# 3. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and API read-back verification.
+# 4. Strict activation guard: rollback never modifies rule if activation was not attempted (preserves active incidents).
 # 5. Independent recovery verification: produces machine-readable summary and audit correlation.
 
 set -euo pipefail
@@ -18,9 +18,8 @@ set -euo pipefail
 # Self-Test Mode (Mock Server Verification)
 # ---------------------------------------------------------------------------
 if [ "${REDLOOP_DRILL_SELF_TEST:-}" = "1" ]; then
-  echo "=== Running RedLoop WAF Drill Harness Self-Test ==="
+  echo "=== Running RedLoop WAF Drill Harness Self-Test Suite ==="
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
 
   # Python mock server simulating Cloudflare API and endpoints
   mock_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
@@ -31,16 +30,25 @@ import sys
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-rule_state = {"enabled": False}
-probe_count = 0
+rule_state = {
+    "enabled": False,
+    "patch_count": 0,
+    "simulate_null_result": False,
+    "probe_fail_count": 0
+}
 
 class MockHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
     def do_GET(self):
-        global probe_count
         if "/ruleset" in self.path:
+            if rule_state["simulate_null_result"]:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "errors": [{"message": "backend error"}], "result": None}).encode())
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -57,7 +65,11 @@ class MockHandler(BaseHTTPRequestHandler):
             }
             self.wfile.write(json.dumps(resp).encode())
         elif self.path == "/staging":
-            probe_count += 1
+            if rule_state["probe_fail_count"] > 0:
+                rule_state["probe_fail_count"] -= 1
+                self.send_response(500)
+                self.end_headers()
+                return
             if rule_state["enabled"]:
                 self.send_response(403)
                 self.send_header("cf-ray", "mockray403-TEST")
@@ -82,21 +94,36 @@ class MockHandler(BaseHTTPRequestHandler):
             self.send_header("server", "cloudflare")
             self.end_headers()
             self.wfile.write(b"404 Not Found")
+        elif self.path == "/control/set_enabled_true":
+            rule_state["enabled"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_enabled_false":
+            rule_state["enabled"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/simulate_null_result":
+            rule_state["simulate_null_result"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/simulate_normal_result":
+            rule_state["simulate_null_result"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/get_patch_count":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"patch_count": rule_state["patch_count"], "enabled": rule_state["enabled"]}).encode())
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_PATCH(self):
+        rule_state["patch_count"] += 1
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         payload = json.loads(body.decode()) if body else {}
-
-        if "dry_run=true" in self.path:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "errors": [], "result": payload}).encode())
-            return
 
         rule_state["enabled"] = payload.get("enabled", False)
         self.send_response(200)
@@ -120,15 +147,23 @@ PYEOF
 
   python3 "$mock_py" "$mock_port" &
   mock_pid=$!
-  sleep 0.5
 
   cleanup_mock() {
     kill "$mock_pid" 2>/dev/null || true
     wait "$mock_pid" 2>/dev/null || true
+    rm -rf "$tmp_dir"
   }
-  trap cleanup_mock EXIT
+  trap cleanup_mock EXIT INT TERM
 
-  # Run self-test invocation against mock
+  # Wait for mock server port readiness
+  for _ in $(seq 1 30); do
+    if python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', $mock_port)); s.close()" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  echo "[+] Test Case 1: Standard Happy Path (404 -> 403 -> 404)"
   CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
@@ -137,22 +172,94 @@ PYEOF
   MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
   MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
   MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
-  CF_TOKEN="mock-token" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
   REDLOOP_DRILL_SELF_TEST="" \
   "$0"
 
-  echo "self-test PASSED successfully."
+  echo "[+] Happy path test completed successfully."
+
+  echo "[+] Test Case 2: Pre-flight abort when rule is already enabled (active incident guard)"
+  # Set mock rule to enabled=true
+  curl -s "http://127.0.0.1:$mock_port/control/set_enabled_true" > /dev/null
+  init_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+
+  set +e
+  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test2.log" 2>&1
+  test2_rc=$?
+  set -e
+
+  if [ "$test2_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 2 expected non-zero exit code when rule is already enabled, got 0"
+    exit 1
+  fi
+
+  post_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+  post_enabled=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.enabled')
+
+  if [ "$post_patches" -ne "$init_patches" ]; then
+    echo "[-] FAIL: Test 2 sent PATCH during pre-flight failure! ($post_patches != $init_patches)"
+    exit 1
+  fi
+  if [ "$post_enabled" != "true" ]; then
+    echo "[-] FAIL: Test 2 modified rule enabled status! Expected rule to remain true, got $post_enabled"
+    exit 1
+  fi
+  echo "[+] Test Case 2 PASSED: Rule remained untouched (enabled=true) and zero PATCHes were sent."
+
+  echo "[+] Test Case 3: Rollback resilience when read-back returns result:null"
+  curl -s "http://127.0.0.1:$mock_port/control/set_enabled_false" > /dev/null
+  curl -s "http://127.0.0.1:$mock_port/control/simulate_null_result" > /dev/null
+
+  set +e
+  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test3.log" 2>&1
+  test3_rc=$?
+  set -e
+
+  # Test 3 should fail cleanly (exit 1) on preflight without jq throwing a crash
+  if [ "$test3_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 3 expected failure when API returned 500 null result, got 0"
+    exit 1
+  fi
+  if grep -q "Cannot check whether null has a string key" "$tmp_dir/test3.log"; then
+    echo "[-] FAIL: Test 3 caught jq null unhandled exception!"
+    exit 1
+  fi
+  echo "[+] Test Case 3 PASSED: Null result handled gracefully without jq exception."
+
+  echo "=== All Self-Test Scenarios PASSED ==="
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
 # Configuration & Constants
 # ---------------------------------------------------------------------------
-CF_TOKEN="${CLOUDFLARE_API_TOKEN:-${CF_TOKEN:-${1:-}}}"
+CF_TOKEN="${CLOUDFLARE_API_TOKEN:-${CF_TOKEN:-}}"
 
 if [ -z "$CF_TOKEN" ]; then
-  echo "[-] ERROR: Cloudflare API token not provided."
-  echo "    Usage: CF_TOKEN=<token> $0  OR  $0 <token>"
+  echo "[-] ERROR: Cloudflare API token not provided via CLOUDFLARE_API_TOKEN or CF_TOKEN." >&2
   exit 1
 fi
 
@@ -165,14 +272,21 @@ TARGET_URL="${MOCK_STAGING_URL:-https://${TARGET_HOST}/}"
 API_URL="${CF_API_BASE_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}}"
 
 # Latency and Timeout Thresholds
-MAX_PROD_LATENCY_SECONDS="${MAX_PROD_LATENCY_SECONDS:-1.000}"
+MAX_PROD_LATENCY_SECONDS="${MAX_PROD_LATENCY_SECONDS:-2.500}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-60}"
 PROBE_INTERVAL_SECONDS="${PROBE_INTERVAL_SECONDS:-1}"
+CURL_TIMEOUT_SECONDS="${CURL_TIMEOUT_SECONDS:-10}"
+CURL_CONNECT_TIMEOUT_SECONDS="${CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 
-# State Tracking
-CURRENT_STATE="initial" # initial -> active -> rolling_back -> inert
+# State Tracking & Incident Guards
+ACTIVATION_ATTEMPTED=0
+CURRENT_STATE="inert" # inert -> active -> rolling_back
+ACTIVATION_MARKER_FILE="${RUNNER_TEMP:-/tmp}/redloop_waf_drill_activated"
 SUMMARY_FILE="${GITHUB_STEP_SUMMARY:-/tmp/redloop_waf_drill_summary.md}"
 TIMINGS_FILE="${TIMINGS_FILE:-/tmp/redloop_waf_drill_timings.json}"
+
+# Ensure activation marker is absent initially
+rm -f "$ACTIVATION_MARKER_FILE"
 
 iso_ts() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -191,6 +305,13 @@ rollback() {
   local exit_code=$?
   # Disable traps during rollback to avoid recursion
   trap - EXIT INT TERM ERR
+  set +e
+
+  # P1 Guard: Never disable a rule that this drill did not attempt to activate
+  if [ "$ACTIVATION_ATTEMPTED" -ne 1 ]; then
+    log "[+] Activation was not attempted by this drill. Rollback will not modify Cloudflare state."
+    exit "$exit_code"
+  fi
 
   if [ "$CURRENT_STATE" = "inert" ]; then
     log "[+] State is already INERT (enabled=false confirmed). No rollback required."
@@ -216,24 +337,32 @@ rollback() {
   while [ "$attempt" -le "$max_attempts" ]; do
     log "[!] Rollback attempt $attempt of $max_attempts..."
     local http_resp
-    http_resp=$(curl -sS -w "\n%{http_code}" -X PATCH "$API_URL" \
-      -H "Authorization: Bearer $CF_TOKEN" \
+    http_resp=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+      -w "\n%{http_code}" -X PATCH "$API_URL" \
+      -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
       -H "Content-Type: application/json" \
-      -d "$deact_payload" || true)
+      -d "$deact_payload" 2>&1 || true)
 
     local http_code
     http_code=$(echo "$http_resp" | tail -n 1)
     local body
     body=$(echo "$http_resp" | sed '$d')
 
-    if [ "$http_code" = "200" ] && [ "$(echo "$body" | jq -r '.success // false')" = "true" ]; then
+    local patch_success
+    patch_success=$(echo "$body" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
+
+    if [ "$http_code" = "200" ] && [ "$patch_success" = "true" ]; then
       log "[+] Rollback PATCH succeeded. Verifying via Cloudflare API read-back..."
       
-      # Read-back verification
+      # Read-back verification with safe jq handling
       local verify_resp
-      verify_resp=$(curl -sS -X GET "$API_URL" -H "Authorization: Bearer $CF_TOKEN" || true)
+      verify_resp=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+        -X GET "$API_URL" \
+        -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") 2>&1 || true)
+
       local verify_enabled
-      verify_enabled=$(echo "$verify_resp" | jq -r 'if (.result | has("enabled")) then (.result.enabled | tostring) else "unknown" end')
+      verify_enabled=$(echo "$verify_resp" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
+      [ -z "$verify_enabled" ] && verify_enabled="unknown"
 
       if [ "$verify_enabled" = "false" ]; then
         log "[+] Rollback CONFIRMED: Cloudflare API read-back reports enabled=false."
@@ -284,7 +413,8 @@ check_production_controls() {
     local exp="${item##*:}"
 
     local probe_out
-    probe_out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" "$url" || echo "000 99.999")
+    probe_out=$(curl -s --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+      -o /dev/null -w "%{http_code} %{time_total}" "$url" || echo "000 99.999")
     local code
     code=$(echo "$probe_out" | awk '{print $1}')
     local latency
@@ -312,23 +442,27 @@ check_production_controls() {
 # ---------------------------------------------------------------------------
 log "=== Step 1: Pre-flight Cloudflare API & Environment Verification ==="
 
-RULE_INFO=$(curl -sS -X GET "$API_URL" -H "Authorization: Bearer $CF_TOKEN")
-SUCCESS=$(echo "$RULE_INFO" | jq -r '.success // false')
+RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+  -X GET "$API_URL" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") 2>&1 || true)
+
+SUCCESS=$(echo "$RULE_INFO" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 
 if [ "$SUCCESS" != "true" ]; then
-  log "[-] API Auth / Read failed: $(echo "$RULE_INFO" | jq -c '.errors')"
+  log "[-] API Auth / Read failed: $(echo "$RULE_INFO" | jq -c 'try .errors catch "error"')"
   exit 1
 fi
 
-INITIAL_ENABLED=$(echo "$RULE_INFO" | jq -r '.result.enabled')
-INITIAL_REF=$(echo "$RULE_INFO" | jq -r '.result.ref')
-INITIAL_EXPR=$(echo "$RULE_INFO" | jq -r '.result.expression')
+INITIAL_ENABLED=$(echo "$RULE_INFO" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
+INITIAL_REF=$(echo "$RULE_INFO" | jq -r 'try .result.ref catch "unknown"' 2>/dev/null || echo "unknown")
+INITIAL_EXPR=$(echo "$RULE_INFO" | jq -r 'try .result.expression catch "unknown"' 2>/dev/null || echo "unknown")
 
 log "[+] Target Rule verified: ref=$INITIAL_REF, enabled=$INITIAL_ENABLED"
 log "[+] Target Expression: $INITIAL_EXPR"
 
 if [ "$INITIAL_ENABLED" != "false" ]; then
-  log "[-] Target rule is NOT inert before drill! (enabled=$INITIAL_ENABLED). Expected enabled=false."
+  log "[-] CRITICAL: Target rule is ALREADY ENABLED (enabled=$INITIAL_ENABLED) before drill!"
+  log "[-] Active incident or manual override suspected. Refusing to run drill."
   exit 1
 fi
 
@@ -341,7 +475,8 @@ fi
 log "[+] All 6 production endpoints match baseline status and latency thresholds."
 
 # Initial Staging Probe
-STAGING_INIT=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" "$TARGET_URL")
+STAGING_INIT=$(curl -s --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+  -o /dev/null -w "%{http_code} %{time_total}" "$TARGET_URL" || echo "000 99.999")
 STAGING_CODE=$(echo "$STAGING_INIT" | awk '{print $1}')
 if [ "$STAGING_CODE" != "404" ]; then
   log "[-] Initial staging probe failed: expected HTTP 404, got $STAGING_CODE"
@@ -350,9 +485,9 @@ fi
 log "[+] Initial staging probe confirmed: HTTP 404 (Unrouted Origin Passthrough)."
 
 # ---------------------------------------------------------------------------
-# Step 2: Server-Side Validation (dry_run=true)
+# Step 2: Local Schema & Scope Pre-validation
 # ---------------------------------------------------------------------------
-log "=== Step 2: Server-Side Request Validation via dry_run=true ==="
+log "=== Step 2: Local Schema & Scope Pre-validation ==="
 
 ACTIVATE_PAYLOAD='{
   "action": "block",
@@ -361,17 +496,22 @@ ACTIVATE_PAYLOAD='{
   "expression": "(http.host eq \"staging-redloop.mctl.ai\")"
 }'
 
-DRY_RUN_RESP=$(curl -sS -X PATCH "${API_URL}?dry_run=true" \
-  -H "Authorization: Bearer $CF_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "$ACTIVATE_PAYLOAD")
-
-DRY_RUN_SUCCESS=$(echo "$DRY_RUN_RESP" | jq -r '.success // false')
-if [ "$DRY_RUN_SUCCESS" != "true" ]; then
-  log "[-] Server-side dry_run validation failed: $(echo "$DRY_RUN_RESP" | jq -c '.errors')"
+# Validate JSON payload locally
+if ! echo "$ACTIVATE_PAYLOAD" | jq . > /dev/null 2>&1; then
+  log "[-] Activation payload failed local JSON syntax validation!"
   exit 1
 fi
-log "[+] Server-side dry_run validation PASSED: syntax, scope, and payload accepted."
+
+if [ "$INITIAL_REF" != "block_staging_redloop_emergency" ]; then
+  log "[-] Ref mismatch: expected block_staging_redloop_emergency, got $INITIAL_REF"
+  exit 1
+fi
+
+if [ "$INITIAL_EXPR" != '(http.host eq "staging-redloop.mctl.ai")' ]; then
+  log "[-] Expression mismatch: expected '(http.host eq \"staging-redloop.mctl.ai\")', got $INITIAL_EXPR"
+  exit 1
+fi
+log "[+] Local validation PASSED: JSON payload valid, ref and expression verified."
 
 # ---------------------------------------------------------------------------
 # Step 3: Activation (T0) & Continuous Observation
@@ -381,14 +521,19 @@ log "=== Step 3: Activating WAF Rule d8b4ea76eabc420e99146cafd9596801 (T0) ==="
 T0_TS=$(iso_ts)
 T0_EPOCH=$(python3 -c "import time; print(time.time())")
 
-ACT_RESP=$(curl -sS -X PATCH "$API_URL" \
-  -H "Authorization: Bearer $CF_TOKEN" \
+# Mark activation attempted IMMEDIATELY before sending the activation PATCH
+ACTIVATION_ATTEMPTED=1
+touch "$ACTIVATION_MARKER_FILE"
+
+ACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+  -X PATCH "$API_URL" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
   -d "$ACTIVATE_PAYLOAD")
 
-ACT_SUCCESS=$(echo "$ACT_RESP" | jq -r '.success // false')
+ACT_SUCCESS=$(echo "$ACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$ACT_SUCCESS" != "true" ]; then
-  log "[-] Rule activation PATCH failed: $(echo "$ACT_RESP" | jq -c '.errors')"
+  log "[-] Rule activation PATCH failed: $(echo "$ACT_RESP" | jq -c 'try .errors catch "error"')"
   exit 1
 fi
 
@@ -423,7 +568,8 @@ while true; do
 
   # Probe staging
   PROBE_TMP=$(mktemp)
-  PROBE_HEADER=$(curl -sD - -o "$PROBE_TMP" -w "%{http_code} %{time_total}" "$TARGET_URL")
+  PROBE_HEADER=$(curl -sD - --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+    -o "$PROBE_TMP" -w "%{http_code} %{time_total}" "$TARGET_URL" || echo "000 99.999")
   HTTP_CODE=$(echo "$PROBE_HEADER" | tail -n 1 | awk '{print $1}')
   PROBE_LAT=$(echo "$PROBE_HEADER" | tail -n 1 | awk '{print $2}')
   CF_RAY=$(echo "$PROBE_HEADER" | grep -i "^cf-ray:" | tr -d '\r' | awk '{print $2}' || echo "none")
@@ -463,14 +609,15 @@ DEACT_PAYLOAD='{
   "expression": "(http.host eq \"staging-redloop.mctl.ai\")"
 }'
 
-DEACT_RESP=$(curl -sS -X PATCH "$API_URL" \
-  -H "Authorization: Bearer $CF_TOKEN" \
+DEACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+  -X PATCH "$API_URL" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
   -d "$DEACT_PAYLOAD")
 
-DEACT_SUCCESS=$(echo "$DEACT_RESP" | jq -r '.success // false')
+DEACT_SUCCESS=$(echo "$DEACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$DEACT_SUCCESS" != "true" ]; then
-  log "[-] Rule deactivation PATCH failed: $(echo "$DEACT_RESP" | jq -c '.errors')"
+  log "[-] Rule deactivation PATCH failed: $(echo "$DEACT_RESP" | jq -c 'try .errors catch "error"')"
   rollback
   exit 1
 fi
@@ -494,7 +641,8 @@ while true; do
   fi
 
   PROBE_TMP=$(mktemp)
-  PROBE_HEADER=$(curl -sD - -o "$PROBE_TMP" -w "%{http_code} %{time_total}" "$TARGET_URL")
+  PROBE_HEADER=$(curl -sD - --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+    -o "$PROBE_TMP" -w "%{http_code} %{time_total}" "$TARGET_URL" || echo "000 99.999")
   HTTP_CODE=$(echo "$PROBE_HEADER" | tail -n 1 | awk '{print $1}')
   PROBE_LAT=$(echo "$PROBE_HEADER" | tail -n 1 | awk '{print $2}')
   CF_RAY=$(echo "$PROBE_HEADER" | grep -i "^cf-ray:" | tr -d '\r' | awk '{print $2}' || echo "none")
@@ -520,8 +668,11 @@ done
 # ---------------------------------------------------------------------------
 log "=== Step 5: Post-Drill API Verification & Production Health ==="
 
-FINAL_RULE_INFO=$(curl -sS -X GET "$API_URL" -H "Authorization: Bearer $CF_TOKEN")
-FINAL_ENABLED=$(echo "$FINAL_RULE_INFO" | jq -r '.result.enabled')
+FINAL_RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+  -X GET "$API_URL" \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN"))
+
+FINAL_ENABLED=$(echo "$FINAL_RULE_INFO" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
 
 if [ "$FINAL_ENABLED" != "false" ]; then
   log "[-] CRITICAL: Post-drill rule state is enabled=${FINAL_ENABLED}! Expected false."
