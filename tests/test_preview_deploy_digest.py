@@ -3,11 +3,15 @@
 trigger-github-build is run from the ClusterWorkflowTemplate's own source
 against a local stand-in for the GitHub API: it must read the digest from the
 build run's image-digest artifact, refuse anything else, and never send the
-token to the blob host the download redirects to. The deploy step's digest
+token to the blob host the download redirects to. Without git_ref it must
+resolve image_tag in a local stand-in for GHCR with the namespace's pull
+secret, never the GitHub token, and refuse when it cannot. The deploy step's digest
 check is run from its own source in sh. Each named mutation must turn at least
 one case red. Plain script: `python3 tests/test_preview_deploy_digest.py`.
 """
+import base64
 import http.server
+import json
 import io
 import os
 import pathlib
@@ -28,6 +32,9 @@ DEPLOY = TEMPLATES["deploy"]["script"]["source"]
 IMAGE = "ghcr.io/mctlhq/foo"
 DIGEST = "sha256:" + "ab" * 32
 ART = "/repos/mctlhq/mctl-gitops/actions/artifacts/9/zip"
+TAG_DIGEST = "sha256:" + "cd" * 32
+PULL_AUTH = base64.b64encode(b"puller:pull-secret").decode()
+PULL_CONFIG = json.dumps({"auths": {"ghcr.io": {"auth": PULL_AUTH}}})
 failures = []
 
 
@@ -65,11 +72,25 @@ class Fake(http.server.BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         self.reply(204)
 
+    def do_HEAD(self):
+        Fake.seen.append(("HEAD", self.path, self.headers.get("Authorization")))
+        sc = Fake.scenario
+        # Any tag of foo resolves, so only the step's own shape check refuses a bad one.
+        if (self.path.startswith("/v2/mctlhq/foo/manifests/") and self.headers.get("Authorization") == "Bearer reg-token"
+                and "application/vnd.oci.image.index.v1+json" in self.headers.get("Accept", "")):
+            if sc.get("manifest") == 404:
+                return self.reply(404)
+            return self.reply(200, headers={"Docker-Content-Digest": sc.get("tag_digest", TAG_DIGEST)})
+        self.reply(401)
+
     def do_GET(self):
-        import json
         Fake.seen.append(("GET", self.path, self.headers.get("Authorization")))
         sc = Fake.scenario
         base = f"http://127.0.0.1:{self.server.server_port}"
+        if self.path == "/token?service=ghcr.io&scope=repository%3Amctlhq%2Ffoo%3Apull":
+            if self.headers.get("Authorization") != f"Basic {PULL_AUTH}":
+                return self.reply(401)
+            return self.reply(200, json.dumps({"token": "reg-token"}).encode())
         if self.path.startswith("/repos/mctlhq/mctl-gitops/actions/workflows/build-image.yaml/runs"):
             return self.reply(200, json.dumps({"workflow_runs": [{"id": 7, "name": "build-wf-abc: t/foo (1.0)"}]}).encode())
         if self.path == "/repos/mctlhq/mctl-gitops/actions/runs/7":
@@ -90,11 +111,16 @@ threading.Thread(target=SERVER.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{SERVER.server_port}"
 
 
-def run_trigger(source, git_ref="feat/x", **scenario):
+def run_trigger(source, git_ref="feat/x", image_tag="1.0", pull_config=PULL_CONFIG, **scenario):
     Fake.scenario, Fake.seen = scenario, []
     d = pathlib.Path(tempfile.mkdtemp())
     out = d / "image_digest"
+    auth = d / "dockerconfigjson"
+    if pull_config is not None:
+        auth.write_text(pull_config)
     src = (source.replace('API = "https://api.github.com"', f'API = "{BASE}"')
+                 .replace('REGISTRY = "https://ghcr.io"', f'REGISTRY = "{BASE}"')
+                 .replace('"/ghcr-pull/.dockerconfigjson"', repr(str(auth)))
                  .replace("time.sleep(", "(lambda _s: None)(")
                  .replace("/tmp/image_digest", str(out))
                  .replace("{{workflow.name}}", "wf-abc")
@@ -103,12 +129,14 @@ def run_trigger(source, git_ref="feat/x", **scenario):
                  .replace('location.startswith("https://")', f'location.startswith("{BASE}/")'))
     (d / "t.py").write_text(src)
     env = {**os.environ, "GITHUB_PAT": "test-token", "GITOPS_ORG": "mctlhq", "GITOPS_REPO": "mctl-gitops",
-           "PARAM_DOCKERFILE_REPO": "mctlhq/foo", "PARAM_GIT_REF": git_ref, "PARAM_IMAGE_TAG": "1.0",
+           "PARAM_DOCKERFILE_REPO": "mctlhq/foo", "PARAM_GIT_REF": git_ref, "PARAM_IMAGE_TAG": image_tag,
            "PARAM_DOCKERFILE_PATH": "Dockerfile", "PARAM_TEAM_NAME": "t", "PARAM_COMPONENT_NAME": "foo"}
     r = subprocess.run([sys.executable, "-I", str(d / "t.py")], env=env, capture_output=True, text=True, timeout=60)
     digest = out.read_text() if out.exists() else None
     blob_auth = [a for (m, p, a) in Fake.seen if p == "/blob" and a]
-    return r.returncode, digest, len(Fake.seen), blob_auth
+    pat_off_github = [p for (m, p, a) in Fake.seen if a and "test-token" in a and not p.startswith("/repos/")]
+    github_calls = [p for (m, p, a) in Fake.seen if p.startswith("/repos/")]
+    return r.returncode, digest, github_calls, blob_auth + pat_off_github
 
 
 def deploy_check(source, digest):
@@ -130,8 +158,21 @@ def cases(trigger, deploy, dag):
     code, digest, _, leak = run_trigger(trigger)
     want("reads the digest from the build's artifact", code == 0 and digest == DIGEST)
     want("never sends the token to the blob host", not leak)
-    code, digest, calls, _ = run_trigger(trigger, git_ref="")
-    want("no git_ref: empty digest, no API call", code == 0 and digest == "" and calls == 0)
+    code, digest, calls, leak = run_trigger(trigger, git_ref="")
+    want("no git_ref: deploys what the tag points at in GHCR", code == 0 and digest == TAG_DIGEST)
+    want("no git_ref: no GitHub API call, GitHub token never sent elsewhere", not calls and not leak)
+    code, _, _, _ = run_trigger(trigger, git_ref="", manifest=404)
+    want("no git_ref: refuses a tag missing from GHCR", code != 0)
+    code, _, _, _ = run_trigger(trigger, git_ref="", pull_config=None)
+    want("no git_ref: refuses without a pull secret", code != 0)
+    code, _, _, _ = run_trigger(trigger, git_ref="", pull_config='{"auths": {"docker.io": {"auth": "eA=="}}}')
+    want("no git_ref: refuses a pull secret without ghcr.io", code != 0)
+    code, _, _, _ = run_trigger(trigger, git_ref="", tag_digest="sha256:" + "CD" * 32)
+    want("no git_ref: refuses a malformed registry digest", code != 0)
+    code, _, _, _ = run_trigger(trigger, git_ref="", image_tag="../x")
+    want("no git_ref: refuses a tag that is not a tag", code != 0)
+    code, digest, _, _ = run_trigger(trigger, pull_config=None)
+    want("git_ref: builds without a pull secret", code == 0 and digest == DIGEST)
     code, _, _, _ = run_trigger(trigger, artifacts=[])
     want("refuses a build without an image-digest artifact", code != 0)
     two = [{"name": "image-digest", "expired": False, "archive_download_url": "BASE" + ART}] * 2
@@ -170,6 +211,8 @@ def dag_of(doc):
     return {t["name"]: t for t in {x["name"]: x for x in doc["spec"]["templates"]}["preview-pipeline"]["dag"]["tasks"]}
 
 
+# A missing pull secret has no mutant: carrying on with an empty entry sends
+# "Basic Og==" and GHCR refuses the token, so the step stays closed either way.
 MUTANTS_TRIGGER = [
     ("any artifact count", "if len(found) != 1:", "if not found:"),
     ("expired accepted", 'and not a.get("expired")', ""),
@@ -181,6 +224,12 @@ MUTANTS_TRIGGER = [
     ("extra files accepted", 'if z.namelist() != ["image-ref.txt"]:', 'if "image-ref.txt" not in z.namelist():'),
     ("redirect scheme unchecked", 'if not location.startswith("https://"):', "if False:"),
     ("no early exit without git_ref", "if not git_ref:\n", "if False:\n"),
+    ("tag not resolved", "digest = resolve_tag_digest()", 'digest = ""'),
+    ("tag shape unchecked", 'if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}", image_tag):', "if False:"),
+    ("registry digest charset loose", 'if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):',
+     'if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):'),
+    ("GitHub token sent to the registry", 'headers={"Authorization": f"Basic {auth}"}',
+     'headers={"Authorization": f"Bearer {PAT}"}'),
 ]
 MUTANTS_DEPLOY = [
     ("deploy digest charset unchecked", 'case "${DIGEST#sha256:}" in', 'case "0" in'),
