@@ -270,7 +270,7 @@ version_holds:
       # credential fixes. The owner confirmed the whole 4.164.0 content.
       # Covers only the 4.164.0 tag of the release PR mctlhq/mctl-api#1092.
       - version: "4.164.0"
-        grant: mctlhq/mctl-gitops#PLACEHOLDER
+        grant: mctlhq/mctl-gitops#2729
         approved_by: mashkovd
         expires: 2026-12-01
 
