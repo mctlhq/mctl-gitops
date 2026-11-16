@@ -505,6 +505,22 @@ def selftest() -> int:
             put("platform-gitops/services/admins/mctl-glovo/values.yaml", "x: 1\n")(r)),
         None, s_paths)
 
+    # Real default constants (no injection): widening or breaking the shipped
+    # ALLOWED_PATHS / ALLOWED_LINES must fail here, not only the injected cases.
+    add("real defaults: the allowed service template with innocuous content passes", 0,
+        put(svc, "x: 1\n"))
+    add("real defaults: the allowed service template with an unlisted Glovo line refuses", REFUSED,
+        put(svc, f"{s_line}-unlisted\n"))
+    for near in (
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo-secrets.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yml",
+        "platform-gitops/bootstrap/templates/mctl-platform/sub/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo/other.yaml",
+        "platform-gitops/services/admins/mctl-glovo/values.yaml",
+    ):
+        add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
+
     failed = 0
     pinned = ALLOWED_PATHS == {svc}
     failed += not pinned
