@@ -277,7 +277,7 @@ run "deploy_approval_client_is_a_confidential_pkce_web_client" {
 }
 
 # The client of the release approval page (mctl-api#1022 S2). The same
-# attributes as mctl-api-release-approval, because the same things keep it closed.
+# attributes as mctl-api-deploy-approval, because the same things keep it closed.
 run "release_approval_client_is_a_confidential_pkce_web_client" {
   command = plan
   plan_options {
