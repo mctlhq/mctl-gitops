@@ -233,6 +233,14 @@ version_holds:
         grant: mctlhq/mctl-gitops#2699
         approved_by: mashkovd
         expires: 2026-11-30
+      # Twelfth grant (owner GO in chat, 2026-11-16): 4.161.3 is 4.161.2 plus
+      # mctlhq/mctl-api#1072 (deploy plan change detection compares values
+      # over the base-service chart defaults, mctlhq/mctl-api#1058).
+      # Covers only the 4.161.3 tag on the merge of mctlhq/mctl-api#1073.
+      - version: "4.161.3"
+        grant: mctlhq/mctl-gitops#GRANT
+        approved_by: mashkovd
+        expires: 2026-11-30
 
 gates:
   - name: mctl-agents-workers
