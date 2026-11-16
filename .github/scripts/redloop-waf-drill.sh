@@ -6,13 +6,14 @@
 # Rule ID: d8b4ea76eabc420e99146cafd9596801 (block_staging_redloop_emergency)
 #
 # Safety invariants:
-# 1. Strictly bounded blast radius: modifies exclusively Rule ID d8b4ea76eabc420e99146cafd9596801.
-# 2. Comprehensive production controls: concurrent parallel checks across 6 production endpoints with latency & status limits, active throughout activation AND recovery.
-# 3. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and API read-back verification.
-# 4. Strict activation guard: rollback never modifies rule if activation was not attempted (preserves active incidents).
-# 5. Fail-safe state tracking: activation state transitions to "activating" BEFORE dispatch, guaranteeing rollback on network drop.
-# 6. Cloudflare Security Events correlation: queries GraphQL firewallEventsAdaptive to verify Ray ID matches Rule ID.
-# 7. Independent recovery verification: produces machine-readable summary, step summary table, and break-glass commands.
+# 1. Strictly bounded blast radius: modifies exclusively Rule ID d8b4ea76eabc420e99146cafd9596801 via PATCH.
+# 2. Ruleset-level read-back: queries ruleset GET endpoint (/rulesets/{ruleset_id}) and extracts target rule from result.rules[], avoiding HTTP 405 (10405) on /rules/{rule_id}.
+# 3. Comprehensive production controls: concurrent parallel checks across 6 production endpoints with latency & status limits, active throughout activation AND recovery.
+# 4. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and ruleset API read-back verification.
+# 5. Strict activation guard: rollback never modifies rule if activation was not attempted (preserves active incidents).
+# 6. Fail-safe state tracking: activation state transitions to "activating" BEFORE dispatch, guaranteeing rollback on network drop.
+# 7. Cloudflare Security Events correlation: queries GraphQL firewallEventsAdaptive to verify Ray ID matches Rule ID.
+# 8. Independent recovery verification: produces machine-readable summary, step summary table, and break-glass commands.
 
 set -euo pipefail
 
@@ -44,7 +45,11 @@ rule_state = {
     "null_on_next_get": False,
     "probe_fail_count": 0,
     "security_event_rule_id": "d8b4ea76eabc420e99146cafd9596801",
-    "security_event_unauthorized": False
+    "security_event_unauthorized": False,
+    "missing_rule": False,
+    "duplicate_rule": False,
+    "malformed_ruleset": False,
+    "auth_error": False,
 }
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -52,29 +57,104 @@ class MockHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if "/ruleset" in self.path:
-            if rule_state["null_on_next_get"]:
-                rule_state["null_on_next_get"] = False
-                self.send_response(500)
+        if self.path.startswith("/rulesets") or "/ruleset" in self.path:
+            # Reproduce Cloudflare 10405 on individual rule GET endpoint
+            if "/rules/" in self.path:
+                self.send_response(405)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "errors": [{"message": "transient backend error"}], "result": None}).encode())
+                self.wfile.write(json.dumps({
+                    "success": False,
+                    "errors": [
+                        {
+                            "code": 10405,
+                            "message": "Method not allowed for this authentication scheme"
+                        }
+                    ],
+                    "result": None
+                }).encode())
                 return
+
+            if rule_state["auth_error"]:
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "success": False,
+                    "errors": [{"code": 10000, "message": "Authentication error"}],
+                    "result": None
+                }).encode())
+                return
+
+            if rule_state["null_on_next_get"] or rule_state["malformed_ruleset"]:
+                rule_state["null_on_next_get"] = False
+                self.send_response(500 if not rule_state["malformed_ruleset"] else 200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "success": False if not rule_state["malformed_ruleset"] else True,
+                    "errors": [{"message": "transient backend error"}] if not rule_state["malformed_ruleset"] else [],
+                    "result": None
+                }).encode())
+                return
+
+            rules = [
+                {
+                    "id": "1493169d2b0947769321b3375a153715",
+                    "action": "skip",
+                    "description": "seerr",
+                    "enabled": True,
+                    "expression": "(ip.src.asnum eq 24940)",
+                    "ref": "1493169d2b0947769321b3375a153715"
+                },
+                {
+                    "id": "b1a2c3d4e5f60718293a4b5c6d7e8f90",
+                    "action": "block",
+                    "description": "block archive probes",
+                    "enabled": True,
+                    "expression": '(http.request.uri.path contains ".zip")',
+                    "ref": "block_archive_probes_apex"
+                },
+                {
+                    "id": "c1d2e3f4a5b60718293a4b5c6d7e8f91",
+                    "action": "block",
+                    "description": "block spoofed crawlers",
+                    "enabled": True,
+                    "expression": "(not cf.client.bot)",
+                    "ref": "block_spoofed_crawlers"
+                }
+            ]
+
+            target_rule = {
+                "id": "d8b4ea76eabc420e99146cafd9596801",
+                "ref": "block_staging_redloop_emergency",
+                "enabled": rule_state["enabled"],
+                "action": "block",
+                "expression": '(http.host eq "staging-redloop.mctl.ai")'
+            }
+
+            if not rule_state["missing_rule"]:
+                rules.append(target_rule)
+                if rule_state["duplicate_rule"]:
+                    rules.append(dict(target_rule))
+
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             resp = {
                 "success": True,
                 "errors": [],
+                "messages": [],
                 "result": {
-                    "id": "d8b4ea76eabc420e99146cafd9596801",
-                    "ref": "block_staging_redloop_emergency",
-                    "enabled": rule_state["enabled"],
-                    "action": "block",
-                    "expression": '(http.host eq "staging-redloop.mctl.ai")'
+                    "id": "4bdd5c0da7004933b40aae8fd0d5ce78",
+                    "name": "default",
+                    "phase": "http_request_firewall_custom",
+                    "rules": rules
                 }
             }
             self.wfile.write(json.dumps(resp).encode())
+            return
+
         elif self.path == "/staging":
             if rule_state["probe_fail_count"] > 0:
                 rule_state["probe_fail_count"] -= 1
@@ -139,6 +219,38 @@ class MockHandler(BaseHTTPRequestHandler):
             self.end_headers()
         elif self.path == "/control/clear_security_event_unauthorized":
             rule_state["security_event_unauthorized"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_missing_rule":
+            rule_state["missing_rule"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_missing_rule":
+            rule_state["missing_rule"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_duplicate_rule":
+            rule_state["duplicate_rule"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_duplicate_rule":
+            rule_state["duplicate_rule"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_malformed_ruleset":
+            rule_state["malformed_ruleset"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_malformed_ruleset":
+            rule_state["malformed_ruleset"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_auth_error":
+            rule_state["auth_error"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_auth_error":
+            rule_state["auth_error"] = False
             self.send_response(200)
             self.end_headers()
         elif self.path == "/control/get_patch_count":
@@ -241,6 +353,7 @@ PYEOF
   python3 "$mock_py" "$mock_port" &
   mock_pid=$!
 
+  # shellcheck disable=SC2329
   cleanup_mock() {
     kill "$mock_pid" 2>/dev/null || true
     wait "$mock_pid" 2>/dev/null || true
@@ -257,7 +370,8 @@ PYEOF
   done
 
   echo "[+] Test Case 1: Standard Happy Path (404 -> 403 -> 404)"
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
@@ -282,14 +396,15 @@ PYEOF
     cat "$tmp_dir/test1.log"
     exit 1
   fi
-  echo "[+] Test Case 1 PASSED: Happy path (404 -> 403 -> 404) with Security Event correlation verified."
+  echo "[+] Test Case 1 PASSED: Happy path (404 -> 403 -> 404) with ruleset read-back & Security Event correlation verified."
 
   echo "[+] Test Case 2: Pre-flight abort when rule is already enabled (active incident guard)"
   curl -s "http://127.0.0.1:$mock_port/control/set_enabled_true" > /dev/null
   init_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
 
   set +e
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
   MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
@@ -327,7 +442,8 @@ PYEOF
   curl -s "http://127.0.0.1:$mock_port/control/set_fail_activation" > /dev/null
 
   set +e
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
   MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
@@ -364,7 +480,8 @@ PYEOF
   curl -s "http://127.0.0.1:$mock_port/control/arm_null_readback_on_rollback" > /dev/null
 
   set +e
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
   MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
@@ -388,11 +505,11 @@ PYEOF
     echo "[-] FAIL: Test 4 caught jq null unhandled exception!"
     exit 1
   fi
-  if ! grep -q "Read-back verification failed: rule enabled status is 'unknown'" "$tmp_dir/test4.log"; then
+  if ! grep -q "Read-back verification failed: unable to fetch rule from ruleset API" "$tmp_dir/test4.log"; then
     echo "[-] FAIL: Test 4 did not log expected transient read-back failure!"
     exit 1
   fi
-  if ! grep -q "Rollback CONFIRMED: Cloudflare API read-back reports enabled=false." "$tmp_dir/test4.log"; then
+  if ! grep -q "Rollback CONFIRMED: Cloudflare ruleset read-back reports enabled=false" "$tmp_dir/test4.log"; then
     echo "[-] FAIL: Test 4 rollback did not recover and confirm inert status!"
     exit 1
   fi
@@ -403,7 +520,8 @@ PYEOF
   curl -s "http://127.0.0.1:$mock_port/control/set_security_event_mismatch" > /dev/null
 
   set +e
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
@@ -443,7 +561,8 @@ PYEOF
   curl -s "http://127.0.0.1:$mock_port/control/set_security_event_unauthorized" > /dev/null
 
   set +e
-  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
   CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
@@ -473,7 +592,194 @@ PYEOF
   fi
   echo "[+] Test Case 6 PASSED: Missing analytics scope gracefully logged as notice while drill completed successfully."
 
-  echo "=== All Self-Test Scenarios PASSED ==="
+  echo "[+] Test Case 7: Reproduce Cloudflare HTTP 10405 error (unsupported GET on /rules/{rule_id}) fails closed"
+  # Regression guard: assert default script configuration targets ruleset endpoint, not individual /rules/ sub-path
+  default_ruleset_cfg=$(grep -E '^[[:space:]]*RULESET_API_URL=' "$0" | head -n1)
+  if [[ "$default_ruleset_cfg" == *"/rules/"* ]]; then
+    echo "[-] FAIL: Regression detected! Default RULESET_API_URL contains /rules/ ($default_ruleset_cfg)"
+    exit 1
+  fi
+
+  init_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+
+  set +e
+  # Pointing RULESET override directly to individual rule path reproduces the 10405 error observed in run #43887406834
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test7.log" 2>&1
+  test7_rc=$?
+  set -e
+
+  post_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+  if [ "$post_patches" -ne "$init_patches" ]; then
+    echo "[-] FAIL: Test 7 sent PATCH during pre-flight failure! ($post_patches != $init_patches)"
+    exit 1
+  fi
+
+  if [ "$test7_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 7 expected non-zero exit code when Cloudflare returns HTTP 10405, got 0"
+    cat "$tmp_dir/test7.log"
+    exit 1
+  fi
+  if ! grep -q "10405" "$tmp_dir/test7.log"; then
+    echo "[-] FAIL: Test 7 did not log expected 10405 error code!"
+    cat "$tmp_dir/test7.log"
+    exit 1
+  fi
+  if ! grep -q "Activation was not attempted by this drill" "$tmp_dir/test7.log"; then
+    echo "[-] FAIL: Test 7 did not abort safely prior to activation!"
+    cat "$tmp_dir/test7.log"
+    exit 1
+  fi
+  echo "[+] Test Case 7 PASSED: Cloudflare HTTP 10405 reproduced, handled fail-closed, and zero mutations attempted."
+
+  echo "[+] Test Case 8: Target rule missing in ruleset fails closed during pre-flight"
+  curl -s "http://127.0.0.1:$mock_port/control/set_missing_rule" > /dev/null
+
+  set +e
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test8.log" 2>&1
+  test8_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_missing_rule" > /dev/null
+
+  if [ "$test8_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 8 expected failure when target rule is missing, got 0"
+    cat "$tmp_dir/test8.log"
+    exit 1
+  fi
+  if ! grep -q "not found in ruleset" "$tmp_dir/test8.log"; then
+    echo "[-] FAIL: Test 8 did not log expected missing rule error!"
+    cat "$tmp_dir/test8.log"
+    exit 1
+  fi
+  echo "[+] Test Case 8 PASSED: Missing target rule in ruleset correctly failed closed."
+
+  echo "[+] Test Case 9: Duplicate rule ID in ruleset fails closed during pre-flight"
+  curl -s "http://127.0.0.1:$mock_port/control/set_duplicate_rule" > /dev/null
+
+  set +e
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test9.log" 2>&1
+  test9_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_duplicate_rule" > /dev/null
+
+  if [ "$test9_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 9 expected failure when duplicate rule ID detected, got 0"
+    cat "$tmp_dir/test9.log"
+    exit 1
+  fi
+  if ! grep -q "Ambiguous ruleset: duplicate rule ID" "$tmp_dir/test9.log"; then
+    echo "[-] FAIL: Test 9 did not log expected duplicate rule error!"
+    cat "$tmp_dir/test9.log"
+    exit 1
+  fi
+  echo "[+] Test Case 9 PASSED: Duplicate rule ID detected and failed closed."
+
+  echo "[+] Test Case 10: Cloudflare HTTP 401 authentication failure fails closed"
+  curl -s "http://127.0.0.1:$mock_port/control/set_auth_error" > /dev/null
+
+  set +e
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test10.log" 2>&1
+  test10_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_auth_error" > /dev/null
+
+  if [ "$test10_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 10 expected failure when auth error returned, got 0"
+    cat "$tmp_dir/test10.log"
+    exit 1
+  fi
+  if ! grep -q "Ruleset API HTTP error 401" "$tmp_dir/test10.log"; then
+    echo "[-] FAIL: Test 10 did not log expected 401 error!"
+    cat "$tmp_dir/test10.log"
+    exit 1
+  fi
+  echo "[+] Test Case 10 PASSED: HTTP 401 authentication error correctly failed closed."
+
+  echo "[+] Test Case 11: Malformed ruleset payload (.result: null) fails closed"
+  curl -s "http://127.0.0.1:$mock_port/control/set_malformed_ruleset" > /dev/null
+
+  set +e
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test11.log" 2>&1
+  test11_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_malformed_ruleset" > /dev/null
+
+  if [ "$test11_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 11 expected failure when ruleset payload was malformed, got 0"
+    cat "$tmp_dir/test11.log"
+    exit 1
+  fi
+  if ! grep -qi "malformed ruleset payload" "$tmp_dir/test11.log"; then
+    echo "[-] FAIL: Test 11 did not log expected malformed payload error!"
+    cat "$tmp_dir/test11.log"
+    exit 1
+  fi
+  echo "[+] Test Case 11 PASSED: Malformed ruleset payload (.result is null) correctly failed closed."
+
+  echo "=== All 11 Self-Test Scenarios PASSED ==="
   exit 0
 fi
 
@@ -493,7 +799,8 @@ RULE_ID="d8b4ea76eabc420e99146cafd9596801"
 TARGET_HOST="staging-redloop.mctl.ai"
 
 TARGET_URL="${MOCK_STAGING_URL:-https://${TARGET_HOST}/}"
-API_URL="${CF_API_BASE_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}}"
+RULESET_API_URL="${CF_RULESET_API_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}}"
+RULE_API_URL="${CF_RULE_API_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}}"
 GRAPHQL_URL="${GRAPHQL_URL:-${CF_GRAPHQL_OVERRIDE:-https://api.cloudflare.com/client/v4/graphql}}"
 
 # Latency and Timeout Thresholds
@@ -521,6 +828,79 @@ log() {
   local ts
   ts=$(iso_ts)
   echo "[$ts] $*"
+}
+
+# ---------------------------------------------------------------------------
+# Ruleset Read-Back Helper (Queries Ruleset and Extracts Target Rule)
+# ---------------------------------------------------------------------------
+fetch_target_rule() {
+  local http_resp
+  http_resp=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
+    -w "\n%{http_code}" -X GET "$RULESET_API_URL" \
+    -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") 2>&1 || true)
+
+  local http_code
+  http_code=$(echo "$http_resp" | tail -n 1)
+  local body
+  body=$(echo "$http_resp" | sed '$d')
+
+  if [ "$http_code" != "200" ]; then
+    local err_msg
+    err_msg=$(echo "$body" | jq -c 'try .errors catch empty' 2>/dev/null || true)
+    log "[-] Ruleset API HTTP error $http_code: ${err_msg:-$body}" >&2
+    return 1
+  fi
+
+  local success
+  success=$(echo "$body" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
+  if [ "$success" != "true" ]; then
+    local err_msg
+    err_msg=$(echo "$body" | jq -c 'try .errors catch empty' 2>/dev/null || true)
+    log "[-] Ruleset API success=false: ${err_msg:-$body}" >&2
+    return 1
+  fi
+
+  local has_result
+  has_result=$(echo "$body" | jq -r 'try (.result != null and (.result | type == "object")) catch false' 2>/dev/null || echo "false")
+  if [ "$has_result" != "true" ]; then
+    log "[-] Malformed ruleset payload: .result is null or not an object" >&2
+    return 1
+  fi
+
+  local rules_is_array
+  rules_is_array=$(echo "$body" | jq -r 'try (.result.rules | type == "array") catch false' 2>/dev/null || echo "false")
+  if [ "$rules_is_array" != "true" ]; then
+    log "[-] Malformed ruleset payload: .result.rules is not an array" >&2
+    return 1
+  fi
+
+  local matching_rules
+  matching_rules=$(echo "$body" | jq --arg id "$RULE_ID" '[.result.rules[]? | select(.id == $id)]' 2>/dev/null || echo "[]")
+  local match_count
+  match_count=$(echo "$matching_rules" | jq 'length' 2>/dev/null || echo 0)
+
+  if [ "$match_count" -eq 0 ]; then
+    log "[-] Target rule $RULE_ID not found in ruleset $RULESET_ID" >&2
+    return 1
+  fi
+
+  if [ "$match_count" -gt 1 ]; then
+    log "[-] Ambiguous ruleset: duplicate rule ID $RULE_ID detected ($match_count occurrences)" >&2
+    return 1
+  fi
+
+  local target_rule
+  target_rule=$(echo "$matching_rules" | jq '.[0]')
+
+  local rule_id
+  rule_id=$(echo "$target_rule" | jq -r 'try .id catch empty' 2>/dev/null || true)
+  if [ "$rule_id" != "$RULE_ID" ]; then
+    log "[-] Extracted rule ID mismatch: expected $RULE_ID, got $rule_id" >&2
+    return 1
+  fi
+
+  echo "$target_rule"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -573,7 +953,7 @@ rollback() {
     log "[!] Rollback attempt $attempt of $max_attempts..."
     local http_resp
     http_resp=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-      -w "\n%{http_code}" -X PATCH "$API_URL" \
+      -w "\n%{http_code}" -X PATCH "$RULE_API_URL" \
       -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
       -H "Content-Type: application/json" \
       -d "$deact_payload" 2>&1 || true)
@@ -587,25 +967,26 @@ rollback() {
     patch_success=$(echo "$body" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 
     if [ "$http_code" = "200" ] && [ "$patch_success" = "true" ]; then
-      log "[+] Rollback PATCH succeeded. Verifying via Cloudflare API read-back..."
+      log "[+] Rollback PATCH succeeded. Verifying via Cloudflare ruleset API read-back..."
       
-      # Read-back verification with safe jq handling
-      local verify_resp
-      verify_resp=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-        -X GET "$API_URL" \
-        -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") 2>&1 || true)
+      # Read-back verification via fetch_target_rule (let stderr through for diagnostics)
+      local verify_rule
+      if verify_rule=$(fetch_target_rule); then
+        local verify_enabled
+        verify_enabled=$(echo "$verify_rule" | jq -r 'try (.enabled | tostring) catch "unknown"')
+        local verify_action
+        verify_action=$(echo "$verify_rule" | jq -r 'try .action catch "unknown"')
 
-      local verify_enabled
-      verify_enabled=$(echo "$verify_resp" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
-      [ -z "$verify_enabled" ] && verify_enabled="unknown"
-
-      if [ "$verify_enabled" = "false" ]; then
-        log "[+] Rollback CONFIRMED: Cloudflare API read-back reports enabled=false."
-        rollback_success=true
-        CURRENT_STATE="inert"
-        break
+        if [ "$verify_enabled" = "false" ] && [ "$verify_action" = "block" ]; then
+          log "[+] Rollback CONFIRMED: Cloudflare ruleset read-back reports enabled=false, action=block."
+          rollback_success=true
+          CURRENT_STATE="inert"
+          break
+        else
+          log "[-] Read-back verification failed: rule status is enabled='$verify_enabled', action='$verify_action'"
+        fi
       else
-        log "[-] Read-back verification failed: rule enabled status is '$verify_enabled'"
+        log "[-] Read-back verification failed: unable to fetch rule from ruleset API"
       fi
     else
       log "[-] Rollback PATCH failed with HTTP $http_code: $body"
@@ -619,8 +1000,14 @@ rollback() {
 
   if [ "$rollback_success" != "true" ]; then
     log "[!] CRITICAL: Automated rollback FAILED after $max_attempts attempts!"
+    log "[!] Cloudflare state is UNCERTAIN. Emergency manual intervention required!"
     log "[!] ACTION REQUIRED: Manually disable rule $RULE_ID via Cloudflare Dashboard!"
-    log "[!] URL: https://dash.cloudflare.com/${ZONE_ID}/security/waf/custom-rules"
+    log "[!] Dashboard URL: https://dash.cloudflare.com/${ZONE_ID}/security/waf/custom-rules"
+    log "[!] Break-glass curl:"
+    log "    curl -s -X PATCH 'https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}' \\"
+    log "      -H 'Authorization: Bearer <CF_TOKEN>' \\"
+    log "      -H 'Content-Type: application/json' \\"
+    log "      -d '{\"action\":\"block\",\"description\":\"staging-redloop: emergency kill switch / drill block\",\"enabled\":false,\"expression\":\"(http.host eq \\\"staging-redloop.mctl.ai\\\")\"}'"
     exit 2
   fi
 
@@ -708,7 +1095,7 @@ check_production_controls() {
 # ---------------------------------------------------------------------------
 # Step 1: Pre-flight Verification
 # ---------------------------------------------------------------------------
-log "=== Step 1: Pre-flight Cloudflare API & Environment Verification ==="
+log "=== Step 1: Pre-flight Cloudflare Ruleset API & Environment Verification ==="
 
 log "[+] Out-of-band break-glass command (if runner disconnects):"
 log "    curl -s -X PATCH 'https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}' \\"
@@ -716,23 +1103,34 @@ log "      -H 'Authorization: Bearer <CF_TOKEN>' \\"
 log "      -H 'Content-Type: application/json' \\"
 log "      -d '{\"action\":\"block\",\"description\":\"staging-redloop: emergency kill switch / drill block\",\"enabled\":false,\"expression\":\"(http.host eq \\\"staging-redloop.mctl.ai\\\")\"}'"
 
-RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-  -X GET "$API_URL" \
-  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") 2>&1 || true)
+RULE_INFO=$(fetch_target_rule) || {
+  log "[-] API Auth / Read failed: unable to fetch target rule from ruleset $RULESET_ID"
+  exit 1
+}
 
-SUCCESS=$(echo "$RULE_INFO" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
+INITIAL_ENABLED=$(echo "$RULE_INFO" | jq -r 'try (.enabled | tostring) catch "unknown"')
+INITIAL_REF=$(echo "$RULE_INFO" | jq -r 'try .ref catch "unknown"')
+INITIAL_EXPR=$(echo "$RULE_INFO" | jq -r 'try .expression catch "unknown"')
+INITIAL_ACTION=$(echo "$RULE_INFO" | jq -r 'try .action catch "unknown"')
 
-if [ "$SUCCESS" != "true" ]; then
-  log "[-] API Auth / Read failed: $(echo "$RULE_INFO" | jq -c 'try .errors catch "error"')"
+log "[+] Target Rule verified: id=$RULE_ID, ref=$INITIAL_REF, action=$INITIAL_ACTION, enabled=$INITIAL_ENABLED"
+log "[+] Target Expression: $INITIAL_EXPR"
+
+# Strict field validation
+if [ "$INITIAL_REF" != "block_staging_redloop_emergency" ]; then
+  log "[-] CRITICAL: Unexpected rule ref: expected 'block_staging_redloop_emergency', got '$INITIAL_REF'!"
   exit 1
 fi
 
-INITIAL_ENABLED=$(echo "$RULE_INFO" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
-INITIAL_REF=$(echo "$RULE_INFO" | jq -r 'try .result.ref catch "unknown"' 2>/dev/null || echo "unknown")
-INITIAL_EXPR=$(echo "$RULE_INFO" | jq -r 'try .result.expression catch "unknown"' 2>/dev/null || echo "unknown")
+if [ "$INITIAL_ACTION" != "block" ]; then
+  log "[-] CRITICAL: Unexpected rule action: expected 'block', got '$INITIAL_ACTION'!"
+  exit 1
+fi
 
-log "[+] Target Rule verified: ref=$INITIAL_REF, enabled=$INITIAL_ENABLED"
-log "[+] Target Expression: $INITIAL_EXPR"
+if [ "$INITIAL_EXPR" != '(http.host eq "staging-redloop.mctl.ai")' ]; then
+  log "[-] CRITICAL: Unexpected rule expression: expected '(http.host eq \"staging-redloop.mctl.ai\")', got '$INITIAL_EXPR'!"
+  exit 1
+fi
 
 if [ "$INITIAL_ENABLED" != "false" ]; then
   log "[-] CRITICAL: Target rule is ALREADY ENABLED (enabled=$INITIAL_ENABLED) before drill!"
@@ -801,7 +1199,7 @@ CURRENT_STATE="activating"
 touch "$ACTIVATION_MARKER_FILE"
 
 ACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-  -X PATCH "$API_URL" \
+  -X PATCH "$RULE_API_URL" \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
   -d "$ACTIVATE_PAYLOAD" 2>&1 || true)
@@ -858,7 +1256,7 @@ while true; do
     CLEAN_RAY_ID="${FIRST_403_RAY%%-*}"
     rm -f "$PROBE_TMP"
     log "[+] HTTP 403 BLOCKED DETECTED! T1 = $T1_TS"
-    log "    cf-ray: $FIRST_403_RAY (clean: $CLEAN_RAY_ID) | server: $FIRST_403_SERVER"
+    log "    cf-ray: $FIRST_403_RAY (clean: $CLEAN_RAY_ID) | server: $FIRST_403_SERVER | snippet: $FIRST_403_SNIPPET"
 
     # Self-test hook to verify rollback on abort
     if [ "${MOCK_TRIGGER_ABORT_ON_403:-}" = "1" ]; then
@@ -887,7 +1285,7 @@ DEACT_PAYLOAD='{
 }'
 
 DEACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-  -X PATCH "$API_URL" \
+  -X PATCH "$RULE_API_URL" \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
   -d "$DEACT_PAYLOAD" 2>&1 || true)
@@ -945,16 +1343,27 @@ done
 # ---------------------------------------------------------------------------
 log "=== Step 5: Post-Drill API Verification & Production Health ==="
 
-FINAL_RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-  -X GET "$API_URL" \
-  -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN"))
+FINAL_RULE_INFO=$(fetch_target_rule) || {
+  rollback "CRITICAL: Unable to fetch rule from ruleset API during post-drill verification!" 1
+}
 
-FINAL_ENABLED=$(echo "$FINAL_RULE_INFO" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
+FINAL_ENABLED=$(echo "$FINAL_RULE_INFO" | jq -r 'try (.enabled | tostring) catch "unknown"')
+FINAL_ACTION=$(echo "$FINAL_RULE_INFO" | jq -r 'try .action catch "unknown"')
+FINAL_EXPR=$(echo "$FINAL_RULE_INFO" | jq -r 'try .expression catch "unknown"')
 
 if [ "$FINAL_ENABLED" != "false" ]; then
   rollback "CRITICAL: Post-drill rule state is enabled=${FINAL_ENABLED}! Expected false." 1
 fi
-log "[+] Cloudflare API read-back confirmed rule is INERT (enabled=false)."
+
+if [ "$FINAL_ACTION" != "block" ]; then
+  rollback "CRITICAL: Post-drill rule action is ${FINAL_ACTION}! Expected block." 1
+fi
+
+if [ "$FINAL_EXPR" != '(http.host eq "staging-redloop.mctl.ai")' ]; then
+  rollback "CRITICAL: Post-drill rule expression is ${FINAL_EXPR}! Expected (http.host eq \"staging-redloop.mctl.ai\")." 1
+fi
+
+log "[+] Cloudflare ruleset read-back confirmed rule $RULE_ID is INERT (enabled=false, action=block)."
 
 # Mark state as inert so trap exit is a clean no-op
 CURRENT_STATE="inert"

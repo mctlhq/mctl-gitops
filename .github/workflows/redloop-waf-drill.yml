@@ -113,7 +113,8 @@ jobs:
           zone_id="86a90fe2fdfe87b9702842218b607f60"
           ruleset_id="4bdd5c0da7004933b40aae8fd0d5ce78"
           rule_id="d8b4ea76eabc420e99146cafd9596801"
-          api_url="https://api.cloudflare.com/client/v4/zones/${zone_id}/rulesets/${ruleset_id}/rules/${rule_id}"
+          ruleset_url="https://api.cloudflare.com/client/v4/zones/${zone_id}/rulesets/${ruleset_id}"
+          rule_patch_url="https://api.cloudflare.com/client/v4/zones/${zone_id}/rulesets/${ruleset_id}/rules/${rule_id}"
 
           marker_file="${{ runner.temp }}/redloop_waf_drill_activated"
           if [ ! -f "$marker_file" ]; then
@@ -122,14 +123,19 @@ jobs:
           fi
 
           echo "Activation was attempted. Checking live rule status in independent recovery step..."
-          resp=$(curl -sS --max-time 10 --connect-timeout 5 -X GET "$api_url" \
+          resp=$(curl -sS --max-time 10 --connect-timeout 5 -X GET "$ruleset_url" \
             -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") 2>&1 || true)
-          live_enabled=$(echo "$resp" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
+          live_enabled=$(echo "$resp" | jq --arg id "$rule_id" -r '
+            try (
+              [.result.rules[]? | select(.id == $id)] as $matches |
+              if ($matches | length) == 1 then ($matches[0].enabled | tostring)
+              else "unknown" end
+            ) catch "unknown"' 2>/dev/null || echo "unknown")
 
           echo "Independent check: rule enabled is '$live_enabled'"
           if [ "$live_enabled" != "false" ]; then
             echo "::warning::Rule is not inert ($live_enabled). Sending emergency deactivation PATCH..."
-            patch_resp=$(curl -sS --max-time 10 --connect-timeout 5 -X PATCH "$api_url" \
+            patch_resp=$(curl -sS --max-time 10 --connect-timeout 5 -X PATCH "$rule_patch_url" \
               -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") \
               -H "Content-Type: application/json" \
               -d '{"action":"block","description":"staging-redloop: emergency kill switch / drill block","enabled":false,"expression":"(http.host eq \"staging-redloop.mctl.ai\")"}')
@@ -140,10 +146,15 @@ jobs:
               exit 1
             fi
 
-            # Read-back verification
-            verify_resp=$(curl -sS --max-time 10 --connect-timeout 5 -X GET "$api_url" \
-              -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"))
-            verify_enabled=$(echo "$verify_resp" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
+            # Read-back verification against ruleset_url
+            verify_resp=$(curl -sS --max-time 10 --connect-timeout 5 -X GET "$ruleset_url" \
+              -K <(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN") 2>&1 || true)
+            verify_enabled=$(echo "$verify_resp" | jq --arg id "$rule_id" -r '
+              try (
+                [.result.rules[]? | select(.id == $id)] as $matches |
+                if ($matches | length) == 1 then ($matches[0].enabled | tostring)
+                else "unknown" end
+              ) catch "unknown"' 2>/dev/null || echo "unknown")
             if [ "$verify_enabled" != "false" ]; then
               echo "::error::Safety net read-back verification failed: rule enabled is '$verify_enabled'!"
               exit 1
