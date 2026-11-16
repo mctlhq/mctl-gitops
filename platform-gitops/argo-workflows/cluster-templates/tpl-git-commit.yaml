@@ -706,6 +706,10 @@ spec:
           fi
 
           # ── 5. Push with rebase retry ──────────────────────────────────────
+          # Baseline for the commit_sha output: the head this step started
+          # from. Written before the loop so the file always exists; the push
+          # below replaces it with the head it actually left on main.
+          git rev-parse HEAD > /tmp/commit_sha
           MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
             # On every attempt: a rebase below brings in main's current gate.

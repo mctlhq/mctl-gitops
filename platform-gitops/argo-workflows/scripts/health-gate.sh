@@ -223,7 +223,11 @@ list_pods() {
     | [ $p.metadata.name,
         # A blueGreen Rollout labels its pods rollouts-pod-template-hash.
         ($p.metadata.labels["pod-template-hash"] // $p.metadata.labels["rollouts-pod-template-hash"] // "-"),
-        (($s.imageID // "") | capture("(?<d>sha256:[0-9a-f]{64})$").d // "-"),
+        # A pod that has not pulled yet has no imageID, or one that is not a
+        # digest. capture() then emits nothing; collecting it into an array
+        # makes "no match" an explicit empty list, so the "-" default always
+        # fills the column and the row keeps its five fields.
+        ([($s.imageID // "") | capture("(?<d>sha256:[0-9a-f]{64})$").d][0] // "-"),
         (($s.ready // false) | tostring),
         (($s.restartCount // 0) | tostring) ]
     | @tsv' "$TMP/pods.json" > "$TMP/pods.tsv" || return 1

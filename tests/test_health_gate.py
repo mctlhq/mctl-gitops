@@ -285,6 +285,20 @@ c = Case(WORKER)
 c.pods([pod("p1", ready=False, restarts=4)])
 expect("crash loop / not ready", c, 1, "unhealthy", "not ready")
 
+# Pods that have not pulled yet: no containerStatuses at all, or an empty
+# imageID. Their row must keep five columns, so the digest reads "-" and the
+# ready flag is not mistaken for it.
+c = Case(WORKER)
+starting = pod("starting")
+del starting["status"]["containerStatuses"]
+empty_id = pod("pulling")
+empty_id["status"]["containerStatuses"][0]["imageID"] = ""
+empty_id["status"]["containerStatuses"][0]["ready"] = False
+c.pods([starting, empty_id])
+res, _ = expect("pods without imageID", c, 1, "unhealthy", "starting runs -")
+check("pulling runs -" in res.get("reason", ""),
+      f"pods without imageID: reason {res.get('reason')!r} must name both pods with digest '-'")
+
 c = Case(WORKER)
 c.pods([pod("new"), pod("old", digest=D_NEW, hash_="h0")])
 expect("rollout not finished", c, 1, "unhealthy", "ReplicaSets")
@@ -389,6 +403,10 @@ body = cs["script"]["source"]
 push = body.index('if git push origin HEAD:main; then')
 check(body.index("git rev-parse HEAD > /tmp/commit_sha", push) < body.index("break", push),
       "commit-service must record the pushed HEAD before leaving the push loop")
+# A run with nothing to commit still pushes (a no-op) and must end with a
+# 40-hex commit_sha; the file exists before the loop even starts.
+check(body.index("git rev-parse HEAD > /tmp/commit_sha") < push,
+      "commit-service must write a baseline commit_sha before the push loop")
 
 if failures:
     print(f"{len(failures)} failure(s):")
