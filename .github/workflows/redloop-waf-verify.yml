@@ -20,19 +20,23 @@ name: RedLoop WAF Ruleset Verification (Gate 3)
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/scripts/redloop-waf-verify.sh'
+      - '.github/workflows/redloop-waf-verify.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: cloudflare-apply-infrastructure/cloudflare/zones/mctl-ai
+  group: redloop-waf-verify
   cancel-in-progress: false
 
 jobs:
   pre-flight:
     name: pre-flight self-test & syntax checks
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -45,6 +49,7 @@ jobs:
     needs: pre-flight
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     environment: cloudflare-apply
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -59,7 +64,7 @@ jobs:
 
       - name: Upload contract evidence artifact
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.4.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: redloop-ruleset-contract-evidence
           path: ${{ runner.temp }}/redloop_ruleset_contract_evidence.json

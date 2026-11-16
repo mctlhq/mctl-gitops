@@ -245,6 +245,16 @@ PYEOF
     echo "[-] FAIL: Test 1 did not generate evidence file!"
     exit 1
   fi
+  if ! jq -e . "$tmp_dir/evidence1.json" > /dev/null 2>&1; then
+    echo "[-] FAIL: Test 1 generated invalid JSON in evidence file!"
+    cat "$tmp_dir/evidence1.json"
+    exit 1
+  fi
+  ev_expr=$(jq -r '.expression' "$tmp_dir/evidence1.json")
+  if [ "$ev_expr" != '(http.host eq "staging-redloop.mctl.ai")' ]; then
+    echo "[-] FAIL: Test 1 evidence expression mismatch: got '$ev_expr'"
+    exit 1
+  fi
   echo "[+] Test Case 1 PASSED: Valid contract verified and safe evidence emitted."
 
   echo "[+] Test Case 2: HTTP 405 Method Not Allowed (reproduce 10405 error) fails closed"
@@ -610,24 +620,33 @@ echo "[+] Total rules in ruleset: $total_rules"
 # Safe Evidence Generation
 # ---------------------------------------------------------------------------
 if [ -n "${EVIDENCE_FILE:-}" ]; then
-  cat > "$EVIDENCE_FILE" <<JSONEOF
-{
-  "workflow_run_id": "${GITHUB_RUN_ID:-local}",
-  "workflow_run_attempt": "${GITHUB_RUN_ATTEMPT:-1}",
-  "timestamp_utc": "$timestamp",
-  "http_status": 200,
-  "api_success": true,
-  "zone_id": "$ZONE_ID",
-  "ruleset_id": "$RULESET_ID",
-  "rule_id": "$RULE_ID",
-  "ref": "$rule_ref",
-  "action": "$rule_action",
-  "expression": "$rule_expr",
-  "enabled": false,
-  "total_rules": $total_rules,
-  "verdict": "PASS"
-}
-JSONEOF
+  jq -n \
+    --arg run_id "${GITHUB_RUN_ID:-local}" \
+    --arg run_attempt "${GITHUB_RUN_ATTEMPT:-1}" \
+    --arg ts "$timestamp" \
+    --arg zone_id "$ZONE_ID" \
+    --arg ruleset_id "$RULESET_ID" \
+    --arg rule_id "$RULE_ID" \
+    --arg ref "$rule_ref" \
+    --arg action "$rule_action" \
+    --arg expr "$rule_expr" \
+    --argjson total_rules "$total_rules" \
+    '{
+      workflow_run_id: $run_id,
+      workflow_run_attempt: $run_attempt,
+      timestamp_utc: $ts,
+      http_status: 200,
+      api_success: true,
+      zone_id: $zone_id,
+      ruleset_id: $ruleset_id,
+      rule_id: $rule_id,
+      ref: $ref,
+      action: $action,
+      expression: $expr,
+      enabled: false,
+      total_rules: $total_rules,
+      verdict: "PASS"
+    }' > "$EVIDENCE_FILE"
   echo "[+] Evidence recorded in $EVIDENCE_FILE"
 fi
 
