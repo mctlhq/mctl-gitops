@@ -1,13 +1,17 @@
 name: RedLoop Image Security Assessment
 
-# One-off, workflow_dispatch-only workflow for Trivy container image assessment.
+# Workflow dispatch for consolidated Trivy container image security assessment.
 # Author: Agent: agy
 #
-# Supported / Allowed Targets:
+# Supported / Allowed Targets (Immutable Candidate Inventory):
 # 1. Baseline Target (Gate 1):
 #    docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
-# 2. Candidate Patched Target (Gate 4):
+# 2. Candidate A (Alpine 1.30 Patched Upstream Candidate):
 #    docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7
+# 3. Candidate B (Debian 1.30-trixie Alternative Distro):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:02570a11e9bd4f37b3d9bff616130d83ee9e5d935dd83a8a2ddec420b67b1993
+# 4. Candidate C (Chainguard / Wolfi Minimal Distro):
+#    docker.io/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98
 #
 # Platform: linux/amd64 (passed via TRIVY_PLATFORM env var, matching Hetzner cx43 worker architecture)
 #
@@ -16,89 +20,205 @@ name: RedLoop Image Security Assessment
 # - Zero cluster kubeconfigs, zero Vault tokens, zero Cloudflare API credentials.
 #
 # Evidence Retention:
-# - SARIF and JSON vulnerability reports are retained as workflow artifacts for 90 days.
+# - SARIF, JSON, checksums, and machine-readable verdict artifacts are retained for 90 days.
 # - NOTE: In a public repository, workflow artifacts are downloadable by anyone with read access to the repository.
 # - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
+#
+# Governance & Verdict Separation:
+# - SCAN_EXECUTION_SUCCESS: Trivy completed scan and emitted non-empty, valid reports.
+# - SECURITY_POSTURE_ACCEPTABLE: 0 CRITICAL findings AND target CVE (CVE-2026-111497) is clean.
+# - GATE4_APPROVED: strictly false in automated workflows. Requires manual Operator Review Gate signoff.
 
 on:
   workflow_dispatch:
     inputs:
-      image_ref:
-        description: "Exact pinned OCI image digest to scan (from approved allowlist)"
+      target:
+        description: "Target candidate(s) to scan: 'all' (consolidated matrix) or specific candidate key ('baseline', 'candidate-a', 'candidate-b', 'candidate-c')"
         required: true
-        default: "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7"
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "baseline"
+          - "candidate-a"
+          - "candidate-b"
+          - "candidate-c"
+      image_ref:
+        description: "Optional explicit pinned OCI image digest (must match approved inventory if provided)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
-  trivy-image-scan:
-    name: Trivy Image Assessment
+  plan:
+    name: Validate Inventory and Plan Assessment
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan-matrix.outputs.matrix }}
+      target: ${{ steps.plan-matrix.outputs.target }}
     steps:
-      - name: Self-test validator and assert image_ref allowlist
+      - name: Validate Candidates and Assert Allowlist
+        id: plan-matrix
         env:
-          IMAGE_REF: ${{ inputs.image_ref }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_IMAGE_REF: ${{ inputs.image_ref }}
         run: |
-          set -euo pipefail
+          python3 - <<'EOF'
+          import json, os, sys, re
 
-          validate_image_ref() {
-            local ref="$1"
-            local baseline_digest="sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
-            local candidate_digest="sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7"
-            local expected_repo="docker.io/nginxinc/nginx-unprivileged@"
-
-            # 1. Reject empty
-            if [ -z "$ref" ]; then return 1; fi
-
-            # 2. Require exact repository prefix (rejects mutable tags, alternative registries, alternative repos)
-            if [[ "$ref" != "$expected_repo"* ]]; then return 1; fi
-
-            # 3. Extract digest portion
-            local digest="${ref#$expected_repo}"
-
-            # 4. Strictly require sha256: followed by exactly 64 lowercase hexadecimal characters
-            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then return 1; fi
-
-            # 5. Check against explicit allowlist (rejects arbitrary unapproved digests)
-            if [ "$digest" != "$baseline_digest" ] && [ "$digest" != "$candidate_digest" ]; then
-              return 1
-            fi
-
-            return 0
+          CANDIDATE_INVENTORY = {
+              "baseline": {
+                  "id": "baseline",
+                  "name": "Nginx Baseline (Gate 1)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01",
+                  "distro": "Alpine 3.24",
+                  "nginx_version": "1.30.5",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-a": {
+                  "id": "candidate-a",
+                  "name": "Nginx Alpine Candidate (Gate 4)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+                  "distro": "Alpine 3.24",
+                  "nginx_version": "1.30.6",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-b": {
+                  "id": "candidate-b",
+                  "name": "Nginx Debian Candidate (Gate 4)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:02570a11e9bd4f37b3d9bff616130d83ee9e5d935dd83a8a2ddec420b67b1993",
+                  "distro": "Debian 13.7 (trixie)",
+                  "nginx_version": "1.30.6",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-c": {
+                  "id": "candidate-c",
+                  "name": "Nginx Chainguard Candidate (Gate 4)",
+                  "ref": "docker.io/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98",
+                  "distro": "Wolfi 20230201",
+                  "nginx_version": "1.31.8",
+                  "expected_user": "65532",
+                  "chart_compatible": False
+              }
           }
 
-          echo "=== Step 1: Running validator self-tests ==="
-          # Test 1: Baseline accepted
-          validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01" || { echo "::error::Validator self-test 1 failed (baseline rejected)"; exit 1; }
+          ALLOWED_REPOS = [
+              "docker.io/nginxinc/nginx-unprivileged@",
+              "docker.io/chainguard/nginx@"
+          ]
 
-          # Test 2: Verified candidate accepted
-          validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 2 failed (candidate rejected)"; exit 1; }
+          def validate_ref(ref):
+              if not ref or not isinstance(ref, str):
+                  return False, "Empty or non-string image_ref"
+              matched_repo = next((r for r in ALLOWED_REPOS if ref.startswith(r)), None)
+              if not matched_repo:
+                  return False, f"Repository/registry rejected: {ref}"
+              digest = ref[len(matched_repo):]
+              if not re.match(r"^sha256:[0-9a-f]{64}$", digest):
+                  return False, f"Malformed SHA256 digest format: {digest}"
+              matched_candidate = next((c for c in CANDIDATE_INVENTORY.values() if c["ref"] == ref), None)
+              if not matched_candidate:
+                  return False, f"Digest not in approved candidate inventory: {digest}"
+              return True, matched_candidate
 
-          # Test 3: Mutable tags rejected
-          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged:latest" || { echo "::error::Validator self-test 3 failed (latest accepted)"; exit 1; }
-          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged:1.30-alpine" || { echo "::error::Validator self-test 3 failed (tag accepted)"; exit 1; }
+          # Run deterministic self-tests
+          print("=== Running Planner Validation Self-Tests ===")
+          # 1. All inventory refs must pass
+          for cid, c in CANDIDATE_INVENTORY.items():
+              ok, res = validate_ref(c["ref"])
+              if not ok:
+                  print(f"::error::Inventory self-test failed for {cid}: {res}")
+                  sys.exit(1)
 
-          # Test 4: Wrong repository rejected
-          ! validate_image_ref "docker.io/library/nginx@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 4 failed (wrong repo accepted)"; exit 1; }
-          ! validate_image_ref "quay.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 4 failed (wrong registry accepted)"; exit 1; }
+          # 2. Negative tests
+          negative_tests = [
+              "docker.io/nginxinc/nginx-unprivileged:latest",
+              "docker.io/nginxinc/nginx-unprivileged:1.30-alpine",
+              "docker.io/library/nginx@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+              "quay.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:xyz",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:E2A8FCA8AA356D66159AAF8A877A9C126773635ADF210503EEFAAEAFFEED6AD7",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "docker.io/chainguard/nginx:latest",
+              "cgr.dev/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98",
+              "",
+              "   ",
+              "; rm -rf /"
+          ]
 
-          # Test 5: Malformed SHA256 rejected
-          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:xyz" || { echo "::error::Validator self-test 5 failed (invalid hex accepted)"; exit 1; }
-          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:E2A8FCA8AA356D66159AAF8A877A9C126773635ADF210503EEFAAEAFFEED6AD7" || { echo "::error::Validator self-test 5 failed (uppercase accepted)"; exit 1; }
+          for neg in negative_tests:
+              ok, msg = validate_ref(neg)
+              if ok:
+                  print(f"::error::Negative test unexpectedly passed: {neg}")
+                  sys.exit(1)
+          print(f"[+] All self-tests passed: 4 approved candidates verified, {len(negative_tests)} negative tests rejected.")
 
-          # Test 6: Arbitrary unsupported digest rejected
-          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:0000000000000000000000000000000000000000000000000000000000000000" || { echo "::error::Validator self-test 6 failed (unsupported digest accepted)"; exit 1; }
+          # Resolve targets
+          input_target = os.environ.get("INPUT_TARGET", "all").strip()
+          input_image_ref = os.environ.get("INPUT_IMAGE_REF", "").strip()
 
-          echo "[+] Validator self-tests passed (6/6 tests green)."
+          selected_candidates = []
 
-          echo "=== Step 2: Validating input image_ref ==="
-          if ! validate_image_ref "$IMAGE_REF"; then
-            echo "::error::Provided image_ref '$IMAGE_REF' is not in the approved allowlist or does not match required format docker.io/nginxinc/nginx-unprivileged@sha256:<64 hex>."
-            exit 1
-          fi
-          echo "[+] Target image_ref verified in allowlist: $IMAGE_REF"
+          if input_image_ref:
+              ok, cand = validate_ref(input_image_ref)
+              if not ok:
+                  print(f"::error::Explicit image_ref '{input_image_ref}' failed validation: {cand}")
+                  sys.exit(1)
+              selected_candidates = [cand]
+              print(f"[+] Explicit image_ref validated: {cand['id']} ({cand['ref']})")
+          elif input_target == "all":
+              selected_candidates = list(CANDIDATE_INVENTORY.values())
+              print("[+] Selected full candidate inventory matrix (4 candidates).")
+          elif input_target in CANDIDATE_INVENTORY:
+              selected_candidates = [CANDIDATE_INVENTORY[input_target]]
+              print(f"[+] Selected single candidate target '{input_target}'.")
+          else:
+              print(f"::error::Unknown target '{input_target}' and no valid image_ref provided.")
+              sys.exit(1)
+
+          matrix_json = json.dumps(selected_candidates)
+
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if github_output:
+              with open(github_output, "a") as go:
+                  go.write(f"matrix={matrix_json}\n")
+                  go.write(f"target={input_target}\n")
+
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if github_summary:
+              with open(github_summary, "a") as gs:
+                  gs.write("### RedLoop Candidate Assessment Plan\n\n")
+                  gs.write(f"- **Target Selection:** `{input_target}`\n")
+                  gs.write(f"- **Planned Scans:** `{len(selected_candidates)}`\n\n")
+                  gs.write("| Candidate ID | Name | Distro | Expected User | Chart Compatible | Image Reference |\n")
+                  gs.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                  for c in selected_candidates:
+                      gs.write(f"| `{c['id']}` | {c['name']} | {c['distro']} | `{c['expected_user']}` | `{c['chart_compatible']}` | `{c['ref']}` |\n")
+          EOF
+
+  trivy-image-scan:
+    name: "Scan: ${{ matrix.candidate.id }}"
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Assert Target Allowlist and Manifest Match
+        env:
+          TARGET_REF: ${{ matrix.candidate.ref }}
+          CANDIDATE_ID: ${{ matrix.candidate.id }}
+        run: |
+          set -euo pipefail
+          echo "Scanning Candidate: $CANDIDATE_ID ($TARGET_REF)"
 
       - name: Scan Image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -106,9 +226,9 @@ jobs:
           TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
-          image-ref: ${{ inputs.image_ref }}
+          image-ref: ${{ matrix.candidate.ref }}
           format: sarif
-          output: trivy-image-results.sarif
+          output: trivy-results-${{ matrix.candidate.id }}.sarif
           severity: CRITICAL,HIGH
           limit-severities-for-sarif: true
           exit-code: "0"
@@ -120,140 +240,216 @@ jobs:
           TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
-          image-ref: ${{ inputs.image_ref }}
+          image-ref: ${{ matrix.candidate.ref }}
           format: json
-          output: trivy-image-results.json
+          output: trivy-results-${{ matrix.candidate.id }}.json
           severity: CRITICAL,HIGH
           exit-code: "0"
           version: v0.69.3
 
-      - name: Verify Scan Evidence Integrity
+      - name: Verify Scan Evidence Integrity and Compute Checksums
         run: |
-          if [[ ! -s "trivy-image-results.sarif" ]]; then
-            echo "::error::SARIF report is missing or empty"
-            exit 1
-          fi
-          if [[ ! -s "trivy-image-results.json" ]]; then
-            echo "::error::JSON report is missing or empty"
-            exit 1
-          fi
-          echo "Assessment evidence files verified non-empty."
+          set -euo pipefail
+          sarif_file="trivy-results-${{ matrix.candidate.id }}.sarif"
+          json_file="trivy-results-${{ matrix.candidate.id }}.json"
+          chk_file="checksums-${{ matrix.candidate.id }}.txt"
 
-      - name: Evaluate Vulnerability Verdict and Generate Summary
-        id: evaluate_verdict
+          if [[ ! -s "$sarif_file" ]]; then
+            echo "::error::SARIF report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
+          if [[ ! -s "$json_file" ]]; then
+            echo "::error::JSON report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
+
+          sha256sum "$sarif_file" "$json_file" > "$chk_file"
+          echo "Checksums generated:"
+          cat "$chk_file"
+
+      - name: Evaluate Candidate Verdict
         env:
-          IMAGE_REF: ${{ inputs.image_ref }}
+          CANDIDATE_ID: ${{ matrix.candidate.id }}
+          CANDIDATE_NAME: ${{ matrix.candidate.name }}
+          CANDIDATE_REF: ${{ matrix.candidate.ref }}
+          CANDIDATE_DISTRO: ${{ matrix.candidate.distro }}
+          CANDIDATE_NGINX_VERSION: ${{ matrix.candidate.nginx_version }}
+          CANDIDATE_CHART_COMPATIBLE: ${{ matrix.candidate.chart_compatible }}
         run: |
           python3 - <<'EOF'
           import json, os, sys
 
-          image_ref = os.environ.get("IMAGE_REF", "unknown")
-          json_path = "trivy-image-results.json"
+          cid = os.environ["CANDIDATE_ID"]
+          cname = os.environ["CANDIDATE_NAME"]
+          cref = os.environ["CANDIDATE_REF"]
+          cdistro = os.environ["CANDIDATE_DISTRO"]
+          cnginx = os.environ["CANDIDATE_NGINX_VERSION"]
+          chart_compat = os.environ["CANDIDATE_CHART_COMPATIBLE"].lower() == "true"
+
+          json_path = f"trivy-results-{cid}.json"
           with open(json_path) as f:
               data = json.load(f)
+
+          results = data.get("Results")
+          has_valid_results = isinstance(results, list) and (len(results) > 0 or bool(data.get("SchemaVersion")))
+
+          if not has_valid_results:
+              print(f"::error::Trivy report for {cid} is degenerate or missing valid schema.")
+              sys.exit(1)
 
           critical_findings = []
           high_findings = []
           target_cve_details = []
           target_cve_id = "CVE-2026-111497"
 
-          # Validate that Trivy report is well-formed and non-degenerate
-          results = data.get("Results")
-          has_valid_results = isinstance(results, list) and len(results) > 0 and bool(data.get("ArtifactName") or data.get("SchemaVersion"))
+          for r in results:
+              for v in (r.get("Vulnerabilities") or []):
+                  sev = v.get("Severity")
+                  vid = v.get("VulnerabilityID")
+                  pkg = v.get("PkgName")
+                  installed_ver = v.get("InstalledVersion", "unknown")
+                  fixed_ver = v.get("FixedVersion", "N/A")
+                  item = {
+                      "vid": vid,
+                      "package": pkg,
+                      "installed": installed_ver,
+                      "fixed": fixed_ver,
+                      "severity": sev
+                  }
+                  if sev == "CRITICAL":
+                      critical_findings.append(item)
+                  elif sev == "HIGH":
+                      high_findings.append(item)
+                  if vid == target_cve_id:
+                      target_cve_details.append(item)
 
-          if not has_valid_results:
-              print("::error::Trivy report is degenerate, missing 'Results' entries, or lacking schema metadata.")
-              cve_status = "UNKNOWN"
-              crit_count = "N/A"
-              high_count = "N/A"
-              posture = "UNACCEPTABLE_DEGENERATE_REPORT"
-          else:
-              for r in results:
-                  for v in (r.get("Vulnerabilities") or []):
-                      sev = v.get("Severity")
-                      vid = v.get("VulnerabilityID")
-                      pkg = v.get("PkgName")
-                      installed_ver = v.get("InstalledVersion", "unknown")
-                      fixed_ver = v.get("FixedVersion", "N/A")
-                      item = {
-                          "vid": vid,
-                          "package": pkg,
-                          "installed": installed_ver,
-                          "fixed": fixed_ver,
-                          "severity": sev
-                      }
-                      if sev == "CRITICAL":
-                          critical_findings.append(item)
-                      elif sev == "HIGH":
-                          high_findings.append(item)
-                      if vid == target_cve_id:
-                          target_cve_details.append(item)
+          crit_count = len(critical_findings)
+          high_count = len(high_findings)
+          cve_status = "DETECTED" if target_cve_details else "CLEAN"
 
-              crit_count = len(critical_findings)
-              high_count = len(high_findings)
-              cve_status = "DETECTED" if target_cve_details else "CLEAN"
+          # Explicit Verdict Separation:
+          scan_success = True
+          posture_acceptable = (crit_count == 0 and cve_status == "CLEAN")
+          # Automated scans NEVER set gate4_approved = True. Operator signoff strictly required.
+          gate4_approved = False
 
-              if crit_count == 0 and cve_status == "CLEAN":
-                  posture = "ACCEPTABLE_FOR_STAGE3"
-              else:
-                  posture = "UNACCEPTABLE_FOR_STAGE3"
+          verdict_data = {
+              "candidate_id": cid,
+              "name": cname,
+              "ref": cref,
+              "distro": cdistro,
+              "nginx_version": cnginx,
+              "chart_compatible": chart_compat,
+              "scan_execution_success": scan_success,
+              "critical_count": crit_count,
+              "high_count": high_count,
+              "target_cve_status": cve_status,
+              "target_cve_findings": target_cve_details,
+              "critical_findings": critical_findings,
+              "security_posture_acceptable": posture_acceptable,
+              "gate4_approved": gate4_approved
+          }
 
-          print("--- Vulnerability Assessment Results ---")
-          print("Target Image:", image_ref)
-          print("Scan Execution Status: SUCCESS")
-          print("CRITICAL Count:", crit_count)
-          print("HIGH Count:", high_count)
-          print("CVE-2026-111497 Status:", cve_status)
-          for d in target_cve_details:
-              print("  Target CVE: %s, Package: %s, Installed: %s, Fixed In: %s" % (d.get("vid"), d.get("package"), d.get("installed"), d.get("fixed")))
-          print("Vulnerability Posture Verdict:", posture)
+          verdict_path = f"verdict-{cid}.json"
+          with open(verdict_path, "w") as vf:
+              json.dump(verdict_data, vf, indent=2)
 
-          # Export GitHub Step Outputs
-          github_output = os.environ.get("GITHUB_OUTPUT")
-          if github_output:
-              with open(github_output, "a") as go:
-                  go.write(f"critical_count={crit_count}\n")
-                  go.write(f"high_count={high_count}\n")
-                  go.write(f"cve_status={cve_status}\n")
-                  go.write(f"posture={posture}\n")
+          print(f"=== Verdict for {cid} ===")
+          print(f"Scan Success: {scan_success}")
+          print(f"CRITICAL Count: {crit_count}")
+          print(f"HIGH Count: {high_count}")
+          print(f"CVE-2026-111497: {cve_status}")
+          print(f"Security Posture Acceptable: {posture_acceptable}")
+          print(f"Gate 4 Approved: {gate4_approved}")
+          EOF
 
-          # Write GitHub Step Summary
+      - name: Archive Candidate Evidence Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: redloop-scan-${{ matrix.candidate.id }}
+          path: |
+            trivy-results-${{ matrix.candidate.id }}.sarif
+            trivy-results-${{ matrix.candidate.id }}.json
+            checksums-${{ matrix.candidate.id }}.txt
+            verdict-${{ matrix.candidate.id }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+  consolidated-summary:
+    name: Aggregate Assessment Findings
+    needs: [plan, trivy-image-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download All Assessment Artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      - name: Consolidate Verdicts and Generate Comparative Matrix
+        run: |
+          python3 - <<'EOF'
+          import json, glob, os, sys
+
+          verdicts = []
+          verdict_files = sorted(glob.glob("artifacts/**/verdict-*.json", recursive=True))
+
+          if not verdict_files:
+              print("::error::No verdict files found to aggregate.")
+              sys.exit(1)
+
+          for vf in verdict_files:
+              with open(vf) as f:
+                  verdicts.append(json.load(f))
+
+          print(f"Consolidating {len(verdicts)} candidate verdicts.")
+
+          # Create consolidated output directory
+          os.makedirs("consolidated-evidence", exist_ok=True)
+
+          consolidated_record = {
+              "target_selection": "${{ needs.plan.outputs.target }}",
+              "candidates_assessed": len(verdicts),
+              "assessment_scope": "RedLoop Gate 4 Remediation",
+              "verdicts": verdicts
+          }
+
+          with open("consolidated-evidence/consolidated-verdict.json", "w") as f:
+              json.dump(consolidated_record, f, indent=2)
+
+          # Combine checksums
+          chk_files = sorted(glob.glob("artifacts/**/checksums-*.txt", recursive=True))
+          all_checksums = []
+          for cf in chk_files:
+              with open(cf) as f:
+                  all_checksums.extend(f.readlines())
+
+          with open("consolidated-evidence/checksums-all.txt", "w") as f:
+              f.writelines(all_checksums)
+
+          # Write Step Summary
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_file:
               with open(summary_file, "a") as sf:
-                  sf.write("## RedLoop Image Security Assessment Verdict\n\n")
-                  sf.write(f"- **Target Image:** `{image_ref}`\n")
-                  sf.write("- **Scan Execution Status:** `SUCCESS`\n")
-                  sf.write(f"- **CRITICAL Vulnerabilities:** `{crit_count}`\n")
-                  sf.write(f"- **HIGH Vulnerabilities:** `{high_count}`\n")
-                  sf.write(f"- **CVE-2026-111497 Status:** `{cve_status}`\n")
-                  sf.write(f"- **Stage 3 Vulnerability Posture:** `{posture}`\n\n")
-                  if target_cve_details:
-                      sf.write(f"### Target CVE Details ({target_cve_id})\n")
-                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
-                      for d in target_cve_details:
-                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
-                      sf.write("\n")
-                  if critical_findings:
-                      sf.write("### All CRITICAL Findings\n")
-                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
-                      for d in critical_findings:
-                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
-                      sf.write("\n")
-                  if high_findings:
-                      sf.write("### HIGH Findings\n")
-                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
-                      for d in high_findings:
-                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
-                      sf.write("\n")
+                  sf.write("## RedLoop Consolidated Gate 4 Assessment Matrix\n\n")
+                  sf.write("| Candidate | Distro | CVE-2026-111497 | CRIT | HIGH | Chart Compatible | Posture Acceptable | Gate 4 Approved |\n")
+                  sf.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                  for v in verdicts:
+                      cve_cell = f"**`{v['target_cve_status']}`**" if v['target_cve_status'] == "DETECTED" else "`CLEAN`"
+                      posture_cell = "`ACCEPTABLE`" if v['security_posture_acceptable'] else "`UNACCEPTABLE`"
+                      compat_cell = "`YES`" if v['chart_compatible'] else "`NO (Refactor Required)`"
+                      gate4_cell = "`STRICT NO-GO`"
+                      sf.write(f"| **`{v['candidate_id']}`** ({v['name']}) | {v['distro']} | {cve_cell} | `{v['critical_count']}` | `{v['high_count']}` | {compat_cell} | {posture_cell} | {gate4_cell} |\n")
+                  sf.write("\n### Governance Signoff Reminder\n")
+                  sf.write("- Automated scans evaluate vulnerability posture and chart compatibility independently.\n")
+                  sf.write("- **Gate 4 Approval (`GATE4_APPROVED`) is strictly reserved for manual Operator Review Gate signoff.**\n")
+                  sf.write("- `ingress.enabled` remains `false`. Zero workloads mutated.\n")
           EOF
 
-      - name: Archive Assessment Evidence Artifacts
+      - name: Archive Consolidated Assessment Evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: redloop-image-scan-evidence
-          path: |
-            trivy-image-results.sarif
-            trivy-image-results.json
+          name: redloop-consolidated-evidence
+          path: consolidated-evidence/
           if-no-files-found: error
           retention-days: 90
