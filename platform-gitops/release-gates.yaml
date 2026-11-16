@@ -253,6 +253,16 @@ version_holds:
         grant: mctlhq/mctl-gitops#2710
         approved_by: mashkovd
         expires: 2026-11-30
+      # Fourteenth grant (owner GO in chat, 2026-11-16): 4.163.0 is 4.162.0
+      # plus the personal basket grant for consenting humans with no team
+      # (mctlhq/mctl-api#1084, dark behind its consent flag) and the
+      # signup fix that an open creation allowlist creates accounts, never
+      # workspaces (mctlhq/mctl-api#1086, SIGNUP_PUBLIC_WORKSPACES off).
+      # Covers only the 4.163.0 tag on the merge of mctlhq/mctl-api#1085.
+      - version: "4.163.0"
+        grant: mctlhq/mctl-gitops#2718
+        approved_by: mashkovd
+        expires: 2026-11-30
 
 gates:
   - name: mctl-agents-workers
