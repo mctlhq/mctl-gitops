@@ -2,6 +2,7 @@
 # Usage:
 #   check-image-user.sh check [--image-user <user>] [--uid-out <file>] <checkout> <team> <component> <image-tag> [<default-repository>]
 #   check-image-user.sh fetch-user <image-ref>
+#   check-image-user.sh resolve-digest <image-ref>
 #
 # check: decides whether a service's image can start under the security
 # context the base-service chart will give it. It renders the chart from
@@ -31,6 +32,10 @@
 # $DOCKER_CONFIG_JSON when it has an entry for the registry, otherwise the
 # pull is anonymous. A multi-platform image is resolved for $IMAGE_PLATFORM
 # (default linux/amd64, the cluster's nodes).
+#
+# resolve-digest: prints the sha256 digest <image-ref> resolves to now, with
+# the same credentials as fetch-user. health-gate.sh compares it with the
+# imageID of the running pods.
 #
 # --image-user skips the registry read and uses the given value; tests use it.
 #
@@ -85,7 +90,11 @@ get() {
   fi
 }
 
-fetch_user() {
+# Parses <ref>, authenticates against its registry and GETs the manifest the
+# reference names (an index for a multi-platform tag). Leaves the body in
+# $TMP/body, the response headers in $TMP/headers, and sets base, AUTH and
+# registry for later reads of the same repository.
+open_manifest() {
   ref=$1
   case "$ref" in
     *[!A-Za-z0-9._:/@-]*|"") die "invalid image reference: $ref" ;;
@@ -148,7 +157,10 @@ fetch_user() {
     code=$(get "${base}/manifests/${reference}")
   fi
   [ "$code" = 200 ] || die "manifest ${ref} answered HTTP ${code}"
+}
 
+fetch_user() {
+  open_manifest "$1"
   media=$(jq -r '.mediaType // empty' "$TMP/body") || die "unreadable manifest for ${ref}"
   if [ -z "$media" ]; then
     # An OCI index or manifest may omit mediaType; the shape tells them apart.
@@ -173,6 +185,28 @@ fetch_user() {
   [ "$code" = 200 ] || die "config blob ${config} answered HTTP ${code}"
   jq -e 'has("config")' "$TMP/body" >/dev/null 2>&1 || die "unreadable image config for ${ref}"
   jq -r '.config.User // ""' "$TMP/body"
+}
+
+# The digest a tag resolves to now: the registry's Docker-Content-Digest for
+# the top-level manifest (the index, for a multi-platform image). That is the
+# digest kubelet records in a pod's imageID when it pulls the tag. Without the
+# header it is the sha256 of the body as served, which is the same thing by
+# definition of a content address.
+resolve_digest() {
+  open_manifest "$1"
+  digest=$(tr -d '\r' < "$TMP/headers" | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p' | tail -1)
+  if [ -z "$digest" ]; then
+    digest="sha256:$(sha256sum "$TMP/body" | cut -d' ' -f1)" || die "cannot hash the manifest of $1"
+  fi
+  case "$digest" in
+    sha256:*) hex=${digest#sha256:} ;;
+    *) die "registry gave no sha256 digest for $1: ${digest}" ;;
+  esac
+  case "$hex" in
+    *[!0-9a-f]*) die "registry gave a malformed digest for $1: ${digest}" ;;
+  esac
+  [ "${#hex}" -eq 64 ] || die "registry gave a malformed digest for $1: ${digest}"
+  echo "$digest"
 }
 
 # ── Policy ───────────────────────────────────────────────────────────────
@@ -329,10 +363,11 @@ check() {
   return 0
 }
 
-[ "$#" -ge 1 ] || die "usage: $0 check|fetch-user ..."
+[ "$#" -ge 1 ] || die "usage: $0 check|fetch-user|resolve-digest ..."
 cmd=$1; shift
 case "$cmd" in
   check) check "$@" ;;
   fetch-user) [ "$#" -eq 1 ] || die "usage: fetch-user <image-ref>"; fetch_user "$1" ;;
+  resolve-digest) [ "$#" -eq 1 ] || die "usage: resolve-digest <image-ref>"; resolve_digest "$1" ;;
   *) die "unknown command: ${cmd}" ;;
 esac
