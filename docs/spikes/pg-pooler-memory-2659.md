@@ -21,7 +21,10 @@ number; this stage could not verify it.
   label `spike:scout` only, no comments; 39 open PRs checked, none mention
   #2659, pooler or pgbouncer. DevLoop "not found" is negative evidence only.
 - Re-checked locally: no remote or local branch naming 2659, and no 2659 report
-  in `docs/spikes/` (the existing reports are 2262, 2286 and 2506). Not already owned.
+  in `docs/spikes/` (the existing reports are 2262, 2286 and 2506). This is
+  bounded negative evidence from local refs and files only. It is not proof that
+  #2659 is not already owned elsewhere (other clones, unpushed work, other
+  trackers were not checked).
 
 ## 1. Declared inventory
 
@@ -30,8 +33,8 @@ number; this stage could not verify it.
 | Cluster | CNPG `Cluster` `shared-pg`, ns `platform-db`, 2 instances (primary + hot standby), `maxSyncReplicas: 0` | `platform-gitops/infra-components/data/cnpg/shared/cluster.yaml` |
 | PostgreSQL | image `ghcr.io/cloudnative-pg/postgresql:17.11@sha256:70664ebc...` (Debian bullseye "system" image, pinned for glibc/collation stability) | `cluster.yaml` `imageName` |
 | CNPG operator | Helm chart `cloudnative-pg` `0.29.1` (the file's comment says this is operator 1.30.1), ns `cnpg-system` | `platform-gitops/bootstrap/templates/data/cloudnative-pg.yaml` |
-| Pooler | **none declared.** There is no `kind: Pooler` and no PgBouncer/pgpool reference outside history and agent proposal text | repo-wide search; see section 2 |
-| PgBouncer version | not applicable today. A future Pooler would use whatever image the operator defaults to, NOT_OBSERVED | n/a |
+| Pooler | **none declared in this repository.** There is no `kind: Pooler` and no PgBouncer/pgpool reference outside history and agent proposal text. This states declared configuration only. Whether a pooler or pool exists in the live cluster is NOT_OBSERVED | repo-wide search; see section 2 |
+| PgBouncer version | no declared version. The deployed version, and any live presence or absence of PgBouncer, is NOT_OBSERVED. A future Pooler would use whatever image the operator defaults to, also NOT_OBSERVED | n/a |
 | `max_connections` | `"200"` | `cluster.yaml` `postgresql.parameters` |
 | `shared_buffers` | `"256MB"` | same |
 | `work_mem` | `"4MB"` (per sort/hash operation, per backend) | same |
@@ -40,7 +43,7 @@ number; this stage could not verify it.
 | Pod memory | request = limit = `2Gi`; CPU request `500m`, limit `2` | `cluster.yaml` `resources` |
 | Per-role caps | `managed.roles[].connectionLimit`: backstage 100, temporal 140, mctl-api 64, forgejo 30, zitadel 25, argoworkflows 20, mctl-agent 20, glovo_runtime 36, mctl_api_workitems 36, glovo_migrator 2, most tenant roles 10, academy_readonly 5. The zitadel comment states these already sum past `max_connections` | `cluster.yaml` `managed.roles` |
 | Connection path | clients use `shared-pg-rw.platform-db.svc.cluster.local:5432` directly | `wft-provision-database.yaml` (Vault `host`/`port`), `temporal.yaml`, `monitoring.yaml`, `base-service/templates/job-db-init.yaml` |
-| Client-side pools (declared) | temporal `maxConns` 20 / `maxIdleConns` 5 (default DB), 10 / 5 (visibility), `maxConnLifetime 1h`; Grafana `max_open_conn 4`, `max_idle_conn 2`; ZITADEL `MaxOpenConns 15`; Grafana academy datasource `maxOpenConns 3`; mctl-api `DB_POOL_MAX_CONNS` default 8 per database URL per pod (value lives in the mctl-api repo, referenced from comments here); Backstage knex pool max 3 per plugin schema (comment) | `temporal.yaml`, `monitoring.yaml`, `zitadel.yaml`, `academy-postgres-datasource.yaml`, `cluster.yaml` comments |
+| Client-side pools (declared) | temporal `maxConns` 20 / `maxIdleConns` 5 (default DB), 10 / 5 (visibility), `maxConnLifetime 1h`; Grafana `max_open_conn 4`, `max_idle_conn 2`; ZITADEL `MaxOpenConns 15`; Grafana academy datasource `maxOpenConns 3`; mctl-api `DB_POOL_MAX_CONNS` default 8 per database URL per pod (value lives in the mctl-api repo, referenced from comments here); Backstage knex pool max 3 per plugin schema (comment) | `temporal.yaml`, `monitoring.yaml`, `zitadel.yaml`, `academy-postgres-datasource.yaml`, `cluster.yaml` comments. Values for other repositories (mctl-api pool default, Backstage knex) are comment evidence only; the implementation was not read and is not verified |
 
 The pooler-related history is the most relevant finding of this stage:
 
@@ -77,10 +80,16 @@ The pooler-related history is the most relevant finding of this stage:
 4. Platform clients (temporal, Grafana, ZITADEL, Backstage, mctl-api, Forgejo)
    configure their own host in their own Applications or services. There is no
    single switch point. A rollout would be per-client.
-5. pg_hba is per database/role, with `host all all 0.0.0.0/0 reject` last. With a
-   Pooler, backend connections come from the pooler pods and pg_hba must admit
-   them. The deleted `networkpolicy.yaml` change in `c26d9ac0f` shows the policy
-   also referenced the pooler. NetworkPolicy is a second place to change.
+5. pg_hba is per database/role, with `host all all 0.0.0.0/0 reject` last. The
+   named database/role entries in `cluster.yaml` already use address `all`, so a
+   pooler does not by itself imply widening or changing them. Whether any
+   pg_hba, authentication or user-mapping change is needed depends on the
+   chosen design (for example how the pooler authenticates to the server and
+   maps client users to roles) and must be reassessed against that design, with
+   tenant isolation retained. The deleted `networkpolicy.yaml` change in
+   `c26d9ac0f` shows the policy once referenced the pooler, so NetworkPolicy
+   is a place to reassess too, not a presumed change. No settings change is
+   authorized by this report.
 
 ## 3. Canonical config owner and observability (source only, not queried)
 
@@ -118,7 +127,7 @@ Distinct quantities that must not be conflated:
 | `work_mem` | 4MB, allocated per sort/hash node per backend and per query, not per connection. One query can use several | actual spill/usage; plan shapes |
 | Active concurrency | commit message claims a peak of 15 active backends over 2026-10-12..20 (NOT_OBSERVED here) | current peak, burst shape, tail beyond the 8-day window, what changes under mctl-api rolling updates |
 | Total connections | same claim: peak 130 of 200 | same |
-| Pool mode | no pool exists today. A deleted Pooler used `transaction` | which clients tolerate transaction pooling |
+| Pool mode | no pool is declared in git. Live presence is NOT_OBSERVED. A deleted Pooler used `transaction` | live pools; which clients tolerate transaction pooling |
 | Pod memory | `2Gi` limit. A comment says shared-pg-1 was OOMKilled 11 times at the former `1Gi` limit on 2026-06-30 and attributes it to `shared_buffers` + `max_connections` x `work_mem` + WAL/checkpoint buffers "under load" | the real composition of the pre-raise working set; whether OOM kills have recurred at `2Gi` |
 
 I do **not** multiply `max_connections` by any per-backend figure, or by
@@ -157,7 +166,12 @@ Signals in this repo:
   (`docs/runbooks/glovo-basket-canary.md`). Transaction-scoped locks are
   compatible in principle, session-scoped locks are not. Which kind each uses is
   NOT_OBSERVED (the code is in other repositories).
-- Prepared statements and driver behaviour per client (Go `database/sql` with
+- Prepared statements and driver behaviour per client. Any client-pool default
+  or driver behaviour for other repositories that appears in a source comment
+  here is comment evidence, not verified implementation, and supports no
+  blanket compatibility claim. A future test must pin and test the exact
+  candidate PgBouncer, driver and client versions. No external fetch is needed
+  for that statement. (Go `database/sql` with
   pgx or lib/pq, knex/pg for Backstage, Python asyncpg for kuptsi-app; the
   drivers used by Forgejo, ZITADEL and Temporal are not read here): NOT_OBSERVED. asyncpg in particular
   uses server-side prepared statements by default, so it is the first client
@@ -167,9 +181,12 @@ Signals in this repo:
   searchable from this repo for third-party clients; NOT_OBSERVED.
 - `ssl_mode require` is used by Grafana; pooler TLS to client and to server
   would be a separate setting. NOT_OBSERVED.
-- Role/pg_hba: connection limits are per role on the server. Behind a pooler
-  the per-role cap would be applied to pooler backend connections, so
-  `connectionLimit` semantics and the per-role alerts would need rework.
+- Role/pg_hba: connection limits are per role on the server. Existing per-role
+  `connectionLimit` values would still constrain backend connections behind a
+  pooler. Whether the per-role alerts and limits need evaluation depends on the
+  chosen design (for example per-role pools versus shared pools); that is an
+  evaluation item, not automatic rework. Authentication, user mapping and
+  tenant isolation must be reassessed against the actual design.
 
 ## 6. Options
 
@@ -242,12 +259,26 @@ installs and any egress before anyone runs it.
 
 | Run | Clients | Mix | Pool | Result |
 |---|---|---|---|---|
-| R1 baseline idle | N idle connections, N stepped (say 10/50/130/200, chosen in advance) | connect, one trivial query, hold idle | direct | NOT_RUN |
+| R1 baseline idle | N requested client connections, N stepped (say 10/50/130/200, chosen in advance). Record how many were admitted and how many refused, with error text | connect, one trivial query, hold idle | direct | NOT_RUN |
+| R1p paired idle via pooler | same requested client count and mix as R1; record observed backend count separately from client count | same | transaction | NOT_RUN |
 | R2 active/idle mix | same N, with a fixed active fraction (say 15 of 130, mirroring the claimed profile, labelled as a claim) | short OLTP transactions | direct | NOT_RUN |
 | R3 same load via pooler | same as R2 | same | transaction | NOT_RUN |
 | R4 session-state probes | small client set | session `SET`, session advisory lock, named prepared statements, `LISTEN`, temp table, `WITH HOLD` cursor | direct vs transaction | NOT_RUN |
 | R5 `work_mem` pressure | few clients | sort/hash-heavy query, with and without spill | direct | NOT_RUN |
 | R6 failure/latency | R3 plus: kill a backend, restart the pooler, restart postgres, inject added network latency | | transaction | NOT_RUN |
+
+**Admission caveat:** `max_connections 200` does not guarantee 200 ordinary
+connections are available. Reserved slots (superuser/reserved connections),
+background and replication roles and version-specific configuration consume
+slots. Treat N as requested client connections, record admissions and
+refusals, and do not assume N were served.
+
+**Idle-memory comparison rule:** if idle memory benefits are discussed, use the
+paired R1/R1p runs with the same logical client count and mix, and report
+observed backend counts for each separately. Measure total memory (PostgreSQL
+plus pooler, all processes) in both arms. Memory saved on the server side is
+not a total gain until pooler memory is included. No benchmark was executed,
+and none of this is a production sizing recommendation.
 
 **Measurements:**
 
@@ -275,8 +306,10 @@ versions and limits.
    bound the risk.
 4. If a pooler is ever reconsidered: choose the pool mode per client from R4
    outcomes, pin the PgBouncer version, size the pool from measured **active**
-   concurrency, not from `max_connections`, and plan the Vault `host`/`port`, `pg_hba`
-   and NetworkPolicy changes in section 2.
+   concurrency, not from `max_connections`, and plan the Vault `host`/`port`
+   changes, then reassess pg_hba/authentication, user mapping, NetworkPolicy,
+   tenant isolation and the existing per-role limits and alerts against the
+   chosen design (section 2). None of these is presumed to need a change.
 
 ## 8. Unknowns (all NOT_OBSERVED in this stage)
 
