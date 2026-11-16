@@ -306,6 +306,13 @@ spec:
             # it. A malformed value refuses startup. Read at start: adding an
             # id restarts the pod through this env change.
             ZITADEL_HOOK_CUSTOMER_CREATE_GITHUB_IDS: "268260640,334465501,47027422"
+            # Google sign-in (mctlhq/mctl-api#1079): "*" lets anyone with a
+            # Google account create a customers account (owner decision
+            # 2026-11-16). It creates an account only, never a workspace: the
+            # public workspace flow also needs SIGNUP_PUBLIC_WORKSPACES=true
+            # (mctlhq/mctl-api#1086), which stays unset. Needs mctl-api
+            # 4.163.0 or later; 4.162.0 would admit a workspace on "*".
+            ZITADEL_HOOK_CUSTOMER_CREATE_GOOGLE_SUBS: "*"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
