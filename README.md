@@ -196,9 +196,26 @@ Located at `platform-gitops/tenants/{team}/values.yaml`. Consumed by the `tenant
 | `name` | Workspace name (DNS-safe) |
 | `displayName` | Human-readable team name |
 | `contactEmail` | Deprecated, keep empty: this repository is public. Tenant contact data moves to Vault (#1627) |
+| `members[]` | `userId` (GitHub login), `principalId` (`prn_...`) and `role`. Public by design; see the note below |
 | `quota.cpu` | CPU request quota |
 | `quota.memory` | Memory request quota |
 | `quota.pods` | Maximum pod count |
+
+**Public tenant membership (owner decision, 2026-11-16).** This repository is
+public, and it holds no personal data or principal ids, with one deliberate
+exception: tenant `members[]`. Membership is access configuration, and a
+reviewer must see in the PR who is added to which tenant with which role.
+Moving it to Vault would hide exactly that change. A principal id is an
+identifier, not a credential; sign-in still goes through OIDC.
+
+Limits of the exception:
+- only `members[]` in `platform-gitops/tenants/*/values.yaml`, plus the
+  fixtures and tests that exercise it;
+- no principal id anywhere else: platform admins (`ADMIN_PRINCIPALS`) and
+  per-feature grant lists come from Vault through ExternalSecrets
+  (`mctl-api-secrets`, #2694 and #2700);
+- no other personal data in membership (no email, no name); `contactEmail`
+  stays empty.
 
 ## CLI (mctl)
 
