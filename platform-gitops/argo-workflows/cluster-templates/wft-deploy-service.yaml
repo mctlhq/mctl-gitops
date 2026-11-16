@@ -158,6 +158,12 @@ spec:
           - name: image_digest
             valueFrom:
               parameter: "{{tasks.health-gate.outputs.parameters.image_digest}}"
+          # The gitops commit this deploy pushed: what a rollback by revision
+          # restores (mctlhq/mctl-api#1048). From the commit task, not the
+          # gate, so it is known whatever the gate concludes.
+          - name: commit_sha
+            valueFrom:
+              parameter: "{{tasks.commit.outputs.parameters.commit_sha}}"
       dag:
         tasks:
           # Step 1: validate naming, team, service existence + resolve image_tag
