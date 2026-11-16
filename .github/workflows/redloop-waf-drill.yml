@@ -1,0 +1,192 @@
+name: RedLoop WAF Drill (Gate 3)
+
+# One-shot, production-safe emergency kill-switch drill for RedLoop Phase P2 Gate 3 (#2388).
+#
+# Deliberately manual with environment approval.
+# Executes 404 -> 403 -> 404 drill exclusively against staging-redloop.mctl.ai
+# with continuous production monitoring across 6 production endpoints.
+#
+# Safety Invariants:
+# 1. Scope bounded: modifies ONLY rule d8b4ea76eabc420e99146cafd9596801 in zone mctl.ai.
+# 2. Server-side pre-validation: dry_run=true verified before live write.
+# 3. Traps and fail-safe rollback on EXIT, ERR, INT, TERM with API read-back.
+# 4. Independent always() cleanup step to enforce enabled=false even on timeout or cancellation.
+# 5. Zero-drift post-drill verification against main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_drill:
+        description: 'Type "I_CONFIRM_GATE3_WAF_DRILL" to authorize execution'
+        required: true
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-apply-infrastructure/cloudflare/zones/mctl-ai
+  cancel-in-progress: false
+
+jobs:
+  pre-flight:
+    name: pre-flight safety & policy checks
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Validate explicit authorization
+        env:
+          CONFIRM: ${{ inputs.confirm_drill }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "I_CONFIRM_GATE3_WAF_DRILL" ]; then
+            echo "::error::Explicit drill confirmation missing. Input was '$CONFIRM', expected 'I_CONFIRM_GATE3_WAF_DRILL'."
+            exit 1
+          fi
+          echo "Explicit drill confirmation verified."
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Verify GitOps invariants (Ingress disabled & image pinned)
+        run: |
+          set -euo pipefail
+          vals="platform-gitops/services/redloop/redloop-synthetic-staging/values.yaml"
+          if [ ! -f "$vals" ]; then
+            echo "::error::Target values.yaml missing at $vals"
+            exit 1
+          fi
+
+          # Assert public Ingress is false
+          ing_enabled=$(python3 -c "import yaml; d=yaml.safe_load(open('$vals')); print(d.get('ingress', {}).get('enabled'))")
+          if [ "$ing_enabled" != "False" ]; then
+            echo "::error::Security invariant violation: ingress.enabled is '$ing_enabled', expected False!"
+            exit 1
+          fi
+          echo "Verified: ingress.enabled == false"
+
+          # Assert image digest
+          digest=$(python3 -c "import yaml; d=yaml.safe_load(open('$vals')); print(d.get('image', {}).get('digest'))")
+          expected_digest="sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+          if [ "$digest" != "$expected_digest" ]; then
+            echo "::error::Security invariant violation: image digest is '$digest', expected '$expected_digest'!"
+            exit 1
+          fi
+          echo "Verified: image digest matches $expected_digest"
+
+      - name: Self-test harness logic
+        run: |
+          REDLOOP_DRILL_SELF_TEST=1 .github/scripts/redloop-waf-drill.sh
+
+  drill:
+    name: execute controlled waf drill
+    needs: pre-flight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: cloudflare-apply
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Run hardened drill harness
+        id: run_drill
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_APPLY_TOKEN_MCTL_AI }}
+          TIMINGS_FILE: ${{ runner.temp }}/timings.json
+        run: |
+          set -euo pipefail
+          .github/scripts/redloop-waf-drill.sh
+
+      - name: Independent recovery safety net (enforce rule inertness)
+        if: always()
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_APPLY_TOKEN_MCTL_AI }}
+        run: |
+          set -euo pipefail
+          zone_id="86a90fe2fdfe87b9702842218b607f60"
+          ruleset_id="4bdd5c0da7004933b40aae8fd0d5ce78"
+          rule_id="d8b4ea76eabc420e99146cafd9596801"
+          api_url="https://api.cloudflare.com/client/v4/zones/${zone_id}/rulesets/${ruleset_id}/rules/${rule_id}"
+
+          echo "Checking live rule status in independent recovery step..."
+          resp=$(curl -sS -X GET "$api_url" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" || true)
+          live_enabled=$(echo "$resp" | jq -r 'if (.result | has("enabled")) then (.result.enabled | tostring) else "unknown" end')
+
+          echo "Independent check: rule enabled is '$live_enabled'"
+          if [ "$live_enabled" != "false" ]; then
+            echo "::warning::Rule is not inert ($live_enabled). Sending emergency deactivation PATCH..."
+            patch_resp=$(curl -sS -X PATCH "$api_url" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"action":"block","description":"staging-redloop: emergency kill switch / drill block","enabled":false,"expression":"(http.host eq \"staging-redloop.mctl.ai\")"}' || true)
+            echo "Emergency deactivation response: $patch_resp"
+          else
+            echo "Independent safety net confirmed rule is inert (enabled=false)."
+          fi
+
+      - name: Upload drill timings artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.4.1
+        with:
+          name: redloop-waf-drill-evidence
+          path: |
+            ${{ runner.temp }}/timings.json
+          if-no-files-found: warn
+
+  zero-drift:
+    name: verify zero drift against gitops
+    needs: [pre-flight, drill]
+    if: always() && needs.drill.result != 'skipped'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/cloudflare/zones/mctl-ai
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
+      TF_IN_AUTOMATION: 1
+      TF_DATA_DIR: /home/runner/work/_temp/tofu-data
+      TF_CLI_CONFIG_FILE: /home/runner/work/_temp/opentofu-ci.tfrc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Point OpenTofu outside the workspace
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p /home/runner/work/_temp
+          cat << 'EOF' > "$TF_CLI_CONFIG_FILE"
+          plugin_cache_dir = "/home/runner/work/_temp/tofu-plugin-cache"
+          disable_checkpoint = true
+          EOF
+          mkdir -p "$TF_DATA_DIR" /home/runner/work/_temp/tofu-plugin-cache
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v1.0.8
+        with:
+          tofu_version: 1.8.2
+
+      - name: Init
+        run: tofu init -input=false -no-color
+
+      - name: Assert remote backend
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/cloudflare-assert-backend.sh infrastructure/cloudflare/zones/mctl-ai "$TF_DATA_DIR"
+
+      - name: Plan and assert zero drift
+        id: plan
+        run: |
+          set -euo pipefail
+          set +e
+          tofu plan -input=false -no-color -detailed-exitcode -out=tfplan > plan.txt
+          rc=$?
+          set -e
+
+          cat plan.txt
+          if [ "$rc" -eq 0 ]; then
+            echo "Zero drift confirmed: live Cloudflare state matches GitOps main."
+          elif [ "$rc" -eq 2 ]; then
+            echo "::error::Drift detected! Live Cloudflare state differs from GitOps main after drill!"
+            exit 2
+          else
+            echo "::error::OpenTofu plan failed with error code $rc"
+            exit "$rc"
+          fi
