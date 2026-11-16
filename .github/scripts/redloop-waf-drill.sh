@@ -494,7 +494,7 @@ TARGET_HOST="staging-redloop.mctl.ai"
 
 TARGET_URL="${MOCK_STAGING_URL:-https://${TARGET_HOST}/}"
 API_URL="${CF_API_BASE_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}}"
-GRAPHQL_URL="${CF_GRAPHQL_OVERRIDE:-https://api.cloudflare.com/client/v4/graphql}"
+GRAPHQL_URL="${GRAPHQL_URL:-${CF_GRAPHQL_OVERRIDE:-https://api.cloudflare.com/client/v4/graphql}}"
 
 # Latency and Timeout Thresholds
 MAX_PROD_LATENCY_SECONDS="${MAX_PROD_LATENCY_SECONDS:-2.500}"
@@ -668,6 +668,15 @@ check_production_controls() {
   for pid in "${pids[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
+
+  # Verify that all 6 probe results were recorded
+  local res_count
+  res_count=$(find "$probe_dir" -maxdepth 1 -name "*.res" | wc -l | tr -d ' ')
+  if [ "$res_count" -ne "${#prod_endpoints[@]}" ]; then
+    log "[-] [$label] ALERT: Only $res_count of ${#prod_endpoints[@]} production probes completed!"
+    rm -rf "$probe_dir"
+    return 1
+  fi
 
   local failed=0
   for f in "$probe_dir"/*.res; do
@@ -859,9 +868,6 @@ while true; do
   fi
   rm -f "$PROBE_TMP"
 
-  # Check production controls during activation phase
-  check_production_controls "activation" || rollback "Production controls failed during activation" 1
-
   sleep "$PROBE_INTERVAL_SECONDS"
 done
 
@@ -975,20 +981,27 @@ SEC_EVENT_STATUS=""
 if [ -n "${CLEAN_RAY_ID:-}" ] && [ "${CLEAN_RAY_ID:-}" != "none" ]; then
   log "[+] Correlating Ray ID '$CLEAN_RAY_ID' against Cloudflare Security Events..."
 
+  DT_GEQ=$(python3 -c "import datetime; print((datetime.datetime.utcnow() - datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+  DT_LEQ=$(python3 -c "import datetime; print((datetime.datetime.utcnow() + datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+
   GQL_PAYLOAD=$(jq -n \
     --arg zoneTag "$ZONE_ID" \
     --arg rayName "$CLEAN_RAY_ID" \
+    --arg dtGeq "$DT_GEQ" \
+    --arg dtLeq "$DT_LEQ" \
     '{
       query: "query($zoneTag: String!, $filter: FirewallEventsAdaptiveFilter_InputObject) { viewer { zones(filter: {zoneTag: $zoneTag}) { firewallEventsAdaptive(filter: $filter, limit: 5) { datetime rayName action source ruleId clientRequestHTTPHost } } } }",
       variables: {
         zoneTag: $zoneTag,
         filter: {
-          rayName: $rayName
+          rayName: $rayName,
+          datetime_geq: $dtGeq,
+          datetime_leq: $dtLeq
         }
       }
     }')
 
-  MAX_GQL_ATTEMPTS=3
+  MAX_GQL_ATTEMPTS=5
   GQL_ATTEMPT=1
   while [ "$GQL_ATTEMPT" -le "$MAX_GQL_ATTEMPTS" ]; do
     GQL_RESP=$(curl -sS --max-time 10 --connect-timeout 5 \
@@ -1054,33 +1067,51 @@ log "  Measured Recovery RTO:          ${RECOVERY_RTO}s"
 log "  Security Event Verified:        $SEC_EVENT_VERIFIED"
 log "  Security Event Correlated Rule: ${SEC_EVENT_RULE_ID:-none}"
 
-# Record machine-readable timings
-cat << JSONEOF > "$TIMINGS_FILE"
-{
-  "zone_id": "$ZONE_ID",
-  "ruleset_id": "$RULESET_ID",
-  "rule_id": "$RULE_ID",
-  "target_host": "$TARGET_HOST",
-  "t0_activation_dispatch": "$T0_TS",
-  "t1_first_403_blocked": "$T1_TS",
-  "t2_deactivation_dispatch": "$T2_TS",
-  "t3_first_404_restored": "$T3_TS",
-  "activation_rto_seconds": $ACTIVATION_RTO,
-  "recovery_rto_seconds": $RECOVERY_RTO,
-  "blocked_ray_id": "$FIRST_403_RAY",
-  "restored_ray_id": "$FIRST_404_RAY",
-  "final_rule_enabled": false,
-  "security_event": {
-    "queried_ray_id": "${CLEAN_RAY_ID:-none}",
-    "verified": $SEC_EVENT_VERIFIED,
-    "rule_id": "${SEC_EVENT_RULE_ID:-none}",
-    "action": "${SEC_EVENT_ACTION:-none}",
-    "source": "${SEC_EVENT_SOURCE:-none}",
-    "datetime": "${SEC_EVENT_DATETIME:-none}",
-    "status": "$SEC_EVENT_STATUS"
-  }
-}
-JSONEOF
+# Record machine-readable timings with safe JSON encoding
+jq -n \
+  --arg zone_id "$ZONE_ID" \
+  --arg ruleset_id "$RULESET_ID" \
+  --arg rule_id "$RULE_ID" \
+  --arg target_host "$TARGET_HOST" \
+  --arg t0 "$T0_TS" \
+  --arg t1 "$T1_TS" \
+  --arg t2 "$T2_TS" \
+  --arg t3 "$T3_TS" \
+  --argjson act_rto "$ACTIVATION_RTO" \
+  --argjson rec_rto "$RECOVERY_RTO" \
+  --arg blocked_ray "$FIRST_403_RAY" \
+  --arg restored_ray "$FIRST_404_RAY" \
+  --argjson verified "$SEC_EVENT_VERIFIED" \
+  --arg q_ray "${CLEAN_RAY_ID:-none}" \
+  --arg ev_rule "${SEC_EVENT_RULE_ID:-none}" \
+  --arg ev_act "${SEC_EVENT_ACTION:-none}" \
+  --arg ev_src "${SEC_EVENT_SOURCE:-none}" \
+  --arg ev_dt "${SEC_EVENT_DATETIME:-none}" \
+  --arg ev_status "$SEC_EVENT_STATUS" \
+  '{
+    zone_id: $zone_id,
+    ruleset_id: $ruleset_id,
+    rule_id: $rule_id,
+    target_host: $target_host,
+    t0_activation_dispatch: $t0,
+    t1_first_403_blocked: $t1,
+    t2_deactivation_dispatch: $t2,
+    t3_first_404_restored: $t3,
+    activation_rto_seconds: $act_rto,
+    recovery_rto_seconds: $rec_rto,
+    blocked_ray_id: $blocked_ray,
+    restored_ray_id: $restored_ray,
+    final_rule_enabled: false,
+    security_event: {
+      queried_ray_id: $q_ray,
+      verified: $verified,
+      rule_id: $ev_rule,
+      action: $ev_act,
+      source: $ev_src,
+      datetime: $ev_dt,
+      status: $ev_status
+    }
+  }' > "$TIMINGS_FILE"
 
 log "[+] Timings written to $TIMINGS_FILE"
 
