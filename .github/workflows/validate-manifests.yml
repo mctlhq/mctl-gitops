@@ -1250,6 +1250,11 @@ jobs:
           tofu init -backend=false -lockfile=readonly -input=false
           tofu validate
 
+      - name: glovo.mctl.ai Worker routes keep /mcp and /.well-known on the origin
+        run: |
+          python3 scripts/validate-cloudflare-glovo-routes.py --selftest
+          python3 scripts/validate-cloudflare-glovo-routes.py
+
       - name: tofu test (mocked providers)
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
