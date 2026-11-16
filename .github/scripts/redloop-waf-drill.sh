@@ -593,6 +593,15 @@ PYEOF
   echo "[+] Test Case 6 PASSED: Missing analytics scope gracefully logged as notice while drill completed successfully."
 
   echo "[+] Test Case 7: Reproduce Cloudflare HTTP 10405 error (unsupported GET on /rules/{rule_id}) fails closed"
+  # Regression guard: assert default script configuration targets ruleset endpoint, not individual /rules/ sub-path
+  default_ruleset_cfg=$(grep -E '^[[:space:]]*RULESET_API_URL=' "$0" | head -n1)
+  if [[ "$default_ruleset_cfg" == *"/rules/"* ]]; then
+    echo "[-] FAIL: Regression detected! Default RULESET_API_URL contains /rules/ ($default_ruleset_cfg)"
+    exit 1
+  fi
+
+  init_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+
   set +e
   # Pointing RULESET override directly to individual rule path reproduces the 10405 error observed in run #43887406834
   CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
@@ -610,6 +619,12 @@ PYEOF
   "$0" > "$tmp_dir/test7.log" 2>&1
   test7_rc=$?
   set -e
+
+  post_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
+  if [ "$post_patches" -ne "$init_patches" ]; then
+    echo "[-] FAIL: Test 7 sent PATCH during pre-flight failure! ($post_patches != $init_patches)"
+    exit 1
+  fi
 
   if [ "$test7_rc" -eq 0 ]; then
     echo "[-] FAIL: Test 7 expected non-zero exit code when Cloudflare returns HTTP 10405, got 0"
@@ -696,7 +711,7 @@ PYEOF
   fi
   echo "[+] Test Case 9 PASSED: Duplicate rule ID detected and failed closed."
 
-  echo "[+] Test Case 10: Malformed ruleset payload or HTTP 401 auth failure fails closed"
+  echo "[+] Test Case 10: Cloudflare HTTP 401 authentication failure fails closed"
   curl -s "http://127.0.0.1:$mock_port/control/set_auth_error" > /dev/null
 
   set +e
@@ -730,7 +745,41 @@ PYEOF
   fi
   echo "[+] Test Case 10 PASSED: HTTP 401 authentication error correctly failed closed."
 
-  echo "=== All 10 Self-Test Scenarios PASSED ==="
+  echo "[+] Test Case 11: Malformed ruleset payload (.result: null) fails closed"
+  curl -s "http://127.0.0.1:$mock_port/control/set_malformed_ruleset" > /dev/null
+
+  set +e
+  CF_RULESET_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_RULE_API_OVERRIDE="http://127.0.0.1:$mock_port/rulesets/rules/d8b4ea76eabc420e99146cafd9596801" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test11.log" 2>&1
+  test11_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_malformed_ruleset" > /dev/null
+
+  if [ "$test11_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 11 expected failure when ruleset payload was malformed, got 0"
+    cat "$tmp_dir/test11.log"
+    exit 1
+  fi
+  if ! grep -qi "malformed ruleset payload" "$tmp_dir/test11.log"; then
+    echo "[-] FAIL: Test 11 did not log expected malformed payload error!"
+    cat "$tmp_dir/test11.log"
+    exit 1
+  fi
+  echo "[+] Test Case 11 PASSED: Malformed ruleset payload (.result is null) correctly failed closed."
+
+  echo "=== All 11 Self-Test Scenarios PASSED ==="
   exit 0
 fi
 
@@ -920,9 +969,9 @@ rollback() {
     if [ "$http_code" = "200" ] && [ "$patch_success" = "true" ]; then
       log "[+] Rollback PATCH succeeded. Verifying via Cloudflare ruleset API read-back..."
       
-      # Read-back verification via fetch_target_rule
+      # Read-back verification via fetch_target_rule (let stderr through for diagnostics)
       local verify_rule
-      if verify_rule=$(fetch_target_rule 2>/dev/null); then
+      if verify_rule=$(fetch_target_rule); then
         local verify_enabled
         verify_enabled=$(echo "$verify_rule" | jq -r 'try (.enabled | tostring) catch "unknown"')
         local verify_action
