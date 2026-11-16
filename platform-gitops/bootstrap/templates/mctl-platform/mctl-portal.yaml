@@ -476,6 +476,20 @@ spec:
                     prompt: auto
                     additionalScopes:
                       - urn:zitadel:iam:user:resourceowner
+                # The Google customer entry, "Sign in with Google"
+                # (mctl-portal#231): the same ZITADEL client again, callback
+                # /api/auth/zitadel-customer-google/handler/frame (registered
+                # in portal.tf). The portal adds the scopes from
+                # zitadelCustomers.googleIdpId and logs an error at startup
+                # if that id is set while this block is missing.
+                zitadel-customer-google:
+                  production:
+                    metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
+                    clientId: ${AUTH_OIDC_CLIENT_ID}
+                    clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
+                    prompt: auto
+                    additionalScopes:
+                      - urn:zitadel:iam:user:resourceowner
             # The ZITADEL organization of self-service customers (mctl-web
             # site onboarding, stage C2). The portal signs a customers token in
             # as the User named by its principal, which mctl-api resolves
@@ -488,6 +502,9 @@ spec:
             zitadelCustomers:
               organizationId: ${AUTH_OIDC_CUSTOMERS_ORG_ID}
               githubIdpId: ${AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID}
+              # Unset while the Google IdP is off (the key is then absent from
+              # backstage-oidc-zitadel); the portal offers no Google entry.
+              googleIdpId: ${AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID}
             integrations:
               github:
                 - host: github.com
