@@ -21,6 +21,17 @@ userId, the default when absent). Any other value is a violation: the portal
 would fall back to the login, which the GitHub login's next holder signs in
 as.
 
+An entry without a `userId` (listed by principalId alone, so that its
+holder's GitHub login is not published in this public repository) is
+governed by PID_ONLY_ALLOWED below:
+- False (rule c, now): refused outright. mctl-api's identity hook answers
+  503 to every new customer account while any such entry exists, until
+  mctlhq/mctl-api#1075 is released.
+- True (rule b, after that release): allowed only with `catalogKey:
+  principal`. Without it the portal's TenantSync keys the catalog User by
+  the missing login, so it skips the entry with only a warning and the
+  member silently loses the portal.
+
 A file that cannot be read or parsed is a violation, not a skip, and so is
 finding no tenant at all: a check that observed nothing has not observed a
 clean repository.
@@ -47,8 +58,14 @@ PRINCIPAL_ID = re.compile(r"prn_[0-9A-HJKMNP-TV-Z]{26}")
 # The catalog keys the portal understands (tenant-backend TenantSync).
 CATALOG_KEYS = ("login", "principal")
 
+# Whether an entry may omit userId (see the module docstring). Flip this one
+# line to True once a mctl-api release containing mctlhq/mctl-api#1075 runs
+# in production; before that, a pid-only entry makes every new customer
+# sign-up fail. The selftest checks both settings either way.
+PID_ONLY_ALLOWED = False
 
-def _members(scope: str, members: object) -> list[str]:
+
+def _members(scope: str, members: object, pid_only_allowed: bool) -> list[str]:
     """Violations in one member list."""
     if members is None:
         return []
@@ -65,6 +82,14 @@ def _members(scope: str, members: object) -> list[str]:
             where += f" ({member['userId']})"
         if "catalogKey" in member and member["catalogKey"] not in CATALOG_KEYS:
             found.append(f"{where}: catalogKey {member['catalogKey']!r} is not one of {', '.join(CATALOG_KEYS)}")
+        if not member.get("userId"):
+            if not pid_only_allowed:
+                found.append(
+                    f"{where}: no userId; listing a member by principalId alone needs "
+                    "mctlhq/mctl-api#1075 released first (PID_ONLY_ALLOWED)"
+                )
+            elif member.get("catalogKey") != "principal":
+                found.append(f"{where}: no userId, so it needs catalogKey: principal or the portal drops it")
         pid = member.get("principalId")
         if pid is None or pid == "":
             found.append(f"{where}: no principalId")
@@ -80,7 +105,7 @@ def _members(scope: str, members: object) -> list[str]:
     return found
 
 
-def violations(root: Path) -> list[str]:
+def violations(root: Path, pid_only_allowed: bool = PID_ONLY_ALLOWED) -> list[str]:
     """Every member entry under root's tenants that principal mode cannot use."""
     tenants_dir = root / TENANTS
     if not tenants_dir.is_dir():
@@ -102,7 +127,7 @@ def violations(root: Path) -> list[str]:
         if not isinstance(tenant, dict):
             found.append(f"{rel}: no tenant mapping; cannot check its members")
             continue
-        found += _members(f"{rel}: tenant", tenant.get("members"))
+        found += _members(f"{rel}: tenant", tenant.get("members"), pid_only_allowed)
         teams = tenant.get("teams")
         if teams is None:
             continue
@@ -113,7 +138,7 @@ def violations(root: Path) -> list[str]:
             if not isinstance(team, dict):
                 found.append(f"{rel}: team {j} is not a mapping")
                 continue
-            found += _members(f"{rel}: team {team.get('name', j)}", team.get("members"))
+            found += _members(f"{rel}: team {team.get('name', j)}", team.get("members"), pid_only_allowed)
     return found
 
 
@@ -128,13 +153,28 @@ def selftest() -> int:
         "  name: t\n"
         "  members:\n"
         f"    - userId: alice\n      principalId: {PID_A}\n      role: owner\n"
-        f"    - principalId: {PID_B}\n      role: developer\n      catalogKey: principal\n"
+        f"    - userId: bob\n      principalId: {PID_B}\n      role: developer\n      catalogKey: principal\n"
         "  teams:\n"
         "    - name: web\n"
         "      members:\n"
         f"        - userId: alice\n          principalId: {PID_A}\n          role: owner\n"
     )
     team_line = f"        - userId: alice\n          principalId: {PID_A}\n"
+    pid_only = good.replace("    - userId: bob\n      principalId", "    - principalId")
+    # Entries without userId: (name, body, fires under rule c, fires under rule b).
+    pid_only_cases: list[tuple[str, str, bool, bool]] = [
+        ("pid-only member with catalogKey principal", pid_only, True, False),
+        ("pid-only member with empty userId", good.replace("userId: bob", 'userId: ""'), True, False),
+        ("pid-only member without catalogKey", pid_only.replace("\n      catalogKey: principal", ""), True, True),
+        ("pid-only member with catalogKey login", pid_only.replace("catalogKey: principal", "catalogKey: login"), True, True),
+        ("pid-only team member without catalogKey", good.replace(team_line, f"        - principalId: {PID_A}\n"), True, True),
+        (
+            "pid-only team member with catalogKey principal",
+            good.replace(team_line, f"        - principalId: {PID_A}\n          catalogKey: principal\n"),
+            True,
+            False,
+        ),
+    ]
     cases: list[tuple[str, str | None, bool]] = [
         # good also lists PID_A at tenant level and in a team, which is allowed.
         ("every entry keyed", good, False),
@@ -164,21 +204,29 @@ def selftest() -> int:
         ("unparseable", "tenant: [\n", True),
         ("values.yaml missing", None, True),
     ]
+    # Every case runs under both settings of PID_ONLY_ALLOWED, so flipping it
+    # never ships an unproven rule.
+    runs = [(n, b, f, f) for n, b, f in cases] + pid_only_cases
     with tempfile.TemporaryDirectory() as d:
-        for name, body, should_fire in cases:
-            root = Path(d) / re.sub(r"\W+", "-", name)
-            tenant = root / TENANTS / "t"
-            tenant.mkdir(parents=True)
-            if body is not None:
-                (tenant / "values.yaml").write_text(body)
-            try:
-                found = violations(root)
-            except Exception as exc:  # noqa: BLE001 - a crash is the failure being tested for
-                print(f"selftest FAIL: case {name!r} crashed the scan: {exc}", file=sys.stderr)
-                return 1
-            if bool(found) != should_fire:
-                print(f"selftest FAIL: case {name!r} expected fire={should_fire}, got {found}", file=sys.stderr)
-                return 1
+        for name, body, fire_c, fire_b in runs:
+            for allowed, should_fire in ((False, fire_c), (True, fire_b)):
+                root = Path(d) / (re.sub(r"\W+", "-", name) + f"-{allowed}")
+                tenant = root / TENANTS / "t"
+                tenant.mkdir(parents=True)
+                if body is not None:
+                    (tenant / "values.yaml").write_text(body)
+                try:
+                    found = violations(root, pid_only_allowed=allowed)
+                except Exception as exc:  # noqa: BLE001 - a crash is the failure being tested for
+                    print(f"selftest FAIL: case {name!r} crashed the scan: {exc}", file=sys.stderr)
+                    return 1
+                if bool(found) != should_fire:
+                    print(
+                        f"selftest FAIL: case {name!r} (PID_ONLY_ALLOWED={allowed}) "
+                        f"expected fire={should_fire}, got {found}",
+                        file=sys.stderr,
+                    )
+                    return 1
         # Observing nothing is not a clean result.
         empty = Path(d) / "empty"
         (empty / TENANTS).mkdir(parents=True)
@@ -187,7 +235,8 @@ def selftest() -> int:
             return 1
     print(
         "selftest OK: detector fires on a missing, empty, malformed or repeated principalId, "
-        "on an unknown catalogKey, "
+        "on an unknown catalogKey, on a member without userId (refused outright, or without "
+        "catalogKey: principal once PID_ONLY_ALLOWED), "
         "on unreadable structure and on an empty tenants directory; stays quiet on keyed entries"
     )
     return 0
