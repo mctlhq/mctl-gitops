@@ -7,11 +7,12 @@
 #
 # Safety invariants:
 # 1. Strictly bounded blast radius: modifies exclusively Rule ID d8b4ea76eabc420e99146cafd9596801.
-# 2. Comprehensive production controls: continuous checks on 6 production endpoints with latency & status limits.
+# 2. Comprehensive production controls: concurrent parallel checks across 6 production endpoints with latency & status limits, active throughout activation AND recovery.
 # 3. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and API read-back verification.
 # 4. Strict activation guard: rollback never modifies rule if activation was not attempted (preserves active incidents).
 # 5. Fail-safe state tracking: activation state transitions to "activating" BEFORE dispatch, guaranteeing rollback on network drop.
-# 6. Independent recovery verification: produces machine-readable summary and audit correlation.
+# 6. Cloudflare Security Events correlation: queries GraphQL firewallEventsAdaptive to verify Ray ID matches Rule ID.
+# 7. Independent recovery verification: produces machine-readable summary, step summary table, and break-glass commands.
 
 set -euo pipefail
 
@@ -30,6 +31,10 @@ if [ "${REDLOOP_DRILL_SELF_TEST:-}" = "1" ]; then
 import sys
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 rule_state = {
     "enabled": False,
@@ -37,7 +42,9 @@ rule_state = {
     "fail_activation_patch": False,
     "trigger_null_on_rollback": False,
     "null_on_next_get": False,
-    "probe_fail_count": 0
+    "probe_fail_count": 0,
+    "security_event_rule_id": "d8b4ea76eabc420e99146cafd9596801",
+    "security_event_unauthorized": False
 }
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -118,6 +125,22 @@ class MockHandler(BaseHTTPRequestHandler):
             rule_state["trigger_null_on_rollback"] = True
             self.send_response(200)
             self.end_headers()
+        elif self.path == "/control/set_security_event_mismatch":
+            rule_state["security_event_rule_id"] = "wrong-rule-mismatched-uuid"
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_security_event_mismatch":
+            rule_state["security_event_rule_id"] = "d8b4ea76eabc420e99146cafd9596801"
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/set_security_event_unauthorized":
+            rule_state["security_event_unauthorized"] = True
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/clear_security_event_unauthorized":
+            rule_state["security_event_unauthorized"] = False
+            self.send_response(200)
+            self.end_headers()
         elif self.path == "/control/get_patch_count":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -126,6 +149,54 @@ class MockHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        payload = json.loads(body.decode()) if body else {}
+
+        if "/graphql" in self.path:
+            if rule_state["security_event_unauthorized"]:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "errors": [{"message": "Authentication error: token lacks Zone -> Analytics -> Read"}],
+                    "data": None
+                }).encode())
+                return
+
+            ray = payload.get("variables", {}).get("filter", {}).get("rayName", "")
+            events = []
+            if "mockray403" in ray:
+                events.append({
+                    "datetime": "2026-11-16T12:00:00Z",
+                    "rayName": ray,
+                    "action": "block",
+                    "source": "firewallCustom",
+                    "ruleId": rule_state["security_event_rule_id"],
+                    "clientRequestHTTPHost": "staging-redloop.mctl.ai"
+                })
+            resp = {
+                "data": {
+                    "viewer": {
+                        "zones": [
+                            {
+                                "firewallEventsAdaptive": events
+                            }
+                        ]
+                    }
+                },
+                "errors": None
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(resp).encode())
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
     def do_PATCH(self):
         rule_state["patch_count"] += 1
@@ -163,7 +234,7 @@ class MockHandler(BaseHTTPRequestHandler):
         }
         self.wfile.write(json.dumps(resp).encode())
 
-server = HTTPServer(("127.0.0.1", int(sys.argv[1])), MockHandler)
+server = ThreadedHTTPServer(("127.0.0.1", int(sys.argv[1])), MockHandler)
 server.serve_forever()
 PYEOF
 
@@ -187,6 +258,7 @@ PYEOF
 
   echo "[+] Test Case 1: Standard Happy Path (404 -> 403 -> 404)"
   CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
   MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
   MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
   MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
@@ -197,7 +269,20 @@ PYEOF
   CLOUDFLARE_API_TOKEN="mock-token" \
   RUNNER_TEMP="$tmp_dir" \
   REDLOOP_DRILL_SELF_TEST="" \
-  "$0"
+  "$0" > "$tmp_dir/test1.log" 2>&1
+  test1_rc=$?
+
+  if [ "$test1_rc" -ne 0 ]; then
+    echo "[-] FAIL: Test 1 exited with non-zero code $test1_rc!"
+    cat "$tmp_dir/test1.log"
+    exit 1
+  fi
+  if ! grep -q "Security Event VERIFIED: Ray ID 'mockray403' blocked by Rule ID 'd8b4ea76eabc420e99146cafd9596801'" "$tmp_dir/test1.log"; then
+    echo "[-] FAIL: Test 1 did not verify Security Event correlation!"
+    cat "$tmp_dir/test1.log"
+    exit 1
+  fi
+  echo "[+] Test Case 1 PASSED: Happy path (404 -> 403 -> 404) with Security Event correlation verified."
 
   echo "[+] Test Case 2: Pre-flight abort when rule is already enabled (active incident guard)"
   curl -s "http://127.0.0.1:$mock_port/control/set_enabled_true" > /dev/null
@@ -313,6 +398,81 @@ PYEOF
   fi
   echo "[+] Test Case 4 PASSED: Transient null read-back handled gracefully without jq exception and recovered on next attempt."
 
+  echo "[+] Test Case 5: Security Event Rule ID mismatch triggers alert & rollback"
+  curl -s "http://127.0.0.1:$mock_port/control/set_enabled_false" > /dev/null
+  curl -s "http://127.0.0.1:$mock_port/control/set_security_event_mismatch" > /dev/null
+
+  set +e
+  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test5.log" 2>&1
+  test5_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_security_event_mismatch" > /dev/null
+
+  if [ "$test5_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 5 expected failure when Security Event rule ID mismatched, got 0"
+    cat "$tmp_dir/test5.log"
+    exit 1
+  fi
+  if ! grep -q "Security Event Rule ID mismatch" "$tmp_dir/test5.log"; then
+    echo "[-] FAIL: Test 5 did not detect expected Security Event rule ID mismatch!"
+    cat "$tmp_dir/test5.log"
+    exit 1
+  fi
+  post_enabled=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.enabled')
+  if [ "$post_enabled" != "false" ]; then
+    echo "[-] FAIL: Test 5 left rule enabled after mismatch rollback!"
+    exit 1
+  fi
+  echo "[+] Test Case 5 PASSED: Security Event Rule ID mismatch correctly triggered alert and rollback to inert."
+
+  echo "[+] Test Case 6: Missing Analytics permission handled gracefully without crashing"
+  curl -s "http://127.0.0.1:$mock_port/control/set_enabled_false" > /dev/null
+  curl -s "http://127.0.0.1:$mock_port/control/set_security_event_unauthorized" > /dev/null
+
+  set +e
+  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  CF_GRAPHQL_OVERRIDE="http://127.0.0.1:$mock_port/graphql" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test6.log" 2>&1
+  test6_rc=$?
+  set -e
+
+  curl -s "http://127.0.0.1:$mock_port/control/clear_security_event_unauthorized" > /dev/null
+
+  if [ "$test6_rc" -ne 0 ]; then
+    echo "[-] FAIL: Test 6 expected drill success when analytics API returned unauthorized notice, got $test6_rc"
+    cat "$tmp_dir/test6.log"
+    exit 1
+  fi
+  if ! grep -q "Security Events API unauthorized" "$tmp_dir/test6.log"; then
+    echo "[-] FAIL: Test 6 did not log expected unauthorized analytics notice!"
+    cat "$tmp_dir/test6.log"
+    exit 1
+  fi
+  echo "[+] Test Case 6 PASSED: Missing analytics scope gracefully logged as notice while drill completed successfully."
+
   echo "=== All Self-Test Scenarios PASSED ==="
   exit 0
 fi
@@ -334,6 +494,7 @@ TARGET_HOST="staging-redloop.mctl.ai"
 
 TARGET_URL="${MOCK_STAGING_URL:-https://${TARGET_HOST}/}"
 API_URL="${CF_API_BASE_OVERRIDE:-https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}}"
+GRAPHQL_URL="${CF_GRAPHQL_OVERRIDE:-https://api.cloudflare.com/client/v4/graphql}"
 
 # Latency and Timeout Thresholds
 MAX_PROD_LATENCY_SECONDS="${MAX_PROD_LATENCY_SECONDS:-2.500}"
@@ -471,7 +632,7 @@ rollback() {
 trap rollback EXIT INT TERM ERR
 
 # ---------------------------------------------------------------------------
-# Production Endpoint Controls
+# Production Endpoint Controls (Parallel with Strict 3s Budget)
 # ---------------------------------------------------------------------------
 check_production_controls() {
   local label="$1"
@@ -484,39 +645,67 @@ check_production_controls() {
     "${MOCK_PROD_TG:-https://tg.mctl.ai/}:200"
   )
 
+  local probe_dir
+  probe_dir=$(mktemp -d)
+  local pids=()
+  local i=0
+
+  # Concurrently probe all 6 endpoints in parallel (strict 3s budget per probe)
   for item in "${prod_endpoints[@]}"; do
     local url="${item%:*}"
     local exp="${item##*:}"
+    (
+      local out
+      out=$(curl -s --max-time 3 --connect-timeout 2 \
+        -o /dev/null -w "%{http_code} %{time_total}" "$url" 2>/dev/null || echo "000 99.999")
+      printf "%s %s %s\n" "$url" "$exp" "$out" > "$probe_dir/$i.res"
+    ) &
+    pids+=($!)
+    i=$((i + 1))
+  done
 
-    local probe_out
-    probe_out=$(curl -s --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
-      -o /dev/null -w "%{http_code} %{time_total}" "$url" || echo "000 99.999")
-    local code
-    code=$(echo "$probe_out" | awk '{print $1}')
-    local latency
-    latency=$(echo "$probe_out" | awk '{print $2}')
+  # Wait for all background probes to finish
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+
+  local failed=0
+  for f in "$probe_dir"/*.res; do
+    [ -f "$f" ] || continue
+    local p_url p_exp p_code p_lat
+    read -r p_url p_exp p_code p_lat < "$f"
 
     # Validate HTTP status
-    if [ "$code" != "$exp" ]; then
-      log "[-] [$label] ALERT: Production status mismatch for $url: expected $exp, got $code"
-      return 1
+    if [ "$p_code" != "$p_exp" ]; then
+      log "[-] [$label] ALERT: Production status mismatch for $p_url: expected $p_exp, got $p_code"
+      failed=1
+      break
     fi
 
-    # Validate Latency Threshold
-    local exceeds_latency
-    exceeds_latency=$(python3 -c "print(1 if float('$latency') > float('$MAX_PROD_LATENCY_SECONDS') else 0)")
-    if [ "$exceeds_latency" -eq 1 ]; then
-      log "[-] [$label] ALERT: Production latency threshold breached for $url: ${latency}s > ${MAX_PROD_LATENCY_SECONDS}s"
-      return 1
+    # Validate latency threshold (awk: sub-millisecond, POSIX)
+    if awk -v lat="$p_lat" -v max="$MAX_PROD_LATENCY_SECONDS" 'BEGIN { exit (lat > max ? 1 : 0) }'; then
+      :
+    else
+      log "[-] [$label] ALERT: Production latency threshold breached for $p_url: ${p_lat}s > ${MAX_PROD_LATENCY_SECONDS}s"
+      failed=1
+      break
     fi
   done
-  return 0
+
+  rm -rf "$probe_dir"
+  return "$failed"
 }
 
 # ---------------------------------------------------------------------------
 # Step 1: Pre-flight Verification
 # ---------------------------------------------------------------------------
 log "=== Step 1: Pre-flight Cloudflare API & Environment Verification ==="
+
+log "[+] Out-of-band break-glass command (if runner disconnects):"
+log "    curl -s -X PATCH 'https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/rulesets/${RULESET_ID}/rules/${RULE_ID}' \\"
+log "      -H 'Authorization: Bearer <CF_TOKEN>' \\"
+log "      -H 'Content-Type: application/json' \\"
+log "      -d '{\"action\":\"block\",\"description\":\"staging-redloop: emergency kill switch / drill block\",\"enabled\":false,\"expression\":\"(http.host eq \\\"staging-redloop.mctl.ai\\\")\"}'"
 
 RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
   -X GET "$API_URL" \
@@ -657,9 +846,10 @@ while true; do
     FIRST_403_RAY="$CF_RAY"
     FIRST_403_SERVER="$SERVER_HDR"
     FIRST_403_SNIPPET=$(head -c 120 "$PROBE_TMP" || true)
+    CLEAN_RAY_ID="${FIRST_403_RAY%%-*}"
     rm -f "$PROBE_TMP"
     log "[+] HTTP 403 BLOCKED DETECTED! T1 = $T1_TS"
-    log "    cf-ray: $FIRST_403_RAY | server: $FIRST_403_SERVER"
+    log "    cf-ray: $FIRST_403_RAY (clean: $CLEAN_RAY_ID) | server: $FIRST_403_SERVER"
 
     # Self-test hook to verify rollback on abort
     if [ "${MOCK_TRIGGER_ABORT_ON_403:-}" = "1" ]; then
@@ -668,6 +858,9 @@ while true; do
     break
   fi
   rm -f "$PROBE_TMP"
+
+  # Check production controls during activation phase
+  check_production_controls "activation" || rollback "Production controls failed during activation" 1
 
   sleep "$PROBE_INTERVAL_SECONDS"
 done
@@ -735,6 +928,9 @@ while true; do
     break
   fi
 
+  # Check production controls during recovery phase
+  check_production_controls "recovery" || rollback "Production controls failed during recovery" 1
+
   sleep "$PROBE_INTERVAL_SECONDS"
 done
 
@@ -765,18 +961,98 @@ fi
 log "[+] All 6 production endpoints healthy and within latency limits."
 
 # ---------------------------------------------------------------------------
-# Step 6: Calculations & Evidence Summary
+# Step 6: Cloudflare Security Event Correlation (Ray ID -> Rule ID)
+# ---------------------------------------------------------------------------
+log "=== Step 6: Cloudflare Security Event Correlation (Ray ID -> Rule ID) ==="
+
+SEC_EVENT_VERIFIED=false
+SEC_EVENT_RULE_ID=""
+SEC_EVENT_ACTION=""
+SEC_EVENT_SOURCE=""
+SEC_EVENT_DATETIME=""
+SEC_EVENT_STATUS=""
+
+if [ -n "${CLEAN_RAY_ID:-}" ] && [ "${CLEAN_RAY_ID:-}" != "none" ]; then
+  log "[+] Correlating Ray ID '$CLEAN_RAY_ID' against Cloudflare Security Events..."
+
+  GQL_PAYLOAD=$(jq -n \
+    --arg zoneTag "$ZONE_ID" \
+    --arg rayName "$CLEAN_RAY_ID" \
+    '{
+      query: "query($zoneTag: String!, $filter: FirewallEventsAdaptiveFilter_InputObject) { viewer { zones(filter: {zoneTag: $zoneTag}) { firewallEventsAdaptive(filter: $filter, limit: 5) { datetime rayName action source ruleId clientRequestHTTPHost } } } }",
+      variables: {
+        zoneTag: $zoneTag,
+        filter: {
+          rayName: $rayName
+        }
+      }
+    }')
+
+  MAX_GQL_ATTEMPTS=3
+  GQL_ATTEMPT=1
+  while [ "$GQL_ATTEMPT" -le "$MAX_GQL_ATTEMPTS" ]; do
+    GQL_RESP=$(curl -sS --max-time 10 --connect-timeout 5 \
+      -X POST "$GRAPHQL_URL" \
+      -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
+      -H "Content-Type: application/json" \
+      -d "$GQL_PAYLOAD" 2>&1 || true)
+
+    # Check for authentication or permission errors
+    GQL_AUTH_ERR=$(echo "$GQL_RESP" | jq -r 'try (.errors[]? | select(.message | test("auth|permission|unauthorized|forbidden"; "i")) | .message) catch empty' 2>/dev/null || true)
+    if [ -n "$GQL_AUTH_ERR" ]; then
+      SEC_EVENT_STATUS="API token lacks Zone -> Analytics -> Read permission ($GQL_AUTH_ERR)"
+      log "[!] Notice: Security Events API unauthorized: $SEC_EVENT_STATUS"
+      break
+    fi
+
+    EVENTS_COUNT=$(echo "$GQL_RESP" | jq -r 'try (.data.viewer.zones[0].firewallEventsAdaptive | length) catch 0' 2>/dev/null || echo 0)
+    if [ "$EVENTS_COUNT" -gt 0 ]; then
+      SEC_EVENT_RULE_ID=$(echo "$GQL_RESP" | jq -r '.data.viewer.zones[0].firewallEventsAdaptive[0].ruleId // empty' 2>/dev/null || true)
+      SEC_EVENT_ACTION=$(echo "$GQL_RESP" | jq -r '.data.viewer.zones[0].firewallEventsAdaptive[0].action // empty' 2>/dev/null || true)
+      SEC_EVENT_SOURCE=$(echo "$GQL_RESP" | jq -r '.data.viewer.zones[0].firewallEventsAdaptive[0].source // empty' 2>/dev/null || true)
+      SEC_EVENT_DATETIME=$(echo "$GQL_RESP" | jq -r '.data.viewer.zones[0].firewallEventsAdaptive[0].datetime // empty' 2>/dev/null || true)
+
+      if [ "$SEC_EVENT_RULE_ID" = "$RULE_ID" ] && [ "$SEC_EVENT_ACTION" = "block" ]; then
+        log "[+] Security Event VERIFIED: Ray ID '$CLEAN_RAY_ID' blocked by Rule ID '$RULE_ID' (action: $SEC_EVENT_ACTION, source: $SEC_EVENT_SOURCE, time: $SEC_EVENT_DATETIME)"
+        SEC_EVENT_VERIFIED=true
+        SEC_EVENT_STATUS="Verified matching rule $RULE_ID"
+        break
+      elif [ -n "$SEC_EVENT_RULE_ID" ]; then
+        log "[-] ALERT: Security Event Rule ID mismatch! Ray ID '$CLEAN_RAY_ID' was blocked by '$SEC_EVENT_RULE_ID' instead of '$RULE_ID'!"
+        SEC_EVENT_STATUS="Mismatched rule ID: $SEC_EVENT_RULE_ID"
+        rollback "Security Event Rule ID mismatch: blocked by $SEC_EVENT_RULE_ID instead of $RULE_ID" 1
+      fi
+    fi
+
+    log "    Security event not yet visible in analytics pipeline (attempt $GQL_ATTEMPT/$MAX_GQL_ATTEMPTS). Retrying in 2s..."
+    sleep 2
+    GQL_ATTEMPT=$((GQL_ATTEMPT + 1))
+  done
+
+  if [ "$SEC_EVENT_VERIFIED" != "true" ] && [ -z "$SEC_EVENT_STATUS" ]; then
+    SEC_EVENT_STATUS="Event not present in analytics pipeline within observation window"
+    log "[!] Warning: $SEC_EVENT_STATUS"
+  fi
+else
+  log "[!] No HTTP 403 Ray ID captured; skipping Security Events correlation."
+  SEC_EVENT_STATUS="No Ray ID captured"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 7: Calculations & Evidence Summary
 # ---------------------------------------------------------------------------
 ACTIVATION_RTO=$(python3 -c "print(f'{$T1_EPOCH - $T0_EPOCH:.3f}')")
 RECOVERY_RTO=$(python3 -c "print(f'{$T3_EPOCH - $T2_EPOCH:.3f}')")
 
 log "=== Drill Results Summary ==="
-log "  T0 (Activation Dispatch):    $T0_TS"
-log "  T1 (First HTTP 403 Block):   $T1_TS (cf-ray: $FIRST_403_RAY)"
-log "  T2 (Deactivation Dispatch):  $T2_TS"
-log "  T3 (First HTTP 404 Restore): $T3_TS (cf-ray: $FIRST_404_RAY)"
-log "  Measured Activation RTO:     ${ACTIVATION_RTO}s"
-log "  Measured Recovery RTO:       ${RECOVERY_RTO}s"
+log "  T0 (Activation Dispatch):       $T0_TS"
+log "  T1 (First HTTP 403 Block):      $T1_TS (cf-ray: $FIRST_403_RAY)"
+log "  T2 (Deactivation Dispatch):     $T2_TS"
+log "  T3 (First HTTP 404 Restore):    $T3_TS (cf-ray: $FIRST_404_RAY)"
+log "  Measured Activation RTO:        ${ACTIVATION_RTO}s"
+log "  Measured Recovery RTO:          ${RECOVERY_RTO}s"
+log "  Security Event Verified:        $SEC_EVENT_VERIFIED"
+log "  Security Event Correlated Rule: ${SEC_EVENT_RULE_ID:-none}"
 
 # Record machine-readable timings
 cat << JSONEOF > "$TIMINGS_FILE"
@@ -793,10 +1069,39 @@ cat << JSONEOF > "$TIMINGS_FILE"
   "recovery_rto_seconds": $RECOVERY_RTO,
   "blocked_ray_id": "$FIRST_403_RAY",
   "restored_ray_id": "$FIRST_404_RAY",
-  "final_rule_enabled": false
+  "final_rule_enabled": false,
+  "security_event": {
+    "queried_ray_id": "${CLEAN_RAY_ID:-none}",
+    "verified": $SEC_EVENT_VERIFIED,
+    "rule_id": "${SEC_EVENT_RULE_ID:-none}",
+    "action": "${SEC_EVENT_ACTION:-none}",
+    "source": "${SEC_EVENT_SOURCE:-none}",
+    "datetime": "${SEC_EVENT_DATETIME:-none}",
+    "status": "$SEC_EVENT_STATUS"
+  }
 }
 JSONEOF
 
 log "[+] Timings written to $TIMINGS_FILE"
+
+# Step Summary for GitHub Actions UI
+cat << MD_EOF >> "$SUMMARY_FILE"
+### RedLoop Gate 3 WAF Drill Execution Summary
+
+| Metric / Check | Value / Status | Notes |
+| :--- | :--- | :--- |
+| **Target Rule ID** | \`$RULE_ID\` | \`block_staging_redloop_emergency\` |
+| **Zone** | \`$ZONE_ID\` (\`mctl.ai\`) | \`http_request_firewall_custom\` |
+| **T0 (Activation Dispatch)** | \`$T0_TS\` | Sent PATCH \`enabled=true\` |
+| **T1 (First HTTP 403 Block)** | \`$T1_TS\` | Ray: \`$FIRST_403_RAY\` |
+| **T2 (Deactivation Dispatch)** | \`$T2_TS\` | Sent PATCH \`enabled=false\` |
+| **T3 (First HTTP 404 Restore)** | \`$T3_TS\` | Ray: \`$FIRST_404_RAY\` |
+| **Activation RTO** | **\`${ACTIVATION_RTO}s\`** | Propagation delay to edge block |
+| **Recovery RTO** | **\`${RECOVERY_RTO}s\`** | Propagation delay to edge unblock |
+| **Final Rule State** | **\`INERT (enabled=false)\`** | Verified via live API read-back |
+| **Security Event Correlation** | **\`$SEC_EVENT_VERIFIED\`** | Rule: \`${SEC_EVENT_RULE_ID:-unverified}\` (\`$SEC_EVENT_STATUS\`) |
+| **Production Controls** | **\`PASS (all 6 endpoints healthy)\`** | Concurrent parallel checks throughout drill |
+MD_EOF
+
 log "=== RedLoop Gate 3 Edge-Only WAF Drill Completed Successfully ==="
 exit 0
