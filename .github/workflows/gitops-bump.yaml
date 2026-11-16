@@ -94,11 +94,6 @@ jobs:
             check_path values_glob "$INPUT_VALUES_GLOB" '^[A-Za-z0-9._/*?-]+$'
           fi
 
-  # The bump is prepared here and published by exactly one of two jobs below.
-  # This job holds no environment and no write credential: it decides the route,
-  # edits the values files and builds ONE commit, which it hands over as a patch.
-  # The publishing jobs apply that patch to a fresh checkout of main, run the
-  # release gate on the tree that would result, and only then write.
   # A digest that is not in the registry, or that the tag does not point at,
   # is refused before any file is written (mctl-gitops#2652): pinned, it would
   # either fail every pull or label one image with another's tag. "Could not
@@ -140,6 +135,11 @@ jobs:
             || refuse "${IMAGE_NAME}:${NEW_TAG} points at ${tag_digest:-nothing}, not ${IMAGE_DIGEST}"
           echo "${IMAGE_NAME}:${NEW_TAG} is ${IMAGE_DIGEST}"
 
+  # The bump is prepared here and published by exactly one of two jobs below.
+  # This job holds no environment and no write credential: it decides the route,
+  # edits the values files and builds ONE commit, which it hands over as a patch.
+  # The publishing jobs apply that patch to a fresh checkout of main, run the
+  # release gate on the tree that would result, and only then write.
   bump:
     needs: [validate-inputs, check-digest]
     runs-on: ubuntu-latest
