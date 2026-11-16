@@ -260,7 +260,7 @@ version_holds:
       # workspaces (mctlhq/mctl-api#1086, SIGNUP_PUBLIC_WORKSPACES off).
       # Covers only the 4.163.0 tag on the merge of mctlhq/mctl-api#1085.
       - version: "4.163.0"
-        grant: mctlhq/mctl-gitops#GRANT_PR
+        grant: mctlhq/mctl-gitops#2718
         approved_by: mashkovd
         expires: 2026-11-30
 
