@@ -134,6 +134,7 @@ class MockHandler(BaseHTTPRequestHandler):
         payload = json.loads(body.decode()) if body else {}
 
         if payload.get("enabled", False) and rule_state["fail_activation_patch"]:
+            rule_state["enabled"] = True
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -609,7 +610,8 @@ ACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_
 
 ACT_SUCCESS=$(echo "$ACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$ACT_SUCCESS" != "true" ]; then
-  rollback "Rule activation PATCH failed: $(echo "$ACT_RESP" | jq -c 'try .errors catch "error"')" 1
+  ACT_ERR=$(echo "$ACT_RESP" | jq -c 'try .errors catch empty' 2>/dev/null || true)
+  rollback "Rule activation PATCH failed: ${ACT_ERR:-$ACT_RESP}" 1
 fi
 
 CURRENT_STATE="active"
@@ -693,7 +695,8 @@ DEACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CUR
 
 DEACT_SUCCESS=$(echo "$DEACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$DEACT_SUCCESS" != "true" ]; then
-  rollback "Rule deactivation PATCH failed: $(echo "$DEACT_RESP" | jq -c 'try .errors catch "error"')" 1
+  DEACT_ERR=$(echo "$DEACT_RESP" | jq -c 'try .errors catch empty' 2>/dev/null || true)
+  rollback "Rule deactivation PATCH failed: ${DEACT_ERR:-$DEACT_RESP}" 1
 fi
 log "[+] Rule deactivation PATCH succeeded. T2 = $T2_TS"
 
