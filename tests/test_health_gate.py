@@ -254,6 +254,28 @@ c = Case({**WEB})
 (c.fx / "http_code").write_text("401")
 expect("auth wall reported, not hidden", c, 0, "healthy", "HTTP not verified")
 
+# Ready only shortly before the deadline: the stability window still runs out.
+c = Case(WORKER)
+c.pods(None, seq=[[pod("p1", ready=False)], [pod("p1")]])
+expect("ready near the deadline", c, 0, "healthy", timeout=3, stable=4)
+
+# blueGreen Rollout pods carry rollouts-pod-template-hash.
+c = Case(WORKER)
+new = pod("new"); new["metadata"]["labels"] = {"rollouts-pod-template-hash": "r1"}
+old = pod("old"); old["metadata"]["labels"] = {"rollouts-pod-template-hash": "r0"}
+c.pods([new, old])
+expect("rollout across two rollout hashes", c, 1, "unhealthy", "ReplicaSets")
+
+# The chart prefers ingress.hosts over ingress.host.
+c = Case({"ingress": {"enabled": True, "host": "old.example.test", "hosts": ["new.example.test"]}})
+res, _ = expect("hosts over host", c, 0, "healthy")
+check(res.get("health_url") == "https://new.example.test", f"hosts over host: {res.get('health_url')!r}")
+
+# Under a path prefix the public URL would ask something else: not verified.
+c = Case({"ingress": {"enabled": True, "host": "svc.example.test", "path": "/api"}})
+expect("ingress path prefix", c, 0, "healthy", "HTTP not verified")
+check(not (c.fx / "curl.log").exists(), "ingress path prefix: probed HTTP anyway")
+
 # ── Red on each failure shape ───────────────────────────────────────────────
 c = Case(WORKER)
 c.pods([pod("p1", digest=D_OLD)])

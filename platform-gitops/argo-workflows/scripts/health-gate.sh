@@ -131,7 +131,8 @@ esac
 
 host=""
 if [ "$(jq -r '.ingress.enabled == true' "$TMP/values.json")" = true ]; then
-  host=$(jq -r '(.ingress.host // "") as $h | if $h != "" then $h else (.ingress.hosts[0] // "") end' "$TMP/values.json")
+  # Same precedence as templates/ingress.yaml: hosts[] wins over host.
+  host=$(jq -r '(.ingress.hosts // [])[0] // .ingress.host // ""' "$TMP/values.json")
 fi
 case "$host" in
   "") ;;
@@ -220,7 +221,8 @@ list_pods() {
     | . as $p
     | ([.status.containerStatuses[]? | select(.name == $c)][0]) as $s
     | [ $p.metadata.name,
-        ($p.metadata.labels["pod-template-hash"] // "-"),
+        # A blueGreen Rollout labels its pods rollouts-pod-template-hash.
+        ($p.metadata.labels["pod-template-hash"] // $p.metadata.labels["rollouts-pod-template-hash"] // "-"),
         (($s.imageID // "") | capture("(?<d>sha256:[0-9a-f]{64})$").d // "-"),
         (($s.ready // false) | tostring),
         (($s.restartCount // 0) | tostring) ]
@@ -228,7 +230,9 @@ list_pods() {
 }
 
 # True only on positive evidence: autoscaling off in the values, at least one
-# Deployment of the release, and every one of them asking for 0 replicas.
+# Deployment of the release, and every one of them asking for 0 replicas. A
+# blueGreen Rollout at zero is not recognised (the workflow cannot read
+# Rollouts) and stays red: unknown, never idle.
 scaled_to_zero() {
   [ "$(jq -r '.autoscaling.enabled == true' "$TMP/values.json")" = false ] || return 1
   kubectl -n "$NS" get deployments -l "app.kubernetes.io/instance=${APP}" -o json > "$TMP/deploys.json" 2>/dev/null || return 1
@@ -256,10 +260,19 @@ check_pods() {
   return 0
 }
 
+# The public URL asks the readiness path only when the ingress routes the
+# whole host to the port the probe uses. Under a path prefix or another port
+# the URL would answer for something else; that is "not verified", not red.
+ingress_path=$(jq -r '.ingress.path // "/"' "$TMP/values.json")
+ready_port=$(jq -r '.probes.readiness.port // "http" | tostring' "$TMP/values.json")
 http_note=""
 check_http() {
   http_note=""
   [ -n "$host" ] && [ -n "$ready_path" ] || return 0
+  if [ "$ingress_path" != "/" ] || [ "$ready_port" != http ]; then
+    http_note="https://${host} routes ${ingress_path} while readiness is ${ready_path} on port ${ready_port}: HTTP not verified"
+    return 0
+  fi
   url="https://${host}${ready_path}"
   # No -L: a redirect (an auth wall, a wrong host) is not the service saying
   # it is ready.
@@ -314,7 +327,14 @@ while :; do
     snapshot=""
   fi
   echo "waiting: ${why}"
-  if [ "$(date +%s)" -ge "$deadline" ]; then
+  # A stability window that started before the deadline runs to its end:
+  # pods that first look ready at 590s are not a failed deploy. One that
+  # (re)started after it does not extend anything, or a pod restarting
+  # forever would keep the gate open forever.
+  now=$(date +%s)
+  if [ "$now" -ge "$deadline" ] \
+     && { [ -z "$stable_since" ] || [ "$stable_since" -ge "$deadline" ] \
+          || [ "$now" -ge $((stable_since + STABLE)) ]; }; then
     case "$state" in
       unknown) finish unknown "${why} (after ${TIMEOUT}s)" ;;
       *) finish unhealthy "${why} (after ${TIMEOUT}s)" ;;
