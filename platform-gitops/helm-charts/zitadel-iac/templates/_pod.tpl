@@ -66,6 +66,17 @@ containers:
           secretKeyRef:
             name: zitadel-iac-github-idp
             key: github-idp.json
+      # The customers Google IdP's OAuth client (customers.tf, mctl-api#1079).
+      # Optional, unlike GitHub's: the IdP is off by default
+      # (customers_google_idp_enabled) and needs no credential then. Turned
+      # on without it, the IdP's precondition stops the run instead of
+      # planning an empty credential.
+      - name: TF_VAR_customers_google_idp
+        valueFrom:
+          secretKeyRef:
+            name: zitadel-iac-google-idp
+            key: google-idp.json
+            optional: true
     command: ["/bin/sh", "-c"]
     args:
       - |

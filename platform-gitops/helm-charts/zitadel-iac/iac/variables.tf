@@ -163,6 +163,45 @@ variable "customers_github_idp" {
   }
 }
 
+variable "customers_google_idp_enabled" {
+  description = <<-EOT
+    Adds a Google IdP to the customers organization next to GitHub
+    (mctlhq/mctl-api#1079). Off by default. Turn it on only once the mctl-api
+    release that handles Google in the identity hook AND resolves Google
+    customers to principals is live (mctl-api#1079 slices 1 and 2), and
+    ZITADEL_HOOK_GOOGLE_IDP_ID reaches mctl-api from the hook Secret. Earlier,
+    the hook fails closed (the create gate refuses every Google link) but
+    the button would only produce refusals.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "customers_google_idp" {
+  description = <<-EOT
+    The Google OAuth client of the customers organization's Google IdP, as
+    JSON {client_id, client_secret}: Vault secret/platform/zitadel/google-idp
+    through ExternalSecret zitadel-iac-google-idp. Optional (empty) while
+    customers_google_idp_enabled is false. The secret is write-only in the
+    provider and never enters the state.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  # Empty is "not provided"; anything else must be complete. Whether it may
+  # be empty is decided by the IdP's precondition (customers.tf), which can
+  # see customers_google_idp_enabled.
+  validation {
+    condition = var.customers_google_idp == "" || try(
+      length(trimspace(jsondecode(var.customers_google_idp).client_id)) > 0 &&
+      length(trimspace(jsondecode(var.customers_google_idp).client_secret)) > 0,
+      false
+    )
+    error_message = "customers_google_idp must be empty or JSON {client_id, client_secret} with both non-empty (zitadel-iac-google-idp, Vault secret/platform/zitadel/google-idp)."
+  }
+}
+
 variable "identity_hook_login_client_user_id" {
   description = <<-EOT
     The caller id the identity hook's creation gate allows to create

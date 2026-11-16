@@ -45,6 +45,8 @@ locals {
   mctl_web_dev_callback = "http://localhost:8787/api/zitadel/callback"
 
   customers_github_idp = jsondecode(var.customers_github_idp)
+  # Decoded only when the IdP is on: off, the value may be empty.
+  customers_google_idp = var.customers_google_idp_enabled && var.customers_google_idp != "" ? jsondecode(var.customers_google_idp) : { client_id = "", client_secret = "" }
 }
 
 resource "zitadel_org" "customers" {
@@ -96,9 +98,51 @@ resource "zitadel_org_idp_github" "customers" {
   }
 }
 
+# The Google IdP (mctlhq/mctl-api#1079): a sign-in path for people without a
+# GitHub account. Off unless customers_google_idp_enabled; see that
+# variable for the ordering against the mctl-api release. Same shape as
+# GitHub:
+#   - credentials from Vault secret/platform/zitadel/google-idp (ExternalSecret
+#     zitadel-iac-google-idp); the client secret is write-only and never
+#     enters the state;
+#   - only openid, email and profile: the hook needs the subject, Google's
+#     email_verified and a display name, nothing else;
+#   - linking off and auto_linking unspecified: a Google identity never
+#     attaches to an existing account, a GitHub one included. A person who
+#     uses both gets two accounts; merging is an admin action;
+#   - creation follows the intent toggle and needs the create gate, so a
+#     Google account is only ever created in the shape the hook checks
+#     (google.<sub>@mctl.ai, one link, google_sub metadata).
+resource "zitadel_org_idp_google" "customers" {
+  count = var.customers_google_idp_enabled ? 1 : 0
+
+  org_id              = zitadel_org.customers.id
+  name                = "Google"
+  client_id           = local.customers_google_idp.client_id
+  client_secret       = local.customers_google_idp.client_secret
+  scopes              = ["openid", "email", "profile"]
+  is_linking_allowed  = false
+  is_creation_allowed = var.identity_hook_intent_enabled
+  is_auto_creation    = var.identity_hook_intent_enabled
+  is_auto_update      = true
+  auto_linking        = "AUTO_LINKING_OPTION_UNSPECIFIED"
+
+  lifecycle {
+    precondition {
+      condition     = length(trimspace(local.customers_google_idp.client_id)) > 0 && length(trimspace(local.customers_google_idp.client_secret)) > 0
+      error_message = "customers_google_idp_enabled needs the Google OAuth client: zitadel-iac-google-idp resolved nothing usable from Vault secret/platform/zitadel/google-idp."
+    }
+    precondition {
+      condition     = var.identity_hook_intent_enabled && var.identity_hook_create_gate_enabled
+      error_message = "The Google IdP needs the intent hook and the create gate on: without the intent hook ZITADEL, not the hook, would decide the shape of a Google account."
+    }
+  }
+}
+
 # An organization login policy replaces the instance policy as a whole, so
 # every field is restated here rather than inherited (login_policy.tf):
-#   - GitHub is the only way in: user_login = false (no password, no
+#   - the customers IdPs are the only way in (GitHub, and Google when
+#     customers_google_idp_enabled): user_login = false (no password, no
 #     passkey), no second factors, passwordless not allowed;
 #   - force_mfa = false with force_mfa_local_only = true: ZITADEL asks no
 #     second factor after GitHub (owner decision, stage B: recovery is
@@ -127,7 +171,7 @@ resource "zitadel_login_policy" "customers" {
   multi_factor_check_lifetime   = "12h0m0s"
   second_factors                = []
   multi_factors                 = []
-  idps                          = [zitadel_org_idp_github.customers.id]
+  idps                          = concat([zitadel_org_idp_github.customers.id], zitadel_org_idp_google.customers[*].id)
 }
 
 # mctl-web, in a project of its own: ZITADEL puts the client ids of every
@@ -248,7 +292,12 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
     namespace = "mctl-api"
   }
 
-  data = {
+  # ZITADEL_HOOK_GOOGLE_IDP_ID is present only with the Google IdP on;
+  # mctl-api then handles that IdP (mctl-api#1079). Absent, the hook does not
+  # know the IdP and its create gate refuses every Google link.
+  data = merge(var.customers_google_idp_enabled ? {
+    ZITADEL_HOOK_GOOGLE_IDP_ID = zitadel_org_idp_google.customers[0].id
+    } : {}, {
     ZITADEL_CUSTOMER_LIFECYCLE_CLIENT_ID     = zitadel_machine_user.customer_lifecycle.client_id
     ZITADEL_CUSTOMER_LIFECYCLE_CLIENT_SECRET = zitadel_machine_user.customer_lifecycle.client_secret
     ZITADEL_CUSTOMER_LIFECYCLE_PROJECT_ID    = zitadel_project.customer_lifecycle.id
@@ -283,7 +332,7 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
     MCTL_WEB_DEV_CLIENT_ID = zitadel_application_oidc.mctl_web_dev.client_id
     # C0 purpose=signin must verify the portal UI audience, not the site's.
     ZITADEL_PORTAL_CLIENT_ID = zitadel_application_oidc.portal_ui.client_id
-  }
+  })
 
   field_manager = "zitadel-iac"
   # Created by Argo CD with no data; see forgejo.tf.
