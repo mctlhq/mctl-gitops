@@ -62,6 +62,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan-matrix.outputs.matrix }}
       target: ${{ steps.plan-matrix.outputs.target }}
+      candidate_count: ${{ steps.plan-matrix.outputs.candidate_count }}
     steps:
       - name: Validate Candidates and Assert Allowlist
         id: plan-matrix
@@ -193,6 +194,7 @@ jobs:
               with open(github_output, "a") as go:
                   go.write(f"matrix={matrix_json}\n")
                   go.write(f"target={input_target}\n")
+                  go.write(f"candidate_count={len(selected_candidates)}\n")
 
           github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if github_summary:
@@ -314,33 +316,66 @@ jobs:
           with open(json_path) as f:
               data = json.load(f)
 
-          # --- Fail-closed degenerate report validation (P2 fix) ---
-          schema_ver = data.get("SchemaVersion")
-          artifact_name = data.get("ArtifactName", "")
-          metadata = data.get("Metadata", {})
-          results = data.get("Results")
+          fullsev_path = f"trivy-fullsev-{cid}.json"
+          with open(fullsev_path) as fsf:
+              fullsev_data = json.load(fsf)
 
-          # Validate structural integrity: require SchemaVersion==2, non-empty ArtifactName
-          if schema_ver != 2:
-              print(f"::error::Trivy report for {cid} has unexpected SchemaVersion={schema_ver} (expected 2).")
-              sys.exit(1)
-          if not artifact_name:
-              print(f"::error::Trivy report for {cid} has empty ArtifactName — cannot verify image identity.")
-              sys.exit(1)
-          # Verify ArtifactName contains the expected digest from candidate ref
+          # --- Fail-closed Trivy report validation (P2 fix) ---
           expected_digest = cref.split("@")[-1] if "@" in cref else ""
-          if expected_digest and expected_digest not in artifact_name:
-              print(f"::error::Trivy ArtifactName '{artifact_name}' does not match expected digest '{expected_digest}'.")
-              sys.exit(1)
-          # When Results is missing/empty but metadata and schema are valid, treat as clean (no vulns found)
-          if results is None or (isinstance(results, list) and len(results) == 0):
-              if not metadata:
-                  print(f"::error::Trivy report for {cid} has no Results AND no Metadata — degenerate report.")
-                  sys.exit(1)
-              print(f"[*] Trivy report for {cid} has valid schema and metadata but empty Results — treating as clean.")
-              results = []
 
-          scan_success = True  # Derived from metadata validation above
+          def validate_trivy_report(report_data, scan_label):
+              if not isinstance(report_data, dict):
+                  print(f"::error::Trivy {scan_label} report for {cid} is not a valid JSON object.")
+                  sys.exit(1)
+
+              schema_ver = report_data.get("SchemaVersion")
+              artifact_name = report_data.get("ArtifactName", "")
+              metadata = report_data.get("Metadata")
+              raw_results = report_data.get("Results")
+
+              # Require SchemaVersion==2
+              if schema_ver != 2:
+                  print(f"::error::Trivy {scan_label} report for {cid} has unexpected SchemaVersion={schema_ver} (expected 2).")
+                  sys.exit(1)
+
+              # Require non-empty ArtifactName matching expected digest
+              if not artifact_name:
+                  print(f"::error::Trivy {scan_label} report for {cid} has empty ArtifactName — cannot verify image identity.")
+                  sys.exit(1)
+              if expected_digest and expected_digest not in artifact_name:
+                  print(f"::error::Trivy {scan_label} ArtifactName '{artifact_name}' does not match expected digest '{expected_digest}'.")
+                  sys.exit(1)
+
+              # Require non-empty Metadata with valid OS family
+              if not isinstance(metadata, dict) or not metadata:
+                  print(f"::error::Trivy {scan_label} report for {cid} has missing or empty Metadata.")
+                  sys.exit(1)
+              os_info = metadata.get("OS")
+              if not isinstance(os_info, dict) or not os_info.get("Family"):
+                  print(f"::error::Trivy {scan_label} report for {cid} has missing or invalid Metadata.OS.")
+                  sys.exit(1)
+
+              # Gracefully handle null (None) Results without TypeError
+              if raw_results is None:
+                  res_list = []
+              elif isinstance(raw_results, list):
+                  res_list = raw_results
+              else:
+                  print(f"::error::Trivy {scan_label} report for {cid} has unexpected Results type: {type(raw_results)}.")
+                  sys.exit(1)
+
+              return res_list, metadata
+
+          # Validate both CRITICAL/HIGH and full-severity reports
+          results, primary_meta = validate_trivy_report(data, "primary (CRITICAL/HIGH)")
+          fullsev_results, fullsev_meta = validate_trivy_report(fullsev_data, "full-severity")
+
+          # Verify OS metadata consistency across both scans to prevent degenerate scan bypass
+          if primary_meta.get("OS") != fullsev_meta.get("OS"):
+              print(f"::error::OS metadata mismatch between primary and full-severity scans for {cid}: {primary_meta.get('OS')} vs {fullsev_meta.get('OS')}")
+              sys.exit(1)
+
+          scan_success = True  # Derived from strict validation of both reports and metadata integrity
 
           critical_findings = []
           high_findings = []
@@ -369,13 +404,7 @@ jobs:
           crit_count = len(critical_findings)
           high_count = len(high_findings)
 
-          # --- Target CVE full-severity lookup (P2 fix) ---
-          # Use the dedicated full-severity scan to check for CVE-2026-111497 at ALL
-          # severity levels, eliminating false negatives from CRITICAL/HIGH-only scans.
-          fullsev_path = f"trivy-fullsev-{cid}.json"
-          with open(fullsev_path) as fsf:
-              fullsev_data = json.load(fsf)
-          fullsev_results = fullsev_data.get("Results", [])
+          # --- Target CVE full-severity lookup (validated against fullsev scan) ---
           for r in fullsev_results:
               for v in (r.get("Vulnerabilities") or []):
                   if v.get("VulnerabilityID") == target_cve_id:
@@ -390,7 +419,7 @@ jobs:
           if target_cve_details:
               cve_status = "DETECTED"
           else:
-              # Full-severity scan confirmed CVE not present at any severity level
+              # Full-severity scan strictly validated and confirmed CVE not present at any severity level
               cve_status = "CLEAN"
 
           # Explicit Verdict Separation:
@@ -456,9 +485,23 @@ jobs:
       - name: Consolidate Verdicts and Generate Comparative Matrix
         env:
           PLAN_TARGET: ${{ needs.plan.outputs.target }}
+          EXPECTED_CANDIDATE_COUNT: ${{ needs.plan.outputs.candidate_count }}
+          SCAN_JOB_RESULT: ${{ needs.trivy-image-scan.result }}
         run: |
           python3 - <<'EOF'
           import json, glob, os, sys
+
+          # --- Assert matrix scan execution succeeded (P3 fix) ---
+          scan_job_result = os.environ.get("SCAN_JOB_RESULT", "")
+          if scan_job_result != "success":
+              print(f"::error::Matrix scan job status is '{scan_job_result}' (expected 'success'). One or more matrix legs failed.")
+              sys.exit(1)
+
+          expected_count_str = os.environ.get("EXPECTED_CANDIDATE_COUNT", "").strip()
+          if not expected_count_str:
+              print("::error::Missing EXPECTED_CANDIDATE_COUNT output from plan.")
+              sys.exit(1)
+          expected_count = int(expected_count_str)
 
           verdicts = []
           verdict_files = sorted(glob.glob("artifacts/**/verdict-*.json", recursive=True))
@@ -471,7 +514,11 @@ jobs:
               with open(vf) as f:
                   verdicts.append(json.load(f))
 
-          print(f"Consolidating {len(verdicts)} candidate verdicts.")
+          print(f"Consolidating {len(verdicts)} candidate verdicts (expected: {expected_count}).")
+
+          if len(verdicts) != expected_count:
+              print(f"::error::Verdict count mismatch: planned {expected_count} candidate scan(s), but collected {len(verdicts)} verdict(s).")
+              sys.exit(1)
 
           # Create consolidated output directory
           os.makedirs("consolidated-evidence", exist_ok=True)
@@ -480,6 +527,7 @@ jobs:
           consolidated_record = {
               "target_selection": plan_target,
               "candidates_assessed": len(verdicts),
+              "expected_candidates": expected_count,
               "assessment_scope": "RedLoop Gate 4 Remediation",
               "verdicts": verdicts
           }
@@ -521,7 +569,7 @@ jobs:
               failed_ids = ", ".join(v["candidate_id"] for v in scan_failures)
               print(f"::error::Scan execution failed for: {failed_ids}")
               sys.exit(1)
-          print(f"[+] All {len(verdicts)} candidate scans executed successfully.")
+          print(f"[+] All {len(verdicts)} candidate scans executed successfully and matched planned candidate count ({expected_count}).")
           EOF
 
       - name: Archive Consolidated Assessment Evidence
