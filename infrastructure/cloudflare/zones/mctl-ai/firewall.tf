@@ -56,6 +56,17 @@ resource "cloudflare_ruleset" "firewall_custom" {
       expression  = module.spoofed_crawlers.expression
       ref         = "block_spoofed_crawlers"
     },
+    # RedLoop Stage 3 emergency kill-switch / security drill rule (#2388).
+    # Scoped strictly to staging-redloop.mctl.ai to allow immediate edge-level
+    # isolation without affecting any production hostname in this zone.
+    # Disabled by default; toggled only during authorized drill or incident.
+    {
+      action      = "block"
+      description = "staging-redloop: emergency kill switch / drill block"
+      enabled     = false
+      expression  = "(http.host eq \"staging-redloop.mctl.ai\")"
+      ref         = "block_staging_redloop_emergency"
+    },
   ]
   zone_id = local.zone_id
 }
