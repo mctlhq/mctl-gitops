@@ -17,6 +17,7 @@ name: RedLoop Image Security Assessment
 #
 # Evidence Retention:
 # - SARIF and JSON vulnerability reports are retained as workflow artifacts for 90 days.
+# - NOTE: In a public repository, workflow artifacts are downloadable by anyone with read access to the repository.
 # - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
 
 on:
@@ -156,35 +157,46 @@ jobs:
           target_cve_details = []
           target_cve_id = "CVE-2026-111497"
 
-          for r in data.get("Results", []):
-              for v in r.get("Vulnerabilities", []):
-                  sev = v.get("Severity")
-                  vid = v.get("VulnerabilityID")
-                  pkg = v.get("PkgName")
-                  installed_ver = v.get("InstalledVersion", "unknown")
-                  fixed_ver = v.get("FixedVersion", "N/A")
-                  item = {
-                      "vid": vid,
-                      "package": pkg,
-                      "installed": installed_ver,
-                      "fixed": fixed_ver,
-                      "severity": sev
-                  }
-                  if sev == "CRITICAL":
-                      critical_findings.append(item)
-                  elif sev == "HIGH":
-                      high_findings.append(item)
-                  if vid == target_cve_id:
-                      target_cve_details.append(item)
+          # Validate that Trivy report is well-formed and non-degenerate
+          results = data.get("Results")
+          has_valid_results = isinstance(results, list) and len(results) > 0 and bool(data.get("ArtifactName") or data.get("SchemaVersion"))
 
-          crit_count = len(critical_findings)
-          high_count = len(high_findings)
-          cve_status = "DETECTED" if target_cve_details else "CLEAN"
-
-          if crit_count == 0 and cve_status == "CLEAN":
-              posture = "ACCEPTABLE_FOR_STAGE3"
+          if not has_valid_results:
+              print("::error::Trivy report is degenerate, missing 'Results' entries, or lacking schema metadata.")
+              cve_status = "UNKNOWN"
+              crit_count = "N/A"
+              high_count = "N/A"
+              posture = "UNACCEPTABLE_DEGENERATE_REPORT"
           else:
-              posture = "UNACCEPTABLE_FOR_STAGE3"
+              for r in results:
+                  for v in (r.get("Vulnerabilities") or []):
+                      sev = v.get("Severity")
+                      vid = v.get("VulnerabilityID")
+                      pkg = v.get("PkgName")
+                      installed_ver = v.get("InstalledVersion", "unknown")
+                      fixed_ver = v.get("FixedVersion", "N/A")
+                      item = {
+                          "vid": vid,
+                          "package": pkg,
+                          "installed": installed_ver,
+                          "fixed": fixed_ver,
+                          "severity": sev
+                      }
+                      if sev == "CRITICAL":
+                          critical_findings.append(item)
+                      elif sev == "HIGH":
+                          high_findings.append(item)
+                      if vid == target_cve_id:
+                          target_cve_details.append(item)
+
+              crit_count = len(critical_findings)
+              high_count = len(high_findings)
+              cve_status = "DETECTED" if target_cve_details else "CLEAN"
+
+              if crit_count == 0 and cve_status == "CLEAN":
+                  posture = "ACCEPTABLE_FOR_STAGE3"
+              else:
+                  posture = "UNACCEPTABLE_FOR_STAGE3"
 
           print("--- Vulnerability Assessment Results ---")
           print("Target Image:", image_ref)
@@ -237,7 +249,7 @@ jobs:
           EOF
 
       - name: Archive Assessment Evidence Artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.4.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: redloop-image-scan-evidence
           path: |
