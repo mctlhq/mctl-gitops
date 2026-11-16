@@ -40,7 +40,16 @@ version_holds:
     issue: mctlhq/mctl-gitops#2528
     file: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
     repository: ghcr.io/mctlhq/mctl-api
-    # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
+    # Standing policy, not a one-off incident hold: every mctl-api version
+    # reaches production only on an owner GO for that exact version. It is
+    # enforced here because gitops-bump and release-deploy write the tag
+    # without a PR, so this check is the only one on that path. It was set at
+    # 4.155.0 (mctlhq/mctl-gitops#2528), which carried defaults the owner had
+    # not approved (mctlhq/mctl-api#934). That reason has been resolved, but
+    # the hold stays. Write the allow record when the GO is given, before
+    # merging the release PR. Today the record is agent-written text, not
+    # proof of a human decision; mctlhq/mctl-api#1022 replaces it with a
+    # fresh, MFA-backed decision.
     held_from: "4.155.0"
     # Record shape, added in a reviewed PR once the owner grants the release:
     #   - version: "4.155.0"
