@@ -1006,6 +1006,16 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_check_image_user.py
 
+      - name: Unit-test the post-sync health gate in deploy-service
+        # deploy-service used to end green once its commit was pushed, even
+        # when the new version crashed on start (gitops#2653). This runs
+        # health-gate.sh against stubbed Argo CD, pods, registry and HTTP for
+        # each failure shape, and checks deploy-service runs it after the
+        # commit for every action.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_health_gate.py
+
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
         # that is already over: the expression stays true for the whole window,
