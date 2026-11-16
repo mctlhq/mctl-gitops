@@ -25,9 +25,12 @@ name: RedLoop Image Security Assessment
 # - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
 #
 # Governance & Verdict Separation:
-# - SCAN_EXECUTION_SUCCESS: Trivy completed scan and emitted non-empty, valid reports.
-# - SECURITY_POSTURE_ACCEPTABLE: 0 CRITICAL findings AND target CVE (CVE-2026-111497) is clean.
+# - SCAN_EXECUTION_SUCCESS: Trivy completed scan with valid SchemaVersion==2, non-empty ArtifactName matching digest.
+# - SECURITY_POSTURE_ACCEPTABLE: 0 CRITICAL findings AND target CVE (CVE-2026-111497) CLEAN via full-severity scan.
 # - GATE4_APPROVED: strictly false in automated workflows. Requires manual Operator Review Gate signoff.
+#
+# Target CVE verification uses a dedicated full-severity (UNKNOWN–CRITICAL) scan to prevent
+# false negatives from distro-specific severity rating differences.
 
 on:
   workflow_dispatch:
@@ -171,6 +174,7 @@ jobs:
                   print(f"::error::Explicit image_ref '{input_image_ref}' failed validation: {cand}")
                   sys.exit(1)
               selected_candidates = [cand]
+              input_target = cand["id"]  # Override target to matched candidate id
               print(f"[+] Explicit image_ref validated: {cand['id']} ({cand['ref']})")
           elif input_target == "all":
               selected_candidates = list(CANDIDATE_INVENTORY.values())
@@ -247,11 +251,27 @@ jobs:
           exit-code: "0"
           version: v0.69.3
 
+      - name: Target CVE Full-Severity Verification Scan
+        # Dedicated scan at ALL severity levels to ensure CVE-2026-111497 is not
+        # missed due to distro-specific severity rating below CRITICAL/HIGH.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: "linux/amd64"
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.candidate.ref }}
+          format: json
+          output: trivy-fullsev-${{ matrix.candidate.id }}.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
+          version: v0.69.3
+
       - name: Verify Scan Evidence Integrity and Compute Checksums
         run: |
           set -euo pipefail
           sarif_file="trivy-results-${{ matrix.candidate.id }}.sarif"
           json_file="trivy-results-${{ matrix.candidate.id }}.json"
+          fullsev_file="trivy-fullsev-${{ matrix.candidate.id }}.json"
           chk_file="checksums-${{ matrix.candidate.id }}.txt"
 
           if [[ ! -s "$sarif_file" ]]; then
@@ -262,8 +282,12 @@ jobs:
             echo "::error::JSON report is missing or empty for ${{ matrix.candidate.id }}"
             exit 1
           fi
+          if [[ ! -s "$fullsev_file" ]]; then
+            echo "::error::Full-severity report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
 
-          sha256sum "$sarif_file" "$json_file" > "$chk_file"
+          sha256sum "$sarif_file" "$json_file" "$fullsev_file" > "$chk_file"
           echo "Checksums generated:"
           cat "$chk_file"
 
@@ -290,12 +314,33 @@ jobs:
           with open(json_path) as f:
               data = json.load(f)
 
+          # --- Fail-closed degenerate report validation (P2 fix) ---
+          schema_ver = data.get("SchemaVersion")
+          artifact_name = data.get("ArtifactName", "")
+          metadata = data.get("Metadata", {})
           results = data.get("Results")
-          has_valid_results = isinstance(results, list) and (len(results) > 0 or bool(data.get("SchemaVersion")))
 
-          if not has_valid_results:
-              print(f"::error::Trivy report for {cid} is degenerate or missing valid schema.")
+          # Validate structural integrity: require SchemaVersion==2, non-empty ArtifactName
+          if schema_ver != 2:
+              print(f"::error::Trivy report for {cid} has unexpected SchemaVersion={schema_ver} (expected 2).")
               sys.exit(1)
+          if not artifact_name:
+              print(f"::error::Trivy report for {cid} has empty ArtifactName — cannot verify image identity.")
+              sys.exit(1)
+          # Verify ArtifactName contains the expected digest from candidate ref
+          expected_digest = cref.split("@")[-1] if "@" in cref else ""
+          if expected_digest and expected_digest not in artifact_name:
+              print(f"::error::Trivy ArtifactName '{artifact_name}' does not match expected digest '{expected_digest}'.")
+              sys.exit(1)
+          # When Results is missing/empty but metadata and schema are valid, treat as clean (no vulns found)
+          if results is None or (isinstance(results, list) and len(results) == 0):
+              if not metadata:
+                  print(f"::error::Trivy report for {cid} has no Results AND no Metadata — degenerate report.")
+                  sys.exit(1)
+              print(f"[*] Trivy report for {cid} has valid schema and metadata but empty Results — treating as clean.")
+              results = []
+
+          scan_success = True  # Derived from metadata validation above
 
           critical_findings = []
           high_findings = []
@@ -320,15 +365,35 @@ jobs:
                       critical_findings.append(item)
                   elif sev == "HIGH":
                       high_findings.append(item)
-                  if vid == target_cve_id:
-                      target_cve_details.append(item)
 
           crit_count = len(critical_findings)
           high_count = len(high_findings)
-          cve_status = "DETECTED" if target_cve_details else "CLEAN"
+
+          # --- Target CVE full-severity lookup (P2 fix) ---
+          # Use the dedicated full-severity scan to check for CVE-2026-111497 at ALL
+          # severity levels, eliminating false negatives from CRITICAL/HIGH-only scans.
+          fullsev_path = f"trivy-fullsev-{cid}.json"
+          with open(fullsev_path) as fsf:
+              fullsev_data = json.load(fsf)
+          fullsev_results = fullsev_data.get("Results", [])
+          for r in fullsev_results:
+              for v in (r.get("Vulnerabilities") or []):
+                  if v.get("VulnerabilityID") == target_cve_id:
+                      target_cve_details.append({
+                          "vid": v.get("VulnerabilityID"),
+                          "package": v.get("PkgName"),
+                          "installed": v.get("InstalledVersion", "unknown"),
+                          "fixed": v.get("FixedVersion", "N/A"),
+                          "severity": v.get("Severity")
+                      })
+
+          if target_cve_details:
+              cve_status = "DETECTED"
+          else:
+              # Full-severity scan confirmed CVE not present at any severity level
+              cve_status = "CLEAN"
 
           # Explicit Verdict Separation:
-          scan_success = True
           posture_acceptable = (crit_count == 0 and cve_status == "CLEAN")
           # Automated scans NEVER set gate4_approved = True. Operator signoff strictly required.
           gate4_approved = False
@@ -370,6 +435,7 @@ jobs:
           path: |
             trivy-results-${{ matrix.candidate.id }}.sarif
             trivy-results-${{ matrix.candidate.id }}.json
+            trivy-fullsev-${{ matrix.candidate.id }}.json
             checksums-${{ matrix.candidate.id }}.txt
             verdict-${{ matrix.candidate.id }}.json
           if-no-files-found: error
@@ -377,6 +443,7 @@ jobs:
 
   consolidated-summary:
     name: Aggregate Assessment Findings
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     needs: [plan, trivy-image-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -387,6 +454,8 @@ jobs:
           path: artifacts
 
       - name: Consolidate Verdicts and Generate Comparative Matrix
+        env:
+          PLAN_TARGET: ${{ needs.plan.outputs.target }}
         run: |
           python3 - <<'EOF'
           import json, glob, os, sys
@@ -407,8 +476,9 @@ jobs:
           # Create consolidated output directory
           os.makedirs("consolidated-evidence", exist_ok=True)
 
+          plan_target = os.environ.get("PLAN_TARGET", "unknown")
           consolidated_record = {
-              "target_selection": "${{ needs.plan.outputs.target }}",
+              "target_selection": plan_target,
               "candidates_assessed": len(verdicts),
               "assessment_scope": "RedLoop Gate 4 Remediation",
               "verdicts": verdicts
@@ -435,15 +505,23 @@ jobs:
                   sf.write("| Candidate | Distro | CVE-2026-111497 | CRIT | HIGH | Chart Compatible | Posture Acceptable | Gate 4 Approved |\n")
                   sf.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
                   for v in verdicts:
-                      cve_cell = f"**`{v['target_cve_status']}`**" if v['target_cve_status'] == "DETECTED" else "`CLEAN`"
+                      cve_cell = f"**`{v['target_cve_status']}`**" if v['target_cve_status'] == "DETECTED" else f"`{v['target_cve_status']}`"
                       posture_cell = "`ACCEPTABLE`" if v['security_posture_acceptable'] else "`UNACCEPTABLE`"
                       compat_cell = "`YES`" if v['chart_compatible'] else "`NO (Refactor Required)`"
-                      gate4_cell = "`STRICT NO-GO`"
+                      gate4_cell = "`APPROVED`" if v.get('gate4_approved') else "`STRICT NO-GO`"
                       sf.write(f"| **`{v['candidate_id']}`** ({v['name']}) | {v['distro']} | {cve_cell} | `{v['critical_count']}` | `{v['high_count']}` | {compat_cell} | {posture_cell} | {gate4_cell} |\n")
                   sf.write("\n### Governance Signoff Reminder\n")
                   sf.write("- Automated scans evaluate vulnerability posture and chart compatibility independently.\n")
                   sf.write("- **Gate 4 Approval (`GATE4_APPROVED`) is strictly reserved for manual Operator Review Gate signoff.**\n")
                   sf.write("- `ingress.enabled` remains `false`. Zero workloads mutated.\n")
+
+          # --- Assert: fail-closed validation of consolidated results ---
+          scan_failures = [v for v in verdicts if not v.get("scan_execution_success")]
+          if scan_failures:
+              failed_ids = ", ".join(v["candidate_id"] for v in scan_failures)
+              print(f"::error::Scan execution failed for: {failed_ids}")
+              sys.exit(1)
+          print(f"[+] All {len(verdicts)} candidate scans executed successfully.")
           EOF
 
       - name: Archive Consolidated Assessment Evidence
