@@ -657,7 +657,9 @@ jobs:
           python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
           python3 tests/test_gitops_tenant_template_write_set.py
       - name: Unit-test gitops-bump inputs and its edit check
-        run: python3 tests/test_gitops_bump_inputs.py
+        run: |
+          python3 tests/test_gitops_bump_inputs.py
+          python3 tests/test_gitops_bump_digest_registry.py
       - name: Preview deploys the image its build pushed, by digest
         run: |
           python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
