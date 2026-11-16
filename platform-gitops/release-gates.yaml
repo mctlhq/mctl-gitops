@@ -224,6 +224,15 @@ version_holds:
         grant: mctlhq/mctl-gitops#2689
         approved_by: mashkovd
         expires: 2026-11-29
+      # Eleventh grant (owner GO in chat, 2026-11-16): 4.161.2 is 4.161.1 plus
+      # mctlhq/mctl-api#1070 (prevent double submit on consent forms and sync
+      # deployplan compiler with upstream wft-preview-deploy image.digest).
+      # Covers only the 4.161.2 tag on the merge of mctlhq/mctl-api#1071.
+      # Provenance: chat GO, merge by an agy session.
+      - version: "4.161.2"
+        grant: mctlhq/mctl-gitops#2699
+        approved_by: mashkovd
+        expires: 2026-11-30
 
 gates:
   - name: mctl-agents-workers
