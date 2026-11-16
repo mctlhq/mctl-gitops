@@ -10,7 +10,8 @@
 # 2. Comprehensive production controls: continuous checks on 6 production endpoints with latency & status limits.
 # 3. Fail-closed rollback: traps EXIT, ERR, INT, TERM with bounded retries and API read-back verification.
 # 4. Strict activation guard: rollback never modifies rule if activation was not attempted (preserves active incidents).
-# 5. Independent recovery verification: produces machine-readable summary and audit correlation.
+# 5. Fail-safe state tracking: activation state transitions to "activating" BEFORE dispatch, guaranteeing rollback on network drop.
+# 6. Independent recovery verification: produces machine-readable summary and audit correlation.
 
 set -euo pipefail
 
@@ -33,7 +34,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 rule_state = {
     "enabled": False,
     "patch_count": 0,
-    "simulate_null_result": False,
+    "fail_activation_patch": False,
+    "trigger_null_on_rollback": False,
+    "null_on_next_get": False,
     "probe_fail_count": 0
 }
 
@@ -43,11 +46,12 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if "/ruleset" in self.path:
-            if rule_state["simulate_null_result"]:
+            if rule_state["null_on_next_get"]:
+                rule_state["null_on_next_get"] = False
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "errors": [{"message": "backend error"}], "result": None}).encode())
+                self.wfile.write(json.dumps({"success": False, "errors": [{"message": "transient backend error"}], "result": None}).encode())
                 return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -102,12 +106,16 @@ class MockHandler(BaseHTTPRequestHandler):
             rule_state["enabled"] = False
             self.send_response(200)
             self.end_headers()
-        elif self.path == "/control/simulate_null_result":
-            rule_state["simulate_null_result"] = True
+        elif self.path == "/control/set_fail_activation":
+            rule_state["fail_activation_patch"] = True
             self.send_response(200)
             self.end_headers()
-        elif self.path == "/control/simulate_normal_result":
-            rule_state["simulate_null_result"] = False
+        elif self.path == "/control/clear_fail_activation":
+            rule_state["fail_activation_patch"] = False
+            self.send_response(200)
+            self.end_headers()
+        elif self.path == "/control/arm_null_readback_on_rollback":
+            rule_state["trigger_null_on_rollback"] = True
             self.send_response(200)
             self.end_headers()
         elif self.path == "/control/get_patch_count":
@@ -125,7 +133,20 @@ class MockHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
         payload = json.loads(body.decode()) if body else {}
 
+        if payload.get("enabled", False) and rule_state["fail_activation_patch"]:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "errors": [{"message": "simulated activation failure"}]}).encode())
+            return
+
         rule_state["enabled"] = payload.get("enabled", False)
+
+        # Trigger null read-back on the subsequent GET if armed
+        if not rule_state["enabled"] and rule_state["trigger_null_on_rollback"]:
+            rule_state["null_on_next_get"] = True
+            rule_state["trigger_null_on_rollback"] = False
+
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -177,10 +198,7 @@ PYEOF
   REDLOOP_DRILL_SELF_TEST="" \
   "$0"
 
-  echo "[+] Happy path test completed successfully."
-
   echo "[+] Test Case 2: Pre-flight abort when rule is already enabled (active incident guard)"
-  # Set mock rule to enabled=true
   curl -s "http://127.0.0.1:$mock_port/control/set_enabled_true" > /dev/null
   init_patches=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.patch_count')
 
@@ -218,9 +236,9 @@ PYEOF
   fi
   echo "[+] Test Case 2 PASSED: Rule remained untouched (enabled=true) and zero PATCHes were sent."
 
-  echo "[+] Test Case 3: Rollback resilience when read-back returns result:null"
+  echo "[+] Test Case 3: Activation PATCH failure triggers in-script rollback to inert"
   curl -s "http://127.0.0.1:$mock_port/control/set_enabled_false" > /dev/null
-  curl -s "http://127.0.0.1:$mock_port/control/simulate_null_result" > /dev/null
+  curl -s "http://127.0.0.1:$mock_port/control/set_fail_activation" > /dev/null
 
   set +e
   CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
@@ -238,16 +256,61 @@ PYEOF
   test3_rc=$?
   set -e
 
-  # Test 3 should fail cleanly (exit 1) on preflight without jq throwing a crash
+  curl -s "http://127.0.0.1:$mock_port/control/clear_fail_activation" > /dev/null
+
   if [ "$test3_rc" -eq 0 ]; then
-    echo "[-] FAIL: Test 3 expected failure when API returned 500 null result, got 0"
+    echo "[-] FAIL: Test 3 expected failure when activation PATCH failed, got 0"
     exit 1
   fi
-  if grep -q "Cannot check whether null has a string key" "$tmp_dir/test3.log"; then
-    echo "[-] FAIL: Test 3 caught jq null unhandled exception!"
+  post_enabled=$(curl -s "http://127.0.0.1:$mock_port/control/get_patch_count" | jq -r '.enabled')
+  if [ "$post_enabled" != "false" ]; then
+    echo "[-] FAIL: Test 3 left rule enabled after activation PATCH failure!"
     exit 1
   fi
-  echo "[+] Test Case 3 PASSED: Null result handled gracefully without jq exception."
+  if ! grep -q "EMERGENCY / RECOVERY ROLLBACK TRIGGERED" "$tmp_dir/test3.log"; then
+    echo "[-] FAIL: Test 3 did not trigger rollback on activation failure!"
+    exit 1
+  fi
+  echo "[+] Test Case 3 PASSED: In-script rollback triggered and verified rule inert."
+
+  echo "[+] Test Case 4: Rollback resilience when read-back returns result:null on first retry"
+  curl -s "http://127.0.0.1:$mock_port/control/set_enabled_false" > /dev/null
+  curl -s "http://127.0.0.1:$mock_port/control/arm_null_readback_on_rollback" > /dev/null
+
+  set +e
+  CF_API_BASE_OVERRIDE="http://127.0.0.1:$mock_port/rulesets" \
+  MOCK_STAGING_URL="http://127.0.0.1:$mock_port/staging" \
+  MOCK_PROD_MCTL="http://127.0.0.1:$mock_port/prod/mctl" \
+  MOCK_PROD_APP="http://127.0.0.1:$mock_port/prod/app" \
+  MOCK_PROD_API_HEALTH="http://127.0.0.1:$mock_port/prod/api/healthz" \
+  MOCK_PROD_API_APEX="http://127.0.0.1:$mock_port/prod/api/apex" \
+  MOCK_PROD_OPS="http://127.0.0.1:$mock_port/prod/ops" \
+  MOCK_PROD_TG="http://127.0.0.1:$mock_port/prod/tg" \
+  CLOUDFLARE_API_TOKEN="mock-token" \
+  RUNNER_TEMP="$tmp_dir" \
+  MOCK_TRIGGER_ABORT_ON_403="1" \
+  REDLOOP_DRILL_SELF_TEST="" \
+  "$0" > "$tmp_dir/test4.log" 2>&1
+  test4_rc=$?
+  set -e
+
+  if [ "$test4_rc" -eq 0 ]; then
+    echo "[-] FAIL: Test 4 expected failure when drill was aborted, got 0"
+    exit 1
+  fi
+  if grep -q "Cannot check whether null has a string key" "$tmp_dir/test4.log"; then
+    echo "[-] FAIL: Test 4 caught jq null unhandled exception!"
+    exit 1
+  fi
+  if ! grep -q "Read-back verification failed: rule enabled status is 'unknown'" "$tmp_dir/test4.log"; then
+    echo "[-] FAIL: Test 4 did not log expected transient read-back failure!"
+    exit 1
+  fi
+  if ! grep -q "Rollback CONFIRMED: Cloudflare API read-back reports enabled=false." "$tmp_dir/test4.log"; then
+    echo "[-] FAIL: Test 4 rollback did not recover and confirm inert status!"
+    exit 1
+  fi
+  echo "[+] Test Case 4 PASSED: Transient null read-back handled gracefully without jq exception and recovered on next attempt."
 
   echo "=== All Self-Test Scenarios PASSED ==="
   exit 0
@@ -280,7 +343,7 @@ CURL_CONNECT_TIMEOUT_SECONDS="${CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 
 # State Tracking & Incident Guards
 ACTIVATION_ATTEMPTED=0
-CURRENT_STATE="inert" # inert -> active -> rolling_back
+CURRENT_STATE="initial" # initial -> activating -> active -> rolling_back -> inert
 ACTIVATION_MARKER_FILE="${RUNNER_TEMP:-/tmp}/redloop_waf_drill_activated"
 SUMMARY_FILE="${GITHUB_STEP_SUMMARY:-/tmp/redloop_waf_drill_summary.md}"
 TIMINGS_FILE="${TIMINGS_FILE:-/tmp/redloop_waf_drill_timings.json}"
@@ -303,6 +366,15 @@ log() {
 # ---------------------------------------------------------------------------
 rollback() {
   local exit_code=$?
+  local reason="${1:-Emergency trap trigger}"
+  if [ "$#" -ge 2 ]; then
+    exit_code="$2"
+  fi
+  # If exit_code is 0 but rollback was explicitly triggered, ensure non-zero exit code
+  if [ "$exit_code" -eq 0 ] && [ "$ACTIVATION_ATTEMPTED" -eq 1 ] && [ "$CURRENT_STATE" != "inert" ]; then
+    exit_code=1
+  fi
+
   # Disable traps during rollback to avoid recursion
   trap - EXIT INT TERM ERR
   set +e
@@ -319,7 +391,8 @@ rollback() {
   fi
 
   log "[!] ================================================================="
-  log "[!] EMERGENCY / RECOVERY ROLLBACK TRIGGERED (Exit code: $exit_code, State: $CURRENT_STATE)"
+  log "[!] EMERGENCY / RECOVERY ROLLBACK TRIGGERED"
+  log "[!] Reason: $reason (Exit code: $exit_code, State: $CURRENT_STATE)"
   log "[!] ================================================================="
 
   CURRENT_STATE="rolling_back"
@@ -377,7 +450,9 @@ rollback() {
     fi
 
     attempt=$((attempt + 1))
-    sleep "$((attempt * 2))"
+    if [ "$attempt" -le "$max_attempts" ]; then
+      sleep "$((attempt * 2))"
+    fi
   done
 
   if [ "$rollback_success" != "true" ]; then
@@ -521,20 +596,20 @@ log "=== Step 3: Activating WAF Rule d8b4ea76eabc420e99146cafd9596801 (T0) ==="
 T0_TS=$(iso_ts)
 T0_EPOCH=$(python3 -c "import time; print(time.time())")
 
-# Mark activation attempted IMMEDIATELY before sending the activation PATCH
+# Mark activation state IMMEDIATELY before sending the activation PATCH
 ACTIVATION_ATTEMPTED=1
+CURRENT_STATE="activating"
 touch "$ACTIVATION_MARKER_FILE"
 
 ACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
   -X PATCH "$API_URL" \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
-  -d "$ACTIVATE_PAYLOAD")
+  -d "$ACTIVATE_PAYLOAD" 2>&1 || true)
 
 ACT_SUCCESS=$(echo "$ACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$ACT_SUCCESS" != "true" ]; then
-  log "[-] Rule activation PATCH failed: $(echo "$ACT_RESP" | jq -c 'try .errors catch "error"')"
-  exit 1
+  rollback "Rule activation PATCH failed: $(echo "$ACT_RESP" | jq -c 'try .errors catch "error"')" 1
 fi
 
 CURRENT_STATE="active"
@@ -554,16 +629,12 @@ while true; do
   ELAPSED=$((NOW - OBS_START))
 
   if [ "$ELAPSED" -gt "$MAX_WAIT_SECONDS" ]; then
-    log "[-] TIMEOUT: Rule propagation exceeded ${MAX_WAIT_SECONDS}s without HTTP 403!"
-    rollback
-    exit 1
+    rollback "TIMEOUT: Rule propagation exceeded ${MAX_WAIT_SECONDS}s without HTTP 403" 1
   fi
 
   # Concurrently verify production stability
   if ! check_production_controls "drill-active"; then
-    log "[-] ALERT: Production degradation detected during activation! Aborting."
-    rollback
-    exit 1
+    rollback "ALERT: Production degradation detected during activation" 1
   fi
 
   # Probe staging
@@ -587,6 +658,11 @@ while true; do
     rm -f "$PROBE_TMP"
     log "[+] HTTP 403 BLOCKED DETECTED! T1 = $T1_TS"
     log "    cf-ray: $FIRST_403_RAY | server: $FIRST_403_SERVER"
+
+    # Self-test hook to verify rollback on abort
+    if [ "${MOCK_TRIGGER_ABORT_ON_403:-}" = "1" ]; then
+      rollback "Self-test simulated abort after 403" 1
+    fi
     break
   fi
   rm -f "$PROBE_TMP"
@@ -613,13 +689,11 @@ DEACT_RESP=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout "$CUR
   -X PATCH "$API_URL" \
   -K <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") \
   -H "Content-Type: application/json" \
-  -d "$DEACT_PAYLOAD")
+  -d "$DEACT_PAYLOAD" 2>&1 || true)
 
 DEACT_SUCCESS=$(echo "$DEACT_RESP" | jq -r 'try (.success // false) catch false' 2>/dev/null || echo "false")
 if [ "$DEACT_SUCCESS" != "true" ]; then
-  log "[-] Rule deactivation PATCH failed: $(echo "$DEACT_RESP" | jq -c 'try .errors catch "error"')"
-  rollback
-  exit 1
+  rollback "Rule deactivation PATCH failed: $(echo "$DEACT_RESP" | jq -c 'try .errors catch "error"')" 1
 fi
 log "[+] Rule deactivation PATCH succeeded. T2 = $T2_TS"
 
@@ -635,9 +709,7 @@ while true; do
   ELAPSED=$((NOW - REC_START))
 
   if [ "$ELAPSED" -gt "$MAX_WAIT_SECONDS" ]; then
-    log "[-] TIMEOUT: Recovery propagation exceeded ${MAX_WAIT_SECONDS}s without HTTP 404!"
-    rollback
-    exit 1
+    rollback "TIMEOUT: Recovery propagation exceeded ${MAX_WAIT_SECONDS}s without HTTP 404" 1
   fi
 
   PROBE_TMP=$(mktemp)
@@ -675,9 +747,7 @@ FINAL_RULE_INFO=$(curl -sS --max-time "$CURL_TIMEOUT_SECONDS" --connect-timeout 
 FINAL_ENABLED=$(echo "$FINAL_RULE_INFO" | jq -r 'try (.result | if (type == "object" and has("enabled")) then (.enabled | tostring) else "unknown" end) catch "unknown"' 2>/dev/null || echo "unknown")
 
 if [ "$FINAL_ENABLED" != "false" ]; then
-  log "[-] CRITICAL: Post-drill rule state is enabled=${FINAL_ENABLED}! Expected false."
-  rollback
-  exit 1
+  rollback "CRITICAL: Post-drill rule state is enabled=${FINAL_ENABLED}! Expected false." 1
 fi
 log "[+] Cloudflare API read-back confirmed rule is INERT (enabled=false)."
 
