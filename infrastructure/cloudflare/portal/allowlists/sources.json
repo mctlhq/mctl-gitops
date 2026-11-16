@@ -12,8 +12,8 @@
       "repo": "mctlhq/mctl-api",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "bc10d9f0c7c9c25d6cc07b2d2dddab0ebd73f09e",
-      "vendored_at": "2026-11-14T13:36:34Z"
+      "sha": "49410a96b3f6f018f47ce7fcaaef0ed49d77a314",
+      "vendored_at": "2026-11-16T13:03:14Z"
     },
     "coolify": {
       "repo": "mctlhq/mctl-coolify-mcp",
