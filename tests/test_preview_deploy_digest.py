@@ -238,8 +238,25 @@ MUTANTS_DEPLOY = [
 ]
 
 
+def pipeline_output_ok(doc):
+    """The workflow-level image_digest output mctl-api reads (mctl-api#1047)."""
+    tpl = {x["name"]: x for x in doc["spec"]["templates"]}[doc["spec"]["entrypoint"]]
+    params = {p["name"]: p for p in tpl.get("outputs", {}).get("parameters", [])}
+    src = params.get("image_digest", {}).get("valueFrom", {}).get("parameter")
+    return src == "{{tasks.build-image.outputs.parameters.digest}}"
+
+
 def main():
     dag = dag_of(DOC)
+    check("the entrypoint exposes the build's digest as the workflow output image_digest", pipeline_output_ok(DOC))
+    for mutate in (
+        lambda t: t.pop("outputs"),
+        lambda t: t["outputs"]["parameters"][0].update(name="digest"),
+        lambda t: t["outputs"]["parameters"][0]["valueFrom"].update(parameter="{{tasks.deploy-preview.outputs.parameters.digest}}"),
+    ):
+        doc = yaml.safe_load(CWFT.read_text())
+        mutate({x["name"]: x for x in doc["spec"]["templates"]}["preview-pipeline"])
+        check("the output check rejects a mutated output", not pipeline_output_ok(doc))
     for name in cases(TRIGGER, DEPLOY, dag):
         check(name, False)
     if not failures:
