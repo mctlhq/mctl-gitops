@@ -108,12 +108,15 @@ spec:
             # Rollback: set back to "shadow" (login decides again, the
             # principal path is still compared and counted).
             TENANT_AUTHZ_MODE: "principal"
-            # Platform admins by principal (mctlhq/mctl-api#377) come from
+            # Platform admins by principal (mctlhq/mctl-api#377) come only from
             # mctl-api-secrets (Vault platform/mctl-api/authz, property
-            # admin-principals) through envFromSecret: this repository is
-            # public, so principal ids are not set here. Decides admin in
-            # `principal` mode; ADMIN_USERS above only matters on a rollback
-            # to shadow/legacy. A malformed id refuses startup.
+            # admin-principals) through envFromSecret: this repository is public,
+            # so principal ids are not set here. null, not a deleted line: the
+            # chart defaults ADMIN_PRINCIPALS to "", and an explicit empty env
+            # entry wins over envFrom (that crash-looped the rollout of #2696).
+            # null removes the key from the merged values, so no env entry is
+            # rendered. A malformed or missing id refuses startup.
+            ADMIN_PRINCIPALS: null
             # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
             # `false` closes the free-text approver relay: a service call to
             # mctl-agents-approve naming a different approver gets 400
