@@ -40,8 +40,13 @@
 #                 autoscaling is off), so nothing runs that could be checked.
 #                 It is not a health claim, and says so.
 #   health_url    https://<host> for a service with a public host, else ""
-#   argo_revision the gitops revision Argo CD reported Synced and Healthy
-#   image_digest  the digest the pods were verified to run
+#   argo_revision the gitops revision Argo CD last reported, once it contains
+#                 the commit; on healthy it is the Synced and Healthy one, on
+#                 a red verdict the one it was stuck at ("" if it never got
+#                 that far)
+#   image_digest  the digest the deploy resolves to, once known; on healthy
+#                 the pods were verified to run it, on a red verdict they
+#                 were not (the reason says why)
 #   reason        one line, why the gate ended where it did
 #
 # Exit 0 for healthy and idle. 1: unhealthy or unknown at the deadline. 2: bad
@@ -171,12 +176,15 @@ state=unknown
 expected=""
 resolve_expected() {
   [ -n "$expected" ] && return 0
-  if [ -n "$pinned" ]; then expected=$pinned; return 0; fi
+  if [ -n "$pinned" ]; then expected=$pinned; echo "$expected" > "${OUT}/image_digest"; return 0; fi
   if ! d=$($RESOLVE "${repo}:${tag}" 2> "$TMP/resolve.err"); then
     why="cannot resolve ${repo}:${tag} in its registry: $(tail -1 "$TMP/resolve.err")"; state=unknown; return 1
   fi
   valid_digest "$d" || { why="resolver gave a malformed digest for ${repo}:${tag}: ${d}"; state=unknown; return 1; }
   expected=$d
+  # Recorded as soon as it is known, so a red verdict still says which digest
+  # the deploy was meant to run (DeployRecord wants it on failed deploys).
+  echo "$expected" > "${OUT}/image_digest"
 }
 
 revision=""
@@ -201,6 +209,9 @@ check_argo() {
     fi
   done
   revision=$(echo "$revs" | head -1)
+  # Every source contains the commit: this is the revision Argo CD is at. Kept
+  # on a red verdict too (Degraded, OutOfSync), where it is the useful fact.
+  echo "$revision" > "${OUT}/argo_revision"
   [ "$sync" = Synced ] || { why="Application ${APP} is ${sync:-without a sync status} at ${revision}"; state=waiting; return 1; }
   [ "$health" = Healthy ] || { why="Application ${APP} is ${health:-without a health status} at ${revision}"; state=waiting; return 1; }
   return 0
