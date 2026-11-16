@@ -603,8 +603,13 @@ an execution fails, the failure page's `error` parameter shows the hook's
 URL. That URL is public anyway.
 
 The hook also answers `503` when it cannot read the gitops checkout it
-checks reserved logins against, or when a tenant member has no `userId`
-(mctl-api docs, "Reserved logins"). Either one stops every customer sign-up.
+checks reserved logins against (mctl-api docs, "Reserved logins"). That
+stops every customer sign-up. Releases before mctlhq/mctl-api#1075 also
+answer `503` when a tenant member has no `userId`, so
+`scripts/validate-tenant-member-keys.py` refuses such an entry until
+`PID_ONLY_ALLOWED` is flipped after that release. From then on a member may
+be listed by `principalId` alone, with `catalogKey: principal`; it reserves
+no login.
 
 **Kill switch.**
 1. As a platform admin in the console (Actions → Executions), delete the

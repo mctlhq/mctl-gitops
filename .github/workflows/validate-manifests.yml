@@ -351,8 +351,9 @@ jobs:
       # members[].principalId alone, so an entry without one works today and
       # silently locks its member out after the switch. Runs on main too:
       # wft-create-tenant pushes new tenants straight to main, and a creator
-      # submitted without a principal id must turn it red. --selftest first,
-      # same reason as the other detectors.
+      # submitted without a principal id must turn it red. It also gates
+      # entries without a userId (PID_ONLY_ALLOWED in the script).
+      # --selftest first, same reason as the other detectors.
       - name: Every tenant member carries a principalId
         run: |
           set -euo pipefail
