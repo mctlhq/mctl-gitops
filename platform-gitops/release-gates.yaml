@@ -230,7 +230,7 @@ version_holds:
       # Covers only the 4.161.2 tag on the merge of mctlhq/mctl-api#1071.
       # Provenance: chat GO, merge by an agy session.
       - version: "4.161.2"
-        grant: mctlhq/mctl-gitops#PENDING
+        grant: mctlhq/mctl-gitops#2699
         approved_by: mashkovd
         expires: 2026-11-30
 
