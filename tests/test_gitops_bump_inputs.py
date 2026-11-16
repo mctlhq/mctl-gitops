@@ -226,7 +226,7 @@ m = re.search(r"ALLOWED_PREFIXES=\((.*?)\)", VALIDATE, re.S)
 shell_prefixes = re.findall(r'"([^"]+)"', m.group(1))
 py_prefixes = re.findall(r'"([^"]+/)"', re.search(r"ALLOWED_PREFIXES = \((.*?)\)", BUMP, re.S).group(1))
 check("the two prefix lists match", shell_prefixes == py_prefixes, (shell_prefixes, py_prefixes))
-check("bump waits for validation", WF["jobs"]["bump"]["needs"] == "validate-inputs")
+check("bump waits for validation", "validate-inputs" in WF["jobs"]["bump"]["needs"])
 check("validation holds no permissions", WF["jobs"]["validate-inputs"]["permissions"] == {})
 check("validation has no environment or checkout",
       "environment" not in WF["jobs"]["validate-inputs"] and "uses" not in str(WF["jobs"]["validate-inputs"]["steps"]))

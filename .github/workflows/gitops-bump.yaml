@@ -94,13 +94,54 @@ jobs:
             check_path values_glob "$INPUT_VALUES_GLOB" '^[A-Za-z0-9._/*?-]+$'
           fi
 
+  # A digest that is not in the registry, or that the tag does not point at,
+  # is refused before any file is written (mctl-gitops#2652): pinned, it would
+  # either fail every pull or label one image with another's tag. "Could not
+  # read the registry" is a refusal too, never "no objection". Its own job so
+  # the bump job keeps holding no credential (tests/test_release_bump_pr_route.py);
+  # without a digest it does nothing and bump goes ahead as before.
+  check-digest:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR (read)
+        if: inputs.image_digest != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the image digest in the registry
+        if: inputs.image_digest != ''
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          refuse() { echo "::error::$1"; exit 1; }
+          # validate-inputs checked the shape; asserted again where it is used.
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || refuse "image_digest is not sha256:<64 hex>"
+          docker buildx imagetools inspect "${IMAGE_NAME}@${IMAGE_DIGEST}" >/dev/null \
+            || refuse "${IMAGE_NAME}@${IMAGE_DIGEST} does not resolve in the registry"
+          # A plain '{{.Manifest.Digest}}' template is ignored by buildx (it prints
+          # the pretty view), so the manifest is read as JSON.
+          tag_digest=$(docker buildx imagetools inspect "${IMAGE_NAME}:${NEW_TAG}" --format '{{json .Manifest}}' | jq -er .digest) \
+            || refuse "${IMAGE_NAME}:${NEW_TAG} does not resolve in the registry"
+          [[ "$tag_digest" == "$IMAGE_DIGEST" ]] \
+            || refuse "${IMAGE_NAME}:${NEW_TAG} points at ${tag_digest:-nothing}, not ${IMAGE_DIGEST}"
+          echo "${IMAGE_NAME}:${NEW_TAG} is ${IMAGE_DIGEST}"
+
   # The bump is prepared here and published by exactly one of two jobs below.
   # This job holds no environment and no write credential: it decides the route,
   # edits the values files and builds ONE commit, which it hands over as a patch.
   # The publishing jobs apply that patch to a fresh checkout of main, run the
   # release gate on the tree that would result, and only then write.
   bump:
-    needs: validate-inputs
+    needs: [validate-inputs, check-digest]
     runs-on: ubuntu-latest
     permissions:
       contents: read
