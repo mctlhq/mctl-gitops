@@ -1,8 +1,14 @@
-name: RedLoop Image Security Assessment (Gate 1)
+name: RedLoop Image Security Assessment
 
 # One-off, workflow_dispatch-only workflow for Trivy container image assessment.
 # Author: Agent: agy
-# Canonical Gate 1 Target: docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+#
+# Supported / Allowed Targets:
+# 1. Baseline Target (Gate 1):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+# 2. Candidate Patched Target (Gate 4):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7
+#
 # Platform: linux/amd64 (passed via TRIVY_PLATFORM env var, matching Hetzner cx43 worker architecture)
 #
 # Credentials & Permissions:
@@ -11,16 +17,15 @@ name: RedLoop Image Security Assessment (Gate 1)
 #
 # Evidence Retention:
 # - SARIF and JSON vulnerability reports are retained as workflow artifacts for 90 days.
-# - NOTE: In a public repository, workflow artifacts are downloadable by anyone with read access to the repository.
 # - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
 
 on:
   workflow_dispatch:
     inputs:
       image_ref:
-        description: "Exact pinned OCI image digest to scan (locked to Gate 1 target)"
+        description: "Exact pinned OCI image digest to scan (from approved allowlist)"
         required: true
-        default: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+        default: "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7"
 
 permissions:
   contents: read
@@ -31,15 +36,68 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Validate pinned digest format and Gate 1 lock
+      - name: Self-test validator and assert image_ref allowlist
         env:
-          EXPECTED_IMAGE_REF: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
           IMAGE_REF: ${{ inputs.image_ref }}
         run: |
-          if [[ "$IMAGE_REF" != "$EXPECTED_IMAGE_REF" ]]; then
-            echo "::error::For Gate 1, image_ref is locked to $EXPECTED_IMAGE_REF (received: $IMAGE_REF)"
+          set -euo pipefail
+
+          validate_image_ref() {
+            local ref="$1"
+            local baseline_digest="sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+            local candidate_digest="sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7"
+            local expected_repo="docker.io/nginxinc/nginx-unprivileged@"
+
+            # 1. Reject empty
+            if [ -z "$ref" ]; then return 1; fi
+
+            # 2. Require exact repository prefix (rejects mutable tags, alternative registries, alternative repos)
+            if [[ "$ref" != "$expected_repo"* ]]; then return 1; fi
+
+            # 3. Extract digest portion
+            local digest="${ref#$expected_repo}"
+
+            # 4. Strictly require sha256: followed by exactly 64 lowercase hexadecimal characters
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then return 1; fi
+
+            # 5. Check against explicit allowlist (rejects arbitrary unapproved digests)
+            if [ "$digest" != "$baseline_digest" ] && [ "$digest" != "$candidate_digest" ]; then
+              return 1
+            fi
+
+            return 0
+          }
+
+          echo "=== Step 1: Running validator self-tests ==="
+          # Test 1: Baseline accepted
+          validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01" || { echo "::error::Validator self-test 1 failed (baseline rejected)"; exit 1; }
+
+          # Test 2: Verified candidate accepted
+          validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 2 failed (candidate rejected)"; exit 1; }
+
+          # Test 3: Mutable tags rejected
+          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged:latest" || { echo "::error::Validator self-test 3 failed (latest accepted)"; exit 1; }
+          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged:1.30-alpine" || { echo "::error::Validator self-test 3 failed (tag accepted)"; exit 1; }
+
+          # Test 4: Wrong repository rejected
+          ! validate_image_ref "docker.io/library/nginx@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 4 failed (wrong repo accepted)"; exit 1; }
+          ! validate_image_ref "quay.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7" || { echo "::error::Validator self-test 4 failed (wrong registry accepted)"; exit 1; }
+
+          # Test 5: Malformed SHA256 rejected
+          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:xyz" || { echo "::error::Validator self-test 5 failed (invalid hex accepted)"; exit 1; }
+          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:E2A8FCA8AA356D66159AAF8A877A9C126773635ADF210503EEFAAEAFFEED6AD7" || { echo "::error::Validator self-test 5 failed (uppercase accepted)"; exit 1; }
+
+          # Test 6: Arbitrary unsupported digest rejected
+          ! validate_image_ref "docker.io/nginxinc/nginx-unprivileged@sha256:0000000000000000000000000000000000000000000000000000000000000000" || { echo "::error::Validator self-test 6 failed (unsupported digest accepted)"; exit 1; }
+
+          echo "[+] Validator self-tests passed (6/6 tests green)."
+
+          echo "=== Step 2: Validating input image_ref ==="
+          if ! validate_image_ref "$IMAGE_REF"; then
+            echo "::error::Provided image_ref '$IMAGE_REF' is not in the approved allowlist or does not match required format docker.io/nginxinc/nginx-unprivileged@sha256:<64 hex>."
             exit 1
           fi
+          echo "[+] Target image_ref verified in allowlist: $IMAGE_REF"
 
       - name: Scan Image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -80,10 +138,108 @@ jobs:
           fi
           echo "Assessment evidence files verified non-empty."
 
+      - name: Evaluate Vulnerability Verdict and Generate Summary
+        id: evaluate_verdict
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+
+          image_ref = os.environ.get("IMAGE_REF", "unknown")
+          json_path = "trivy-image-results.json"
+          with open(json_path) as f:
+              data = json.load(f)
+
+          critical_findings = []
+          high_findings = []
+          target_cve_details = []
+          target_cve_id = "CVE-2026-111497"
+
+          for r in data.get("Results", []):
+              for v in r.get("Vulnerabilities", []):
+                  sev = v.get("Severity")
+                  vid = v.get("VulnerabilityID")
+                  pkg = v.get("PkgName")
+                  installed_ver = v.get("InstalledVersion", "unknown")
+                  fixed_ver = v.get("FixedVersion", "N/A")
+                  item = {
+                      "vid": vid,
+                      "package": pkg,
+                      "installed": installed_ver,
+                      "fixed": fixed_ver,
+                      "severity": sev
+                  }
+                  if sev == "CRITICAL":
+                      critical_findings.append(item)
+                  elif sev == "HIGH":
+                      high_findings.append(item)
+                  if vid == target_cve_id:
+                      target_cve_details.append(item)
+
+          crit_count = len(critical_findings)
+          high_count = len(high_findings)
+          cve_status = "DETECTED" if target_cve_details else "CLEAN"
+
+          if crit_count == 0 and cve_status == "CLEAN":
+              posture = "ACCEPTABLE_FOR_STAGE3"
+          else:
+              posture = "UNACCEPTABLE_FOR_STAGE3"
+
+          print("--- Vulnerability Assessment Results ---")
+          print("Target Image:", image_ref)
+          print("Scan Execution Status: SUCCESS")
+          print("CRITICAL Count:", crit_count)
+          print("HIGH Count:", high_count)
+          print("CVE-2026-111497 Status:", cve_status)
+          for d in target_cve_details:
+              print("  Target CVE: %s, Package: %s, Installed: %s, Fixed In: %s" % (d.get("vid"), d.get("package"), d.get("installed"), d.get("fixed")))
+          print("Vulnerability Posture Verdict:", posture)
+
+          # Export GitHub Step Outputs
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if github_output:
+              with open(github_output, "a") as go:
+                  go.write(f"critical_count={crit_count}\n")
+                  go.write(f"high_count={high_count}\n")
+                  go.write(f"cve_status={cve_status}\n")
+                  go.write(f"posture={posture}\n")
+
+          # Write GitHub Step Summary
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_file:
+              with open(summary_file, "a") as sf:
+                  sf.write("## RedLoop Image Security Assessment Verdict\n\n")
+                  sf.write(f"- **Target Image:** `{image_ref}`\n")
+                  sf.write("- **Scan Execution Status:** `SUCCESS`\n")
+                  sf.write(f"- **CRITICAL Vulnerabilities:** `{crit_count}`\n")
+                  sf.write(f"- **HIGH Vulnerabilities:** `{high_count}`\n")
+                  sf.write(f"- **CVE-2026-111497 Status:** `{cve_status}`\n")
+                  sf.write(f"- **Stage 3 Vulnerability Posture:** `{posture}`\n\n")
+                  if target_cve_details:
+                      sf.write(f"### Target CVE Details ({target_cve_id})\n")
+                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
+                      for d in target_cve_details:
+                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
+                      sf.write("\n")
+                  if critical_findings:
+                      sf.write("### All CRITICAL Findings\n")
+                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
+                      for d in critical_findings:
+                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
+                      sf.write("\n")
+                  if high_findings:
+                      sf.write("### HIGH Findings\n")
+                      sf.write("| CVE ID | Package | Installed Version | Fixed In |\n| :--- | :--- | :--- | :--- |\n")
+                      for d in high_findings:
+                          sf.write(f"| {d['vid']} | {d['package']} | {d['installed']} | {d['fixed']} |\n")
+                      sf.write("\n")
+          EOF
+
       - name: Archive Assessment Evidence Artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.4.1
         with:
-          name: redloop-gate1-trivy-evidence
+          name: redloop-image-scan-evidence
           path: |
             trivy-image-results.sarif
             trivy-image-results.json
