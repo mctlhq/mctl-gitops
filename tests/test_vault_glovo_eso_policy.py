@@ -8,7 +8,7 @@
   metadata forms), next to the github-app-agents deny, and still grants
   platform/* (the deny is what narrows it);
 - vault-policy-argo-workflow-teams-rw.hcl (live role argo-workflow, SA
-  argo-workflow-sa, which tenant-writable WorkflowTemplates can run as) carries
+  argo-workflow-sa, which platform actors can run as) carries
   the same deny, so its platform/* grant cannot read, overwrite or delete the prefix;
 - vault-policy-glovo-db-creds-read.hcl (platform-db store glovo-db-creds) grants
   only read on the database-* keys and read,list on their metadata.

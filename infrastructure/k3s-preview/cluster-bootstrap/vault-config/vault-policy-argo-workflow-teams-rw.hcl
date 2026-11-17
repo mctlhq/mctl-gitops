@@ -25,9 +25,11 @@ path "secret/metadata/platform/*" {
 
 # Explicit deny on the Glovo C2 service prefix (private keys, DB passwords, audit
 # key, tailnet auth key). The platform/* grant above would let any workflow run
-# as argo-workflow-sa read, overwrite and delete them, and tenants can write
-# WorkflowTemplates (known open risk), so the prefix is cut out here. A deny
-# wins over the grant. The service's own role `eso-mctl-glovo` and
+# as argo-workflow-sa read, overwrite and delete them, so the prefix is cut out
+# here. A deny wins over the grant. It does not make argo-workflow a lesser
+# identity: its sibling policy argo-workflow-provisioner can mint policies and
+# roles, so the role stays platform-admin-equivalent (see the vault-config
+# README, "Platform trust boundary"). The service's own role `eso-mctl-glovo` and
 # `glovo-db-creds` still read it; nothing in the workflow templates touches
 # this prefix (mctlhq/mctl-gitops#2759).
 path "secret/data/platform/mctl-glovo*" {

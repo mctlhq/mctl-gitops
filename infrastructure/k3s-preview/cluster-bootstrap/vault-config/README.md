@@ -534,32 +534,84 @@ Applying either early cuts off every consumer still on `vault-backend`. Order:
 
 1. Create both policies and both roles (above).
 2. Merge this PR and the namespace PR (mctlhq/mctl-gitops#2736); Argo CD syncs the
-   SecretStores and the switched ExternalSecrets.
+   platform-db SecretStore and the switched ExternalSecrets. The `mctl-glovo`
+   namespace, SecretStore and ExternalSecrets render only while Glovo is deployed
+   (`deploy=true`); while it is dark they do not exist.
 3. Verify every ExternalSecret that reads the prefix is `Ready` through the new
    stores (`kubectl get externalsecret -A`, status only, never Secret data):
-   `mctl-glovo` -> `mctl-glovo-vault`, `platform-db` -> `glovo-db-creds`.
-4. ONLY THEN write BOTH `external-secrets-read` and `argo-workflow-teams-rw` from
-   the repo files, after a read-only pre-flight shows step 3 holds and that no
-   ExternalSecret or ClusterExternalSecret anywhere reads the prefix through a
-   ClusterSecretStore. Compare each live policy with its repo file first: lines the repo adds
-   (the prefix denies; the `writers/*` denies that the live `external-secrets-read`
-   still lacks) are expected, but any rule present live and absent from the repo
-   file means stop and reconcile the repo file first.
+   `platform-db` -> `glovo-db-creds` always, and `mctl-glovo` -> `mctl-glovo-vault`
+   whenever that namespace exists.
+4. Write BOTH `external-secrets-read` and `argo-workflow-teams-rw` from the repo
+   files with `glovo-eso-vault-setup.sh deny` (operator script, kept outside the
+   repo). Its read-only pre-flight observes the namespace explicitly:
+   - `mctl-glovo` observed `NotFound` (Glovo dark): it requires only the two C2
+     ExternalSecrets in platform-db (`glovo-c2-runtime-db-creds`,
+     `glovo-c2-migrator-db-creds`), both on `glovo-db-creds` and `Ready`;
+   - `mctl-glovo` exists: its ExternalSecrets must also be present, on
+     `mctl-glovo-vault` and `Ready`;
+   - any other failure to observe (timeout, forbidden, unreachable) aborts.
+   In both states no ExternalSecret or ClusterExternalSecret anywhere may read the
+   prefix through a ClusterSecretStore. The drift guard compares each live policy
+   with its repo file per path block (path to capability set, through the parser in
+   `scripts/check-vault-policy-capabilities.py`): the only differences allowed are
+   added `deny` blocks (the prefix denies; the `writers/*` denies that the live
+   `external-secrets-read` still lacks); a live block absent from the repo file, or
+   present with different capabilities, aborts. The structural diff is printed
+   before anything is written, and the write needs `CONFIRM=yes` or an interactive
+   `yes` on a tty (no tty and no `CONFIRM=yes` refuses).
+
+The deny may be applied while Glovo is dark, and applying it BEFORE Glovo's own
+deploy flips is the intended safe order: the deny then lands while no consumer of
+the prefix exists outside the two new stores. The `mctl-glovo` role and store are
+validated at the first deploy.
+
+Pre-deploy checklist (before flipping `deploy=true` for Glovo): the `eso-mctl-glovo`
+role and policy exist (`glovo-eso-vault-setup.sh verify`); after the sync, confirm the
+`mctl-glovo` ExternalSecrets go `Ready` through `mctl-glovo-vault`. If they do not,
+fix the role or store before anything depends on them; the deny is already in place,
+so there is no fallback to `vault-backend`.
 
 `tests/test_no_glovo_prefix_on_vault_backend.py` (CI, `vault-policy-check`) fails if
 any ExternalSecret in the repository, plain YAML or Helm template, reads the prefix
 through a ClusterSecretStore, so the deny cannot silently break a consumer again.
 
-**The `argo-workflow-teams-rw` deny and its caveat.** The live role `argo-workflow`
-(SA `argo-workflow-sa` in `argo-workflows`) carries `argo-workflow-teams-rw`, whose
-`platform/*` grant could read, overwrite and delete the prefix. Tenant SSO users can
-write WorkflowTemplates (open risk from earlier audits, not fixed here), so a
-tenant-controlled workflow may run as that SA; the explicit deny removes this prefix
-from its reach. The other platform-path policies do not reach it
-(`github-actions-erpact-images`: one `forgejo` path; `github-actions-repo-pat`:
-`teams/+/+/repo-pat`; `argo-workflow-platform-rotator`: `github-app`, `mctl-agent/tokens`;
-`backstage-teams-rw` and `provisioning`: `platform/teams/*` only). The deny does not
-fix the wider exposure of `platform/*` to that SA.
+**The `argo-workflow-teams-rw` deny and what it does not do.** The live role
+`argo-workflow` (SA `argo-workflow-sa` in `argo-workflows`) carries three policies:
+`argo-workflow-platform-rotator`, `argo-workflow-provisioner` and
+`argo-workflow-teams-rw`. The last one's `platform/*` grant could read, overwrite and
+delete the prefix; the explicit deny removes that. The other platform-path policies do
+not reach the prefix directly (`github-actions-erpact-images`: one `forgejo` path;
+`github-actions-repo-pat`: `teams/+/+/repo-pat`; `argo-workflow-platform-rotator`:
+`github-app`, `mctl-agent/tokens`; `backstage-teams-rw` and `provisioning`:
+`platform/teams/*` only).
+
+An earlier note here said tenant SSO users can write WorkflowTemplates. A live check
+does not corroborate it: `kubectl auth can-i create workflows`, `workflowtemplates`,
+`clusterworkflowtemplates` and `cronworkflows` in `argo-workflows` is `no` for a
+tenant SSO user and for the `sso-team-*` ServiceAccounts, which are bound to a
+view role. The claim was withdrawn (mctlhq/mctl-gitops#2759).
+
+**Platform trust boundary (open, accepted until the owner decides otherwise).** The
+prefix is unreadable outside Glovo's stores except for the platform-admin-equivalent
+identities listed here:
+
+- Vault role `argo-workflow` (SA `argo-workflow-sa`, ns `argo-workflows`):
+  `argo-workflow-provisioner` can create and update `sys/policies/acl/tenant-*` and
+  `eso-tenant-*`, and `auth/kubernetes/role/eso-tenant-*` and `argo-workflow-tenant-*`.
+  A holder can mint a policy that reads `platform/mctl-glovo/*`, bind a role to a
+  ServiceAccount it controls and read the prefix; the deny in
+  `argo-workflow-teams-rw` does not stop that, because the policy is new. In practice
+  `argo-workflow == Vault admin-equivalent`. Platform actors that can run as that SA:
+  SSO group admins (`argo-workflows-admin`), the `mctl-api` ServiceAccount through
+  RoleBinding `mctl-api-workflow-submitter` (create workflows in `argo-workflows`),
+  and cluster-admin. Narrowing `argo-workflow-provisioner` is an owner decision and is
+  not done here.
+- `vault-human-auth-iac`: admin-equivalent, platform-only.
+- The ESO controller: its ClusterRole `external-secrets-controller` can create
+  `serviceaccounts/token` cluster-wide with no `resourceNames`. Anyone who can create
+  a SecretStore in `mctl-glovo` or `platform-db` that names the SA reads the prefix.
+  The gate is review of PRs to mctl-gitops, and tenant values must never choose the
+  destination namespace `mctl-glovo` or `platform-db`.
 
 **mctl-api control-caller.** `platform/mctl-glovo/control-caller` is meant to be read
 by mctl-api for the kill switch (mctlhq/mctl-gitops#2742, draft, still on
