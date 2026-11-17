@@ -500,6 +500,7 @@ the prefix once the last step below is done.
 |---|---|---|---|---|
 | `mctl-glovo-vault` (mctl-glovo ns) | SecretStore | `eso-mctl-glovo` (SA `mctl-glovo-eso`) | `eso-mctl-glovo` | `secret/data/platform/mctl-glovo/*` |
 | `glovo-db-creds` (platform-db ns) | SecretStore | `glovo-db-creds` (SA `glovo-db-creds`) | `glovo-db-creds-read` | `secret/data/platform/mctl-glovo/database-*` |
+| `mctl-api-control-vault` (mctl-api ns) | SecretStore | `eso-mctl-api-control` (SA `mctl-api-control-eso`) | `eso-mctl-api-control` | `secret/data/platform/mctl-glovo/control-caller` only |
 
 The second store exists because the CNPG managed-role passwords are synced into
 platform-db (`glovo-c2-runtime-db-creds`, `glovo-c2-migrator-db-creds` in
@@ -507,8 +508,9 @@ platform-db (`glovo-c2-runtime-db-creds`, `glovo-c2-migrator-db-creds` in
 store cannot serve them. It follows the `cnpg-db-creds` pattern exactly; the policy
 grants only the two `database-*` keys, not the signing keys or the control-caller.
 
-Policy files: `vault-policy-eso-mctl-glovo.hcl`, `vault-policy-glovo-db-creds-read.hcl`
-(read on `secret/data/...`, read and list on `secret/metadata/...`).
+Policy files: `vault-policy-eso-mctl-glovo.hcl`, `vault-policy-glovo-db-creds-read.hcl`,
+`vault-policy-eso-mctl-api-control.hcl` (read on `secret/data/...`, read and list on
+`secret/metadata/...`).
 
 ```bash
 vault policy write eso-mctl-glovo vault-policy-eso-mctl-glovo.hcl
@@ -522,6 +524,12 @@ vault write auth/kubernetes/role/glovo-db-creds \
   bound_service_account_names=glovo-db-creds \
   bound_service_account_namespaces=platform-db \
   policies=glovo-db-creds-read ttl=1h
+
+vault policy write eso-mctl-api-control vault-policy-eso-mctl-api-control.hcl
+vault write auth/kubernetes/role/eso-mctl-api-control \
+  bound_service_account_names=mctl-api-control-eso \
+  bound_service_account_namespaces=mctl-api \
+  policies=eso-mctl-api-control ttl=1h
 ```
 
 No `audience` is set, same as the `eso-tenant-*` roles. Whoever runs these writes
@@ -613,18 +621,32 @@ identities listed here:
   The gate is review of PRs to mctl-gitops, and tenant values must never choose the
   destination namespace `mctl-glovo` or `platform-db`.
 
-**mctl-api control-caller.** `platform/mctl-glovo/control-caller` is meant to be read
-by mctl-api for the kill switch (mctlhq/mctl-gitops#2742, draft, still on
-`vault-backend`). That consumer does not exist on the cluster yet, so the deny can go
-in first; but #2742 cannot merge as drafted: the repo test fails it, and the deny must
-not be written while such an ExternalSecret is live. #2742 needs its own namespaced SecretStore in the
-mctl-api namespace with a dedicated role whose policy reads only that one key, added
-to this README and the expectations table, before it lands.
+**mctl-api control-caller store.** `platform/mctl-glovo/control-caller` is read by
+mctl-api for the kill switch (mctlhq/mctl-gitops#2742) through its own namespaced
+store, `mctl-api-control-vault` in the `mctl-api` namespace, and not through
+`vault-backend` (denied) and not through the service's `mctl-glovo-vault` (a
+different namespace). Its identity is separate from everything above: ServiceAccount
+`mctl-api-control-eso` (used only by ESO token requests, `automountServiceAccountToken:
+false`, no pod runs as it) bound to Vault role `eso-mctl-api-control`, whose policy
+`eso-mctl-api-control` reads exactly `secret/data/platform/mctl-glovo/control-caller`
+and read,list on its metadata path: no wildcard, so the service's signing keys,
+database passwords and tailnet key stay out of reach of a compromised mctl-api
+namespace. `tests/test_vault_glovo_eso_policy.py` pins the one-key shape (a glob, the
+prefix wildcard, an extra capability or a missing rule each fail it) and the
+expectations table pins the denied neighbours.
+
+Ordering for #2742: the template renders nothing until `apiC2Control.enabled` (which
+itself needs the released chart slots, see mctlhq/mctl-api's extra* values). Create
+the role and policy first (`glovo-eso-vault-setup.sh verify` checks all three roles);
+after the sync the ExternalSecret `mctl-api-c2-control-caller` must go `Ready` on
+`mctl-api-control-vault`. Do not write the control-caller value into Vault before the
+deny is in place; the deny may be applied first, as the consumer does not exist until
+the switch is lit.
 
 **Identity caveats.** A pod creator in a namespace can set `serviceAccountName` to any
-ServiceAccount there, so `mctl-glovo-eso` (and `glovo-db-creds` in platform-db) is only
+ServiceAccount there, so `mctl-glovo-eso` (and `glovo-db-creds` in platform-db, and `mctl-api-control-eso` in mctl-api) is only
 as private as the namespace's RBAC: keep pod creation in `mctl-glovo` and `platform-db`
-platform-only (no tenant RoleBindings there). `automountServiceAccountToken: false` on
+platform-only (no tenant RoleBindings there; the mctl-api namespace is platform-owned, created and synced by Argo CD only). `automountServiceAccountToken: false` on
 the SA does not stop a pod spec that opts in. ESO obtains tokens for these SAs through
 its ClusterRole `external-secrets-controller` (`serviceaccounts/token` `create`,
 cluster-wide, no `resourceNames`).

@@ -5,7 +5,8 @@
     "external-secrets": {"policies": ["vault-policy-external-secrets-read.hcl"]},
     "argo-workflow": {"policies": ["vault-policy-argo-workflow-teams-rw.hcl"]},
     "eso-mctl-glovo": {"policies": ["vault-policy-eso-mctl-glovo.hcl"]},
-    "glovo-db-creds": {"policies": ["vault-policy-glovo-db-creds-read.hcl"]}
+    "glovo-db-creds": {"policies": ["vault-policy-glovo-db-creds-read.hcl"]},
+    "eso-mctl-api-control": {"policies": ["vault-policy-eso-mctl-api-control.hcl"]}
   },
   "expectations": [
     {"identity": "external-secrets", "path": "secret/data/platform/backstage/ghcr-credentials", "effective": ["read"]},
@@ -34,6 +35,14 @@
     {"identity": "glovo-db-creds", "path": "secret/data/platform/mctl-glovo/signing-key", "effective": []},
     {"identity": "glovo-db-creds", "path": "secret/data/platform/mctl-glovo", "effective": []},
     {"identity": "glovo-db-creds", "path": "secret/data/platform/github-app", "effective": []},
-    {"identity": "glovo-db-creds", "path": "secret/data/teams/example/service", "effective": []}
+    {"identity": "glovo-db-creds", "path": "secret/data/teams/example/service", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/mctl-glovo/control-caller", "effective": ["read"]},
+    {"identity": "eso-mctl-api-control", "path": "secret/metadata/platform/mctl-glovo/control-caller", "effective": ["list", "read"]},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/mctl-glovo/signing-key", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/mctl-glovo/database-runtime", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/mctl-glovo/control-caller-other", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/mctl-glovo", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/platform/github-app", "effective": []},
+    {"identity": "eso-mctl-api-control", "path": "secret/data/teams/example/service", "effective": []}
   ]
 }

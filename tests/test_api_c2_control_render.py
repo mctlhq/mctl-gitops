@@ -9,7 +9,9 @@ Pins, on the bootstrap render:
   - lit: the Application values carry the URL, the token file, the sidecar with
     its secret refs, the 0444 key mount, a read-only token mount in the main
     container, and the ExternalSecret reads exactly user_id, key_id, key from
-    one Vault path;
+    one Vault path through the namespaced SecretStore mctl-api-control-vault
+    (role eso-mctl-api-control, own ServiceAccount, automount off), never a
+    ClusterSecretStore;
   - the kill switch flag appears only with killSwitch.
 
 Run: python3 tests/test_api_c2_control_render.py   (needs helm)
@@ -55,6 +57,10 @@ def api_values(out):
 def secret(out):
     return [d for d in docs(out) if d["kind"] == "ExternalSecret"
             and d["metadata"]["name"] == "mctl-api-c2-control-caller"]
+
+
+def kind_named(out, kind, name):
+    return [d for d in docs(out) if d["kind"] == kind and d["metadata"]["name"] == name]
 
 
 def refused(args, needle):
@@ -112,6 +118,8 @@ def main():
     v = api_values(dark.stdout)
     env = v["env"]
     check(not secret(dark.stdout), "dark: the control-caller ExternalSecret rendered")
+    check(not kind_named(dark.stdout, "SecretStore", "mctl-api-control-vault"), "dark: the isolated store rendered")
+    check(not kind_named(dark.stdout, "ServiceAccount", "mctl-api-control-eso"), "dark: the control SA rendered")
     for k in ("GLOVO_C2_CONTROL_URL", "GLOVO_C2_CONTROL_TOKEN_FILE", "GLOVO_C2_KILLSWITCH_ENABLED"):
         check(k not in env, f"dark: {k} rendered")
     for k in ("extraContainers", "extraVolumes", "extraVolumeMounts"):
@@ -157,7 +165,29 @@ def main():
             check([d["secretKey"] for d in data] == ["user_id", "key_id", "key"], "lit: ExternalSecret fields")
             check({d["remoteRef"]["key"] for d in data} == {"platform/mctl-glovo/control-caller"},
                   "lit: one bare Vault path")
-            check(es[0]["spec"]["secretStoreRef"]["name"] == "vault-backend", "lit: store")
+            ref = es[0]["spec"]["secretStoreRef"]
+            check(ref == {"kind": "SecretStore", "name": "mctl-api-control-vault"},
+                  f"lit: the ExternalSecret must read through the isolated namespaced store, got {ref}")
+        # The isolated store: namespaced, own role, own ServiceAccount (ESO token requests only).
+        stores = kind_named(lit.stdout, "SecretStore", "mctl-api-control-vault")
+        check(len(stores) == 1, "lit: exactly one SecretStore mctl-api-control-vault")
+        sas = kind_named(lit.stdout, "ServiceAccount", "mctl-api-control-eso")
+        check(len(sas) == 1, "lit: exactly one ServiceAccount mctl-api-control-eso")
+        if stores:
+            check(stores[0]["metadata"]["namespace"] == "mctl-api", "lit: store namespace")
+            vault = stores[0]["spec"]["provider"]["vault"]["auth"]["kubernetes"]
+            check(vault["role"] == "eso-mctl-api-control", f"lit: store role {vault['role']}")
+            check(vault["serviceAccountRef"] == {"name": "mctl-api-control-eso"}, "lit: store service account")
+        if sas:
+            check(sas[0]["metadata"]["namespace"] == "mctl-api", "lit: service account namespace")
+            check(sas[0].get("automountServiceAccountToken") is False, "lit: service account must not automount")
+        check(not [d for d in docs(lit.stdout) if d["kind"] == "ClusterSecretStore"
+                   and "control" in d["metadata"].get("name", "")], "lit: no ClusterSecretStore for the key")
+        # Nothing in the lit render may point an ExternalSecret that reads the prefix at a cluster store.
+        for d in docs(lit.stdout):
+            if d["kind"] == "ExternalSecret" and "platform/mctl-glovo" in str(d["spec"].get("data")):
+                check(d["spec"]["secretStoreRef"].get("kind") == "SecretStore",
+                      f"lit: {d['metadata']['name']} reads the prefix through a cluster store")
 
     on = helm(*LIT, "--set", "apiC2Control.killSwitch=true")
     check(on.returncode == 0 and api_values(on.stdout)["env"].get("GLOVO_C2_KILLSWITCH_ENABLED") == "true",

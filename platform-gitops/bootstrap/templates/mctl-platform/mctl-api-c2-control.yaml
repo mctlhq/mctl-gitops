@@ -9,6 +9,15 @@ The scope comes from the ConfigMap mctl-api-c2-machine-ids (control_scope),
 which holds ids only. The Secret is separate from mctl-api-secrets so a
 missing Vault property cannot take DB_PASSWORD down with it.
 
+Read through an ISOLATED namespaced SecretStore (mctl-api-control-vault), never
+the cluster-wide vault-backend: that store denies this prefix
+(mctlhq/mctl-gitops#2759) and a repo test fails any ClusterSecretStore reader
+of it (vault-config/README.md). The store has its own
+ServiceAccount (token requests by ESO only, automount off) and its own Vault
+role eso-mctl-api-control, whose policy reads this one key and nothing else
+(vault-config/README.md, "mctl-api control-caller store"). Create the role
+BEFORE enabling the switch; the render of this file is empty until then.
+
 Network: nothing to add. The mctl-api namespace has no egress policy, and the
 peer allow rule on the C2 service side (ingress from the mctl-api pods on
 8080) is part of mctlhq/mctl-gitops#2736 (control switch).
@@ -18,6 +27,37 @@ peer allow rule on the C2 service side (ingress from the mctl-api pods on
 {{- if not $c2.chartSlots }}{{ fail "apiC2Control.enabled needs apiC2Control.chartSlots: the pinned mctl-api chart has no extraContainers/extraVolumes/extraVolumeMounts slots (TODO, separate mctl-api change)" }}{{ end }}
 {{- if eq $c2.refresherImage.tag "0.0.0-unreleased" }}{{ fail "apiC2Control.enabled needs a released refresher image: the tag is still the placeholder" }}{{ end }}
 {{- if not $c2.refresherImage.command }}{{ fail "apiC2Control.enabled needs refresherImage.command (the refresher image does not exist yet)" }}{{ end }}
+# Used only by ESO, which mints its token through the TokenRequest API. No pod
+# of this chart runs as it, and the token is not mounted anywhere.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mctl-api-control-eso
+  namespace: mctl-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: mctl-api-control-vault
+  namespace: mctl-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  provider:
+    vault:
+      server: "http://vault.vault.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "eso-mctl-api-control"
+          serviceAccountRef:
+            name: mctl-api-control-eso
+---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -26,8 +66,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: mctl-api-control-vault
   target:
     name: mctl-api-c2-control-caller
     creationPolicy: Owner
