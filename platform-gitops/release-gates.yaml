@@ -313,7 +313,7 @@ version_holds:
       # and the release approval page copy fix (mctl-api#1104). Covers only
       # the 4.166.0 tag of release PR mctlhq/mctl-api#1103.
       - version: "4.166.0"
-        grant: mctlhq/mctl-gitops#GRANT
+        grant: mctlhq/mctl-gitops#2753
         approved_by: mashkovd
         expires: 2026-12-01
 
