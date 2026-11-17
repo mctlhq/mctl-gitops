@@ -735,6 +735,12 @@ spec:
       name: mctl-api-orchestrator-devloop-ids
       jsonPointers:
         - /data
+    # Written by the zitadel-iac Job (c2-machine-users.tf): the ids of the C2
+    # machine users (infra-components/mctl-platform/mctl-api/c2-machine-users.yaml).
+    - kind: ConfigMap
+      name: mctl-api-c2-machine-ids
+      jsonPointers:
+        - /data
     # ESO admission webhook injects defaults absent in git, plus legacy
     # last-applied-configuration annotations can pin stale apiVersion across
     # chart churn. Mirror the tenants ApplicationSet pattern.
