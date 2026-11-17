@@ -668,7 +668,7 @@ the repository or the state):
 
 | User | Used by | Audience (`aud`) | Verified by |
 |---|---|---|---|
-| `c2-consent-reader` | the C2 service's token refresher | the MCTL API project id | mctl-api, `subject_audiences` of the `zitadel` entry (this subject only) |
+| `c2-consent-reader` | the C2 service's token refresher | the MCTL API project id | mctl-api, `service_subjects` of the `zitadel` entry (kind `service`, this subject only, pinned to this audience) |
 | `c2-control-caller` | mctl-api's kill switch client | the project `MCTL C2 control` id | the C2 service itself: issuer, JWKS, exact subject, audience |
 
 The ids are in ConfigMap `mctl-api/mctl-api-c2-machine-ids` (no credential;
