@@ -350,6 +350,17 @@ version_holds:
         grant: mctlhq/mctl-gitops#2753
         approved_by: mashkovd
         expires: 2026-12-01
+      # Owner GO in chat (2026-11-17) for 4.167.0: rollback_deployment behind
+      # an owner's grant (mctlhq/mctl-api#1106, with the rollback apply fix
+      # that keeps deployment_id) and mctlhq/mctl-api#1112 (the deploy record
+      # reconciler read only status.outputs, which Argo leaves empty for the
+      # entrypoint template's outputs, so records never got health or the
+      # image digest; it now reads the workflow's root node as well).
+      # Covers only the 4.167.0 tag of release PR mctlhq/mctl-api#1107.
+      - version: "4.167.0"
+        grant: mctlhq/mctl-gitops#TBD
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
