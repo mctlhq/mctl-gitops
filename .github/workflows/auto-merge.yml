@@ -235,5 +235,7 @@ jobs:
           REVIEW_COMMIT: ${{ github.event.review.commit_id }}
           # This job's own check run: the name of the job, and an exact match.
           OWN_CHECK: auto-merge
-          # The required status checks of ruleset main-protection.
+          # The required status checks of ruleset main-protection (id 18465404).
+          # Keep in step with the ruleset; tests/test_release_bump_checks_ready.py
+          # pins these to the job ids tests/test_required_check_job_ids.py guards.
           REQUIRED_CHECKS: cloudflare-plan,reserved-hosts,validate

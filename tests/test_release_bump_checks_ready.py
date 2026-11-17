@@ -112,12 +112,13 @@ def run_step(runs, *, total=None, runs_ok=True, head=HEAD, review_commit=None, s
             '  *) exit 1 ;;\n'
             "esac\n")
         gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
-        sleep = d / "bin" / "sleep"  # a wait verdict must not stall the test: loop exits via deadline
-        sleep.write_text("#!/bin/sh\nexit 0\n")
+        # A wait verdict must not stall the test or depend on wall-clock time (a
+        # slow runner once expired a 1 s deadline mid-run): the deadline stays
+        # far away and the third sleep kills the step instead.
+        sleep = d / "bin" / "sleep"
+        sleep.write_text(f'#!/bin/sh\necho x >> "{d}/sleeps"\n[ "$(wc -l < "{d}/sleeps")" -ge 3 ] && kill -9 $PPID\nexit 0\n')
         sleep.chmod(sleep.stat().st_mode | stat.S_IEXEC)
-        # SECONDS cannot be faked, so shrink the deadline and let `wait` loops expire.
-        body = body.replace("SECONDS + 2700", "SECONDS + 1")
-        body = body.replace("sleep 30", "sleep 1")
+        body = body.replace("SECONDS + 2700", "SECONDS + 100000")
         env = {"PATH": f"{gh.parent}:{os.environ['PATH']}", "GH_TOKEN": "x", "REPO": "o/r", "PR": "7",
                "HEAD_SHA": HEAD, "REVIEW_COMMIT": review_commit or HEAD,
                "OWN_CHECK": env_decl["OWN_CHECK"], "REQUIRED_CHECKS": env_decl["REQUIRED_CHECKS"]}
@@ -142,6 +143,9 @@ def step_cases(script=None):
     c.append(("step b: unreadable check list does not enqueue", noenq(s(green(), runs_ok=False)), True))
     c.append(("step b: truncated check list does not enqueue", noenq(s(green(), total=len(green()) + 5)), True))
     c.append(("step c: a similarly named pending check does not enqueue", noenq(s(green() + [run_for("auto-merge-lint", "in_progress", None)])), True))
+    for label, extra in (("failed", run_for("trivy2", conclusion="failure")), ("unknown", run_for("z", conclusion=None))):
+        rc, calls, out = s(green() + [extra])
+        c.append((f"step b: a {label} check stops at once with a not-mergeable error", rc != 0 and calls == "" and "is not mergeable" in out, True))
     c.append(("step: refused enqueue fails the job", s(green() + [own()], enqueue_ok=False)[0] != 0, True))
     rc, calls, _ = s(green() + [own()], review_commit="b" * 40)
     c.append(("step: approval on another head does not enqueue", rc == 0 and calls == "", True))
@@ -177,7 +181,8 @@ def main():
     wmut = {
         "own check name not passed": ('--own-check "$OWN_CHECK"', '--own-check "nothing"'),
         "unreadable check list ignored": ('echo "::error::could not read the check runs of ${HEAD_SHA}; not merging."\n      exit 1', "exit 0"),
-        "not-ready verdict enqueues": ('*) echo "::error::#${PR} is not mergeable: ${verdict}"; exit 1 ;;', '*) rc=0 ;;'),
+        "not-ready verdict is ignored": ('*) echo "::error::#${PR} is not mergeable: ${verdict}"; exit 1 ;;', '*) rc=0 ;;'),
+        "not-ready verdict enqueues": ("      0)\n        if ! out=$(gh api graphql", "      0|10|11|12)\n        if ! out=$(gh api graphql"),
         "enqueue without head pin": ('-f h="$HEAD_SHA"', '-f h=""'),
         "review on another head accepted": ('if [ "$REVIEW_COMMIT" != "$HEAD_SHA" ]; then', 'if false; then'),
     }
@@ -191,6 +196,16 @@ def main():
     assert step_script()[1]["OWN_CHECK"] == job.get("name", "auto-merge"), "OWN_CHECK != the job's check name"
     # Required checks match the ruleset's documented list.
     assert step_script()[1]["REQUIRED_CHECKS"] == REQ
+    # Drift guard: the names are the job ids that tests/test_required_check_job_ids.py
+    # pins as the required checks of ruleset main-protection (check name == job id,
+    # no `name:`), so a renamed or dropped job fails here as well as there.
+    for wf, jobs in ((".github/workflows/validate-manifests.yml", ["validate", "reserved-hosts"]),
+                     (".github/workflows/cloudflare-plan.yml", ["cloudflare-plan"])):
+        have = yaml.safe_load((ROOT / wf).read_text())["jobs"]
+        for j in jobs:
+            assert j in have, f"required check {j} has no job in {wf}"
+            assert have[j].get("name", j) == j, f"job {j} in {wf} is named differently from its id"
+    assert sorted(REQ.split(",")) == sorted(["validate", "reserved-hosts", "cloudflare-plan"])
     print("ok")
 
 
