@@ -59,6 +59,13 @@ IMAGE_REPO = "ghcr.io/mctlhq/mctl-api"
 # the real tag when that release exists; until the pin reaches it the check is
 # skipped, loudly. A value above the true first release only delays enforcement;
 # one below it makes every pin in between fail closed (no ok line).
+#
+# 4.167.0 is a PLACEHOLDER that is safe by construction: 4.166.0 is the last
+# release known to lack the flag (mctl-api#1108 is unmerged), so no release the
+# flag could be in is below it. Too low only fails closed (a pin or candidate
+# in between, without the flag, gets no ok line and is refused); it can never
+# skip a release that has the flag. tests/test_release_config_preflight.py pins
+# that MIN stays above 4.166.0. Set it to the real first release when it exists.
 MIN_CHECKER_VERSION = "4.167.0"
 
 OK_LINE = "mctl-api check-config: ok"

@@ -43,7 +43,7 @@ jobs:
   # listed in `needs`, so a shard added later cannot be left out of the gate.
   validate:
     if: always()
-    needs: [validate-1, validate-2, validate-3, validate-4]
+    needs: [validate-1, validate-2, validate-3, validate-4, zitadel-iac]
     runs-on: ubuntu-latest
     steps:
       - name: Every validate shard succeeded
@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           # A missing, skipped or cancelled shard is not a pass.
-          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null
+          echo "$NEEDS" | jq -e 'length == 5 and all(.[]; .result == "success")' > /dev/null
 
   validate-1:
     runs-on: ubuntu-latest
@@ -1455,6 +1455,12 @@ jobs:
           python3 -m pip install --quiet pyyaml
           scripts/check-mctl-api-oidc-config.py --selftest
           scripts/check-mctl-api-oidc-config.py
+
+      # The same check for the NEW image on the release path (bump job of
+      # release-deploy.yaml and gitops-bump.yaml): wiring, the 4.166.0 shape
+      # with a stub docker, and mutants of each. Stub only: no network.
+      - name: release config preflight blocks a bump the new image would crash on
+        run: python3 tests/test_release_config_preflight.py
 
       # Customers rollout phase 3: every Actions v2 execution is
       # instance-wide and lives behind a toggle in customers_executions.tf
