@@ -240,6 +240,10 @@ spec:
 # The migration Job's connection string, from the migrator credentials in
 # Vault (host, port, database, username, password). TLS is mandatory (the
 # migrator refuses anything weaker than sslmode=require).
+# Password alphabet: urlquery turns a space into '+', which url.Parse does not
+# decode in userinfo, and ESO templates have no PathEscape. Keep the Vault
+# passwords URL-safe ([A-Za-z0-9]): the platform provisioner
+# (wft-provision-database) already emits alphanumeric passwords.
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -430,19 +434,25 @@ spec:
 # Schema and runtime grants, as the migration owner. Idempotent: a current
 # schema is a no-op and never resets the kill switch (a fresh database ships
 # KILLED). Not a hook: it lives in root-app, whose every sync would run a hook.
-# Force+Replace recreate it whenever its spec changes, which is every image
-# bump, so each release migrates before the Deployment (wave 1) rolls.
+# The name carries the image tag, so each release is a NEW Job (a Job spec is
+# immutable, it is never mutated or replaced): wave 0 runs it to completion
+# before the Deployment (wave 1) rolls, and root-app's prune (automated,
+# prune: true) removes the previous release's Job. No Force/Replace: root-app
+# has no ApplyOutOfSyncOnly, so those options would delete and recreate the
+# Job on EVERY root-app sync, not only on an image bump. No
+# ttlSecondsAfterFinished either: a TTL-deleted Job is OutOfSync and selfHeal
+# would re-run the migration. A failed Job (backoffLimit spent) stays failed
+# for its tag; retry by deleting it or by shipping the next tag.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $app }}-migrate
+  name: {{ $app }}-migrate-{{ regexReplaceAll "[^a-z0-9]+" ($image.tag | lower) "-" | trunc 40 | trimSuffix "-" }}
   namespace: {{ $ns }}
   labels:
     app.kubernetes.io/name: {{ $app }}
     app.kubernetes.io/component: migrate
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   backoffLimit: 3
   activeDeadlineSeconds: 600
