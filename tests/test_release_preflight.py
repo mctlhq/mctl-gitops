@@ -281,9 +281,14 @@ check("an unknown stage refuses", rc(stage="nonsense") == 2)
 rd = yaml.safe_load((ROOT / ".github/workflows/release-deploy.yaml").read_text())
 bi = yaml.safe_load((ROOT / ".github/workflows/build-image.yaml").read_text())
 jobs = rd["jobs"]
-check("order: validate, preflight, build, bump",
+check("order: validate, preflight, build, ledger gate, bump",
       jobs["preflight"]["needs"] == "validate-inputs" and jobs["build"]["needs"] == "preflight"
-      and jobs["bump"]["needs"] == "build")
+      and jobs["ledger-gate"]["needs"] == "build" and jobs["bump"]["needs"] == ["build", "ledger-gate"])
+# A skipped or failed ledger-gate must skip the bump: no `if:` may let bump run
+# around it, and the gate must not be continue-on-error (mctl-api#1022 S4).
+check("the bump cannot run around the ledger gate",
+      "if" not in jobs["bump"] and "if" not in jobs["ledger-gate"]
+      and not jobs["ledger-gate"].get("continue-on-error"))
 check("preflight holds no secret and no environment",
       "secrets." not in str(jobs["preflight"]) and "environment" not in jobs["preflight"]
       and jobs["preflight"]["permissions"] == {"contents": "read"})
