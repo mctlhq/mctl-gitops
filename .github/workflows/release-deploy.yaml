@@ -191,6 +191,45 @@ jobs:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
+  # Release ledger, SHADOW MODE (mctlhq/mctl-api#1022 S3). Reads the MFA-backed
+  # release decisions mctl-api keeps and reports what a ledger-based gate would
+  # decide for exactly the image just built (repository, version, tag commit,
+  # digest), next to what the YAML allow records decide. It enforces nothing:
+  # continue-on-error, and no job needs it, so the release never waits on it.
+  # The verdict (allow / refuse / unknown) lands in the job summary; collect
+  # agreement here before the ledger replaces the YAML (S4).
+  # id-token: write is the whole credential: mctl-api accepts this workflow's
+  # GitHub OIDC token as the read-only release gate reader, only from
+  # mctlhq/mctl-gitops on refs/heads/main. No secrets, no environment.
+  ledger-shadow:
+    needs: build
+    if: inputs.repo == 'mctlhq/mctl-api'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Release ledger verdict (shadow)
+        env:
+          REPO: ${{ inputs.repo }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          REVISION: ${{ needs.build.outputs.revision }}
+        run: |
+          python3 scripts/release-ledger-shadow.py check --repository "$REPO" --version "$IMAGE_TAG" \
+            --digest "$IMAGE_DIGEST" --commit "$REVISION" --image "$IMAGE_NAME"
+
   # The bump is prepared here and published by exactly one of two jobs below.
   # This job holds no environment and no write credential: it decides the route,
   # edits the values files and builds ONE commit, which it hands over as a patch.
