@@ -1,0 +1,46 @@
+# Service: docs-canary
+# Team: admins
+#
+# Throwaway target for the live check of promote_deployment and
+# rollback_deployment (mctlhq/mctl-api#1049). It serves the mctl-docs image
+# (nginx-unprivileged) so a governed preview, a promotion and a rollback can
+# run end to end without touching a real service. Not exposed: no ingress.
+# Remove it with the retire-service workflow once the check is done.
+
+# Chart: base-service
+
+image:
+  # promote-deployment accepts only ghcr.io/<org>/<component>.
+  repository: ghcr.io/mctlhq/docs-canary
+  tag: "seed-1"
+imagePullSecrets:
+  - name: ghcr-credentials
+# Port 8080 so that a governed preview of this service renders the same
+# values as production (the DeployIntent schema needs runtime.port >= 1024).
+service:
+  port: 8080
+  containerPort: 8080
+backstage:
+  kubernetesId: docs-canary
+# nginx-unprivileged runs as uid/gid 101.
+containerSecurityContext:
+  runAsUser: 101
+  runAsGroup: 101
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /healthz
+replicaCount: 1
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+env:
+  APP_ENV: production
+ingress:
+  enabled: false
+extraContainers: []

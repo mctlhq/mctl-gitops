@@ -310,8 +310,11 @@ version_holds:
         expires: 2026-12-01
       # Owner GO in chat (2026-11-17) for 4.166.0: the promote-preview-to-
       # production feature behind an owner grant (mctl-api 71e179d, d82da1f)
-      # and the release approval page copy fix (mctl-api#1104). Covers only
-      # the 4.166.0 tag of release PR mctlhq/mctl-api#1103.
+      # and the release approval page copy fix (mctl-api#1104). Owner extended
+      # the GO in chat (2026-11-17) to mctl-api#1105 (promoted digest compared
+      # with the preview's; deploy_records migration), which landed in the
+      # release PR afterwards. Covers only the 4.166.0 tag of release PR
+      # mctlhq/mctl-api#1103.
       - version: "4.166.0"
         grant: mctlhq/mctl-gitops#2753
         approved_by: mashkovd

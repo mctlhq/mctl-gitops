@@ -744,3 +744,13 @@ obiSpike:
     limits.cpu: "3"
     limits.memory: "3Gi"
     pods: "10"
+
+# C2 cluster service switches (the service's bootstrap template documents
+# each one). All false: only the namespace and its NetworkPolicies
+# render. Each flip is its own reviewed PR; rollback is flipping it back.
+mctlGlovo:
+  deploy: false
+  c2: false
+  allowlist: false
+  consent: false
+  control: false

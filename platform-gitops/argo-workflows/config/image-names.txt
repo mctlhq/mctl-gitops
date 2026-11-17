@@ -40,6 +40,11 @@ reserved seerrsense
 reserved vault-iac
 reserved zitadel-iac
 
+# --- Third-party mirrors from platform-gitops/images/mirrors.yaml. Only
+# --- .github/workflows/mirror-image.yaml pushes to these names, so none is
+# --- ever granted to a team. scripts/validate-image-mirrors.py enforces both.
+reserved chainguard-nginx
+
 # --- Reviewed grants. Each one is an existing service whose name is reserved
 # --- above or shared between teams; add a line here only in review.
 
@@ -61,6 +66,7 @@ grant admins mctl-agents-worker-exec
 grant admins mctl-agents-worker-implement
 grant admins mctl-design
 grant admins mctl-docs
+grant admins mctl-glovo
 grant admins mctl-support
 grant admins mctl-web
 

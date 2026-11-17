@@ -195,6 +195,15 @@ jobs:
           python3 scripts/validate-usage-pricing-catalog.py --selftest
           python3 scripts/validate-usage-pricing-catalog.py
 
+      # Third-party images mirrored into GHCR by mirror-image.yaml
+      # (mctl-gitops#2744): every entry digest-pinned, immutable tag.
+      - name: Validate image mirrors
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-image-mirrors.py --selftest
+          python3 scripts/validate-image-mirrors.py
+
       - name: Validate agent platform catalog
         run: |
           python3 -m pip install --quiet pyyaml jsonschema
@@ -973,6 +982,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_generated_app_scope.py
           scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
+
+      # The C2 service pod with the consent switch on: the refresher runs the
+      # token-refresher command of the server image and its 0440 key file is
+      # readable by uid 10001 (pod fsGroup). Red when either is removed.
+      - name: Unit-test the C2 service consent pod render
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_mctl_glovo_consent_render.py
 
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
