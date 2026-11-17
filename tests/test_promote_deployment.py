@@ -159,9 +159,25 @@ check("pin: refuses an unknown service", pin_refused(component_name="nope"))
 check("pin: refuses a malformed digest", pin_refused(image_digest="sha256:zz"))
 check("pin: refuses a malformed tag", pin_refused(image_tag="a b"))
 
+# The tag is re-pushed after the preview ran (mctl-api#1049): production must
+# still run the digest the preview ran. Before verify the tag no longer
+# describes the preview (refused above); after verify, pin must not look at
+# the tag at all.
+def repushed_pin_keeps_the_preview_digest(mutate=None):
+    def body(b):
+        b.registry({f"{REPO}@{NEW}": NEW, f"{REPO}:{TAG}": OLD})  # the tag now points at the old image
+        rc, _ = b.run(PIN, mutate=mutate)
+        s = b.show()
+        return rc == 0 and NEW in s and OLD not in s
+    return boxed(body)
+
+
+check("repush: after the tag moves, pin still writes the preview's digest", repushed_pin_keeps_the_preview_digest())
+
 MUT = {
     "verify: no tag-still-points-here check": lambda s: re.sub(r'(got=\$\(\$RESOLVE "\$\{REPO\}:\$\{TAG\}"\).*\n)\s*\[ "\$got" = "\$DIGEST" \]', r'\1          true', s),
     "verify: no namespace check": lambda s: s.replace('case "$REPO" in "ghcr.io/${GITOPS_ORG}/${COMPONENT}") ;;', 'case "$REPO" in *) ;;'),
+    "pin: digest taken from the tag (promote by tag)": lambda s: s.replace('DIGEST="$PARAM_IMAGE_DIGEST"', 'DIGEST=$("$PROMOTE_RESOLVE" "${PARAM_IMAGE_REPOSITORY}:${PARAM_IMAGE_TAG}")'),
     "pin: no repository recheck": lambda s: s.replace('[ "$(yq \'.image.repository // ""\' "${VALUES}")" = "$REPO_EXPECTED" ]', 'true'),
 }
 
@@ -170,6 +186,8 @@ def caught(name):
     mut = MUT[name]
     if name.startswith("verify: no tag"):
         return boxed(lambda b: (b.registry({f"{REPO}@{NEW}": NEW, f"{REPO}:{TAG}": OLD}), b.run(VERIFY, mutate=mut)[0] == 0)[1])
+    if name.startswith("pin: digest taken from the tag"):
+        return not repushed_pin_keeps_the_preview_digest(mutate=mut)
     if name.startswith("verify"):
         return boxed(lambda b: (b.commit(values(repo="ghcr.io/evil/app")), b.registry({"ghcr.io/evil/app@" + NEW: NEW, "ghcr.io/evil/app:" + TAG: NEW}),
                                 b.run(VERIFY, mutate=mut)[0] == 0)[2])
