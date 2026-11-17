@@ -350,6 +350,15 @@ version_holds:
         grant: mctlhq/mctl-gitops#2753
         approved_by: mashkovd
         expires: 2026-12-01
+      # Owner GO in chat (2026-11-17) for 4.167.0: rollback_deployment behind
+      # an owner grant (mctl-api ea0632f, 8780f98) and the rollback apply fix
+      # (46694e8). Also the first live run of the release ledger in shadow
+      # mode (mctlhq/mctl-api#1022 S4). Covers only the 4.167.0 tag of release
+      # PR mctlhq/mctl-api#1107.
+      - version: "4.167.0"
+        grant: mctlhq/mctl-gitops#PENDING
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
