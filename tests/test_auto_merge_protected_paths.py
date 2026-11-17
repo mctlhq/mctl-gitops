@@ -25,6 +25,7 @@ PROTECTED = [
     "platform-gitops/release-gates.yaml",
     "scripts/release-bump-diff-guard.py",
     "scripts/release-bump-route.py",
+    "scripts/release-bump-checks-ready.py",
     "scripts/release-bump-apply.sh",
     "platform-gitops/release-bump-routes.yaml",
     "platform-gitops/argo-workflows/scripts/release-gate-guard.sh",
