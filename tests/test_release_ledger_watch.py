@@ -294,7 +294,7 @@ LEDGER_MUTANTS = {
 
 def wiring():
     wf = yaml.safe_load((ROOT / ".github/workflows/release-gate-watch.yml").read_text())
-    job = wf["jobs"]["verify"]
+    job = wf["jobs"]["ledger"]
     steps = {s.get("id"): s for s in job["steps"] if s.get("id")}
     led = steps.get("ledger", {})
     am = (ROOT / ".github/workflows/auto-merge.yml").read_text()
@@ -302,8 +302,8 @@ def wiring():
     on = wf.get(True) or wf.get("on")
     return [
         ("wiring: the job may request an OIDC token", job.get("permissions", {}).get("id-token"), "write"),
-        ("wiring: the ledger step runs only on a push (mctl-api refuses other events' tokens)",
-         "github.event_name == 'push'" in led.get("if", ""), True),
+        ("wiring: the ledger job runs only on a push (mctl-api refuses other events' tokens)",
+         job.get("if", "").strip() == "github.event_name == 'push'", True),
         ("wiring: the ledger step runs watch on the pushed range",
          'release-ledger-shadow.py watch --base "$BEFORE" --head "$SHA"' in led.get("run", ""), True),
         ("wiring: a change to the ledger script runs the watch on its PR",
