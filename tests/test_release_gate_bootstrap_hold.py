@@ -363,7 +363,7 @@ MUTANTS = {
         "            try:\n                old_text", "diff neg: push of 4.155.0, no allow in the parent policy"),
     "diff: removed held file not reported": ('viol.append(f"{p}: held file was removed")\n                continue\n            (tmp / p).parent',
         'continue\n            (tmp / p).parent', "diff neg: push removes the held file (violation, not unknown)"),
-    "diff: a changed held tag is not a write": ("            if new_t != old_tag:", "            if False:",
+    "diff: a changed held tag is not a write": ("            if new_t != old_tag and not _enforced(hold):", "            if False:",
                                                   "diff neg: push of 4.155.0, allow expired in the parent policy"),
     "diff: parent policy not required to hold version_holds": ('holds = _holds(base_policy)', 'holds = (base_policy.get("version_holds") or []) if isinstance(base_policy, dict) else []',
                                                               "diff unknown: parent policy without version_holds"),

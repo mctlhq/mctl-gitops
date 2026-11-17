@@ -42,6 +42,27 @@ version_holds:
     repository: ghcr.io/mctlhq/mctl-api
     # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
     held_from: "4.155.0"
+    # Release ledger (mctlhq/mctl-api#1022 S4). release-deploy's ledger-gate
+    # job reads the MFA-backed decisions mctl-api keeps for exactly the image
+    # it built.
+    #   shadow:  the allow records below decide; the ledger verdict is only
+    #            reported in the run summary.
+    #   enforce: the ledger decides. A bump needs an approved decision for the
+    #            exact digest (the job waits up to wait_minutes for it), the
+    #            allow records are no longer read, gitops-bump.yaml cannot
+    #            bump this image at all, and a pull request may change its tag
+    #            only as bump_pr_author from a bump_pr_branch_prefix branch.
+    # Switch to enforce in its own PR, and only when (1) a live run has shown
+    # ledger=allow for an approved release and (2) release-gate-watch reads
+    # the ledger after each push (S4b): in enforce mode its offline diff no
+    # longer flags a held-tag change, so without (2) a direct deploy-key push
+    # (docs/runbooks/mctl-api-release-hold.md P5b/P6) would go unnoticed.
+    # mctl-api's approval page text changes with the switch.
+    ledger:
+      mode: shadow
+      wait_minutes: 60
+      bump_pr_author: mctl-gitops-pr[bot]
+      bump_pr_branch_prefix: release-bump/
     # Record shape, added in a reviewed PR once the owner grants the release:
     #   - version: "4.155.0"
     #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given

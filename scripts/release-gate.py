@@ -87,14 +87,15 @@ def _gates(root: Path, rev: str | None = None) -> list[dict]:
 
 
 def problems(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
-             today: datetime.date | None = None, image: str | None = None) -> list[str]:
+             today: datetime.date | None = None, image: str | None = None,
+             ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
     """Every reason to refuse. `files=None` is verify mode (whole tree)."""
     try:
         gates = _gates(root, rev)
         holds = _holds(_policy_doc(root, rev))
     except Exception as exc:  # noqa: BLE001 - unreadable gate is a refusal
         return [f"UNKNOWN: gate {GATE} unreadable: {type(exc).__name__}: {exc}"]
-    out: list[str] = hold_problems(root, holds, files, new_tag, today, image)
+    out: list[str] = hold_problems(root, holds, files, new_tag, today, image, ledger_digest, new_digest)
     for g in gates:
         paths = g["paths"]
         touched = paths if files is None else [p for p in paths if p in files]
@@ -210,6 +211,7 @@ def _holds(doc: Any) -> list[dict]:
                 and isinstance(h.get("repository"), str) and h["repository"]
                 and _semver(h.get("held_from")) is not None):
             raise ValueError(f"malformed hold {h!r}")
+        _ledger_cfg(h)
         allow = h.get("allow")
         if allow is None:
             allow = h["allow"] = []
@@ -228,6 +230,40 @@ def _holds(doc: Any) -> list[dict]:
                 raise ValueError(f"hold {h['name']}: two allow records for {a['version']}")
             seen.add(a["version"])
     return holds
+
+
+LEDGER_MODES = ("shadow", "enforce")
+
+
+def _ledger_cfg(h: dict) -> dict | None:
+    """The hold's optional `ledger:` block (mctlhq/mctl-api#1022 S4), validated.
+
+    mode shadow:  the YAML allow records decide; release-deploy only reports
+                  what the release ledger would decide.
+    mode enforce: the ledger decides. A bump of the held image needs an
+                  approved, MFA-backed ledger decision for exactly the image
+                  digest being written (release-deploy's ledger-gate job hands
+                  it over), the YAML allow records are not consulted, and a
+                  pull request may change the held tag only when it is the
+                  release bot's bump PR.
+    """
+    led = h.get("ledger")
+    if led is None:
+        return None
+    if not isinstance(led, dict) or led.get("mode") not in LEDGER_MODES:
+        raise ValueError(f"hold {h.get('name')}: ledger.mode must be one of {LEDGER_MODES}")
+    w = led.get("wait_minutes")
+    if not isinstance(w, int) or isinstance(w, bool) or not 1 <= w <= 180:
+        raise ValueError(f"hold {h.get('name')}: ledger.wait_minutes must be an integer 1..180")
+    for k in ("bump_pr_author", "bump_pr_branch_prefix"):
+        if not isinstance(led.get(k), str) or not led[k].strip():
+            raise ValueError(f"hold {h.get('name')}: ledger.{k} is required")
+    return led
+
+
+def _enforced(h: dict) -> bool:
+    led = h.get("ledger")
+    return isinstance(led, dict) and led.get("mode") == "enforce"
 
 
 def _strip_tag(text: str, hold: dict) -> str:
@@ -254,7 +290,8 @@ def _bootstrap_tag(root: Path, hold: dict) -> str:
 
 
 def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_tag: str | None,
-                  today: datetime.date | None = None, image: str | None = None) -> list[str]:
+                  today: datetime.date | None = None, image: str | None = None,
+                  ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
     """Refuse a held version unless an allow record names exactly that version.
 
     Bump mode (files given): a NEW write, judged on `new_tag`, only for a hold
@@ -264,6 +301,20 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
     already deployed, so a record that exists counts as granted even after
     `expires`: letting it lapse must not freeze every other release and PR.
     Expiry only ever stops the next write of the held version.
+
+    A hold whose ledger mode is `enforce` ignores the allow records. A bump
+    then needs `ledger_digest` (the digest the ledger-gate job found an
+    approved decision for) equal to `new_digest` (the digest being written);
+    nothing else stands in for it, so gitops-bump.yaml, which has no ledger
+    step, cannot bump the held image at all. Verify mode accepts the held
+    version in the tree without a record: how it got there is judged by the
+    bump gate (gitops-bump.yaml has no ledger step, so it cannot bump the
+    held image) and by the pull-request identity check (`pr-identity`).
+    Direct pushes with another bypassing deploy key (runbook
+    mctl-api-release-hold.md, P5b/P6) are not judged by either, and in
+    enforce mode the offline `diff` no longer flags them either: a ledger
+    read in release-gate-watch after each push (S4b) must land before any
+    hold is switched to enforce.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
     out: list[str] = []
@@ -281,6 +332,15 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
             out.append(f"{h['name']}: tag {version!r} is not X.Y.Z, cannot compare to the hold")
             continue
         if v < _semver(h["held_from"]):  # type: ignore[operator]
+            continue
+        if _enforced(h):
+            if files is None:
+                continue
+            if not (isinstance(new_digest, str) and DIGEST.fullmatch(new_digest)):
+                out.append(f"{h['name']}: ledger enforced, but the digest being written is unknown ({new_digest!r})")
+            elif ledger_digest != new_digest:
+                out.append(f"{h['name']}: ledger enforced and no approved release-ledger decision was handed over "
+                           f"for {version} @ {new_digest} (got {ledger_digest!r})")
             continue
         rec = [a for a in h["allow"] if a["version"] == version]
         if not rec:
@@ -348,8 +408,8 @@ def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
 
 
 def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
-        image: str | None = None) -> int:
-    found = problems(root, files, new_tag, rev, image=image)
+        image: str | None = None, ledger_digest: str | None = None, new_digest: str | None = None) -> int:
+    found = problems(root, files, new_tag, rev, image=image, ledger_digest=ledger_digest, new_digest=new_digest)
     for line in found:
         print(f"::error::release gate: {line}", file=sys.stderr)
     if found:
@@ -572,7 +632,10 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
                 if not content_changed:  # else the content is what is wrong, already a violation
                     unk.append(f"{p}: pushed image.tag unreadable: {type(exc).__name__}: {exc}")
                 continue
-            if new_t != old_tag:
+            # An enforced ledger hold is judged where the change is made (the
+            # bump gate, `pr-identity`); this offline diff cannot read the
+            # ledger, and the allow records no longer decide for that hold.
+            if new_t != old_tag and not _enforced(hold):
                 viol.extend(hold_problems(tmp, [hold], [p], new_t, image=hold["repository"]))
         # The pushed tree must satisfy the parent's policy.
         # A file already reported as a violation (removed, unparsable) is not
@@ -600,6 +663,66 @@ def run_diff(repo: Path, base: str, head: str) -> int:
         return REFUSED
     print("release gate diff: pass")
     return 0
+
+
+# -- ledger holds: who may change a held tag, and what the watch must read ----
+
+
+def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: str) -> list[str]:
+    """A pull request may change an enforced hold's tag only as the release bot's bump PR.
+
+    Pull-request CI cannot read the release ledger (mctl-api admits only
+    workflows on refs/heads/main as its reader), so it cannot check a
+    decision. It can check who proposes the change: release-deploy's
+    publish-pr job opens bump PRs as the GitHub App bot from a branch named
+    release-bump/<image>-<version>, after its ledger-gate job found the
+    decision. The policy is read from `base`, never from the pull request.
+    A failed read is a problem, never a pass.
+    """
+    try:
+        raw = _blob(repo, base, GATE)
+        if raw is None:
+            return [f"{GATE} absent at {base}"]
+        holds = _holds(_parse(raw))
+    except Exception as exc:  # noqa: BLE001
+        return [f"UNKNOWN: policy unreadable at {base}: {type(exc).__name__}: {exc}"]
+    out: list[str] = []
+    for h in holds:
+        if not _enforced(h):
+            continue
+        tags = []
+        for rev in (base, head):
+            try:
+                b = _blob(repo, rev, h["file"])
+                if b is None:
+                    raise ValueError("file absent")
+                with tempfile.TemporaryDirectory() as t:
+                    (Path(t) / h["file"]).parent.mkdir(parents=True)
+                    (Path(t) / h["file"]).write_bytes(b)
+                    tags.append(_bootstrap_tag(Path(t), h))
+            except Exception as exc:  # noqa: BLE001
+                out.append(f"UNKNOWN: {h['file']} image.tag unreadable at {rev}: {type(exc).__name__}: {exc}")
+                break
+        else:
+            if tags[0] == tags[1]:
+                continue
+            led = h["ledger"]
+            if author != led["bump_pr_author"] or not branch.startswith(led["bump_pr_branch_prefix"]):
+                out.append(f"{h['name']}: {h['file']} changes {h['repository']} {tags[0]} -> {tags[1]}, but the "
+                           f"ledger is enforced and only {led['bump_pr_author']} on a "
+                           f"{led['bump_pr_branch_prefix']}* branch may propose that (got {author!r} on {branch!r}); "
+                           f"release it through release-deploy instead")
+    return out
+
+
+def ledger_holds(root: Path) -> list[str]:
+    """`<mode> <repository> <version>` per ledger hold (for operators and the S4b watch step)."""
+    out = []
+    for h in _holds(_policy_doc(root, None)):
+        led = h.get("ledger")
+        if led:
+            out.append(f"{led['mode']} {h['repository']} {_bootstrap_tag(root, h)}")
+    return out
 
 
 # -- selftest: green on a converged tree, red on every deliberate mutation ----
@@ -739,18 +862,46 @@ def main(argv: list[str] | None = None) -> int:
     for sp in (c, v):
         sp.add_argument("--policy-rev", default=None,
                         help="read release-gates.yaml from this git revision (e.g. origin/main), not the tree")
+    c.add_argument("--new-digest", default=None, help="digest of the image being written (ledger holds)")
+    c.add_argument("--ledger-approved-digest", default=None,
+                   help="digest release-deploy's ledger-gate job found an approved decision for")
     d = sub.add_parser("diff")
     d.add_argument("--base", required=True)
     d.add_argument("--head", required=True)
+    pi = sub.add_parser("pr-identity")
+    pi.add_argument("--base", required=True)
+    pi.add_argument("--head", required=True)
+    pi.add_argument("--author", required=True)
+    pi.add_argument("--branch", required=True)
+    sub.add_parser("ledger-holds")
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest()
     if a.cmd == "check":
-        return run(Path(a.root), a.files, a.new_tag, a.policy_rev, a.image)
+        return run(Path(a.root), a.files, a.new_tag, a.policy_rev, a.image,
+                   a.ledger_approved_digest or None, a.new_digest or None)
     if a.cmd == "verify":
         return run(Path(a.root), None, None, a.policy_rev)
     if a.cmd == "diff":
         return run_diff(Path(a.root), a.base, a.head)
+    if a.cmd == "pr-identity":
+        found = pr_identity_problems(Path(a.root), a.base, a.head, a.author, a.branch)
+        for line in found:
+            print(f"::error::release gate pr-identity: {line}", file=sys.stderr)
+        if any(x.startswith("UNKNOWN") for x in found):
+            return UNKNOWN
+        if found:
+            return REFUSED
+        print("release gate pr-identity: pass")
+        return 0
+    if a.cmd == "ledger-holds":
+        try:
+            for line in ledger_holds(Path(a.root)):
+                print(line)
+        except Exception as exc:  # noqa: BLE001 - could not observe
+            print(f"::error::release gate ledger-holds: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return UNKNOWN
+        return 0
     ap.error("a command or --selftest is required")
     return 2
 
