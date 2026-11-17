@@ -143,8 +143,14 @@ def cases(script):
     out.append(("ledger-holds lists nothing without a ledger block", 0 if code == 0 and not text.strip() else 1, 0))
 
     d, b, h = repo(policy("enforce"), policy("enforce"))
-    pi = lambda a, br: run(script, d, "pr-identity", "--base", b, "--head", h, "--author", a, "--branch", br)[0]  # noqa: E731
+    def pi(a, br, pusher=None):
+        return run(script, d, "pr-identity", "--base", b, "--head", h, "--author", a, "--branch", br,
+                   "--pusher", pusher or a)[0]
     out.append(("pr-identity: release bot bump PR passes", pi(BOT, "release-bump/mctl-api-4.200.0"), 0))
+    out.append(("pr-identity: a human's PR is refused even if the bot pushed to it",
+                pi("mashkovd", "release-bump/mctl-api-4.200.0", pusher=BOT), REFUSED))
+    out.append(("pr-identity: a human push onto the bot's bump PR is refused",
+                pi(BOT, "release-bump/mctl-api-4.200.0", pusher="mashkovd"), REFUSED))
     out.append(("pr-identity: a person may not change the tag", pi("mashkovd", "release-bump/mctl-api-4.200.0"),
                 REFUSED))
     out.append(("pr-identity: the bot from another branch may not", pi(BOT, "feat/x"), REFUSED))
@@ -152,19 +158,23 @@ def cases(script):
                 run(script, d, "diff", "--base", b, "--head", h)[0], 0))
     d, b, h = repo(policy("enforce"), policy("shadow"))
     out.append(("pr-identity: policy is read from the base, not the PR",
-                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x")[0],
+                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x",
+                    "--pusher", "mashkovd")[0],
                 REFUSED))
     d, b, h = repo(policy("shadow"), policy("shadow"))
     out.append(("pr-identity: shadow mode does not judge authors",
-                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x")[0], 0))
+                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x",
+                    "--pusher", "mashkovd")[0], 0))
     out.append(("diff: shadow tag change without a record is a violation",
                 run(script, d, "diff", "--base", b, "--head", h)[0], REFUSED))
     d, b, h = repo(policy("enforce"), policy("enforce"), head_api=BASE_API)
     out.append(("pr-identity: a PR that leaves the tag alone passes",
-                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x")[0], 0))
+                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", "mashkovd", "--branch", "x",
+                    "--pusher", "mashkovd")[0], 0))
     d, b, h = repo(policy("enforce"), policy("enforce"), head_api="not yaml: [")
     out.append(("pr-identity: unreadable head tag is unknown",
-                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", BOT, "--branch", PREFIX + "x")[0],
+                run(script, d, "pr-identity", "--base", b, "--head", h, "--author", BOT, "--branch", PREFIX + "x",
+                    "--pusher", BOT)[0],
                 UNKNOWN))
     return out
 
@@ -181,6 +191,7 @@ MUTANTS = {
                            '            if not branch.startswith(led["bump_pr_branch_prefix"]):'),
     "branch not checked": ('            if author != led["bump_pr_author"] or not branch.startswith(led["bump_pr_branch_prefix"]):',
                            '            if author != led["bump_pr_author"]:'),
+    "pusher not checked": ('            elif pusher != led["bump_pr_author"]:', "            elif False:"),
     "policy read from head": ('        raw = _blob(repo, base, GATE)\n        if raw is None:\n            return [f"{GATE} absent at {base}"]',
                               '        raw = _blob(repo, head, GATE)\n        if raw is None:\n            return [f"{GATE} absent at {base}"]'),
     "diff judges enforced tag by records": ("            if new_t != old_tag and not _enforced(hold):",
@@ -188,8 +199,22 @@ MUTANTS = {
 }
 
 
+def wiring() -> list[tuple[str, bool, bool]]:
+    rd = (ROOT / ".github/workflows/release-deploy.yaml").read_text()
+    vm = (ROOT / ".github/workflows/validate-manifests.yml").read_text()
+    return [
+        ("wiring: release-deploy check passes the built and the approved digest",
+         '"--new-digest", os.environ.get("IMAGE_DIGEST", "")' in rd
+         and '"--ledger-approved-digest", os.environ.get("LEDGER_APPROVED_DIGEST", "")' in rd
+         and "IMAGE_DIGEST: ${{ needs.build.outputs.digest }}" in rd
+         and "LEDGER_APPROVED_DIGEST: ${{ needs.ledger-gate.outputs.approved_digest }}" in rd, True),
+        ("wiring: validate passes the event sender as the pusher",
+         "PUSHER: ${{ github.event.sender.login }}" in vm and '--pusher "$PUSHER"' in vm, True),
+    ]
+
+
 def main() -> int:
-    bad = [(n, a, e) for n, a, e in cases(SCRIPT) if a != e]
+    bad = [(n, a, e) for n, a, e in cases(SCRIPT) + wiring() if a != e]
     for n, a, e in bad:
         print(f"FAIL {n}: got {a}, want {e}")
     src = SCRIPT.read_text()

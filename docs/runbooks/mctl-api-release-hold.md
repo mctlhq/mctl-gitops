@@ -170,6 +170,15 @@ what it changes:
      tag.
   7. `verify` accepts the held tag without a record.
 
+`ledger-gate` runs for every image, because `bump` needs it. A red
+`ledger-gate` on an image with no ledger hold is an infrastructure failure:
+checkout, `pip install`, or loading `release-gates.yaml`. It is not a
+refusal. Re-run the job.
+
+`pr-identity` requires the event sender to be the bot as well as the PR
+author. A human push onto an open bump PR therefore fails `validate`. So
+does a human reopening it. Let release-deploy open a new PR instead.
+
 Before switching to enforce (its own PR), both of these must hold:
 
 1. A live run has shown `ledger=allow` for an approved release. Until one

@@ -668,7 +668,8 @@ def run_diff(repo: Path, base: str, head: str) -> int:
 # -- ledger holds: who may change a held tag, and what the watch must read ----
 
 
-def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: str) -> list[str]:
+def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: str,
+                         pusher: str | None = None) -> list[str]:
     """A pull request may change an enforced hold's tag only as the release bot's bump PR.
 
     Pull-request CI cannot read the release ledger (mctl-api admits only
@@ -678,6 +679,13 @@ def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: 
     release-bump/<image>-<version>, after its ledger-gate job found the
     decision. The policy is read from `base`, never from the pull request.
     A failed read is a problem, never a pass.
+
+    The opener alone proves nothing about later commits: anyone with write
+    access can push onto the bot's open branch, and the PR's author stays the
+    bot. So `pusher`, the account that caused this run (the event sender: the
+    opener on `opened`, whoever pushed on `synchronize`, whoever reopened),
+    must be the bot as well. Commit author names would not do: they are
+    free text and the bot's commits are unsigned.
     """
     try:
         raw = _blob(repo, base, GATE)
@@ -712,6 +720,10 @@ def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: 
                            f"ledger is enforced and only {led['bump_pr_author']} on a "
                            f"{led['bump_pr_branch_prefix']}* branch may propose that (got {author!r} on {branch!r}); "
                            f"release it through release-deploy instead")
+            elif pusher != led["bump_pr_author"]:
+                out.append(f"{h['name']}: {h['file']} changes {h['repository']} {tags[0]} -> {tags[1]} on the release "
+                           f"bot's PR, but this run was caused by {pusher!r}, not {led['bump_pr_author']}: a commit "
+                           f"pushed onto the bump branch carries no ledger decision")
     return out
 
 
@@ -873,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("--head", required=True)
     pi.add_argument("--author", required=True)
     pi.add_argument("--branch", required=True)
+    pi.add_argument("--pusher", required=True, help="github.event.sender.login of the pull_request event")
     sub.add_parser("ledger-holds")
     a = ap.parse_args(argv)
     if a.selftest:
@@ -885,7 +898,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "diff":
         return run_diff(Path(a.root), a.base, a.head)
     if a.cmd == "pr-identity":
-        found = pr_identity_problems(Path(a.root), a.base, a.head, a.author, a.branch)
+        found = pr_identity_problems(Path(a.root), a.base, a.head, a.author, a.branch, a.pusher)
         for line in found:
             print(f"::error::release gate pr-identity: {line}", file=sys.stderr)
         if any(x.startswith("UNKNOWN") for x in found):

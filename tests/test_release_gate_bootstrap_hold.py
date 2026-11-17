@@ -310,7 +310,7 @@ def wiring():
     for label, name in (("gitops-bump", "gitops-bump.yaml"), ("release-deploy", "release-deploy.yaml")):
         wf = (ROOT / ".github/workflows" / name).read_text()
         chk = re.search(r'"scripts/release-gate\.py", "check",\s*\n\s*"--files", \*\[os\.path\.normpath\(f\) for f in files\], '
-                        r'"--new-tag", new_tag,\s*"--policy-rev", "origin/main", "--image", image_name\]', wf)
+                        r'"--new-tag", new_tag,\s*"--policy-rev", "origin/main", "--image", image_name[\],]', wf)
         out.append((f"wiring: {label} check reads the policy from origin/main and names the image", bool(chk), True))
         # The push happens in the two publishing jobs (direct and PR route). In
         # each of them verify reads the policy from origin/main and runs before

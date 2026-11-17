@@ -436,7 +436,58 @@ def _selftest() -> int:
         if got != want:
             bad += 1
             print(f"FAIL poll {name}: got {got}, want {want}")
-    total = len(cases) + len(ycases) + len(pcases) + 1
+    # gate() routing: it sits in front of every release-deploy bump, so a
+    # wrong exit here blocks every image. IO is stubbed via module globals.
+    import tempfile  # noqa: PLC0415
+    g = globals()
+    saved = {k: g[k] for k in ("_ledger_hold", "_read_ledger", "check", "wait_for_decision")}
+    hold_enf = {"ledger": {"mode": "enforce", "wait_minutes": 1}}
+
+    def route(hold, digest=D, waited=(0, "ok"), check_rc=0):
+        with tempfile.TemporaryDirectory() as td:
+            outp = Path(td) / "out"
+            outp.write_text("")
+            old_env = os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_STEP_SUMMARY")
+            os.environ["GITHUB_OUTPUT"] = str(outp)
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            calls = []
+
+            def lh(_image):
+                if isinstance(hold, Exception):
+                    raise hold
+                return hold
+            g["_ledger_hold"] = lh
+            g["check"] = lambda _a: calls.append("check") or check_rc
+            g["wait_for_decision"] = lambda *a, **k: calls.append("wait") or waited
+            try:
+                ns = argparse.Namespace(repository=R, version=V, digest=digest, commit=C, image="ghcr.io/x/y")
+                import contextlib  # noqa: PLC0415
+                import io  # noqa: PLC0415
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = gate(ns)
+                return rc, tuple(calls), outp.read_text().strip()
+            finally:
+                g.update(saved)
+                for k, v in zip(("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"), old_env):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    gcases = [
+        ("no hold: pass, nothing read", route(None, digest=""), (0, (), "")),
+        ("unreadable policy: unknown", route(ValueError("x")), (7, (), "")),
+        ("bad digest under a hold: 2", route(hold_enf, digest="sha256:x"), (2, (), "")),
+        ("shadow: reports and passes", route({"ledger": {"mode": "shadow", "wait_minutes": 1}}), (0, ("check",), "")),
+        ("enforce allow: digest handed over", route(hold_enf), (0, ("wait",), f"approved_digest={D}")),
+        ("enforce refuse: no digest", route(hold_enf, waited=(6, "no")), (6, ("wait",), "")),
+        ("enforce unknown: no digest", route(hold_enf, waited=(7, "down")), (7, ("wait",), "")),
+    ]
+    for name, got, want in gcases:
+        if got != want:
+            bad += 1
+            print(f"FAIL gate {name}: got {got}, want {want}")
+    total = len(cases) + len(ycases) + len(pcases) + len(gcases) + 1
     print(f"selftest: {total - bad}/{total} passed")
     return 1 if bad else 0
 
