@@ -5,8 +5,11 @@
 The hold began as an incident guard for 4.155.0 (unapproved #934 defaults).
 That incident is closed and every held version since then shipped on an owner
 GO, but the hold stays on as standing policy: an mctl-api version reaches
-production only on an owner GO for that exact version, with one allow record
-per version, written when the GO is given. Do not remove it as obsolete.
+production only on an owner GO for that exact version. While the hold's
+`ledger.mode` is `shadow` that GO is one allow record per version, written when
+the GO is given; in `enforce` it is the MFA-backed release-ledger decision for
+the exact digest (see "Release ledger mode" below). Do not remove the hold as
+obsolete.
 
 Its current strength, honestly: it stops unattended writers (gitops-bump,
 release-deploy, DevLoop) but not an agent session that holds the owner's
