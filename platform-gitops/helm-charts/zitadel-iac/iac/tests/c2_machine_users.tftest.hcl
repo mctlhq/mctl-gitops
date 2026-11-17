@@ -94,8 +94,14 @@ run "mctl_api_accepts_the_consent_reader_audience_for_that_subject_only" {
   }
 
   assert {
-    condition     = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0].subject_audiences == { "consent-reader-user" = ["mctl-api-project"] }
-    error_message = "The MCTL API project audience must be accepted for the consent reader's subject, and for no other."
+    condition     = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0].service_subjects == { "consent-reader-user" = "mctl-api-project" }
+    error_message = "The consent reader's subject must be a service subject pinned to the MCTL API project audience, and no other subject listed."
+  }
+  # mctl-api refuses to boot when a service subject is also a
+  # subject_audiences key, so the entry must not carry that key at all.
+  assert {
+    condition     = !contains(keys(nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0]), "subject_audiences")
+    error_message = "The entry must not carry subject_audiences alongside service_subjects (mctl-api refuses to boot)."
   }
 }
 

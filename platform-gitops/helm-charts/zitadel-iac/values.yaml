@@ -85,7 +85,11 @@ image:
 #   keys, the control audience project, the data of
 #   mctl-api/mctl-api-c2-machine-ids): no new action; all creates, plus an
 #   in-place update of the data of mctl-api/mctl-api-oidc-zitadel
-#   (subject_audiences in the entry).
+#   (service_subjects in the entry).
+#   mctl-api#1022 (mctl-api.tf: the mctl-api-release-approval web client of
+#   the release approval page, in the MCTL API project): no new action; a
+#   create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
 #   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
 #   for coolify-mcp and mctl-academy, one grant of each project per tenant
 #   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel

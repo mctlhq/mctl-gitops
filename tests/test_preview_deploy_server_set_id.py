@@ -82,6 +82,8 @@ class PreviewDeployServerSetID(unittest.TestCase):
             "PARAM_PORT": "",
             "PARAM_PREVIEW_ID": "",
             "PARAM_GITOPS_REF": "",
+            "PARAM_COMPILED_VALUES": "",
+            "PARAM_VALUES_SHA256": "",
             "PARAM_IMAGE_DIGEST": "",
             "ARGO_WORKFLOW_NAME": "preview-deploy-x7k2q",
             "PLATFORM_DOMAIN": "mctl.ai",

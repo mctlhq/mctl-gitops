@@ -153,11 +153,11 @@ def judge(files):
                 ck is not None and "default_branch" in str(ck.get("with")) and ck["with"].get("persist-credentials") is False))
     plain = step(job, "Merge PR")
     out.append(("auto-merge: the plain merge step is not taken by release-bump PRs", plain is not None and "!startsWith(github.event.pull_request.head.ref, 'release-bump/')" in plain["if"]))
-    rb = step(job, "Merge release-bump PR")
+    rb = step(job, "Enqueue release-bump PR")
     rbtxt = rb["run"] if rb else ""
-    out.append(("auto-merge: release-bump merge is pinned to the judged head", '--match-head-commit "$HEAD_SHA"' in rbtxt and "steps.guard.outputs.head_sha" in str(rb.get("env"))))
-    out.append(("auto-merge: release-bump merge waits for CLEAN and stops when the head moved",
-                "CLEAN)" in rbtxt and '"$cur" != "$HEAD_SHA"' in rbtxt and "--merge" in rbtxt and "--squash" not in rbtxt))
+    out.append(("auto-merge: release-bump merge is pinned to the judged head", "expectedHeadOid" in rbtxt and '-f h="$HEAD_SHA"' in rbtxt and "steps.guard.outputs.head_sha" in str(rb.get("env"))))
+    out.append(("auto-merge: release-bump merge waits for the other checks and stops when the head moved",
+                "release-bump-checks-ready.py" in rbtxt and '"$cur" != "$HEAD_SHA"' in rbtxt and "enqueuePullRequest" in rbtxt and "gh pr merge" not in rbtxt and "--squash" not in rbtxt))
     out.append(("auto-merge: an unreadable PR state is a refusal", "could not read #" in rbtxt))
     out.append(("auto-merge: the claude/ and portal-allowlist/ routes are unchanged",
                 "startsWith(github.event.pull_request.head.ref, 'claude/')" in job["if"] and "portal-allowlist/" in job["if"]))
@@ -189,8 +189,8 @@ MUT = [
     ("auto-merge: fork head accepted", "auto-merge.yml", 'elif [ "$HEAD_REPO" != "$REPO" ]; then', "elif false; then"),
     ("auto-merge: guard bypassed", "auto-merge.yml", "elif ! python3 scripts/release-bump-diff-guard.py < \"$RUNNER_TEMP/pr.diff\"; then", "elif false; then"),
     ("auto-merge: diff read at a moving ref", "auto-merge.yml", "compare/main...${head_sha}", "compare/main...${HEAD_REF}"),
-    ("auto-merge: merge not pinned", "auto-merge.yml", 'gh pr merge "$PR" --merge --delete-branch --match-head-commit "$HEAD_SHA" --repo "$REPO"', 'gh pr merge "$PR" --merge --delete-branch --repo "$REPO"'),
-    ("auto-merge: merges without waiting for CLEAN", "auto-merge.yml", "              CLEAN)\n", "              CLEAN|BLOCKED)\n"),
+    ("auto-merge: enqueue not pinned", "auto-merge.yml", '-f h="$HEAD_SHA"', '-f h=""'),
+    ("auto-merge: enqueues without the readiness script", "auto-merge.yml", "python3 scripts/release-bump-checks-ready.py", "python3 scripts/other.py"),
     ("auto-merge: guard scripts from the PR merge commit", "auto-merge.yml", "          ref: ${{ github.event.repository.default_branch }}\n", "          ref: ${{ github.sha }}\n"),
     ("auto-merge: plain step also takes release-bump", "auto-merge.yml", " && !startsWith(github.event.pull_request.head.ref, 'release-bump/')", ""),
     ("wait: closed unmerged is success", "release-deploy.yaml", 'echo "::error::release-bump pull request #${PR} was closed without merging"; exit 1', 'exit 0'),

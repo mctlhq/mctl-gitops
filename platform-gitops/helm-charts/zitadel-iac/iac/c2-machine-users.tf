@@ -65,7 +65,7 @@ resource "zitadel_project" "c2_control" {
 }
 
 # The consent reader's audience is the MCTL API project: mctl-api lists that
-# id under subject_audiences for this one subject only (mctl-api.tf), so the
+# id under service_subjects for this one subject only (mctl-api.tf), so the
 # project audience is not accepted from any other client.
 
 # Keys of our own, as orchestrator-devloop.tf: the RSA private keys were
