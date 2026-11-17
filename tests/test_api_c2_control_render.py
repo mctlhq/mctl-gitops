@@ -14,6 +14,7 @@ Pins, on the bootstrap render:
 
 Run: python3 tests/test_api_c2_control_render.py   (needs helm)
 """
+import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -62,7 +63,50 @@ def refused(args, needle):
           f"got rc={r.returncode} {r.stderr[-200:]!r}")
 
 
+def gate_module():
+    spec = importlib.util.spec_from_file_location("release_gate", ROOT / "scripts" / "release-gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+TEMPLATE = "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml"
+
+
+def gate_reads_tag(gate, text, label):
+    """The release gate's own reader must still see a string image.tag (UNKNOWN = gate blocked)."""
+    try:
+        img = gate.block_values(text).get("image")
+        ok = isinstance(img, dict) and isinstance(img.get("tag"), str)
+    except Exception as exc:  # any failure is the gate answering UNKNOWN
+        check(False, f"{label}: release gate cannot read image.tag: {type(exc).__name__}: {exc}")
+        return
+    check(ok, f"{label}: release gate cannot read image.tag")
+
+
+def gate_regression():
+    """The gate parses the raw template (Go lines stripped), so the sidecar block is always
+    in what it parses; it also parses the rendered values of both switch states. An inline
+    directive left outside quotes made the sidecar `command` a dict used as a key (unhashable)."""
+    gate = gate_module()
+    gate_reads_tag(gate, (ROOT / TEMPLATE).read_text(), "raw template")
+    for label, args in (("rendered OFF", []), ("rendered ON", LIT)):
+        out = helm(*args)
+        if out.returncode != 0:
+            check(False, f"{label}: render failed: {out.stderr[-200:]}")
+            continue
+        for d in docs(out.stdout):
+            if d["kind"] == "Application" and d["metadata"].get("name") == "admins-mctl-api":
+                vals = d["spec"]["sources"][0]["helm"]["values"]
+                wrapped = "      values: |\n" + "".join("        " + ln + "\n" for ln in vals.splitlines())
+                gate_reads_tag(gate, wrapped, label)
+                break
+        else:
+            check(False, f"{label}: admins-mctl-api Application not rendered")
+
+
 def main():
+    gate_regression()
     dark = helm()
     check(dark.returncode == 0, f"dark render failed: {dark.stderr[-300:]}")
     v = api_values(dark.stdout)

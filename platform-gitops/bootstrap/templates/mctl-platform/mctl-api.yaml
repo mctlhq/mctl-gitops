@@ -697,7 +697,16 @@ spec:
           extraContainers:
             - name: c2-control-token-refresher
               image: "{{ $c2.refresherImage.repository }}:{{ $c2.refresherImage.tag }}"
-              command: {{ toJson $c2.refresherImage.command }}
+              # The release gate strips whole-line directives and parses this
+              # block as YAML. An unquoted inline directive (toJson, or a bare
+              # list item) reads as a flow mapping, and as a mapping key it
+              # is unhashable: image.tag becomes unreadable and the gate
+              # answers UNKNOWN. Keep inline directives inside quotes. Command
+              # words must therefore not contain a double quote or backslash.
+              command:
+              {{- range $c2.refresherImage.command }}
+                - "{{ . }}"
+              {{- end }}
               env:
                 - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
                 - {name: TOKEN_FILE, value: "/var/run/secrets/c2-control/token"}
