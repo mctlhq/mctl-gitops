@@ -283,6 +283,20 @@ version_holds:
         grant: mctlhq/mctl-gitops#2729
         approved_by: mashkovd
         expires: 2026-12-01
+      # Sixteenth grant (owner GO in chat, 2026-11-17): 4.165.0 is 4.164.0
+      # plus three changes, all confirmed by the owner as one release:
+      # service_subjects, which pins named ZITADEL machine users to the
+      # service kind (mctlhq/mctl-api#1098, off until configured);
+      # plan and apply of a preview onboard from a DeployIntent
+      # (mctlhq/mctl-api#1099, owner approval per onboard; the live check on
+      # a real repository was not run); and the rollback-revision operation
+      # (mctlhq/mctl-api#1096; every rollback is refused until records carry
+      # a commit, its workflow template is mctlhq/mctl-gitops#2734, merged).
+      # Covers only the 4.165.0 tag of the release PR mctlhq/mctl-api#1097.
+      - version: "4.165.0"
+        grant: mctlhq/mctl-gitops#2745
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
