@@ -273,7 +273,11 @@ version_holds:
       # RELEASE_APPROVAL_UI_ENABLED) and its optional Helm slot
       # releaseApprovalUISecret (mctlhq/mctl-api#1095, empty by default,
       # default render unchanged). Nothing in this release turns any of it
-      # on; that is a separate, owner-approved PR.
+      # on; that is a separate, owner-approved PR. Also, confirmed by the
+      # owner before the release merged: mctlhq/mctl-api#1094 (step 1 of
+      # #1048, not dark): an additive migration (deploy_records.commit_sha,
+      # nullable) and the DeployRecord reconciler filling argo_revision,
+      # commit_sha and health from workflow outputs.
       # Covers only the 4.164.0 tag of the release PR mctlhq/mctl-api#1092.
       - version: "4.164.0"
         grant: mctlhq/mctl-gitops#2729

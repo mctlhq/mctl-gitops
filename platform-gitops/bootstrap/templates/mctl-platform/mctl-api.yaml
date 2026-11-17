@@ -10,12 +10,13 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. 9895c76f is the 4.159.0 release commit. With the
-      # previous bootstrap values it renders identically to f54c5b96 (the
-      # 4.156.0 pin; helm template, empty diff); its one chart change is the
-      # optional deployApprovalUISecret slot (mctlhq/mctl-api#1050), used
-      # below. Move this pin in the same reviewed PR that bumps the image tag.
-      targetRevision: 9895c76fc45b2d7046e46308871a994d8dc6eb81
+      # a GitOps change. c5e5d6f9 is the 4.164.0 release commit. With the
+      # current bootstrap values it renders the same objects as 9895c76f (the
+      # 4.159.0 pin; helm template, the only diff is one YAML comment); its
+      # chart changes are the optional releaseApprovalUISecret slot
+      # (mctlhq/mctl-api#1095), unset here, and that comment. Move this pin
+      # in a reviewed PR, at a release commit whose image is deployed.
+      targetRevision: c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361
       path: helm
       helm:
         releaseName: mctl-api
