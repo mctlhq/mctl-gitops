@@ -220,9 +220,24 @@
       "reason": "Read-only lookup of a stored preview deploy plan (mctlhq/mctl-api#866); enabling it on the shared portal is a separate owner decision."
     },
     {
+      "name": "mctl_get_deployment",
+      "enabled": false,
+      "reason": "Read-only lookup of the deployment record of an applied plan (mctlhq/mctl-api#1047); enabling it on the shared portal is a separate owner decision."
+    },
+    {
       "name": "mctl_request_deploy_approval",
       "enabled": false,
       "reason": "Opens a pending deploy.apply grant request for a stored plan (mctlhq/mctl-api#1026); grants nothing. Enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_promote_deployment",
+      "enabled": false,
+      "reason": "Writes an immutable production-promotion plan row (mctlhq/mctl-api#1049); enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_rollback_deployment",
+      "enabled": false,
+      "reason": "Writes an immutable production-rollback plan row (mctlhq/mctl-api#1049); enabling it on the shared portal is a separate owner decision."
     },
     {
       "name": "mctl_deploy_apply",
@@ -418,6 +433,11 @@
       "name": "mctl_rollback_agent_binding",
       "enabled": false,
       "reason": "Admin-only write: appends a ReleaseBinding revision that restores a prior definition/profile pair for an agent in an environment. Destructive to running behaviour and not recorded readOnly, so it stays off the shared portal."
+    },
+    {
+      "name": "mctl_rollback_revision",
+      "enabled": false,
+      "reason": "Restores a service's whole values.yaml and image digest from an earlier deployment record, changing production. New (mctlhq/mctl-api#1048) and not yet enabled on the shared portal: the owner decides visibility once deployment records exist for deploy-service."
     },
     {
       "name": "mctl_rollback_service",
