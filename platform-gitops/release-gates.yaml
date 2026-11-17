@@ -40,7 +40,17 @@ version_holds:
     issue: mctlhq/mctl-gitops#2528
     file: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
     repository: ghcr.io/mctlhq/mctl-api
-    # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
+    # Standing policy, not a one-off incident hold: every mctl-api version
+    # reaches production only on an owner GO for that exact version. It is
+    # enforced here because gitops-bump and release-deploy write the tag
+    # without a PR, so this check is the only one on that path. It was set at
+    # 4.155.0 (mctlhq/mctl-gitops#2528), which carried defaults the owner had
+    # not approved (mctlhq/mctl-api#934). That reason has been resolved, but
+    # the hold stays. While ledger.mode is shadow the GO is an allow record
+    # (agent-written text, not proof of a human decision), written when the
+    # GO is given and before the release PR merges; in enforce mode the GO is
+    # the MFA-backed release-ledger decision (mctlhq/mctl-api#1022 S4) and
+    # allow records are no longer read.
     held_from: "4.155.0"
     # Release ledger (mctlhq/mctl-api#1022 S4). release-deploy's ledger-gate
     # job reads the MFA-backed decisions mctl-api keeps for exactly the image

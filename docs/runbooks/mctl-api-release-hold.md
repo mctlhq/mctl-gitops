@@ -1,5 +1,29 @@
 # mctl-api release hold: write-path inventory
 
+## Purpose (2026-11-16)
+
+The hold began as an incident guard for 4.155.0 (unapproved #934 defaults).
+That incident is closed and every held version since then shipped on an owner
+GO, but the hold stays on as standing policy: an mctl-api version reaches
+production only on an owner GO for that exact version. While the hold's
+`ledger.mode` is `shadow` that GO is one allow record per version, written when
+the GO is given; in `enforce` it is the MFA-backed release-ledger decision for
+the exact digest (see "Release ledger mode" below). Do not remove the hold as
+obsolete.
+
+Its current strength, honestly: it stops unattended writers (gitops-bump,
+release-deploy, DevLoop) but not an agent session that holds the owner's
+token, because such a session can write and merge the allow record itself.
+How it moves toward a real approval gate:
+
+1. mctlhq/mctl-api#1022: the grant becomes a fresh, MFA-backed browser
+   decision recorded in the mctl-api ledger, unreachable over MCP or a bearer
+   token.
+2. The gate verifies that ledger record, bound to the image digest
+   (promote-by-digest, mctlhq/mctl-gitops#2652), instead of a YAML allow line.
+3. Admission policy in the cluster (tasks 10/11 below) refuses an image that
+   has no approval, so a write that bypasses the script still cannot run.
+
 Tasks 1, 12 and 16 of the #2528 design (PR #2589). Facts are read from the
 repository on `main` (56c31ec6 plus the #2596 merge) and from `gh api`; where
 something could not be observed it is marked so. This document grants nothing
