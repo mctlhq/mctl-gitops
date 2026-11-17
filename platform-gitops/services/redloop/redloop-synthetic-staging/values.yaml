@@ -195,15 +195,29 @@ extraVolumeMounts:
 # ingress.enabled is false nothing is created. The Middleware and the router
 # annotation above appear and disappear in the same sync.
 #
-# Clients are keyed on CF-Connecting-IP. Cloudflare sets that header itself,
-# and the websecure entrypoint admits only Cloudflare ranges
-# (traefik/cloudflare-origin ipAllowList), so a client cannot reach Traefik
-# with a forged one. Keying on the remote address would instead put every
-# visitor behind the same Cloudflare edge IP into one bucket.
+# Clients are keyed on CF-Connecting-IP, which Cloudflare sets. Keying on the
+# remote address instead would put every visitor behind the same Cloudflare
+# edge IP into one bucket. The websecure entrypoint admits only Cloudflare
+# ranges (traefik/cloudflare-origin), but that does NOT make the header
+# unforgeable. cloudflare-origin-allowlist.yaml.tpl lists two gaps it leaves
+# open:
+#   - an in-cluster client can reach Traefik directly and send its own PROXY
+#     header;
+#   - another Cloudflare customer's zone can route to this origin.
+# Either one can choose its own CF-Connecting-IP. The limit is therefore
+# per-client for honest traffic only, and it is not an access control.
 #
-# 10 req/s average and a burst of 20 per client. That is twice the RoE scanner
-# ceiling of 5 req/s, so a scanner that follows the RoE never hits it. One
-# that ignores the RoE gets 429s instead of exhausting the 100m CPU request.
+# The counters live in each Traefik replica's memory (no Redis configured).
+# There are 3 replicas today, and the HPA allows 3-10. The effective ceiling
+# for one client is therefore 10 req/s times the number of replicas its
+# connections land on, which is 30-100 req/s, not 10.
+#
+# 10 req/s average and a burst of 20, per client and per replica. That is
+# twice the RoE scanner ceiling of 5 req/s even if every request of a
+# keep-alive scanner lands on one replica, so a scanner that follows the RoE
+# never hits it. It is a backstop against a runaway scanner, not the budget.
+# The budget is the RoE rate, enforced by the tester, and the fixture's
+# protection is its 100m CPU limit plus the RedLoop* alerts.
 extraObjects:
   - renderIf: '{{ .Values.ingress.enabled | toString | eq "true" }}'
     apiVersion: traefik.io/v1alpha1
