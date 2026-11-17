@@ -65,6 +65,17 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: mctl-api
+        # The C2 cluster service's server pod logs in via auth/kubernetes
+        # (transit encrypt/decrypt of linked sessions). The server pod only:
+        # its migration Job and the egress sidecars never call Vault, and
+        # neither does anything else in that namespace.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-glovo
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-glovo
+              app.kubernetes.io/component: server
         # Workflows authenticate via auth/kubernetes/login (provision-database,
         # create-tenant, tpl-vault-write). Workflow pods only, not the Argo
         # server or controller.

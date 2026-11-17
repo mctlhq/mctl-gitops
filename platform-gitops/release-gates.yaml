@@ -51,6 +51,27 @@ version_holds:
     # proof of a human decision; mctlhq/mctl-api#1022 replaces it with a
     # fresh, MFA-backed decision.
     held_from: "4.155.0"
+    # Release ledger (mctlhq/mctl-api#1022 S4). release-deploy's ledger-gate
+    # job reads the MFA-backed decisions mctl-api keeps for exactly the image
+    # it built.
+    #   shadow:  the allow records below decide; the ledger verdict is only
+    #            reported in the run summary.
+    #   enforce: the ledger decides. A bump needs an approved decision for the
+    #            exact digest (the job waits up to wait_minutes for it), the
+    #            allow records are no longer read, gitops-bump.yaml cannot
+    #            bump this image at all, and a pull request may change its tag
+    #            only as bump_pr_author from a bump_pr_branch_prefix branch.
+    # Switch to enforce in its own PR, and only when (1) a live run has shown
+    # ledger=allow for an approved release and (2) release-gate-watch reads
+    # the ledger after each push (S4b): in enforce mode its offline diff no
+    # longer flags a held-tag change, so without (2) a direct deploy-key push
+    # (docs/runbooks/mctl-api-release-hold.md P5b/P6) would go unnoticed.
+    # mctl-api's approval page text changes with the switch.
+    ledger:
+      mode: shadow
+      wait_minutes: 60
+      bump_pr_author: mctl-gitops-pr[bot]
+      bump_pr_branch_prefix: release-bump/
     # Record shape, added in a reviewed PR once the owner grants the release:
     #   - version: "4.155.0"
     #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given
@@ -262,6 +283,72 @@ version_holds:
         grant: mctlhq/mctl-gitops#2710
         approved_by: mashkovd
         expires: 2026-11-30
+      # Fourteenth grant (owner GO in chat, 2026-11-16): 4.163.0 is 4.162.0
+      # plus the personal basket grant for consenting humans with no team
+      # (mctlhq/mctl-api#1084, dark behind its consent flag) and the
+      # signup fix that an open creation allowlist creates accounts, never
+      # workspaces (mctlhq/mctl-api#1086, SIGNUP_PUBLIC_WORKSPACES off).
+      # Covers only the 4.163.0 tag on the merge of mctlhq/mctl-api#1085.
+      - version: "4.163.0"
+        grant: mctlhq/mctl-gitops#2718
+        approved_by: mashkovd
+        expires: 2026-11-30
+      # Fifteenth grant (owner GO in chat, 2026-11-17): 4.164.0 is 4.163.0
+      # plus the admin route for the C2 kill switch (mctlhq/mctl-api#1088,
+      # dark until its feature setting is on), the ledger kind and routes
+      # for owner release grants (S1, mctlhq/mctl-api#1090, dark behind
+      # RELEASE_GRANTS_ENABLED) and the release credential fixes. Widened
+      # after a second owner GO the same night: the fresh-MFA release
+      # approval page (S2, mctlhq/mctl-api#1093, dark behind
+      # RELEASE_APPROVAL_UI_ENABLED) and its optional Helm slot
+      # releaseApprovalUISecret (mctlhq/mctl-api#1095, empty by default,
+      # default render unchanged). Nothing in this release turns any of it
+      # on; that is a separate, owner-approved PR. Also, confirmed by the
+      # owner before the release merged: mctlhq/mctl-api#1094 (step 1 of
+      # #1048, not dark): an additive migration (deploy_records.commit_sha,
+      # nullable) and the DeployRecord reconciler filling argo_revision,
+      # commit_sha and health from workflow outputs.
+      # Covers only the 4.164.0 tag of the release PR mctlhq/mctl-api#1092.
+      - version: "4.164.0"
+        grant: mctlhq/mctl-gitops#2729
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Sixteenth grant (owner GO in chat, 2026-11-17): 4.165.0 is 4.164.0
+      # plus three changes, all confirmed by the owner as one release:
+      # service_subjects, which pins named ZITADEL machine users to the
+      # service kind (mctlhq/mctl-api#1098, off until configured);
+      # plan and apply of a preview onboard from a DeployIntent
+      # (mctlhq/mctl-api#1099, owner approval per onboard; the live check on
+      # a real repository was not run); and the rollback-revision operation
+      # (mctlhq/mctl-api#1096; every rollback is refused until records carry
+      # a commit, its workflow template is mctlhq/mctl-gitops#2734, merged).
+      # Covers only the 4.165.0 tag of the release PR mctlhq/mctl-api#1097.
+      - version: "4.165.0"
+        grant: mctlhq/mctl-gitops#2745
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Owner GO in chat (2026-11-17) for a patch release carrying only
+      # mctlhq/mctl-api#1100: the release approval page refused every ZITADEL
+      # ID token, because ZITADEL puts the project id and the project's other
+      # client ids into aud. The page now applies OIDC Core 3.1.3.7 (aud
+      # contains the client, azp required with several audiences and equal
+      # to the client). Page-only; nothing reads release grants yet.
+      # Covers only the 4.165.1 tag of the next release PR.
+      - version: "4.165.1"
+        grant: mctlhq/mctl-gitops#2747
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Owner GO in chat (2026-11-17) for 4.166.0: the promote-preview-to-
+      # production feature behind an owner grant (mctl-api 71e179d, d82da1f)
+      # and the release approval page copy fix (mctl-api#1104). Owner extended
+      # the GO in chat (2026-11-17) to mctl-api#1105 (promoted digest compared
+      # with the preview's; deploy_records migration), which landed in the
+      # release PR afterwards. Covers only the 4.166.0 tag of release PR
+      # mctlhq/mctl-api#1103.
+      - version: "4.166.0"
+        grant: mctlhq/mctl-gitops#2753
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers

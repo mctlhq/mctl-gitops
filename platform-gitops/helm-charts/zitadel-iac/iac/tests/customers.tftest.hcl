@@ -16,6 +16,9 @@ mock_provider "kubernetes" {}
 variables {
   smtp_password        = "test"
   customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
+  # Production turns the Google IdP on (customers_rollout.auto.tfvars.json),
+  # which tofu test also loads; the mocked client stands in for Vault.
+  customers_google_idp = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
   platform_admins = jsonencode({
     admin = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
   })
@@ -499,10 +502,13 @@ run "customer_lifecycle_is_scoped_to_customer_user_management" {
   }
 }
 
-# The Google IdP (mctlhq/mctl-api#1079) is off by default: no IdP, GitHub
-# alone in the login policy, and no Google IdP id for mctl-api's hook.
-run "google_idp_is_off_by_default" {
+# The Google IdP (mctlhq/mctl-api#1079) switched off: no IdP, GitHub alone
+# in the login policy, and no Google IdP id for mctl-api's hook.
+run "google_idp_off_adds_nothing" {
   command = plan
+  variables {
+    customers_google_idp_enabled = false
+  }
   plan_options {
     target = [
       zitadel_login_policy.customers,
@@ -600,4 +606,26 @@ run "google_idp_credentials_are_complete_or_absent" {
     target = [zitadel_login_policy.customers]
   }
   expect_failures = [var.customers_google_idp]
+}
+
+# Production runs with the Google IdP on (customers_rollout.auto.tfvars.json,
+# mctlhq/mctl-api#1079): GitHub and Google in the login policy, and the IdP
+# id reaches mctl-api's hook.
+run "production_has_the_google_idp" {
+  command = plan
+  plan_options {
+    target = [
+      zitadel_login_policy.customers,
+      kubernetes_secret_v1_data.mctl_api_zitadel_hook,
+    ]
+  }
+
+  assert {
+    condition     = length(zitadel_org_idp_google.customers) == 1 && length(zitadel_login_policy.customers.idps) == 2
+    error_message = "Production offers GitHub and Google on the customers organization."
+  }
+  assert {
+    condition     = contains(keys(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data), "ZITADEL_HOOK_GOOGLE_IDP_ID")
+    error_message = "Production tells mctl-api's hook the Google IdP id."
+  }
 }

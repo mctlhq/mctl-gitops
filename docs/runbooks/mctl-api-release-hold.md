@@ -158,3 +158,52 @@ tool the design describes.
 - 14: checker and merger Apps, their environments, and the ruleset change
   (owner actions; neither App may become a bypass actor).
 - 15: the post-sync digest verifier CronJob.
+
+## Release ledger mode (mctl-api#1022 S4)
+
+The hold carries a `ledger:` block (`mode: shadow` today). Each mode, and
+what it changes:
+
+- **shadow**: the allow records decide, exactly as above. release-deploy's
+  `ledger-gate` job reads the release ledger for the image it built and puts
+  its verdict next to the YAML verdict in the run summary. It never fails
+  the run.
+- **enforce**: the ledger decides, and the allow records are not read.
+  1. After the build, `ledger-gate` waits up to `wait_minutes` for an
+     approved, MFA-backed decision for exactly the built digest and tag
+     commit.
+  2. An admin opens the request with
+     `POST https://api.mctl.ai/api/v1/release/grants` and
+     `{"repository":"mctlhq/mctl-api","version":"X.Y.Z"}`. The image must
+     already exist, so this happens after the build. The owner then approves
+     it on the release approval page.
+  3. On approval, the job hands the digest to `bump`. Its
+     `release-gate.py check` refuses the held image unless
+     `--ledger-approved-digest` equals `--new-digest`.
+  4. A rejection fails the run, and nothing is bumped. So do the deadline
+     and an unreadable ledger (exit 6 or 7). Re-run the workflow after the
+     decision.
+  5. `gitops-bump.yaml` never passes a ledger digest, so it cannot bump
+     the held image at all.
+  6. On pull requests, `validate` runs
+     `release-gate.py pr-identity` (policy read from the base). Only
+     `mctl-gitops-pr[bot]` from a `release-bump/` branch may change the held
+     tag.
+  7. `verify` accepts the held tag without a record.
+
+`ledger-gate` runs for every image, because `bump` needs it. A red
+`ledger-gate` on an image with no ledger hold is an infrastructure failure:
+checkout, `pip install`, or loading `release-gates.yaml`. It is not a
+refusal. Re-run the job.
+
+`pr-identity` requires the event sender to be the bot as well as the PR
+author. A human push onto an open bump PR therefore fails `validate`. So
+does a human reopening it. Let release-deploy open a new PR instead.
+
+Before switching to enforce (its own PR), both of these must hold:
+
+1. A live run has shown `ledger=allow` for an approved release. Until one
+   does, the OIDC reader path is unproven.
+2. `release-gate-watch.yml` reads the ledger after each push (S4b). In
+   enforce mode `diff` no longer judges a held-tag change by records, so
+   P5b/P6 pushes would otherwise go undetected.

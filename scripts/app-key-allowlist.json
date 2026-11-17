@@ -81,6 +81,11 @@
         "APP_PRIVATE_KEY"
       ]
     },
+    "mctl-glovo": {
+      ".github/workflows/release-please.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ]
+    },
     "mctl-portal": {
       ".github/workflows/release-please.yml": [
         "AGENTS_APP_PRIVATE_KEY"

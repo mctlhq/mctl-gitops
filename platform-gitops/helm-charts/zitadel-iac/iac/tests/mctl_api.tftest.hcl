@@ -276,6 +276,53 @@ run "deploy_approval_client_is_a_confidential_pkce_web_client" {
   }
 }
 
+# The client of the release approval page (mctl-api#1022 S2). The same
+# attributes as mctl-api-deploy-approval, because the same things keep it closed.
+run "release_approval_client_is_a_confidential_pkce_web_client" {
+  command = plan
+  plan_options {
+    target = [zitadel_application_oidc.mctl_api_release_approval]
+  }
+
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "mctl-api-project" }
+  }
+
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.name == "mctl-api-release-approval"
+    error_message = "The client is named mctl-api-release-approval."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_release_approval.org_id == "100000000000000001"
+    error_message = "The client must be in the MCTL API project of MCTL: has_project_check there is what limits who can sign in."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.redirect_uris == tolist(["https://api.mctl.ai/release/approvals/callback"])
+    error_message = "The only redirect URI must be https://api.mctl.ai/release/approvals/callback."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_release_approval.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
+    error_message = "The client must be a confidential web client authenticating with client_secret_basic."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_release_approval.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
+    error_message = "Authorization code only: no implicit, refresh token or device grant."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.access_token_type == "OIDC_TOKEN_TYPE_BEARER"
+    error_message = "The access token must stay opaque (BEARER), never JWT."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.id_token_userinfo_assertion == true
+    error_message = "id_token_userinfo_assertion must be on: mctl-api reads preferred_username from the ID token."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_release_approval.dev_mode == false
+    error_message = "dev_mode must stay off: on, ZITADEL accepts http redirects."
+  }
+}
+
 # The Job patches one Secret for three consumers. The new keys must carry the
 # new client's credentials, not the link client's, and the keys mctl-api and
 # the CLI already read must stay.
@@ -318,8 +365,20 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     values = { client_id = "deploy-approval-client-id", client_secret = "deploy-approval-client-secret" }
   }
   override_resource {
+    target = zitadel_application_oidc.mctl_api_release_approval
+    values = { client_id = "release-approval-client-id", client_secret = "release-approval-client-secret" }
+  }
+  override_resource {
     target = zitadel_org.customers
     values = { id = "customers-org-id" }
+  }
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "mctl-api-project" }
+  }
+  override_resource {
+    target = zitadel_machine_user.c2_consent_reader
+    values = { id = "consent-reader-user" }
   }
 
   assert {
@@ -340,10 +399,12 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
       "GLOVO_BASKET_UI_CLIENT_SECRET",
       "DEPLOY_APPROVAL_UI_CLIENT_ID",
       "DEPLOY_APPROVAL_UI_CLIENT_SECRET",
+      "RELEASE_APPROVAL_UI_CLIENT_ID",
+      "RELEASE_APPROVAL_UI_CLIENT_SECRET",
       "MCTL_API_DEV_ZITADEL_CLIENT_ID",
       "MCTL_API_DEV_ZITADEL_CLIENT_SECRET",
     ])
-    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the fourteen keys its consumers read."
+    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the sixteen keys its consumers read."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_ID"]) == "dev-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_SECRET"]) == "dev-client-secret"
@@ -374,6 +435,10 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     error_message = "The deploy approval keys must carry the mctl-api-deploy-approval client's credentials, never another flow's."
   }
   assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["RELEASE_APPROVAL_UI_CLIENT_ID"]) == "release-approval-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["RELEASE_APPROVAL_UI_CLIENT_SECRET"]) == "release-approval-client-secret"
+    error_message = "The release approval keys must carry the mctl-api-release-approval client's credentials, never another flow's."
+  }
+  assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_CLI_ZITADEL_CLIENT_ID"]) == "cli-client-id"
     error_message = "MCTL_CLI_ZITADEL_CLIENT_ID must still be the CLI's client id."
   }
@@ -383,9 +448,14 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
   # unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf).
   assert {
     condition = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"])) == [
-      { name = "zitadel", issuer = "https://auth.mctl.ai", audiences = ["api-client-id"], customers_org_id = "customers-org-id" },
+      {
+        name             = "zitadel"
+        issuer           = "https://auth.mctl.ai"
+        audiences        = ["api-client-id"]
+        customers_org_id = "customers-org-id"
+      },
     ]
-    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id."
+    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id only (mctl-api refuses to boot when service_subjects is combined with customers_org_id)."
   }
 }
 

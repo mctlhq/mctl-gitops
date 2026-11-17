@@ -80,6 +80,7 @@
       "local-path-storage"
       "mctl-agents-egress"
       "mctl-api"
+      "mctl-glovo"
       "monitoring"
       "platform-db"
       "platform-events"

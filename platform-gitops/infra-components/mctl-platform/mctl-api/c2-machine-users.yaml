@@ -1,0 +1,43 @@
+# The ids of the C2 machine users (helm-charts/zitadel-iac/iac/
+# c2-machine-users.tf). The zitadel-iac Job writes, with server-side apply as
+# field manager `zitadel-iac`, the user, key and audience ids the consumers
+# and the operator need. None of it is a credential. Argo CD creates the
+# ConfigMap without data and never owns `.data` (ignoreDifferences in
+# bootstrap/templates/mctl-platform/mctl-api.yaml). The Job may only read and
+# patch this one object by name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-api-c2-machine-ids
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: c2-machine-users
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-c2-machine-users
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: c2-machine-users
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["mctl-api-c2-machine-ids"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-c2-machine-users
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: c2-machine-users
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-c2-machine-users
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel

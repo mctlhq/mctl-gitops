@@ -1,8 +1,18 @@
-name: RedLoop Image Security Assessment (Gate 1)
+name: RedLoop Image Security Assessment
 
-# One-off, workflow_dispatch-only workflow for Trivy container image assessment.
+# Workflow dispatch for consolidated Trivy container image security assessment.
 # Author: Agent: agy
-# Canonical Gate 1 Target: docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+#
+# Supported / Allowed Targets (Immutable Candidate Inventory):
+# 1. Baseline Target (Gate 1):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01
+# 2. Candidate A (Alpine 1.30 Patched Upstream Candidate):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7
+# 3. Candidate B (Debian 1.30-trixie Alternative Distro):
+#    docker.io/nginxinc/nginx-unprivileged@sha256:02570a11e9bd4f37b3d9bff616130d83ee9e5d935dd83a8a2ddec420b67b1993
+# 4. Candidate C (Chainguard / Wolfi Minimal Distro):
+#    docker.io/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98
+#
 # Platform: linux/amd64 (passed via TRIVY_PLATFORM env var, matching Hetzner cx43 worker architecture)
 #
 # Credentials & Permissions:
@@ -10,36 +20,211 @@ name: RedLoop Image Security Assessment (Gate 1)
 # - Zero cluster kubeconfigs, zero Vault tokens, zero Cloudflare API credentials.
 #
 # Evidence Retention:
-# - SARIF and JSON vulnerability reports are retained as workflow artifacts for 90 days.
+# - SARIF, JSON, checksums, and machine-readable verdict artifacts are retained for 90 days.
 # - NOTE: In a public repository, workflow artifacts are downloadable by anyone with read access to the repository.
 # - Zero automated ingestion into GitHub Code Scanning or SecurityFinding v1.
+#
+# Governance & Verdict Separation:
+# - SCAN_EXECUTION_SUCCESS: Trivy completed scan with valid SchemaVersion==2, non-empty ArtifactName matching digest.
+# - SECURITY_POSTURE_ACCEPTABLE: 0 CRITICAL findings AND target CVE (CVE-2026-111497) CLEAN via full-severity scan.
+# - GATE4_APPROVED: strictly false in automated workflows. Requires manual Operator Review Gate signoff.
+#
+# Target CVE verification uses a dedicated full-severity (UNKNOWN–CRITICAL) scan to prevent
+# false negatives from distro-specific severity rating differences.
 
 on:
   workflow_dispatch:
     inputs:
-      image_ref:
-        description: "Exact pinned OCI image digest to scan (locked to Gate 1 target)"
+      target:
+        description: "Target candidate(s) to scan: 'all' (consolidated matrix) or specific candidate key ('baseline', 'candidate-a', 'candidate-b', 'candidate-c')"
         required: true
-        default: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "baseline"
+          - "candidate-a"
+          - "candidate-b"
+          - "candidate-c"
+      image_ref:
+        description: "Optional explicit pinned OCI image digest (must match approved inventory if provided)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
+  plan:
+    name: Validate Inventory and Plan Assessment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan-matrix.outputs.matrix }}
+      target: ${{ steps.plan-matrix.outputs.target }}
+      candidate_count: ${{ steps.plan-matrix.outputs.candidate_count }}
+    steps:
+      - name: Validate Candidates and Assert Allowlist
+        id: plan-matrix
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, re
+
+          CANDIDATE_INVENTORY = {
+              "baseline": {
+                  "id": "baseline",
+                  "name": "Nginx Baseline (Gate 1)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01",
+                  "distro": "Alpine 3.24",
+                  "nginx_version": "1.30.5",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-a": {
+                  "id": "candidate-a",
+                  "name": "Nginx Alpine Candidate (Gate 4)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+                  "distro": "Alpine 3.24",
+                  "nginx_version": "1.30.6",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-b": {
+                  "id": "candidate-b",
+                  "name": "Nginx Debian Candidate (Gate 4)",
+                  "ref": "docker.io/nginxinc/nginx-unprivileged@sha256:02570a11e9bd4f37b3d9bff616130d83ee9e5d935dd83a8a2ddec420b67b1993",
+                  "distro": "Debian 13.7 (trixie)",
+                  "nginx_version": "1.30.6",
+                  "expected_user": "101",
+                  "chart_compatible": True
+              },
+              "candidate-c": {
+                  "id": "candidate-c",
+                  "name": "Nginx Chainguard Candidate (Gate 4)",
+                  "ref": "docker.io/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98",
+                  "distro": "Wolfi 20230201",
+                  "nginx_version": "1.31.8",
+                  "expected_user": "65532",
+                  "chart_compatible": False
+              }
+          }
+
+          ALLOWED_REPOS = [
+              "docker.io/nginxinc/nginx-unprivileged@",
+              "docker.io/chainguard/nginx@"
+          ]
+
+          def validate_ref(ref):
+              if not ref or not isinstance(ref, str):
+                  return False, "Empty or non-string image_ref"
+              matched_repo = next((r for r in ALLOWED_REPOS if ref.startswith(r)), None)
+              if not matched_repo:
+                  return False, f"Repository/registry rejected: {ref}"
+              digest = ref[len(matched_repo):]
+              if not re.match(r"^sha256:[0-9a-f]{64}$", digest):
+                  return False, f"Malformed SHA256 digest format: {digest}"
+              matched_candidate = next((c for c in CANDIDATE_INVENTORY.values() if c["ref"] == ref), None)
+              if not matched_candidate:
+                  return False, f"Digest not in approved candidate inventory: {digest}"
+              return True, matched_candidate
+
+          # Run deterministic self-tests
+          print("=== Running Planner Validation Self-Tests ===")
+          # 1. All inventory refs must pass
+          for cid, c in CANDIDATE_INVENTORY.items():
+              ok, res = validate_ref(c["ref"])
+              if not ok:
+                  print(f"::error::Inventory self-test failed for {cid}: {res}")
+                  sys.exit(1)
+
+          # 2. Negative tests
+          negative_tests = [
+              "docker.io/nginxinc/nginx-unprivileged:latest",
+              "docker.io/nginxinc/nginx-unprivileged:1.30-alpine",
+              "docker.io/library/nginx@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+              "quay.io/nginxinc/nginx-unprivileged@sha256:e2a8fca8aa356d66159aaf8a877a9c126773635adf210503eefaaeaffeed6ad7",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:xyz",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:E2A8FCA8AA356D66159AAF8A877A9C126773635ADF210503EEFAAEAFFEED6AD7",
+              "docker.io/nginxinc/nginx-unprivileged@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "docker.io/chainguard/nginx:latest",
+              "cgr.dev/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98",
+              "",
+              "   ",
+              "; rm -rf /"
+          ]
+
+          for neg in negative_tests:
+              ok, msg = validate_ref(neg)
+              if ok:
+                  print(f"::error::Negative test unexpectedly passed: {neg}")
+                  sys.exit(1)
+          print(f"[+] All self-tests passed: 4 approved candidates verified, {len(negative_tests)} negative tests rejected.")
+
+          # Resolve targets
+          input_target = os.environ.get("INPUT_TARGET", "all").strip()
+          input_image_ref = os.environ.get("INPUT_IMAGE_REF", "").strip()
+
+          selected_candidates = []
+
+          if input_image_ref:
+              ok, cand = validate_ref(input_image_ref)
+              if not ok:
+                  print(f"::error::Explicit image_ref '{input_image_ref}' failed validation: {cand}")
+                  sys.exit(1)
+              selected_candidates = [cand]
+              input_target = cand["id"]  # Override target to matched candidate id
+              print(f"[+] Explicit image_ref validated: {cand['id']} ({cand['ref']})")
+          elif input_target == "all":
+              selected_candidates = list(CANDIDATE_INVENTORY.values())
+              print("[+] Selected full candidate inventory matrix (4 candidates).")
+          elif input_target in CANDIDATE_INVENTORY:
+              selected_candidates = [CANDIDATE_INVENTORY[input_target]]
+              print(f"[+] Selected single candidate target '{input_target}'.")
+          else:
+              print(f"::error::Unknown target '{input_target}' and no valid image_ref provided.")
+              sys.exit(1)
+
+          matrix_json = json.dumps(selected_candidates)
+
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if github_output:
+              with open(github_output, "a") as go:
+                  go.write(f"matrix={matrix_json}\n")
+                  go.write(f"target={input_target}\n")
+                  go.write(f"candidate_count={len(selected_candidates)}\n")
+
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if github_summary:
+              with open(github_summary, "a") as gs:
+                  gs.write("### RedLoop Candidate Assessment Plan\n\n")
+                  gs.write(f"- **Target Selection:** `{input_target}`\n")
+                  gs.write(f"- **Planned Scans:** `{len(selected_candidates)}`\n\n")
+                  gs.write("| Candidate ID | Name | Distro | Expected User | Chart Compatible | Image Reference |\n")
+                  gs.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                  for c in selected_candidates:
+                      gs.write(f"| `{c['id']}` | {c['name']} | {c['distro']} | `{c['expected_user']}` | `{c['chart_compatible']}` | `{c['ref']}` |\n")
+          EOF
+
   trivy-image-scan:
-    name: Trivy Image Assessment
+    name: "Scan: ${{ matrix.candidate.id }}"
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - name: Validate pinned digest format and Gate 1 lock
+      - name: Assert Target Allowlist and Manifest Match
         env:
-          EXPECTED_IMAGE_REF: "docker.io/nginxinc/nginx-unprivileged@sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
-          IMAGE_REF: ${{ inputs.image_ref }}
+          TARGET_REF: ${{ matrix.candidate.ref }}
+          CANDIDATE_ID: ${{ matrix.candidate.id }}
         run: |
-          if [[ "$IMAGE_REF" != "$EXPECTED_IMAGE_REF" ]]; then
-            echo "::error::For Gate 1, image_ref is locked to $EXPECTED_IMAGE_REF (received: $IMAGE_REF)"
-            exit 1
-          fi
+          set -euo pipefail
+          echo "Scanning Candidate: $CANDIDATE_ID ($TARGET_REF)"
 
       - name: Scan Image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -47,9 +232,9 @@ jobs:
           TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
-          image-ref: ${{ inputs.image_ref }}
+          image-ref: ${{ matrix.candidate.ref }}
           format: sarif
-          output: trivy-image-results.sarif
+          output: trivy-results-${{ matrix.candidate.id }}.sarif
           severity: CRITICAL,HIGH
           limit-severities-for-sarif: true
           exit-code: "0"
@@ -61,31 +246,336 @@ jobs:
           TRIVY_PLATFORM: "linux/amd64"
         with:
           scan-type: image
-          image-ref: ${{ inputs.image_ref }}
+          image-ref: ${{ matrix.candidate.ref }}
           format: json
-          output: trivy-image-results.json
+          output: trivy-results-${{ matrix.candidate.id }}.json
           severity: CRITICAL,HIGH
           exit-code: "0"
           version: v0.69.3
 
-      - name: Verify Scan Evidence Integrity
-        run: |
-          if [[ ! -s "trivy-image-results.sarif" ]]; then
-            echo "::error::SARIF report is missing or empty"
-            exit 1
-          fi
-          if [[ ! -s "trivy-image-results.json" ]]; then
-            echo "::error::JSON report is missing or empty"
-            exit 1
-          fi
-          echo "Assessment evidence files verified non-empty."
+      - name: Target CVE Full-Severity Verification Scan
+        # Dedicated scan at ALL severity levels to ensure CVE-2026-111497 is not
+        # missed due to distro-specific severity rating below CRITICAL/HIGH.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: "linux/amd64"
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.candidate.ref }}
+          format: json
+          output: trivy-fullsev-${{ matrix.candidate.id }}.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
+          version: v0.69.3
 
-      - name: Archive Assessment Evidence Artifacts
+      - name: Verify Scan Evidence Integrity and Compute Checksums
+        run: |
+          set -euo pipefail
+          sarif_file="trivy-results-${{ matrix.candidate.id }}.sarif"
+          json_file="trivy-results-${{ matrix.candidate.id }}.json"
+          fullsev_file="trivy-fullsev-${{ matrix.candidate.id }}.json"
+          chk_file="checksums-${{ matrix.candidate.id }}.txt"
+
+          if [[ ! -s "$sarif_file" ]]; then
+            echo "::error::SARIF report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
+          if [[ ! -s "$json_file" ]]; then
+            echo "::error::JSON report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
+          if [[ ! -s "$fullsev_file" ]]; then
+            echo "::error::Full-severity report is missing or empty for ${{ matrix.candidate.id }}"
+            exit 1
+          fi
+
+          sha256sum "$sarif_file" "$json_file" "$fullsev_file" > "$chk_file"
+          echo "Checksums generated:"
+          cat "$chk_file"
+
+      - name: Evaluate Candidate Verdict
+        env:
+          CANDIDATE_ID: ${{ matrix.candidate.id }}
+          CANDIDATE_NAME: ${{ matrix.candidate.name }}
+          CANDIDATE_REF: ${{ matrix.candidate.ref }}
+          CANDIDATE_DISTRO: ${{ matrix.candidate.distro }}
+          CANDIDATE_NGINX_VERSION: ${{ matrix.candidate.nginx_version }}
+          CANDIDATE_CHART_COMPATIBLE: ${{ matrix.candidate.chart_compatible }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+
+          cid = os.environ["CANDIDATE_ID"]
+          cname = os.environ["CANDIDATE_NAME"]
+          cref = os.environ["CANDIDATE_REF"]
+          cdistro = os.environ["CANDIDATE_DISTRO"]
+          cnginx = os.environ["CANDIDATE_NGINX_VERSION"]
+          chart_compat = os.environ["CANDIDATE_CHART_COMPATIBLE"].lower() == "true"
+
+          json_path = f"trivy-results-{cid}.json"
+          with open(json_path) as f:
+              data = json.load(f)
+
+          fullsev_path = f"trivy-fullsev-{cid}.json"
+          with open(fullsev_path) as fsf:
+              fullsev_data = json.load(fsf)
+
+          # --- Fail-closed Trivy report validation (P2 fix) ---
+          expected_digest = cref.split("@")[-1] if "@" in cref else ""
+
+          def validate_trivy_report(report_data, scan_label):
+              if not isinstance(report_data, dict):
+                  print(f"::error::Trivy {scan_label} report for {cid} is not a valid JSON object.")
+                  sys.exit(1)
+
+              schema_ver = report_data.get("SchemaVersion")
+              artifact_name = report_data.get("ArtifactName", "")
+              metadata = report_data.get("Metadata")
+              raw_results = report_data.get("Results")
+
+              # Require SchemaVersion==2
+              if schema_ver != 2:
+                  print(f"::error::Trivy {scan_label} report for {cid} has unexpected SchemaVersion={schema_ver} (expected 2).")
+                  sys.exit(1)
+
+              # Require non-empty ArtifactName matching expected digest
+              if not artifact_name:
+                  print(f"::error::Trivy {scan_label} report for {cid} has empty ArtifactName — cannot verify image identity.")
+                  sys.exit(1)
+              if expected_digest and expected_digest not in artifact_name:
+                  print(f"::error::Trivy {scan_label} ArtifactName '{artifact_name}' does not match expected digest '{expected_digest}'.")
+                  sys.exit(1)
+
+              # Require non-empty Metadata with valid OS family
+              if not isinstance(metadata, dict) or not metadata:
+                  print(f"::error::Trivy {scan_label} report for {cid} has missing or empty Metadata.")
+                  sys.exit(1)
+              os_info = metadata.get("OS")
+              if not isinstance(os_info, dict) or not os_info.get("Family"):
+                  print(f"::error::Trivy {scan_label} report for {cid} has missing or invalid Metadata.OS.")
+                  sys.exit(1)
+
+              # Gracefully handle null (None) Results without TypeError
+              if raw_results is None:
+                  res_list = []
+              elif isinstance(raw_results, list):
+                  res_list = raw_results
+              else:
+                  print(f"::error::Trivy {scan_label} report for {cid} has unexpected Results type: {type(raw_results)}.")
+                  sys.exit(1)
+
+              return res_list, metadata
+
+          # Validate both CRITICAL/HIGH and full-severity reports
+          results, primary_meta = validate_trivy_report(data, "primary (CRITICAL/HIGH)")
+          fullsev_results, fullsev_meta = validate_trivy_report(fullsev_data, "full-severity")
+
+          # Verify OS metadata consistency across both scans to prevent degenerate scan bypass
+          if primary_meta.get("OS") != fullsev_meta.get("OS"):
+              print(f"::error::OS metadata mismatch between primary and full-severity scans for {cid}: {primary_meta.get('OS')} vs {fullsev_meta.get('OS')}")
+              sys.exit(1)
+
+          scan_success = True  # Derived from strict validation of both reports and metadata integrity
+
+          critical_findings = []
+          high_findings = []
+          target_cve_details = []
+          target_cve_id = "CVE-2026-111497"
+
+          for r in results:
+              for v in (r.get("Vulnerabilities") or []):
+                  sev = v.get("Severity")
+                  vid = v.get("VulnerabilityID")
+                  pkg = v.get("PkgName")
+                  installed_ver = v.get("InstalledVersion", "unknown")
+                  fixed_ver = v.get("FixedVersion", "N/A")
+                  item = {
+                      "vid": vid,
+                      "package": pkg,
+                      "installed": installed_ver,
+                      "fixed": fixed_ver,
+                      "severity": sev
+                  }
+                  if sev == "CRITICAL":
+                      critical_findings.append(item)
+                  elif sev == "HIGH":
+                      high_findings.append(item)
+
+          crit_count = len(critical_findings)
+          high_count = len(high_findings)
+
+          # --- Target CVE full-severity lookup (validated against fullsev scan) ---
+          for r in fullsev_results:
+              for v in (r.get("Vulnerabilities") or []):
+                  if v.get("VulnerabilityID") == target_cve_id:
+                      target_cve_details.append({
+                          "vid": v.get("VulnerabilityID"),
+                          "package": v.get("PkgName"),
+                          "installed": v.get("InstalledVersion", "unknown"),
+                          "fixed": v.get("FixedVersion", "N/A"),
+                          "severity": v.get("Severity")
+                      })
+
+          if target_cve_details:
+              cve_status = "DETECTED"
+          else:
+              # Full-severity scan strictly validated and confirmed CVE not present at any severity level
+              cve_status = "CLEAN"
+
+          # Explicit Verdict Separation:
+          posture_acceptable = (crit_count == 0 and cve_status == "CLEAN")
+          # Automated scans NEVER set gate4_approved = True. Operator signoff strictly required.
+          gate4_approved = False
+
+          verdict_data = {
+              "candidate_id": cid,
+              "name": cname,
+              "ref": cref,
+              "distro": cdistro,
+              "nginx_version": cnginx,
+              "chart_compatible": chart_compat,
+              "scan_execution_success": scan_success,
+              "critical_count": crit_count,
+              "high_count": high_count,
+              "target_cve_status": cve_status,
+              "target_cve_findings": target_cve_details,
+              "critical_findings": critical_findings,
+              "security_posture_acceptable": posture_acceptable,
+              "gate4_approved": gate4_approved
+          }
+
+          verdict_path = f"verdict-{cid}.json"
+          with open(verdict_path, "w") as vf:
+              json.dump(verdict_data, vf, indent=2)
+
+          print(f"=== Verdict for {cid} ===")
+          print(f"Scan Success: {scan_success}")
+          print(f"CRITICAL Count: {crit_count}")
+          print(f"HIGH Count: {high_count}")
+          print(f"CVE-2026-111497: {cve_status}")
+          print(f"Security Posture Acceptable: {posture_acceptable}")
+          print(f"Gate 4 Approved: {gate4_approved}")
+          EOF
+
+      - name: Archive Candidate Evidence Artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: redloop-gate1-trivy-evidence
+          name: redloop-scan-${{ matrix.candidate.id }}
           path: |
-            trivy-image-results.sarif
-            trivy-image-results.json
+            trivy-results-${{ matrix.candidate.id }}.sarif
+            trivy-results-${{ matrix.candidate.id }}.json
+            trivy-fullsev-${{ matrix.candidate.id }}.json
+            checksums-${{ matrix.candidate.id }}.txt
+            verdict-${{ matrix.candidate.id }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+  consolidated-summary:
+    name: Aggregate Assessment Findings
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    needs: [plan, trivy-image-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download All Assessment Artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      - name: Consolidate Verdicts and Generate Comparative Matrix
+        env:
+          PLAN_TARGET: ${{ needs.plan.outputs.target }}
+          EXPECTED_CANDIDATE_COUNT: ${{ needs.plan.outputs.candidate_count }}
+          SCAN_JOB_RESULT: ${{ needs.trivy-image-scan.result }}
+        run: |
+          python3 - <<'EOF'
+          import json, glob, os, sys
+
+          # --- Assert matrix scan execution succeeded (P3 fix) ---
+          scan_job_result = os.environ.get("SCAN_JOB_RESULT", "")
+          if scan_job_result != "success":
+              print(f"::error::Matrix scan job status is '{scan_job_result}' (expected 'success'). One or more matrix legs failed.")
+              sys.exit(1)
+
+          expected_count_str = os.environ.get("EXPECTED_CANDIDATE_COUNT", "").strip()
+          if not expected_count_str:
+              print("::error::Missing EXPECTED_CANDIDATE_COUNT output from plan.")
+              sys.exit(1)
+          expected_count = int(expected_count_str)
+
+          verdicts = []
+          verdict_files = sorted(glob.glob("artifacts/**/verdict-*.json", recursive=True))
+
+          if not verdict_files:
+              print("::error::No verdict files found to aggregate.")
+              sys.exit(1)
+
+          for vf in verdict_files:
+              with open(vf) as f:
+                  verdicts.append(json.load(f))
+
+          print(f"Consolidating {len(verdicts)} candidate verdicts (expected: {expected_count}).")
+
+          if len(verdicts) != expected_count:
+              print(f"::error::Verdict count mismatch: planned {expected_count} candidate scan(s), but collected {len(verdicts)} verdict(s).")
+              sys.exit(1)
+
+          # Create consolidated output directory
+          os.makedirs("consolidated-evidence", exist_ok=True)
+
+          plan_target = os.environ.get("PLAN_TARGET", "unknown")
+          consolidated_record = {
+              "target_selection": plan_target,
+              "candidates_assessed": len(verdicts),
+              "expected_candidates": expected_count,
+              "assessment_scope": "RedLoop Gate 4 Remediation",
+              "verdicts": verdicts
+          }
+
+          with open("consolidated-evidence/consolidated-verdict.json", "w") as f:
+              json.dump(consolidated_record, f, indent=2)
+
+          # Combine checksums
+          chk_files = sorted(glob.glob("artifacts/**/checksums-*.txt", recursive=True))
+          all_checksums = []
+          for cf in chk_files:
+              with open(cf) as f:
+                  all_checksums.extend(f.readlines())
+
+          with open("consolidated-evidence/checksums-all.txt", "w") as f:
+              f.writelines(all_checksums)
+
+          # Write Step Summary
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_file:
+              with open(summary_file, "a") as sf:
+                  sf.write("## RedLoop Consolidated Gate 4 Assessment Matrix\n\n")
+                  sf.write("| Candidate | Distro | CVE-2026-111497 | CRIT | HIGH | Chart Compatible | Posture Acceptable | Gate 4 Approved |\n")
+                  sf.write("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                  for v in verdicts:
+                      cve_cell = f"**`{v['target_cve_status']}`**" if v['target_cve_status'] == "DETECTED" else f"`{v['target_cve_status']}`"
+                      posture_cell = "`ACCEPTABLE`" if v['security_posture_acceptable'] else "`UNACCEPTABLE`"
+                      compat_cell = "`YES`" if v['chart_compatible'] else "`NO (Refactor Required)`"
+                      gate4_cell = "`APPROVED`" if v.get('gate4_approved') else "`STRICT NO-GO`"
+                      sf.write(f"| **`{v['candidate_id']}`** ({v['name']}) | {v['distro']} | {cve_cell} | `{v['critical_count']}` | `{v['high_count']}` | {compat_cell} | {posture_cell} | {gate4_cell} |\n")
+                  sf.write("\n### Governance Signoff Reminder\n")
+                  sf.write("- Automated scans evaluate vulnerability posture and chart compatibility independently.\n")
+                  sf.write("- **Gate 4 Approval (`GATE4_APPROVED`) is strictly reserved for manual Operator Review Gate signoff.**\n")
+                  sf.write("- `ingress.enabled` remains `false`. Zero workloads mutated.\n")
+
+          # --- Assert: fail-closed validation of consolidated results ---
+          scan_failures = [v for v in verdicts if not v.get("scan_execution_success")]
+          if scan_failures:
+              failed_ids = ", ".join(v["candidate_id"] for v in scan_failures)
+              print(f"::error::Scan execution failed for: {failed_ids}")
+              sys.exit(1)
+          print(f"[+] All {len(verdicts)} candidate scans executed successfully and matched planned candidate count ({expected_count}).")
+          EOF
+
+      - name: Archive Consolidated Assessment Evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: redloop-consolidated-evidence
+          path: consolidated-evidence/
           if-no-files-found: error
           retention-days: 90

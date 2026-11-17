@@ -12,6 +12,7 @@ bindings:
   ghcr.io/mctlhq/mctl-api: mctlhq/mctl-api
   ghcr.io/mctlhq/mctl-design: mctlhq/mctl-design
   ghcr.io/mctlhq/mctl-docs: mctlhq/mctl-docs
+  ghcr.io/mctlhq/mctl-glovo: mctlhq/mctl-glovo
   ghcr.io/mctlhq/mctl-portal: mctlhq/mctl-portal
   ghcr.io/mctlhq/mctl-telegram: mctlhq/mctl-telegram
   ghcr.io/mctlhq/mctl-web: mctlhq/mctl-web

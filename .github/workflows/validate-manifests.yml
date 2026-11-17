@@ -34,7 +34,28 @@ env:
   CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/522267593c567f301ce7852e00463309fe62fa10/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 jobs:
+  # `validate` is the REQUIRED check (ruleset main-protection) and stays the
+  # job id `validate` with no `name:`. It is only an aggregator: the work runs in
+  # the validate-N shards below, in parallel, and `validate` is green only when
+  # every shard is (gitops#2721). `if: always()` makes it report even when a shard
+  # failed or was cancelled; a job that is skipped would count as passed.
+  # tests/test_required_check_job_ids.py pins this shape, and that every shard is
+  # listed in `needs`, so a shard added later cannot be left out of the gate.
   validate:
+    if: always()
+    needs: [validate-1, validate-2, validate-3, validate-4]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every validate shard succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          # A missing, skipped or cancelled shard is not a pass.
+          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null
+
+  validate-1:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,6 +79,83 @@ jobs:
           curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
             | tar xz kubeconform
           sudo mv kubeconform /usr/local/bin/
+
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo mv promtool /usr/local/bin/
+
+      - name: Release gate holds a bootstrap-embedded version
+        # mctl-api keeps its tag in a values block scalar; a held version needs
+        # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
+        run: python3 tests/test_release_gate_bootstrap_hold.py
+
+      - name: Release gate ledger mode (shadow / enforce)
+        # mctlhq/mctl-api#1022 S4: cases and mutants for the ledger block.
+        run: python3 tests/test_release_gate_ledger_hold.py
+
+      # With a hold's ledger enforced, pull-request CI cannot read the release
+      # ledger (mctl-api admits only workflows on refs/heads/main as its
+      # reader), so it checks who proposes a change of the held tag instead:
+      # only the release bot's bump PR, which release-deploy opens after its
+      # ledger-gate job saw the approval. The policy is read from the base
+      # (HEAD^1 of the merge ref), never from the pull request. The event
+      # sender must be the bot too: a human push onto the bot's branch keeps
+      # the bot as PR author but makes the sender that human. A no-op while
+      # every ledger hold is in shadow mode. Not run on merge_group: the queue
+      # payload carries no author, and the PR passed this on its own head.
+      - name: Release ledger holds - who may change a held tag
+        if: github.event_name == 'pull_request'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          # Who caused this run: the pusher on synchronize. A re-run keeps it.
+          PUSHER: ${{ github.event.sender.login }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          # A fork's branch name proves nothing; treat it as no branch at all.
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || BRANCH="fork:$HEAD_REPO:$BRANCH"
+          python3 scripts/release-gate.py pr-identity --base HEAD^1 --head HEAD \
+            --author "$AUTHOR" --branch "$BRANCH" --pusher "$PUSHER"
+
+  validate-2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history: validate-profile-version-bumps.py diffs the changed
+          # ExecutionProfiles against the PR's base, and a depth-1 clone has
+          # no base to resolve. That script FAILS rather than skips when the
+          # base is missing, so a shallow clone here would turn the whole job
+          # red rather than quietly checking nothing -- which is the correct
+          # direction, but the fetch is what makes it actually run.
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo mv promtool /usr/local/bin/
 
       - name: Helm lint internal charts
         run: |
@@ -87,6 +185,429 @@ jobs:
             fi
           done
           exit $fail
+
+      # issue-2286: obiSpike.enabled is false by default, so this overlay is
+      # the only place obi-spike.yaml renders in CI. teardownAfter is
+      # injected relative to today (a fixed date would go stale), and the
+      # guard runs --selftest first: a detector never seen to fire is not
+      # known to work.
+      - name: Render and validate the OBI spike overlay (issue-2286)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-obi-spike.py --selftest
+          scripts/validate-obi-spike.py
+          printf 'obiSpike:\n  teardownAfter: "%s"\n' "$(date -u -d '+7 days' +%F)" > "$tmpdir/teardown.yaml"
+          scripts/validate-obi-spike.py \
+            --values platform-gitops/bootstrap/values.yaml \
+            --values tests/fixtures/obi-spike.example-values.yaml \
+            --values "$tmpdir/teardown.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/obi-spike.example-values.yaml \
+            -f "$tmpdir/teardown.yaml" > "$tmpdir/bootstrap-obi.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-obi.yaml"
+
+      # issue-1409: the usage pricing ConfigMap renders unconditionally (no
+      # flag, unlike the two overlays above) since it is inert until a
+      # companion mctl-api chart change (cross-repo, tracked separately)
+      # wires a mount to it. This validates the committed rate card itself
+      # (mirroring usage.NewCatalog's own checks, mctlhq/mctl-api) and that
+      # the rendered ConfigMap's catalog.json is byte-identical to it.
+      - name: Validate the usage pricing catalog (issue-1409)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-usage-pricing-catalog.py --selftest
+          python3 scripts/validate-usage-pricing-catalog.py
+
+      # Third-party images mirrored into GHCR by mirror-image.yaml
+      # (mctl-gitops#2744): every entry digest-pinned, immutable tag.
+      - name: Validate image mirrors
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-image-mirrors.py --selftest
+          python3 scripts/validate-image-mirrors.py
+
+      - name: Validate agent platform catalog
+        run: |
+          python3 -m pip install --quiet pyyaml jsonschema
+          # --selftest also replays scripts/tests/fixtures/agent-platform/
+          # {valid,invalid} so a change that silently weakens a check (e.g.
+          # a reference no longer failing closed) fails CI even though the
+          # real platform-gitops/agent-platform/ catalog itself is fine.
+          scripts/validate-agent-platform.py --selftest
+
+      - name: Check every changed ExecutionProfile bumped its version
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          # --selftest first, same reason as the interpolation check below: a
+          # detector that has never been seen to fire is not known to work. It
+          # builds a throwaway repository and asserts all four branches --
+          # unbumped edit fires, bumped edit does not, a new profile does not,
+          # and an unresolvable base RAISES instead of passing.
+          scripts/validate-profile-version-bumps.py --selftest
+          scripts/validate-profile-version-bumps.py
+
+      # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
+      # seed must not come back and every agent secretKeyRef must be classified.
+      # mctl-agents#1007 B4: the required checks of the main-protection ruleset
+      # are matched by job id. Renaming `validate`, adding a job-level `if` or
+      # a paths filter would block every PR (or let a skipped check pass).
+      - name: Pin required-check job ids
+        run: |
+          set -euo pipefail
+          python3 tests/test_required_check_job_ids.py
+          python3 tests/test_validate_aggregator.py
+
+      - name: Check for shell interpolation of workflow parameters
+        run: |
+          set -euo pipefail
+          # --selftest first: a checker that has never been seen to fail is
+          # not known to work. It builds a template that interpolates a
+          # parameter and asserts the detector fires on it.
+          scripts/validate-shell-param-interpolation.py --selftest
+          scripts/validate-shell-param-interpolation.py
+
+      - name: Tenant workflow templates only write tenant-scoped paths
+        run: |
+          set -euo pipefail
+          # A tenant workflow template that writes a shared file breaks the
+          # "concurrent tenant ops touch disjoint git paths" guarantee and
+          # reintroduces the merge-conflict-then-set-e-abort failure mode
+          # that orphaned Vault policies on 2026-09-27 (gitops#1431).
+          # --selftest first, same reason as the detectors above.
+          scripts/validate-tenant-workflow-shared-writes.py --selftest
+          scripts/validate-tenant-workflow-shared-writes.py
+
+      - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
+        run: |
+          set -euo pipefail
+          # Excludes:
+          #  - values.yaml (Helm values, not a k8s manifest)
+          #  - catalog-info.yaml (Backstage entity, no k8s schema)
+          #  - *_test.yaml: promtool rule unit tests, not k8s manifests
+          #    (run by scripts/check-vm-rules.sh above)
+          #  - vm-rules/tests/generated/: build output of check-vm-rules.sh
+          #    (extracted rule-group docs, no `kind`). The script now cleans
+          #    up after itself; this pattern is the belt-and-braces guard.
+          #  - cwft-mctl-agents-{shepherd,implement,issue-poll}.yaml: intentionally set
+          #    .spec.outputs on a ClusterWorkflowTemplate (see in-file comments) to
+          #    satisfy Argo's static validator; the community CRD schema catalog
+          #    doesn't recognize this field yet and flags it as an unknown property,
+          #    even though it's required for the CronWorkflow to schedule.
+          find platform-gitops/tenants platform-gitops/argo-workflows platform-gitops/mcp platform-gitops/infra-components \
+            \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
+            xargs -0 kubeconform -strict -summary -schema-location default \
+              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml|.*_test\.yaml)$' \
+              -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
+              -schema-location "$CRD_SCHEMA_LOCATION"
+
+      - name: Unit-test the implement/shepherd CWFTs' optional work-context env
+        # gitops#1408, mirroring gitops#1279 above onto cwft-mctl-agents-implement.yaml
+        # and cwft-mctl-agents-shepherd.yaml. The implement/shepherd argv is a
+        # cross-repo compatibility contract for the cron sweep,
+        # mctl_trigger_implementer and the shepherd cron: run_implementer.py and
+        # run_shepherd.py have no --work-item-id-style flags, so the five
+        # correlation values travel through env only, and env-only is what
+        # keeps a hostile identifier out of a root pod holding the gitops
+        # deploy key.
+        run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
+
+      - name: Unit-test the control-plane failure-path inventory
+        # mctlhq/mctl-gitops#2210: every etcd/apiserver/admission failure path
+        # has a status, unmonitored paths are tracked, and claimed alerts exist.
+        run: python3 tests/test_control_plane_failure_paths.py
+
+      - name: Check the k3s-preview kured and SUC manifests follow the module inputs
+        # kube-hetzner re-applies its own kured DaemonSet and
+        # system-upgrade-controller Deployment, without resources, whenever
+        # its kustomization is replaced; ours re-apply only when their
+        # rendered content changes. The hash annotation and the templated tags
+        # keep ours winning and on the same versions (#2036).
+        run: python3 tests/test_k3s_kured_single_owner.py
+
+      - name: Check the in-cluster Access login probe against its sources
+        # The CronJob in infra-components/observability/blackbox carries two
+        # copies it cannot read at run time: scripts/access-login-probe.py as
+        # a ConfigMap, and the ZITADEL client id from
+        # infrastructure/cloudflare/account/zitadel-idp.tf as an argument. A
+        # drifted copy would probe for a client that no longer exists, or run
+        # an old script, and stay green doing it (#1329).
+        run: |
+          python3 scripts/access-login-probe.py --selftest
+          python3 tests/test_access_login_probe_cronjob.py
+
+      - name: CI pip installs are hash-pinned
+        # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
+        # only install with --require-hashes from the pinned requirements file.
+        run: python3 tests/test_pip_installs_hashed.py
+
+      - name: Release gate in the shared workflow templates
+        # The templates' own scripts run against a local bare repository: every
+        # refusal must leave it untouched, other services must still deploy and
+        # retire, and each guard layer is removed in turn to prove a test fails.
+        run: python3 tests/test_release_gate_guard.py
+      - name: Rollback by revision restores the deploy's values
+        # The restore step runs against a local bare repository: every refusal
+        # leaves it untouched, and each guard is removed in turn to prove a test fails.
+        run: python3 tests/test_rollback_revision.py
+      - name: Promote by digest pins the preview's image
+        # verify-image and pin-image run against a local bare repository and a
+        # stub registry: every refusal leaves it untouched, each guard is
+        # removed in turn to prove a test fails.
+        run: python3 tests/test_promote_deployment.py
+
+      - name: Release bump PR route (routes file, tag-only diff guard, wiring)
+        # #2543 stage 1 fast track: the route decision fails closed, the guard
+        # accepts only image tag moves, and the workflows can write only to a
+        # release-bump/* ref on the PR route. Each test carries its own mutants.
+        run: |
+          python3 tests/test_release_bump_route.py
+          python3 tests/test_release_bump_diff_guard.py
+          python3 tests/test_release_bump_checks_ready.py
+          python3 tests/test_release_bump_digest.py
+          python3 tests/test_release_bump_pr_route.py
+          python3 tests/test_release_bump_supersede.py
+          python3 tests/test_release_bump_apply.py
+
+      - name: Ledger of references to the gitops write credentials
+        # Shrink-only: a new reference, or a ledger row whose reference is
+        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
+        # chart, so it needs the Helm install above.
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_write_credential_holders.py
+
+      - name: Tenant-class templates and Secret readers, by credential name
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_tenant_template_write_set.py
+
+      - name: Preview deploys the image its build pushed, by digest
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_preview_deploy_digest.py
+
+      - name: Unit-test the App-token scope validation
+        # rotate-github-app-tokens narrows mctl-api's installation token to one
+        # repository and two permissions, then checks GitHub's response against
+        # what it asked for. That check is the only thing standing between a
+        # narrowing that silently did not apply and a token carrying the
+        # installation's full write grant across every repository — which
+        # works, and logs identically. It runs every 30 minutes in a workflow
+        # nobody watches, so it is tested here instead.
+        run: python3 tests/test_rotate_github_token_scope.py
+
+      - name: Unit-test build-image's source repository check
+        # A private repository with no PAT builds only when mctl-api answers
+        # 200 with bound: true for the same team/repo (gitops#2146). This runs
+        # the step's own script against a fake curl: every other answer, an
+        # unreachable mctl-api or a missing OIDC token must refuse.
+        run: python3 tests/test_build_image_source_repo_check.py
+
+      - name: Unit-test write-service-secrets against a fake Vault
+        # Values reach Vault byte for byte (quotes, backslashes, code-shaped
+        # text), existing keys survive the merge, and an unreadable current
+        # version stops the step instead of overwriting the whole secret.
+        run: python3 tests/test_tpl_vault_write_parse.py
+
+      - name: Tenant workflows log in to Vault with their own tenant role
+        # A template reachable from a tenant namespace picks its Vault role
+        # from the pod's namespace and never asks for the platform role
+        # argo-workflow; create/delete-tenant manage the per-tenant role.
+        run: python3 tests/test_vault_login_role.py
+
+      - name: Pin the argo-workflow-rotator Vault role's reach
+        # The dedicated rotation role grants exactly the KV paths the
+        # rotate-github-app-tokens template names (derived from it), is bound to
+        # one ServiceAccount, and nothing else. Not yet used by the template.
+        run: python3 tests/test_vault_rotator_role.py
+
+      - name: Unit-test the shepherd's commit-and-push staging
+        # commit-and-push is the only step that writes agents-state back to
+        # git, and it stages through `git add` pathspecs. A pathspec that
+        # matches nothing exits 128, so under `set -e` a mis-chosen pathspec
+        # does not skip one file — it loses the whole durable write. That has
+        # now happened twice in this script (the `:(literal)` P1 on
+        # gitops#1046, then a staged deletion still being handed to `git add`,
+        # gitops#1295), and both reproduce against real git in a scratch repo,
+        # so the block's own text is replayed here.
+        run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
+
+      - name: Unit-test the portal OAuth registration drift detector
+        # The MCP server's `auth_credentials` is write-only: the API accepts it
+        # and never returns it, so OpenTofu keeps what was last applied in
+        # state and a refresh cannot correct it -- measured against a throwaway
+        # server, an out-of-band change left `tofu plan` at `no-op`. That one
+        # attribute is therefore checked by a script instead, and this is its
+        # selftest: a detector never seen to fire is not known to work.
+        run: scripts/portal-auth-credentials-drift.py --selftest
+
+      - name: Unit-test wft-provision-database's values.yaml patch
+        # The provisioner commits straight to main, so no PR check sees the
+        # file it writes, and `helm template` above accepts duplicate keys
+        # silently. This runs the template's own extracted block against a
+        # values file that already declares envFrom — the shape that lost
+        # every application secret in gitops#1102.
+        run: python3 tests/test_wft_provision_database_values.py
+
+      - name: Unit-test base-service's OTEL env on both workload kinds
+        # The chart renders a Deployment OR a Rollout, never both, so an env
+        # block added to one template is invisible in the other's output and
+        # fails silently — which is how the OTEL opt-in first shipped working
+        # only for non-blueGreen services. This renders both from the same
+        # values and compares them, and covers a service with no `env:` key.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_otel_env.py
+
+      - name: Unit-test base-service's preStop sleep on both workload kinds
+        # Without a pause before SIGTERM the process can exit while Traefik
+        # still routes to the pod (one 502 on admins/mctl-web, gitops#1946).
+        # Also checks the sleep stays below terminationGracePeriodSeconds.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_prestop_sleep.py
+
+      - name: Tenant preview namespaces bind Helm rights only inside the tenant
+        # preview-deploy/delete run as {tenant}/argo-workflow-sa; a binding
+        # for the central SA gave it write access to every tenant's preview
+        # secrets while previews themselves failed (gitops#1969).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_preview_rbac.py
+
+      - name: preview-deploy renders the preview id and gitops commit a plan binds
+        # An approved deploy plan binds its preview id, host and the values at
+        # one gitops commit (.github#254); the workflow used to derive its id
+        # from its own name and read the default branch. Runs the deploy
+        # script with stub git/python3, under bash and busybox sh.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_server_set_id.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_server_set_id.py'
+
+      - name: preview-deploy deploys values compiled from an intent
+        # mctlhq/mctl-gitops#2654: a service with no values.yaml in gitops
+        # gets a preview from server-set compiled values. Each guard (hash,
+        # existing-service refusal, image repository pin, failure cleanup,
+        # gitops_ref, size cap) is removed in turn to prove a case fails.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_compiled_values.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_compiled_values.py'
+
+      - name: Preview ttl_hours is stamped and enforced
+        # Nothing deleted expired previews before preview-reaper; a May
+        # preview release was still on record in October. Runs the reaper's
+        # own script with stub kubectl/helm/date and renders the tenant
+        # chart's CronWorkflow for every tenant. The second run repeats the
+        # script cases under busybox sh, the shell of the tools image the
+        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_reaper.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
+              python3 tests/test_preview_reaper.py Reaper Deploy'
+
+      - name: The central workflow SA holds only opted-in grants in tenant namespaces
+        # It used to hold argo-workflow-helm-deploy and smoke-verify in every
+        # tenant; only labs (smoke-test, claude-remote restart) and admins
+        # (rotate-github-token) are targeted from argo-workflows.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_central_sa_bindings.py
+
+      - name: Unit-test the image-user check in deploy-service
+        # runAsNonRoot with a named or root image USER only fails after the
+        # deploy is committed (CreateContainerConfigError). check-image-user.sh
+        # judges the image against the rendered chart first; this runs it on
+        # fixtures and every existing service, and checks deploy-service runs
+        # it between the build and the commit.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_check_image_user.py
+
+      - name: Forgejo reconcile keeps user e-mail and name out of the plan log
+        # svalabs/forgejo marks only forgejo_user.password sensitive; without
+        # sensitive() in main.tf every user created or changed prints its
+        # address and name in the Job log and in Loki.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_forgejo_reconcile_pii.py
+
+      - name: Check the observability-eval sandbox teardown date (issue-1355)
+        # --selftest first, same reason as every other detector in this job:
+        # a checker never seen to fire is not known to work. Proves all five
+        # branches (disabled+empty passes; enabled+within-14d passes;
+        # enabled+empty/expired/beyond-14d all fail), then runs for real
+        # against the committed platform-gitops/bootstrap/values.yaml. Also
+        # runs on push: [main] (this workflow's own trigger, see the header
+        # comment above), so an expired sandbox turns main red even with no
+        # open PR -- a two-week spike namespace must not become silently
+        # permanent.
+        run: |
+          scripts/validate-eval-teardown-date.py --selftest
+          scripts/validate-eval-teardown-date.py
+
+      - name: Validate storage & finops Grafana dashboards
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_storage_finops_dashboard.py
+
+  # mctl-reserved-platform-hosts-{ingress,ingressroute} (#1503) are CEL that
+  # only an API server can evaluate: a policy that never denies, or one that
+  # denies every Ingress, renders and lints clean. This runs them in k3s at the
+  # cluster's version against deny/admit fixtures and every Ingress /
+  # IngressRoute the GitOps services render, so a service that claims another
+  # namespace's reserved host fails here instead of at sync. Its own job: it
+  # needs Docker and takes about a minute. The second step proves the
+  # external-manifests Secret allowlist policy the same way.
+
+  validate-3:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history: validate-profile-version-bumps.py diffs the changed
+          # ExecutionProfiles against the PR's base, and a depth-1 clone has
+          # no base to resolve. That script FAILS rather than skips when the
+          # base is missing, so a shallow clone here would turn the whole job
+          # red rather than quietly checking nothing -- which is the correct
+          # direction, but the fetch is what makes it actually run.
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo mv promtool /usr/local/bin/
 
       - name: Render and validate bootstrap and argocd charts
         run: |
@@ -130,63 +651,6 @@ jobs:
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
-      # Validate project scope for generated applications: expand the `apps`
-      # and `tenants` ApplicationSets over the real directories, render
-      # base-service per service and check each object against the resolved
-      # project, check directory and reserved-name consistency and the
-      # inventory of places that spell the project name `apps`. The unit tests
-      # prove each check green on this tree and red on a mutation.
-      - name: Validate project scope for generated applications
-        run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_generated_app_scope.py
-          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
-
-      # issue-903: otelCollector.eval.enabled is false by default, so this
-      # overlay is the only place the eval-namespace/eval-candidates
-      # templates and a multi-backend fan-out ever render in CI. Proves the
-      # manifests mctlhq/mctl-gitops#1280 will flip on are schema-valid
-      # before that PR exists, not after.
-      - name: Render and validate the otel-collector eval overlay (issue-903)
-        run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          helm template test platform-gitops/bootstrap \
-            -f platform-gitops/bootstrap/values.yaml \
-            -f tests/fixtures/otel-eval-candidates.example-values.yaml \
-            > "$tmpdir/bootstrap-eval.yaml"
-          kubeconform -strict -summary -schema-location default \
-            -schema-location "$CRD_SCHEMA_LOCATION" \
-            "$tmpdir/bootstrap-eval.yaml"
-
-      # issue-2286: obiSpike.enabled is false by default, so this overlay is
-      # the only place obi-spike.yaml renders in CI. teardownAfter is
-      # injected relative to today (a fixed date would go stale), and the
-      # guard runs --selftest first: a detector never seen to fire is not
-      # known to work.
-      - name: Render and validate the OBI spike overlay (issue-2286)
-        run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          python3 -m pip install --quiet pyyaml
-          scripts/validate-obi-spike.py --selftest
-          scripts/validate-obi-spike.py
-          printf 'obiSpike:\n  teardownAfter: "%s"\n' "$(date -u -d '+7 days' +%F)" > "$tmpdir/teardown.yaml"
-          scripts/validate-obi-spike.py \
-            --values platform-gitops/bootstrap/values.yaml \
-            --values tests/fixtures/obi-spike.example-values.yaml \
-            --values "$tmpdir/teardown.yaml"
-          helm template test platform-gitops/bootstrap \
-            -f platform-gitops/bootstrap/values.yaml \
-            -f tests/fixtures/obi-spike.example-values.yaml \
-            -f "$tmpdir/teardown.yaml" > "$tmpdir/bootstrap-obi.yaml"
-          kubeconform -strict -summary -schema-location default \
-            -schema-location "$CRD_SCHEMA_LOCATION" \
-            "$tmpdir/bootstrap-obi.yaml"
-
       # .github#50: both flag states are rendered explicitly with --set, so
       # the assertion does not depend on the committed default (enabled
       # since the owner-approved rollout). On: the usage-writer ExternalSecret
@@ -207,6 +671,371 @@ jobs:
             grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done
+
+      - name: Validate platform skill registry
+        run: |
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-platform-skills.py
+
+      - name: Check the implementation admission worker stays a single replica
+        run: |
+          set -euo pipefail
+          # --selftest first, as for every detector in this job. The
+          # invariant (mctl-agents#395, #1285): max_concurrent_activities is
+          # a per-process limit, so capacity on mctl-dev-loop-implement is
+          # replicas × N. One replica is what makes N mean N; this fails the
+          # PR that scales it instead of raising N.
+          scripts/validate-implement-worker-singleton.py --selftest
+          scripts/validate-implement-worker-singleton.py
+
+      - name: Validate agent pod security context
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-pod-security.py --selftest
+          scripts/validate-agent-pod-security.py
+
+      - name: Validate agent credential delivery
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-credential-delivery.py --selftest
+          scripts/validate-agent-credential-delivery.py
+          python3 tests/test_agent_credential_delivery.py
+
+      # Principal-mode tenant authorization (mctl-api#377) grants by
+      # members[].principalId alone, so an entry without one works today and
+      # silently locks its member out after the switch. Runs on main too:
+      # wft-create-tenant pushes new tenants straight to main, and a creator
+      # submitted without a principal id must turn it red. It also gates
+      # entries without a userId (PID_ONLY_ALLOWED in the script).
+      # --selftest first, same reason as the other detectors.
+      - name: Every tenant member carries a principalId
+        run: |
+          set -euo pipefail
+          scripts/validate-tenant-member-keys.py --selftest
+          scripts/validate-tenant-member-keys.py
+
+      - name: Check for shell interpolation of yq expressions
+        run: |
+          set -euo pipefail
+          # Sibling invariant to the check above: yq's expression language is
+          # not data either, so a value that closes the string literal keeps
+          # running against values.yaml with the pipeline's write access
+          # (gitops#990, #995, #997). --selftest first, same reason.
+          scripts/validate-yq-interpolation.py --selftest
+          scripts/validate-yq-interpolation.py
+
+      - name: ArgoCD tenant RBAC fragments match the canonical policy
+        run: |
+          set -euo pipefail
+          # Machine-checks the SOC F4 "no tenant exec" control instead of
+          # relying on a values.yaml comment: a hand-edited fragment that
+          # widens a glob or adds a verb now fails CI (gitops#1431).
+          scripts/validate-argocd-tenant-rbac.py --selftest
+          scripts/validate-argocd-tenant-rbac.py
+
+      - name: Unit-test the mctl-agents CWFTs' execution-trace env
+        # mctl-agents#195: a container that exports OTLP must carry
+        # MCTL_TRACE_REQUIRE_PARENT=true and a parameter-sourced TRACEPARENT,
+        # so only runs a traced DevLoop submitted can export (ADR 0001,
+        # "Producer amendment: DevLoop traces").
+        run: python3 tests/test_cwft_execution_trace_env.py
+
+      - name: Unit-test the k3s-preview apply guard
+        # terraform.yml refuses a cluster plan that destroys infrastructure or
+        # re-runs node provisioners (#1534). It only meets a real plan during
+        # an apply of the preprod cluster, where a miss is a restarted control
+        # plane, so it is exercised here against synthetic plans.
+        run: python3 tests/test_k3s_plan_guard.py
+
+      - name: Check the in-cluster MCP portal health check against its sources
+        # The cloudflare-portal-health CronJob runs a ConfigMap copy of
+        # scripts/cloudflare-portal-health.py and reads its token from the
+        # Secret an ExternalSecret writes. A drifted copy would run an old
+        # script and stay green; a drifted Secret name or key would keep the
+        # Job from starting.
+        run: |
+          python3 scripts/cloudflare-portal-health.py --selftest
+          python3 tests/test_cloudflare_portal_health_cronjob.py
+
+      - name: Unit-test the release-deploy bump script
+        # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
+        # it only ever runs during a real release — a bug in it is found by
+        # a broken deploy. This extracts it and exercises it against
+        # fixtures, in particular that EVERY explicitly named values_path
+        # must match: a component deployed as two workloads (ADR-008's
+        # control/execution workers) is exactly where a silent miss pins one
+        # of them forever.
+        run: python3 tests/test_release_deploy_bump.py
+
+      - name: Pre-pull PreSync verifier
+        run: python3 tests/test_prepull_verify.py
+
+      - name: Submit contract fixtures match the repository
+        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
+        # fixtures, the shipped templates and the per-tenant write mode must
+        # agree. Red on each named mutation, exit 2 when a file cannot be read.
+        run: python3 -I tests/test_submit_contract_fixtures.py
+
+      - name: Release gate (selftest, tree, mutation tests)
+        # mctlhq/mctl-agents#1007: the worker group may not be bumped
+        # partially, below its image floor, or without Recreate on the control
+        # worker. --selftest first as for every detector; the tree check also
+        # stops a manual PR that lowers a tag or drops the strategy.
+        run: |
+          set -euo pipefail
+          python3 scripts/release-gate.py --selftest
+          python3 scripts/release-gate.py verify
+          python3 tests/test_release_gate.py
+
+      - name: Release ledger shadow verdicts (selftest)
+        # mctlhq/mctl-api#1022 S3: allow / refuse / unknown stay distinct; a
+        # failed or malformed ledger read is unknown, never refuse or allow.
+        run: python3 scripts/release-ledger-shadow.py --selftest
+
+      - name: Release gate watch alerts on a violation
+        run: python3 tests/test_release_gate_watch.py
+
+      - name: Auto-merge protected paths
+        run: python3 tests/test_auto_merge_protected_paths.py
+
+      - name: Unit-test gitops-bump inputs and its edit check
+        run: |
+          python3 tests/test_gitops_bump_inputs.py
+          python3 tests/test_gitops_bump_digest_registry.py
+
+      - name: Test that build-image stamps the source revision label
+        # org.opencontainers.image.revision is the 40-hex commit of the
+        # checkout, never the input ref; an unresolvable revision refuses the
+        # build (mctlhq/mctl-gitops#2528, task 13).
+        run: python3 tests/test_build_image_revision_label.py
+
+      - name: Unit-test tpl-git-commit's yq handling
+        # The static check above proves no yq expression interpolates a shell
+        # variable. This proves the shape that replaced it actually resists
+        # the payloads — a key that closes the expression PATH, and a value
+        # that closes the string literal — by running the template's own
+        # extracted loop against a fixture with real yq.
+        run: python3 tests/test_tpl_git_commit_yq.py
+
+      - name: Unit-test retire's Vault delete against a fake KV v2 tree
+        # Every secret below teams/<t>/<s> goes (KV v2 deletes per path, so
+        # database/ and preview/ used to survive a retire), nothing outside
+        # it does, and a failed LIST or DELETE fails the step.
+        run: python3 tests/test_tpl_vault_delete_service_tree.py
+
+      - name: Unit-test create-tenant's existing-tenant checks
+        # create-tenant creates a tenant: an existing one fails validate unless
+        # reprovision=true, and the commit step refuses one that appeared
+        # after validate. Runs the template's own extracted blocks against a
+        # fixture checkout, with git clone stubbed.
+        run: python3 tests/test_wft_create_tenant_existing.py
+
+      - name: Unit-test create-tenant's creator_catalog_key
+        # creator_catalog_key=principal writes catalogKey: principal on the
+        # owner entry (site onboarding stage C2); principal without a
+        # principal id, or any value but login/principal, fails the step
+        # instead of falling back to a login-keyed owner. Runs the template's
+        # own extracted case and members blocks.
+        run: |
+          python3 tests/test_wft_create_tenant_catalog_key.py
+          python3 tests/test_wft_create_tenant_starter.py
+
+      - name: Unit-test retire-service's Argo CD Application guard
+        # retire-service deletes the Application <team>-<component>. The
+        # guard only lets through an absent Application or one the `apps`
+        # ApplicationSet generated for that team, and treats an unreadable
+        # one as an error. Runs the template's own script against a stub
+        # kubectl.
+        run: python3 tests/test_wft_retire_service_guard.py
+
+      - name: Unit-test the shepherd's verify and Telegram gates
+        # post-deploy-verify runs only after a tick that may have merged, and
+        # a Succeeded tick reaches Telegram only with a terminal transition.
+        # Both read markers commit-and-push derives from the staged diff; the
+        # three scripts are run from the template against real git and jq,
+        # with kubectl, curl and sleep stubbed.
+        run: python3 tests/test_cwft_shepherd_verify_gate.py
+
+      - name: Unit-test the portal tool catalogue drift detector
+        # Its sibling above. The portal never refreshes a manual-OAuth server's
+        # tool snapshot, so a tool added upstream stays invisible and a changed
+        # output schema is validated by clients against the stale copy. Same
+        # reason for running it here rather than only nightly: a refactor that
+        # breaks compare() or the waiver table would merge green, and the first
+        # anyone heard of it would be a nightly run reporting that the detector
+        # could not run — with the catalogue unchecked meanwhile.
+        run: scripts/portal-catalogue-drift.py --selftest
+
+      - name: Unit-test base-service's work-context env on both workload kinds
+        # mctlhq/mctl-gitops#1405, same defect class as the OTEL test above:
+        # gate off must change nothing, gate on must render the ExternalSecret
+        # and all 4 env vars identically on Deployment and Rollout, a
+        # service's own env/envValueFrom must win, and an empty
+        # tokenVaultKey/tokenVaultProperty must fail the render loudly.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_work_context_env.py
+
+      - name: Service Jobs and CronJobs pass restricted PodSecurity, gated ones too
+        # Tenant namespaces enforce restricted PSA, so a non-compliant Job is
+        # never admitted. Renders every service once as committed and once
+        # with each renderIf env flag forced on, so a gated CronJob (e.g.
+        # mctl-telegram's demo-reviewer-watch) is checked before the flag flips.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_service_extra_jobs_restricted.py
+
+      - name: Unit-test PruneLast on base-service's blueGreen objects
+        # Switching blueGreen off must not prune the Rollout before the
+        # Deployment that replaces it is Ready; ArgoCD reads PruneLast from
+        # the live object, so it has to be rendered while blueGreen is on.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_bluegreen_prune_last.py
+
+      - name: preview-delete removes the preview's TLS Secret
+        # cert-manager keeps ${RELEASE}-tls after its Certificate is gone, so
+        # helm uninstall alone left one orphan Secret per preview. Runs the
+        # template's script with stub helm/kubectl.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_delete_tls_secret.py
+
+      - name: Tenant Pod Security labels follow tenant.podSecurityLevel
+        # The templates read these keys from the top level while the chart
+        # documented them under tenant:, so a per-tenant flip to restricted
+        # rendered baseline without a word.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_pod_security_level.py
+
+      - name: Unit-test the post-sync health gate in deploy-service
+        # deploy-service used to end green once its commit was pushed, even
+        # when the new version crashed on start (gitops#2653). This runs
+        # health-gate.sh against stubbed Argo CD, pods, registry and HTTP for
+        # each failure shape, and checks deploy-service runs it after the
+        # commit for every action.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_health_gate.py
+
+      - name: Unit-test the otel-collector backends/eval render (issue-903)
+        # T1/T2/T5: the default render must stay byte-identical to the
+        # committed golden file, the fan-out must render N independent
+        # otlp/<name> exporters plus the legacy scalar, and the gated eval
+        # manifests must render nothing by default and a correct
+        # Namespace/NetworkPolicy/Application set under the example overlay.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_backends_render.py
+
+      - name: Unit-test the ArgoCD tenant RBAC render (gitops#1431)
+        # The per-tenant rbac/tenants/*.csv fragments plus the base policy
+        # must render the same effective policy.csv as the pre-migration
+        # single-file version, minus the two intentionally dropped orphan
+        # tenants (yyy, xxxx); create: false must hold so the argo-cd
+        # subchart never also tries to own argocd-rbac-cm.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_argocd_rbac_policy_render.py
+
+      - name: Check the ADR rubric stays frozen and Stage A honest (issue-903)
+        # T6/T7: weights sum to 100 and agree with the ADR's Markdown table,
+        # every score cell is null before any candidate is deployed, and no
+        # Stage A row whose evidence is only the issue text is promoted to
+        # SURVIVES on a load-bearing deployment claim.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_adr_rubric_frozen.py
+
+      - name: Run the redaction processor in the real collector (#1332)
+        # The key test above cannot see #1332's actual defect: a masked
+        # integer counter arrives as the string "****". This runs the pinned
+        # otelcol-contrib image with the rendered redaction/resource
+        # processors and checks the exported values and types. The
+        # --without-ignore run puts #1332 back and must fail first, so the
+        # detector is seen to fire on every run, not only once in review.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          if python3 tests/test_otel_collector_redaction_e2e.py --without-ignore; then
+            echo "::error::redaction e2e passed with ignored_key_patterns removed -- the detector does not detect #1332"
+            exit 1
+          fi
+          python3 tests/test_otel_collector_redaction_e2e.py
+
+  validate-4:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history: validate-profile-version-bumps.py diffs the changed
+          # ExecutionProfiles against the PR's base, and a depth-1 clone has
+          # no base to resolve. That script FAILS rather than skips when the
+          # base is missing, so a shallow clone here would turn the whole job
+          # red rather than quietly checking nothing -- which is the correct
+          # direction, but the fetch is what makes it actually run.
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.5.0"
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          sudo mv promtool /usr/local/bin/
+
+      # Validate project scope for generated applications: expand the `apps`
+      # and `tenants` ApplicationSets over the real directories, render
+      # base-service per service and check each object against the resolved
+      # project, check directory and reserved-name consistency and the
+      # inventory of places that spell the project name `apps`. The unit tests
+      # prove each check green on this tree and red on a mutation.
+      - name: Validate project scope for generated applications
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_scope.py
+          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
+
+      # The C2 service pod with the consent switch on: the refresher runs the
+      # token-refresher command of the server image and its 0440 key file is
+      # readable by uid 10001 (pod fsGroup). Red when either is removed.
+      - name: Unit-test the C2 service consent pod render
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_mctl_glovo_consent_render.py
+
+      # issue-903: otelCollector.eval.enabled is false by default, so this
+      # overlay is the only place the eval-namespace/eval-candidates
+      # templates and a multi-backend fan-out ever render in CI. Proves the
+      # manifests mctlhq/mctl-gitops#1280 will flip on are schema-valid
+      # before that PR exists, not after.
+      - name: Render and validate the otel-collector eval overlay (issue-903)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/otel-eval-candidates.example-values.yaml \
+            > "$tmpdir/bootstrap-eval.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-eval.yaml"
 
       # mctlhq/mctl-gitops#1405: same both-states shape as the usage-writer
       # overlay above. On: the mctl-api-surface-telegram ExternalSecret and
@@ -248,33 +1077,6 @@ jobs:
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done
 
-      # issue-1409: the usage pricing ConfigMap renders unconditionally (no
-      # flag, unlike the two overlays above) since it is inert until a
-      # companion mctl-api chart change (cross-repo, tracked separately)
-      # wires a mount to it. This validates the committed rate card itself
-      # (mirroring usage.NewCatalog's own checks, mctlhq/mctl-api) and that
-      # the rendered ConfigMap's catalog.json is byte-identical to it.
-      - name: Validate the usage pricing catalog (issue-1409)
-        run: |
-          set -euo pipefail
-          python3 -m pip install --quiet pyyaml
-          python3 scripts/validate-usage-pricing-catalog.py --selftest
-          python3 scripts/validate-usage-pricing-catalog.py
-
-      - name: Validate platform skill registry
-        run: |
-          python3 -m pip install --quiet pyyaml
-          scripts/validate-platform-skills.py
-
-      - name: Validate agent platform catalog
-        run: |
-          python3 -m pip install --quiet pyyaml jsonschema
-          # --selftest also replays scripts/tests/fixtures/agent-platform/
-          # {valid,invalid} so a change that silently weakens a check (e.g.
-          # a reference no longer failing closed) fails CI even though the
-          # real platform-gitops/agent-platform/ catalog itself is fine.
-          scripts/validate-agent-platform.py --selftest
-
       - name: Validate the DeployIntent contract (#2186)
         run: |
           set -euo pipefail
@@ -287,52 +1089,8 @@ jobs:
           # every contract check fires on a deliberate mutation.
           scripts/validate-deploy-intent.py --selftest
 
-      - name: Check every changed ExecutionProfile bumped its version
-        run: |
-          set -euo pipefail
-          python3 -m pip install --quiet pyyaml
-          # --selftest first, same reason as the interpolation check below: a
-          # detector that has never been seen to fire is not known to work. It
-          # builds a throwaway repository and asserts all four branches --
-          # unbumped edit fires, bumped edit does not, a new profile does not,
-          # and an unresolvable base RAISES instead of passing.
-          scripts/validate-profile-version-bumps.py --selftest
-          scripts/validate-profile-version-bumps.py
-
-      - name: Check the implementation admission worker stays a single replica
-        run: |
-          set -euo pipefail
-          # --selftest first, as for every detector in this job. The
-          # invariant (mctl-agents#395, #1285): max_concurrent_activities is
-          # a per-process limit, so capacity on mctl-dev-loop-implement is
-          # replicas × N. One replica is what makes N mean N; this fails the
-          # PR that scales it instead of raising N.
-          scripts/validate-implement-worker-singleton.py --selftest
-          scripts/validate-implement-worker-singleton.py
-
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
-
-      - name: Validate agent pod security context
-        run: |
-          set -euo pipefail
-          scripts/validate-agent-pod-security.py --selftest
-          scripts/validate-agent-pod-security.py
-
-      # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
-      # seed must not come back and every agent secretKeyRef must be classified.
-      # mctl-agents#1007 B4: the required checks of the main-protection ruleset
-      # are matched by job id. Renaming `validate`, adding a job-level `if` or
-      # a paths filter would block every PR (or let a skipped check pass).
-      - name: Pin required-check job ids
-        run: python3 tests/test_required_check_job_ids.py
-
-      - name: Validate agent credential delivery
-        run: |
-          set -euo pipefail
-          scripts/validate-agent-credential-delivery.py --selftest
-          scripts/validate-agent-credential-delivery.py
-          python3 tests/test_agent_credential_delivery.py
 
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
@@ -347,28 +1105,6 @@ jobs:
           scripts/validate-agents-state-approval.py --selftest
           scripts/validate-agents-state-approval.py
 
-      # Principal-mode tenant authorization (mctl-api#377) grants by
-      # members[].principalId alone, so an entry without one works today and
-      # silently locks its member out after the switch. Runs on main too:
-      # wft-create-tenant pushes new tenants straight to main, and a creator
-      # submitted without a principal id must turn it red. It also gates
-      # entries without a userId (PID_ONLY_ALLOWED in the script).
-      # --selftest first, same reason as the other detectors.
-      - name: Every tenant member carries a principalId
-        run: |
-          set -euo pipefail
-          scripts/validate-tenant-member-keys.py --selftest
-          scripts/validate-tenant-member-keys.py
-
-      - name: Check for shell interpolation of workflow parameters
-        run: |
-          set -euo pipefail
-          # --selftest first: a checker that has never been seen to fail is
-          # not known to work. It builds a template that interpolates a
-          # parameter and asserts the detector fires on it.
-          scripts/validate-shell-param-interpolation.py --selftest
-          scripts/validate-shell-param-interpolation.py
-
       - name: Check GitHub Actions run steps for expression injection
         run: |
           set -euo pipefail
@@ -377,27 +1113,6 @@ jobs:
           # --selftest first, same reason.
           scripts/validate-gha-expression-injection.py --selftest
           scripts/validate-gha-expression-injection.py
-
-      - name: Check for shell interpolation of yq expressions
-        run: |
-          set -euo pipefail
-          # Sibling invariant to the check above: yq's expression language is
-          # not data either, so a value that closes the string literal keeps
-          # running against values.yaml with the pipeline's write access
-          # (gitops#990, #995, #997). --selftest first, same reason.
-          scripts/validate-yq-interpolation.py --selftest
-          scripts/validate-yq-interpolation.py
-
-      - name: Tenant workflow templates only write tenant-scoped paths
-        run: |
-          set -euo pipefail
-          # A tenant workflow template that writes a shared file breaks the
-          # "concurrent tenant ops touch disjoint git paths" guarantee and
-          # reintroduces the merge-conflict-then-set-e-abort failure mode
-          # that orphaned Vault policies on 2026-09-27 (gitops#1431).
-          # --selftest first, same reason as the detectors above.
-          scripts/validate-tenant-workflow-shared-writes.py --selftest
-          scripts/validate-tenant-workflow-shared-writes.py
 
       - name: Tenant workflow pods pass Pod Security "restricted"
         run: |
@@ -408,15 +1123,6 @@ jobs:
           # on init/wait/main, no runtime apk. --selftest first, same reason.
           scripts/validate-tenant-workflow-pod-security.py --selftest
           scripts/validate-tenant-workflow-pod-security.py
-
-      - name: ArgoCD tenant RBAC fragments match the canonical policy
-        run: |
-          set -euo pipefail
-          # Machine-checks the SOC F4 "no tenant exec" control instead of
-          # relying on a values.yaml comment: a hand-edited fragment that
-          # widens a glob or adds a verb now fails CI (gitops#1431).
-          scripts/validate-argocd-tenant-rbac.py --selftest
-          scripts/validate-argocd-tenant-rbac.py
 
       - name: Origin mTLS is still enforced
         run: |
@@ -431,15 +1137,6 @@ jobs:
           # (#1159). --selftest first, same reason as the detectors above.
           scripts/validate-origin-mtls.py --selftest
           scripts/validate-origin-mtls.py
-
-      - name: Install promtool
-        env:
-          PROMETHEUS_VERSION: "3.5.0"
-        run: |
-          set -euo pipefail
-          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
-            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
-          sudo mv promtool /usr/local/bin/
 
       # Syntax AND semantics. kubeconform above only sees a VMRule as a valid
       # CRD instance; the expressions inside are an opaque string to it.
@@ -458,29 +1155,6 @@ jobs:
           scripts/check-vm-rules.sh --selftest
           scripts/check-vm-rules.sh
 
-      - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
-        run: |
-          set -euo pipefail
-          # Excludes:
-          #  - values.yaml (Helm values, not a k8s manifest)
-          #  - catalog-info.yaml (Backstage entity, no k8s schema)
-          #  - *_test.yaml: promtool rule unit tests, not k8s manifests
-          #    (run by scripts/check-vm-rules.sh above)
-          #  - vm-rules/tests/generated/: build output of check-vm-rules.sh
-          #    (extracted rule-group docs, no `kind`). The script now cleans
-          #    up after itself; this pattern is the belt-and-braces guard.
-          #  - cwft-mctl-agents-{shepherd,implement,issue-poll}.yaml: intentionally set
-          #    .spec.outputs on a ClusterWorkflowTemplate (see in-file comments) to
-          #    satisfy Argo's static validator; the community CRD schema catalog
-          #    doesn't recognize this field yet and flags it as an unknown property,
-          #    even though it's required for the CronWorkflow to schedule.
-          find platform-gitops/tenants platform-gitops/argo-workflows platform-gitops/mcp platform-gitops/infra-components \
-            \( -name "*.yaml" -o -name "*.yml" \) -print0 | \
-            xargs -0 kubeconform -strict -summary -schema-location default \
-              -ignore-filename-pattern '(^|.*/)(values\.yaml|catalog-info\.yaml|cwft-mctl-agents-(shepherd|implement|issue-poll)\.yaml|.*_test\.yaml)$' \
-              -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
-              -schema-location "$CRD_SCHEMA_LOCATION"
-
       - name: Unit-test the investigate CWFT's optional work-context argv
         # The omit-both argv is a cross-repo compatibility contract, not a
         # style preference: mctl_trigger_issue, a hand-submitted Workflow,
@@ -490,24 +1164,6 @@ jobs:
         # optional parameters existed (gitops#1279). Also proves the `set --`
         # construction resists a value carrying shell metacharacters.
         run: python3 tests/test_cwft_investigate_work_context_argv.py
-
-      - name: Unit-test the implement/shepherd CWFTs' optional work-context env
-        # gitops#1408, mirroring gitops#1279 above onto cwft-mctl-agents-implement.yaml
-        # and cwft-mctl-agents-shepherd.yaml. The implement/shepherd argv is a
-        # cross-repo compatibility contract for the cron sweep,
-        # mctl_trigger_implementer and the shepherd cron: run_implementer.py and
-        # run_shepherd.py have no --work-item-id-style flags, so the five
-        # correlation values travel through env only, and env-only is what
-        # keeps a hostile identifier out of a root pod holding the gitops
-        # deploy key.
-        run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
-
-      - name: Unit-test the mctl-agents CWFTs' execution-trace env
-        # mctl-agents#195: a container that exports OTLP must carry
-        # MCTL_TRACE_REQUIRE_PARENT=true and a parameter-sourced TRACEPARENT,
-        # so only runs a traced DevLoop submitted can export (ADR 0001,
-        # "Producer amendment: DevLoop traces").
-        run: python3 tests/test_cwft_execution_trace_env.py
 
       - name: Unit-test that the ADR 0002 log-backend rubric stays frozen
         # #2245 / #2250: the bake-off rubric (docs/adr/0002-rubric.yaml) must
@@ -523,70 +1179,16 @@ jobs:
         # (bypass-open) stay visible and tracked.
         run: python3 tests/test_policy_checkpoint_coverage.py
 
-      - name: Unit-test the control-plane failure-path inventory
-        # mctlhq/mctl-gitops#2210: every etcd/apiserver/admission failure path
-        # has a status, unmonitored paths are tracked, and claimed alerts exist.
-        run: python3 tests/test_control_plane_failure_paths.py
-
-      - name: Unit-test the k3s-preview apply guard
-        # terraform.yml refuses a cluster plan that destroys infrastructure or
-        # re-runs node provisioners (#1534). It only meets a real plan during
-        # an apply of the preprod cluster, where a miss is a restarted control
-        # plane, so it is exercised here against synthetic plans.
-        run: python3 tests/test_k3s_plan_guard.py
-
       - name: Unit-test the ExternalSecret annotation healer's failure paths
         # scripts/heal-eso-lac.sh used to print a clean summary and exit 0
         # when kubectl or jq failed, because the scan ran in a process
         # substitution. Runs the script against a fake kubectl on PATH.
         run: python3 tests/test_heal_eso_lac.py
 
-      - name: Check the k3s-preview kured and SUC manifests follow the module inputs
-        # kube-hetzner re-applies its own kured DaemonSet and
-        # system-upgrade-controller Deployment, without resources, whenever
-        # its kustomization is replaced; ours re-apply only when their
-        # rendered content changes. The hash annotation and the templated tags
-        # keep ours winning and on the same versions (#2036).
-        run: python3 tests/test_k3s_kured_single_owner.py
-
-      - name: Check the in-cluster Access login probe against its sources
-        # The CronJob in infra-components/observability/blackbox carries two
-        # copies it cannot read at run time: scripts/access-login-probe.py as
-        # a ConfigMap, and the ZITADEL client id from
-        # infrastructure/cloudflare/account/zitadel-idp.tf as an argument. A
-        # drifted copy would probe for a client that no longer exists, or run
-        # an old script, and stay green doing it (#1329).
-        run: |
-          python3 scripts/access-login-probe.py --selftest
-          python3 tests/test_access_login_probe_cronjob.py
-
-      - name: Check the in-cluster MCP portal health check against its sources
-        # The cloudflare-portal-health CronJob runs a ConfigMap copy of
-        # scripts/cloudflare-portal-health.py and reads its token from the
-        # Secret an ExternalSecret writes. A drifted copy would run an old
-        # script and stay green; a drifted Secret name or key would keep the
-        # Job from starting.
-        run: |
-          python3 scripts/cloudflare-portal-health.py --selftest
-          python3 tests/test_cloudflare_portal_health_cronjob.py
-
-      - name: Unit-test the release-deploy bump script
-        # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
-        # it only ever runs during a real release — a bug in it is found by
-        # a broken deploy. This extracts it and exercises it against
-        # fixtures, in particular that EVERY explicitly named values_path
-        # must match: a component deployed as two workloads (ADR-008's
-        # control/execution workers) is exactly where a silent miss pins one
-        # of them forever.
-        run: python3 tests/test_release_deploy_bump.py
-
       # release-deploy and gitops-bump each carry an inline tag writer; the
       # pieces that guard what reaches main must stay the same in both.
       - name: The two tag writers share their protections
         run: python3 tests/test_bump_writers_parity.py
-
-      - name: Pre-pull PreSync verifier
-        run: python3 tests/test_prepull_verify.py
 
       - name: Pre-pull verifier identity renders in order
         # mctl-agents#1007: the ServiceAccount is a PreSync hook of the same app
@@ -594,98 +1196,22 @@ jobs:
         # Role. Red on each mutation of a copied chart. Needs helm.
         run: python3 tests/test_prepull_render.py
 
-      - name: CI pip installs are hash-pinned
-        # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
-        # only install with --require-hashes from the pinned requirements file.
-        run: python3 tests/test_pip_installs_hashed.py
-
-      - name: Submit contract fixtures match the repository
-        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
-        # fixtures, the shipped templates and the per-tenant write mode must
-        # agree. Red on each named mutation, exit 2 when a file cannot be read.
-        run: python3 -I tests/test_submit_contract_fixtures.py
-
-      - name: Release gate (selftest, tree, mutation tests)
-        # mctlhq/mctl-agents#1007: the worker group may not be bumped
-        # partially, below its image floor, or without Recreate on the control
-        # worker. --selftest first as for every detector; the tree check also
-        # stops a manual PR that lowers a tag or drops the strategy.
-        run: |
-          set -euo pipefail
-          python3 scripts/release-gate.py --selftest
-          python3 scripts/release-gate.py verify
-          python3 tests/test_release_gate.py
-
-      - name: Release gate holds a bootstrap-embedded version
-        # mctl-api keeps its tag in a values block scalar; a held version needs
-        # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
-        run: python3 tests/test_release_gate_bootstrap_hold.py
-
       - name: Release gate diff judges a push by content
         # Includes the two sanctioned steps of a pre-pulled deploy (green) and
         # every other change to the pre-pulled file (red), with mutants.
         run: python3 tests/test_release_gate_diff.py
 
-      - name: Release gate watch alerts on a violation
-        run: python3 tests/test_release_gate_watch.py
-      - name: Release gate in the shared workflow templates
-        # The templates' own scripts run against a local bare repository: every
-        # refusal must leave it untouched, other services must still deploy and
-        # retire, and each guard layer is removed in turn to prove a test fails.
-        run: python3 tests/test_release_gate_guard.py
-
-      - name: Auto-merge protected paths
-        run: python3 tests/test_auto_merge_protected_paths.py
-      - name: Release bump PR route (routes file, tag-only diff guard, wiring)
-        # #2543 stage 1 fast track: the route decision fails closed, the guard
-        # accepts only image tag moves, and the workflows can write only to a
-        # release-bump/* ref on the PR route. Each test carries its own mutants.
-        run: |
-          python3 tests/test_release_bump_route.py
-          python3 tests/test_release_bump_diff_guard.py
-          python3 tests/test_release_bump_digest.py
-          python3 tests/test_release_bump_pr_route.py
-          python3 tests/test_release_bump_supersede.py
-          python3 tests/test_release_bump_apply.py
       - name: Unit-test the release preflight
         run: python3 tests/test_release_preflight.py
+
       - name: Read-only workflow steps hold no write credential
         run: python3 tests/test_read_steps_no_credential.py
-      - name: Ledger of references to the gitops write credentials
-        # Shrink-only: a new reference, or a ledger row whose reference is
-        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
-        # chart, so it needs the Helm install above.
-        run: |
-          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
-          python3 tests/test_gitops_write_credential_holders.py
-      - name: Tenant-class templates and Secret readers, by credential name
-        run: |
-          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
-          python3 tests/test_gitops_tenant_template_write_set.py
-      - name: Unit-test gitops-bump inputs and its edit check
-        run: |
-          python3 tests/test_gitops_bump_inputs.py
-          python3 tests/test_gitops_bump_digest_registry.py
-      - name: Preview deploys the image its build pushed, by digest
-        run: |
-          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
-          python3 tests/test_preview_deploy_digest.py
 
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against
         # valid and hostile inputs and keeps its prefix list equal to the
         # bump script's ALLOWED_PREFIXES.
         run: python3 tests/test_release_deploy_validate_inputs.py
-
-      - name: Unit-test the App-token scope validation
-        # rotate-github-app-tokens narrows mctl-api's installation token to one
-        # repository and two permissions, then checks GitHub's response against
-        # what it asked for. That check is the only thing standing between a
-        # narrowing that silently did not apply and a token carrying the
-        # installation's full write grant across every repository — which
-        # works, and logs identically. It runs every 30 minutes in a workflow
-        # nobody watches, so it is tested here instead.
-        run: python3 tests/test_rotate_github_token_scope.py
 
       - name: Unit-test the image-name ownership check
         # Tenant builds push, and tenant services run, ghcr.io/mctlhq/<component
@@ -698,27 +1224,6 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_check_image_name.py
 
-      - name: Unit-test build-image's source repository check
-        # A private repository with no PAT builds only when mctl-api answers
-        # 200 with bound: true for the same team/repo (gitops#2146). This runs
-        # the step's own script against a fake curl: every other answer, an
-        # unreachable mctl-api or a missing OIDC token must refuse.
-        run: python3 tests/test_build_image_source_repo_check.py
-
-      - name: Test that build-image stamps the source revision label
-        # org.opencontainers.image.revision is the 40-hex commit of the
-        # checkout, never the input ref; an unresolvable revision refuses the
-        # build (mctlhq/mctl-gitops#2528, task 13).
-        run: python3 tests/test_build_image_revision_label.py
-
-      - name: Unit-test tpl-git-commit's yq handling
-        # The static check above proves no yq expression interpolates a shell
-        # variable. This proves the shape that replaced it actually resists
-        # the payloads — a key that closes the expression PATH, and a value
-        # that closes the string literal — by running the template's own
-        # extracted loop against a fixture with real yq.
-        run: python3 tests/test_tpl_git_commit_yq.py
-
       - name: Unit-test patch-autoscaling-values against a values file
         # The step edits only .autoscaling (#2413). Its own script runs against
         # fixtures with real yq, with git, ssh, kubectl and argo shimmed to fail.
@@ -726,18 +1231,6 @@ jobs:
 
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
-
-      - name: Unit-test write-service-secrets against a fake Vault
-        # Values reach Vault byte for byte (quotes, backslashes, code-shaped
-        # text), existing keys survive the merge, and an unreadable current
-        # version stops the step instead of overwriting the whole secret.
-        run: python3 tests/test_tpl_vault_write_parse.py
-
-      - name: Unit-test retire's Vault delete against a fake KV v2 tree
-        # Every secret below teams/<t>/<s> goes (KV v2 deletes per path, so
-        # database/ and preview/ used to survive a retire), nothing outside
-        # it does, and a failed LIST or DELETE fails the step.
-        run: python3 tests/test_tpl_vault_delete_service_tree.py
 
       - name: Unit-test delete-tenant's Vault cleanup against a fake Vault
         # Roles, policies and the whole teams/<t> tree go and read back as
@@ -750,64 +1243,8 @@ jobs:
         # writer policy, and the deny on the writer prefix in two policies.
         run: python3 tests/test_vault_policy_files.py
 
-      - name: Tenant workflows log in to Vault with their own tenant role
-        # A template reachable from a tenant namespace picks its Vault role
-        # from the pod's namespace and never asks for the platform role
-        # argo-workflow; create/delete-tenant manage the per-tenant role.
-        run: python3 tests/test_vault_login_role.py
-
-      - name: Pin the argo-workflow-rotator Vault role's reach
-        # The dedicated rotation role grants exactly the KV paths the
-        # rotate-github-app-tokens template names (derived from it), is bound to
-        # one ServiceAccount, and nothing else. Not yet used by the template.
-        run: python3 tests/test_vault_rotator_role.py
-
-      - name: Unit-test create-tenant's existing-tenant checks
-        # create-tenant creates a tenant: an existing one fails validate unless
-        # reprovision=true, and the commit step refuses one that appeared
-        # after validate. Runs the template's own extracted blocks against a
-        # fixture checkout, with git clone stubbed.
-        run: python3 tests/test_wft_create_tenant_existing.py
-
-      - name: Unit-test create-tenant's creator_catalog_key
-        # creator_catalog_key=principal writes catalogKey: principal on the
-        # owner entry (site onboarding stage C2); principal without a
-        # principal id, or any value but login/principal, fails the step
-        # instead of falling back to a login-keyed owner. Runs the template's
-        # own extracted case and members blocks.
-        run: |
-          python3 tests/test_wft_create_tenant_catalog_key.py
-          python3 tests/test_wft_create_tenant_starter.py
-
       - name: Unit-test customer deletion callbacks and completion gates
         run: python3 tests/test_wft_customer_deletion.py
-
-      - name: Unit-test retire-service's Argo CD Application guard
-        # retire-service deletes the Application <team>-<component>. The
-        # guard only lets through an absent Application or one the `apps`
-        # ApplicationSet generated for that team, and treats an unreadable
-        # one as an error. Runs the template's own script against a stub
-        # kubectl.
-        run: python3 tests/test_wft_retire_service_guard.py
-
-      - name: Unit-test the shepherd's commit-and-push staging
-        # commit-and-push is the only step that writes agents-state back to
-        # git, and it stages through `git add` pathspecs. A pathspec that
-        # matches nothing exits 128, so under `set -e` a mis-chosen pathspec
-        # does not skip one file — it loses the whole durable write. That has
-        # now happened twice in this script (the `:(literal)` P1 on
-        # gitops#1046, then a staged deletion still being handed to `git add`,
-        # gitops#1295), and both reproduce against real git in a scratch repo,
-        # so the block's own text is replayed here.
-        run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
-
-      - name: Unit-test the shepherd's verify and Telegram gates
-        # post-deploy-verify runs only after a tick that may have merged, and
-        # a Succeeded tick reaches Telegram only with a terminal transition.
-        # Both read markers commit-and-push derives from the staged diff; the
-        # three scripts are run from the template against real git and jq,
-        # with kubectl, curl and sleep stubbed.
-        run: python3 tests/test_cwft_shepherd_verify_gate.py
 
       - name: Unit-test the mctl-agents-approve reviewed-digest binding
         # The approval flip must refuse an empty or mismatched digest and
@@ -820,25 +1257,6 @@ jobs:
         # It writes to PRs with an App token, so what it refuses is the point:
         # an enabled tool, a widening, or anything it could not read (#2416).
         run: python3 tests/test_portal_catalogue_land.py
-
-      - name: Unit-test the portal OAuth registration drift detector
-        # The MCP server's `auth_credentials` is write-only: the API accepts it
-        # and never returns it, so OpenTofu keeps what was last applied in
-        # state and a refresh cannot correct it -- measured against a throwaway
-        # server, an out-of-band change left `tofu plan` at `no-op`. That one
-        # attribute is therefore checked by a script instead, and this is its
-        # selftest: a detector never seen to fire is not known to work.
-        run: scripts/portal-auth-credentials-drift.py --selftest
-
-      - name: Unit-test the portal tool catalogue drift detector
-        # Its sibling above. The portal never refreshes a manual-OAuth server's
-        # tool snapshot, so a tool added upstream stays invisible and a changed
-        # output schema is validated by clients against the stale copy. Same
-        # reason for running it here rather than only nightly: a refactor that
-        # breaks compare() or the waiver table would merge green, and the first
-        # anyone heard of it would be a nightly run reporting that the detector
-        # could not run — with the catalogue unchecked meanwhile.
-        run: scripts/portal-catalogue-drift.py --selftest
 
       - name: Validate the vendored MCP portal allowlists
         # mctlhq/mctl-gitops#1370 PR A: each owning repo's docs/portal-allowlist.json
@@ -858,34 +1276,6 @@ jobs:
           scripts/validate-portal-allowlists.py --selftest
           scripts/validate-portal-allowlists.py
 
-      - name: Unit-test wft-provision-database's values.yaml patch
-        # The provisioner commits straight to main, so no PR check sees the
-        # file it writes, and `helm template` above accepts duplicate keys
-        # silently. This runs the template's own extracted block against a
-        # values file that already declares envFrom — the shape that lost
-        # every application secret in gitops#1102.
-        run: python3 tests/test_wft_provision_database_values.py
-
-      - name: Unit-test base-service's OTEL env on both workload kinds
-        # The chart renders a Deployment OR a Rollout, never both, so an env
-        # block added to one template is invisible in the other's output and
-        # fails silently — which is how the OTEL opt-in first shipped working
-        # only for non-blueGreen services. This renders both from the same
-        # values and compares them, and covers a service with no `env:` key.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_base_service_otel_env.py
-
-      - name: Unit-test base-service's work-context env on both workload kinds
-        # mctlhq/mctl-gitops#1405, same defect class as the OTEL test above:
-        # gate off must change nothing, gate on must render the ExternalSecret
-        # and all 4 env vars identically on Deployment and Rollout, a
-        # service's own env/envValueFrom must win, and an empty
-        # tokenVaultKey/tokenVaultProperty must fail the render loudly.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_base_service_work_context_env.py
-
       - name: Unit-test base-service's securityContext defaults on both workload kinds
         # base-service.hardenedContainers merges extraContainerSecurityContext
         # under each init/extra container's own securityContext. A swapped
@@ -897,15 +1287,6 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_security_context.py
 
-      - name: Service Jobs and CronJobs pass restricted PodSecurity, gated ones too
-        # Tenant namespaces enforce restricted PSA, so a non-compliant Job is
-        # never admitted. Renders every service once as committed and once
-        # with each renderIf env flag forced on, so a gated CronJob (e.g.
-        # mctl-telegram's demo-reviewer-watch) is checked before the flag flips.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_service_extra_jobs_restricted.py
-
       - name: Unit-test base-service's containerPort on both workload kinds
         # service.containerPort moves only the container; the Service and
         # Ingress stay on service.port (gitops#1933 broke docs.mctl.ai by
@@ -913,64 +1294,6 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_container_port.py
-
-      - name: Unit-test PruneLast on base-service's blueGreen objects
-        # Switching blueGreen off must not prune the Rollout before the
-        # Deployment that replaces it is Ready; ArgoCD reads PruneLast from
-        # the live object, so it has to be rendered while blueGreen is on.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_base_service_bluegreen_prune_last.py
-
-      - name: Unit-test base-service's preStop sleep on both workload kinds
-        # Without a pause before SIGTERM the process can exit while Traefik
-        # still routes to the pod (one 502 on admins/mctl-web, gitops#1946).
-        # Also checks the sleep stays below terminationGracePeriodSeconds.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_base_service_prestop_sleep.py
-
-      - name: Tenant preview namespaces bind Helm rights only inside the tenant
-        # preview-deploy/delete run as {tenant}/argo-workflow-sa; a binding
-        # for the central SA gave it write access to every tenant's preview
-        # secrets while previews themselves failed (gitops#1969).
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_tenant_preview_rbac.py
-
-      - name: preview-delete removes the preview's TLS Secret
-        # cert-manager keeps ${RELEASE}-tls after its Certificate is gone, so
-        # helm uninstall alone left one orphan Secret per preview. Runs the
-        # template's script with stub helm/kubectl.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_preview_delete_tls_secret.py
-
-      - name: preview-deploy renders the preview id and gitops commit a plan binds
-        # An approved deploy plan binds its preview id, host and the values at
-        # one gitops commit (.github#254); the workflow used to derive its id
-        # from its own name and read the default branch. Runs the deploy
-        # script with stub git/python3, under bash and busybox sh.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_preview_deploy_server_set_id.py
-          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
-            python:3.12-alpine sh -c 'pip install -q pyyaml &&
-              python3 tests/test_preview_deploy_server_set_id.py'
-
-      - name: Preview ttl_hours is stamped and enforced
-        # Nothing deleted expired previews before preview-reaper; a May
-        # preview release was still on record in October. Runs the reaper's
-        # own script with stub kubectl/helm/date and renders the tenant
-        # chart's CronWorkflow for every tenant. The second run repeats the
-        # script cases under busybox sh, the shell of the tools image the
-        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_preview_reaper.py
-          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
-            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
-              python3 tests/test_preview_reaper.py Reaper Deploy'
 
       - name: Only workflow SAs read every Secret in a tenant namespace
         # The namespace holds the gitops deploy key and github-actions-pat.
@@ -980,32 +1303,6 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_secret_readers.py
 
-      - name: Tenant Pod Security labels follow tenant.podSecurityLevel
-        # The templates read these keys from the top level while the chart
-        # documented them under tenant:, so a per-tenant flip to restricted
-        # rendered baseline without a word.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_tenant_pod_security_level.py
-
-      - name: The central workflow SA holds only opted-in grants in tenant namespaces
-        # It used to hold argo-workflow-helm-deploy and smoke-verify in every
-        # tenant; only labs (smoke-test, claude-remote restart) and admins
-        # (rotate-github-token) are targeted from argo-workflows.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_tenant_central_sa_bindings.py
-
-      - name: Unit-test the image-user check in deploy-service
-        # runAsNonRoot with a named or root image USER only fails after the
-        # deploy is committed (CreateContainerConfigError). check-image-user.sh
-        # judges the image against the rendered chart first; this runs it on
-        # fixtures and every existing service, and checks deploy-service runs
-        # it between the build and the commit.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_check_image_user.py
-
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
         # that is already over: the expression stays true for the whole window,
@@ -1014,34 +1311,6 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_alert_windows.py
-
-      - name: Unit-test the otel-collector backends/eval render (issue-903)
-        # T1/T2/T5: the default render must stay byte-identical to the
-        # committed golden file, the fan-out must render N independent
-        # otlp/<name> exporters plus the legacy scalar, and the gated eval
-        # manifests must render nothing by default and a correct
-        # Namespace/NetworkPolicy/Application set under the example overlay.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_otel_collector_backends_render.py
-
-      - name: Unit-test the ArgoCD tenant RBAC render (gitops#1431)
-        # The per-tenant rbac/tenants/*.csv fragments plus the base policy
-        # must render the same effective policy.csv as the pre-migration
-        # single-file version, minus the two intentionally dropped orphan
-        # tenants (yyy, xxxx); create: false must hold so the argo-cd
-        # subchart never also tries to own argocd-rbac-cm.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_argocd_rbac_policy_render.py
-
-      - name: Forgejo reconcile keeps user e-mail and name out of the plan log
-        # svalabs/forgejo marks only forgejo_user.password sensitive; without
-        # sensitive() in main.tf every user created or changed prints its
-        # address and name in the Job log and in Loki.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_forgejo_reconcile_pii.py
 
       - name: Unit-test the DevLoop trace fixtures (issue-903)
         # T3/T4: the representative fixture has one root span per execution,
@@ -1054,15 +1323,6 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_devloop_trace_fixture.py
 
-      - name: Check the ADR rubric stays frozen and Stage A honest (issue-903)
-        # T6/T7: weights sum to 100 and agree with the ADR's Markdown table,
-        # every score cell is null before any candidate is deployed, and no
-        # Stage A row whose evidence is only the issue text is promoted to
-        # SURVIVES on a load-bearing deployment claim.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_adr_rubric_frozen.py
-
       - name: Check the otel-trace-fixture ConfigMap is up to date (issue-903)
         # --selftest first, same reason as the other detectors in this job: a
         # drift detector that has never been seen to fire is not known to
@@ -1073,20 +1333,6 @@ jobs:
           scripts/materialize-otel-trace-fixture.py --selftest
           scripts/materialize-otel-trace-fixture.py --check
 
-      - name: Check the observability-eval sandbox teardown date (issue-1355)
-        # --selftest first, same reason as every other detector in this job:
-        # a checker never seen to fire is not known to work. Proves all five
-        # branches (disabled+empty passes; enabled+within-14d passes;
-        # enabled+empty/expired/beyond-14d all fail), then runs for real
-        # against the committed platform-gitops/bootstrap/values.yaml. Also
-        # runs on push: [main] (this workflow's own trigger, see the header
-        # comment above), so an expired sandbox turns main red even with no
-        # open PR -- a two-week spike namespace must not become silently
-        # permanent.
-        run: |
-          scripts/validate-eval-teardown-date.py --selftest
-          scripts/validate-eval-teardown-date.py
-
       - name: Unit-test the otel-collector redaction processor (issue-1355, #1332)
         # Key classification against the committed ignored_key_patterns and
         # blocked_key_patterns: credential-shaped keys (including ones inside
@@ -1095,21 +1341,6 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_redaction.py
-
-      - name: Run the redaction processor in the real collector (#1332)
-        # The key test above cannot see #1332's actual defect: a masked
-        # integer counter arrives as the string "****". This runs the pinned
-        # otelcol-contrib image with the rendered redaction/resource
-        # processors and checks the exported values and types. The
-        # --without-ignore run puts #1332 back and must fail first, so the
-        # detector is seen to fire on every run, not only once in review.
-        run: |
-          python3 -m pip install --quiet pyyaml
-          if python3 tests/test_otel_collector_redaction_e2e.py --without-ignore; then
-            echo "::error::redaction e2e passed with ignored_key_patterns removed -- the detector does not detect #1332"
-            exit 1
-          fi
-          python3 tests/test_otel_collector_redaction_e2e.py
 
       - name: Unit-test the OBI spike render and attribution (issue-2286)
         # The render test pins the privilege set and the default-off
@@ -1127,19 +1358,6 @@ jobs:
           done
           python3 tests/test_obi_spike_attribution_e2e.py
 
-      - name: Validate storage & finops Grafana dashboards
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_storage_finops_dashboard.py
-
-  # mctl-reserved-platform-hosts-{ingress,ingressroute} (#1503) are CEL that
-  # only an API server can evaluate: a policy that never denies, or one that
-  # denies every Ingress, renders and lints clean. This runs them in k3s at the
-  # cluster's version against deny/admit fixtures and every Ingress /
-  # IngressRoute the GitOps services render, so a service that claims another
-  # namespace's reserved host fails here instead of at sync. Its own job: it
-  # needs Docker and takes about a minute. The second step proves the
-  # external-manifests Secret allowlist policy the same way.
   reserved-hosts:
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -1239,6 +1457,11 @@ jobs:
           tofu fmt -check -diff
           tofu init -backend=false -lockfile=readonly -input=false
           tofu validate
+
+      - name: glovo.mctl.ai Worker routes keep /mcp and /.well-known on the origin
+        run: |
+          python3 scripts/validate-cloudflare-glovo-routes.py --selftest
+          python3 scripts/validate-cloudflare-glovo-routes.py
 
       - name: tofu test (mocked providers)
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac

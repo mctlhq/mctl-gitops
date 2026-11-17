@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""Release ledger, shadow mode (mctlhq/mctl-api#1022 S3, mctlhq/mctl-gitops#2528).
+
+  release-ledger-shadow.py check --repository R --version V --digest D --commit C --image I
+  release-ledger-shadow.py gate  --repository R --version V --digest D --commit C --image I
+  release-ledger-shadow.py --selftest
+
+`gate` (mctlhq/mctl-api#1022 S4) is what release-deploy's ledger-gate job
+runs for every release. It looks up the version hold for the image in
+release-gates.yaml (read from main) and acts on its `ledger.mode`:
+  no ledger block  nothing to do, exit 0
+  shadow           the `check` report above, exit 0 whatever it says
+  enforce          poll the ledger every POLL_SECONDS for up to
+                   ledger.wait_minutes until it holds an allow for exactly
+                   this digest and commit; then write approved_digest=<digest>
+                   to $GITHUB_OUTPUT (the bump's release-gate.py check needs
+                   it) and exit 0. A rejection of this exact image ends the
+                   wait at once (exit 6). The deadline ends it with exit 6, or
+                   7 when the last read was unknown: no approval was observed
+                   either way, and nothing is bumped.
+
+Reads the release decisions mctl-api keeps for one release
+(GET /api/v1/release/grants) and says what a ledger-based gate WOULD decide
+for exactly the image this run built, next to what the YAML allow records in
+platform-gitops/release-gates.yaml decide today. It enforces nothing: the
+release-deploy job that runs it is continue-on-error and nothing needs it.
+The point is to collect evidence that the two agree before the ledger
+replaces the YAML (S4).
+
+Three ledger verdicts, kept apart end to end:
+  allow    an approved, unexpired, unconsumed decision with MFA evidence names
+           this repository, version, tag commit AND image digest
+  refuse   the ledger was read and holds no such decision (none, rejected,
+           expired, consumed, or bound to another digest/commit)
+  unknown  the ledger could not be read or its answer is malformed.
+           Could not observe is never "no decision" and never "allowed".
+
+The ID token is requested from GitHub with audience https://api.mctl.ai and
+is never printed. mctl-api accepts it as the release gate reader only from a
+workflow of mctlhq/mctl-gitops on refs/heads/main.
+
+Exit 0 always for `check` (shadow), except on bad arguments; the verdict is
+on stdout and in $GITHUB_STEP_SUMMARY.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+GATE = "platform-gitops/release-gates.yaml"
+API = "https://api.mctl.ai"
+AUDIENCE = "https://api.mctl.ai"
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
+COMMIT = re.compile(r"[0-9a-f]{40}", re.ASCII)
+SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)
+REPO = re.compile(r"[a-z0-9][a-z0-9-]*/[a-z0-9._-]+", re.ASCII)
+
+ALLOW, REFUSE, UNKNOWN = "allow", "refuse", "unknown"
+# Cloudflare in front of api.mctl.ai refuses urllib's default User-Agent
+# ("Python-urllib/3.x") with 403 "error code: 1010" before the request
+# reaches mctl-api; the first live run (4.166.0) read nothing because of it.
+USER_AGENT = "mctl-gitops-release-ledger-shadow/1"
+
+
+def _request(url: str, headers: dict[str, str]) -> urllib.request.Request:
+    return urllib.request.Request(url, headers={**headers, "User-Agent": USER_AGENT})
+
+
+def _ts(raw: Any) -> datetime.datetime:
+    """RFC 3339 from Go (Z suffix, 0-9 fraction digits) -> aware datetime."""
+    if not isinstance(raw, str):
+        raise ValueError(f"timestamp {raw!r} is not a string")
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})", raw, re.ASCII)
+    if not m:
+        raise ValueError(f"timestamp {raw!r} is not RFC 3339")
+    frac = (m.group(2) or ".0")[1:7].ljust(6, "0")
+    tz = "+00:00" if m.group(3) == "Z" else m.group(3)
+    return datetime.datetime.fromisoformat(f"{m.group(1)}.{frac}{tz}")
+
+
+def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: str,
+                 now: datetime.datetime) -> tuple[str, str]:
+    """What a ledger gate would decide for this exact artifact. Pure."""
+    if not isinstance(body, dict) or not isinstance(body.get("grants"), list):
+        return UNKNOWN, "response is not an object with a grants list"
+    if body.get("repository") != repository or body.get("version") != version:
+        return UNKNOWN, f"response is for {body.get('repository')!r} {body.get('version')!r}, not this release"
+    approved: list[str] = []
+    refused: list[str] = []
+    others = 0
+    for i, g in enumerate(body["grants"]):
+        a = g.get("approval") if isinstance(g, dict) else None
+        art = g.get("artifact") if isinstance(g, dict) else None
+        if not isinstance(a, dict) or not isinstance(art, dict) or not isinstance(a.get("id"), str) \
+                or not isinstance(a.get("state"), str):
+            # A row we cannot read is a failed read, not a row to skip.
+            return UNKNOWN, f"grant {i} is malformed"
+        if (art.get("repository"), art.get("version")) != (repository, version):
+            return UNKNOWN, f"grant {a['id']} is for another release"
+        if art.get("image_digest") != digest or art.get("tag_commit") != commit:
+            others += 1
+            continue
+        state = a["state"]
+        if state == "rejected":
+            refused.append(f"{a['id']} rejected")
+        elif state == "approved":
+            dec = g.get("decision")
+            if not isinstance(dec, dict) or not isinstance(dec.get("amr"), list):
+                return UNKNOWN, f"grant {a['id']} is approved but carries no decision evidence"
+            if "mfa" not in dec["amr"]:
+                refused.append(f"{a['id']} approved without mfa")
+                continue
+            try:
+                expires = _ts(a.get("expires_at"))
+            except ValueError as exc:
+                return UNKNOWN, f"grant {a['id']}: {exc}"
+            if a.get("consumed_at"):
+                refused.append(f"{a['id']} already consumed")
+            elif expires <= now:
+                refused.append(f"{a['id']} expired at {a['expires_at']}")
+            else:
+                approved.append(a["id"])
+        # pending/expired/other states decide nothing.
+    if refused:
+        # A rejection of this exact image outranks any approval of it.
+        return REFUSE, "; ".join(refused)
+    if approved:
+        return ALLOW, f"approved by {', '.join(approved)}"
+    if others:
+        return REFUSE, f"no decision for this digest and commit ({others} grant(s) bind another artifact)"
+    return REFUSE, "no approved decision for this release"
+
+
+def judge_yaml(doc: Any, image: str, version: str, today: datetime.date) -> tuple[str, str]:
+    """What the YAML allow records decide for a new write of `version`."""
+    holds = doc.get("version_holds") if isinstance(doc, dict) else None
+    if not isinstance(holds, list):
+        return UNKNOWN, "version_holds missing"
+    mine = [h for h in holds if isinstance(h, dict) and h.get("repository") == image]
+    if not mine:
+        return ALLOW, "no version hold for this image"
+    v = SEMVER.fullmatch(version)
+    for h in mine:
+        floor = SEMVER.fullmatch(str(h.get("held_from")))
+        if v is None or floor is None:
+            return UNKNOWN, f"hold {h.get('name')}: unreadable versions"
+        if tuple(map(int, v.groups())) < tuple(map(int, floor.groups())):
+            continue
+        rec = [a for a in h.get("allow") or [] if isinstance(a, dict) and a.get("version") == version]
+        if not rec:
+            return REFUSE, f"{version} has no allow record"
+        exp = rec[0].get("expires")
+        if not isinstance(exp, datetime.date):
+            return UNKNOWN, f"allow record for {version}: expires is not a date"
+        if exp < today:
+            return REFUSE, f"allow record for {version} expired on {exp}"
+        return ALLOW, f"allow record {rec[0].get('grant')}"
+    return ALLOW, "below held_from"
+
+
+def _id_token() -> str:
+    url, bearer = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL"), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url or not bearer:
+        raise RuntimeError("no GitHub OIDC request environment (job lacks id-token: write?)")
+    sep = "&" if "?" in url else "?"
+    req = _request(f"{url}{sep}audience={urllib.parse.quote(AUDIENCE, safe='')}",
+                   {"Authorization": f"bearer {bearer}"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        val = json.load(resp).get("value")
+    if not isinstance(val, str) or not val:
+        raise RuntimeError("GitHub returned no ID token")
+    return val
+
+
+def _read_ledger(repository: str, version: str) -> Any:
+    q = urllib.parse.urlencode({"repository": repository, "version": version})
+    req = _request(f"{API}/api/v1/release/grants?{q}",
+                   {"Authorization": f"Bearer {_id_token()}", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}")
+        return json.load(resp)
+
+
+def check(args: argparse.Namespace) -> int:
+    for name, rx in (("repository", REPO), ("version", SEMVER), ("digest", DIGEST), ("commit", COMMIT)):
+        if not rx.fullmatch(getattr(args, name) or ""):
+            print(f"::error::bad --{name} {getattr(args, name)!r}", file=sys.stderr)
+            return 2
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        body = _read_ledger(args.repository, args.version)
+        ledger = judge_ledger(body, args.repository, args.version, args.digest, args.commit, now)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(200).decode("utf-8", "replace").strip().replace("\n", " ")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        ledger = (UNKNOWN, f"ledger read failed: HTTP {exc.code} {detail}".rstrip())
+    except Exception as exc:  # noqa: BLE001 - could not observe is unknown, never refuse/allow
+        ledger = (UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}")
+    try:
+        import yaml  # noqa: PLC0415 - only `check` needs it
+        yml = judge_yaml(yaml.safe_load((ROOT / GATE).read_text()), args.image, args.version, now.date())
+    except Exception as exc:  # noqa: BLE001
+        yml = (UNKNOWN, f"{GATE} unreadable: {type(exc).__name__}: {exc}")
+    agree = "unknown" if UNKNOWN in (ledger[0], yml[0]) else str(ledger[0] == yml[0]).lower()
+    line = (f"ledger-shadow repository={args.repository} version={args.version} digest={args.digest} "
+            f"ledger={ledger[0]} yaml={yml[0]} agree={agree}")
+    print(line)
+    print(f"  ledger: {ledger[1]}")
+    print(f"  yaml:   {yml[1]}")
+    level = "notice" if agree == "true" else "warning"
+    print(f"::{level} title=release ledger (shadow)::ledger={ledger[0]} yaml={yml[0]} agree={agree}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Release ledger (shadow, enforces nothing)\n\n"
+                    f"`{args.repository}` `{args.version}` `{args.digest}`\n\n"
+                    "| source | verdict | why |\n|---|---|---|\n"
+                    f"| ledger | {ledger[0]} | {ledger[1]} |\n| YAML allow | {yml[0]} | {yml[1]} |\n\n"
+                    f"agree: **{agree}**\n")
+    return 0
+
+
+POLL_SECONDS = 30
+
+
+def _rejected(body: Any, digest: str, commit: str) -> bool:
+    """A rejected decision names exactly this image (a final answer)."""
+    for g in body.get("grants", []) if isinstance(body, dict) else []:
+        a = g.get("approval") if isinstance(g, dict) else None
+        art = g.get("artifact") if isinstance(g, dict) else None
+        if isinstance(a, dict) and isinstance(art, dict) and a.get("state") == "rejected" \
+                and art.get("image_digest") == digest and art.get("tag_commit") == commit:
+            return True
+    return False
+
+
+def wait_for_decision(read, judge, digest: str, commit: str, wait_seconds: int, clock, sleep,
+                      log=print) -> tuple[int, str]:
+    """Poll until allow, a rejection of this image, or the deadline. Pure but for the injected IO.
+
+    Returns (exit code, last reason): 0 allow, 6 refused, 7 unknown at the deadline.
+    """
+    deadline = clock() + wait_seconds
+    verdict, why = UNKNOWN, "never read"
+    while True:
+        try:
+            body = read()
+            verdict, why = judge(body)
+            if verdict == REFUSE and _rejected(body, digest, commit):
+                return 6, why
+        except urllib.error.HTTPError as exc:
+            verdict, why = UNKNOWN, f"ledger read failed: HTTP {exc.code}"
+        except Exception as exc:  # noqa: BLE001 - could not observe, keep waiting
+            verdict, why = UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}"
+        if verdict == ALLOW:
+            return 0, why
+        log(f"ledger-gate: {verdict}: {why}")
+        if clock() + POLL_SECONDS > deadline:
+            return (7 if verdict == UNKNOWN else 6), why
+        sleep(POLL_SECONDS)
+
+
+def _ledger_hold(image: str) -> dict | None:
+    """The version hold for `image`, validated by release-gate.py itself; any doubt raises."""
+    import importlib.util  # noqa: PLC0415
+    import yaml  # noqa: PLC0415
+    spec = importlib.util.spec_from_file_location("release_gate", ROOT / "scripts/release-gate.py")
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    holds = mod._holds(yaml.safe_load((ROOT / GATE).read_text()))
+    found = [h for h in holds if h["repository"] == image and h.get("ledger")]
+    if len(found) > 1:
+        raise ValueError(f"more than one ledger hold for {image}")
+    return found[0] if found else None
+
+
+def gate(args: argparse.Namespace) -> int:
+    # Arguments are judged only once a ledger hold applies: every other image
+    # passes through here too, and must not fail on inputs it never uses.
+    try:
+        hold = _ledger_hold(args.image)
+    except Exception as exc:  # noqa: BLE001 - an unreadable policy is not "no hold"
+        print(f"::error::ledger-gate: {GATE} unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 7
+    if hold is None:
+        print(f"ledger-gate: no ledger hold for {args.image}, nothing to wait for")
+        return 0
+    for name, rx in (("repository", REPO), ("version", SEMVER), ("digest", DIGEST), ("commit", COMMIT)):
+        if not rx.fullmatch(getattr(args, name) or ""):
+            print(f"::error::bad --{name} {getattr(args, name)!r}", file=sys.stderr)
+            return 2
+    led = hold["ledger"]
+    if led["mode"] != "enforce":
+        return check(args)
+    print(f"::notice title=release ledger::waiting up to {led['wait_minutes']} min for an MFA approval of "
+          f"{args.repository} {args.version} @ {args.digest}. An admin opens the request "
+          f"(POST {API}/api/v1/release/grants with repository and version), the owner approves it on the "
+          f"release approval page.")
+    code, why = wait_for_decision(
+        lambda: _read_ledger(args.repository, args.version),
+        lambda body: judge_ledger(body, args.repository, args.version, args.digest, args.commit,
+                                  datetime.datetime.now(datetime.timezone.utc)),
+        args.digest, args.commit, led["wait_minutes"] * 60,
+        __import__("time").monotonic, __import__("time").sleep)
+    verdict = {0: ALLOW, 6: REFUSE, 7: UNKNOWN}[code]
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Release ledger (enforced)\n\n"
+                    f"`{args.repository}` `{args.version}` `{args.digest}`\n\n"
+                    f"verdict: **{verdict}** - {why}\n")
+    if code == 0:
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a", encoding="utf-8") as f:
+                f.write(f"approved_digest={args.digest}\n")
+        print(f"::notice title=release ledger::allow: {why}")
+        return 0
+    print(f"::error title=release ledger::{verdict}: {why}. Nothing is bumped; re-run this workflow after "
+          f"the decision.", file=sys.stderr)
+    return code
+
+
+def _selftest() -> int:
+    R, V = "mctlhq/mctl-api", "4.164.0"
+    D, C = "sha256:" + "d" * 64, "c" * 40
+    now = datetime.datetime(2026, 11, 18, tzinfo=datetime.timezone.utc)
+
+    def grant(state="approved", digest=D, commit=C, amr=("mfa", "user"), expires="2026-11-20T09:14:30.720789Z",
+              consumed=None, decision=True, gid="aar_1"):
+        g: dict = {"approval": {"id": gid, "state": state, "expires_at": expires},
+                   "artifact": {"repository": R, "version": V, "tag_commit": commit, "image_digest": digest}}
+        if consumed:
+            g["approval"]["consumed_at"] = consumed
+        if decision and state in ("approved", "rejected"):
+            g["decision"] = {"amr": list(amr)}
+        return g
+
+    def body(*grants):
+        return {"schema_version": "1", "repository": R, "version": V, "grants": list(grants)}
+
+    cases = [
+        ("approved, mfa, unexpired", body(grant()), ALLOW),
+        ("Go timestamp with nanoseconds", body(grant(expires="2026-11-20T09:14:30.123456789Z")), ALLOW),
+        ("no grants", body(), REFUSE),
+        ("only pending", body(grant(state="pending")), REFUSE),
+        ("rejected", body(grant(state="rejected")), REFUSE),
+        ("rejection outranks approval", body(grant(), grant(state="rejected", gid="aar_2")), REFUSE),
+        ("approved another digest", body(grant(digest="sha256:" + "e" * 64)), REFUSE),
+        ("approved another commit", body(grant(commit="f" * 40)), REFUSE),
+        ("approved without mfa", body(grant(amr=("pwd",))), REFUSE),
+        ("approved but expired", body(grant(expires="2026-11-17T00:00:00Z")), REFUSE),
+        ("approved but consumed", body(grant(consumed="2026-11-17T10:00:00Z")), REFUSE),
+        ("approved, no evidence", body(grant(decision=False)), UNKNOWN),
+        ("approved, bad expiry", body(grant(expires="soon")), UNKNOWN),
+        ("not an object", [], UNKNOWN),
+        ("no grants list", {"repository": R, "version": V}, UNKNOWN),
+        ("answer for another version", {**body(grant()), "version": "4.165.0"}, UNKNOWN),
+        ("malformed row", body({"approval": None}), UNKNOWN),
+        ("row for another release", body({**grant(), "artifact": {**grant()["artifact"], "version": "1.0.0"}}), UNKNOWN),
+    ]
+    bad = 0
+    for name, b, want in cases:
+        got = judge_ledger(b, R, V, D, C, now)[0]
+        if got != want:
+            bad += 1
+            print(f"FAIL ledger {name}: got {got}, want {want}")
+    I, today = "ghcr.io/mctlhq/mctl-api", now.date()
+
+    def hold(*allow, held_from="4.155.0"):
+        return {"version_holds": [{"name": "h", "repository": I, "held_from": held_from, "allow": list(allow)}]}
+
+    rec = {"version": V, "grant": "x#1", "expires": datetime.date(2026, 12, 1)}
+    ycases = [
+        ("allow record", hold(rec), ALLOW),
+        ("no allow record", hold(), REFUSE),
+        ("expired record", hold({**rec, "expires": datetime.date(2026, 11, 1)}), REFUSE),
+        ("below held_from", hold(held_from="5.0.0"), ALLOW),
+        ("no hold for image", {"version_holds": []}, ALLOW),
+        ("no version_holds", {}, UNKNOWN),
+        ("expires not a date", hold({**rec, "expires": "2026-12-01"}), UNKNOWN),
+    ]
+    for name, d, want in ycases:
+        got = judge_yaml(d, I, V, today)[0]
+        if got != want:
+            bad += 1
+            print(f"FAIL yaml {name}: got {got}, want {want}")
+    ua = _request("https://example.invalid/", {}).get_header("User-agent", "")
+    if not ua or ua.lower().startswith("python-urllib"):
+        bad += 1
+        print(f"FAIL requests carry urllib's default User-Agent ({ua!r}), which Cloudflare refuses")
+    # wait_for_decision: a fake clock and reader, one body per poll.
+    def poll(*bodies, wait=95):
+        t = [0.0]
+        seq = list(bodies)
+        polls = [0]
+
+        def read():
+            polls[0] += 1
+            b = seq.pop(0) if len(seq) > 1 else seq[0]
+            if isinstance(b, Exception):
+                raise b
+            return b
+
+        code, _ = wait_for_decision(read, lambda b: judge_ledger(b, R, V, D, C, now), D, C, wait,
+                                    lambda: t[0], lambda s: t.__setitem__(0, t[0] + s), log=lambda _m: None)
+        return code, polls[0]
+
+    pending = body(grant(state="pending"))
+    pcases = [
+        ("allow on the first read", poll(body(grant())), (0, 1)),
+        ("waits through pending, then allow", poll(pending, pending, body(grant())), (0, 3)),
+        ("waits through a failed read, then allow", poll(OSError("down"), body(grant())), (0, 2)),
+        ("a rejection of this image ends the wait", poll(body(grant(state="rejected")), body(grant())), (6, 1)),
+        ("a rejection of another image does not", poll(body(grant(state="rejected", digest="sha256:" + "e" * 64)),
+                                                       body(grant())), (0, 2)),
+        ("deadline while pending is refused", poll(pending), (6, 4)),
+        ("deadline while unreadable is unknown", poll(OSError("down")), (7, 4)),
+        ("approval for another digest never allows", poll(body(grant(digest="sha256:" + "e" * 64))), (6, 4)),
+    ]
+    for name, got, want in pcases:
+        if got != want:
+            bad += 1
+            print(f"FAIL poll {name}: got {got}, want {want}")
+    # gate() routing: it sits in front of every release-deploy bump, so a
+    # wrong exit here blocks every image. IO is stubbed via module globals.
+    import tempfile  # noqa: PLC0415
+    g = globals()
+    saved = {k: g[k] for k in ("_ledger_hold", "_read_ledger", "check", "wait_for_decision")}
+    hold_enf = {"ledger": {"mode": "enforce", "wait_minutes": 1}}
+
+    def route(hold, digest=D, waited=(0, "ok"), check_rc=0):
+        with tempfile.TemporaryDirectory() as td:
+            outp = Path(td) / "out"
+            outp.write_text("")
+            old_env = os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_STEP_SUMMARY")
+            os.environ["GITHUB_OUTPUT"] = str(outp)
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            calls = []
+
+            def lh(_image):
+                if isinstance(hold, Exception):
+                    raise hold
+                return hold
+            g["_ledger_hold"] = lh
+            g["check"] = lambda _a: calls.append("check") or check_rc
+            g["wait_for_decision"] = lambda *a, **k: calls.append("wait") or waited
+            try:
+                ns = argparse.Namespace(repository=R, version=V, digest=digest, commit=C, image="ghcr.io/x/y")
+                import contextlib  # noqa: PLC0415
+                import io  # noqa: PLC0415
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = gate(ns)
+                return rc, tuple(calls), outp.read_text().strip()
+            finally:
+                g.update(saved)
+                for k, v in zip(("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"), old_env):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    gcases = [
+        ("no hold: pass, nothing read", route(None, digest=""), (0, (), "")),
+        ("unreadable policy: unknown", route(ValueError("x")), (7, (), "")),
+        ("bad digest under a hold: 2", route(hold_enf, digest="sha256:x"), (2, (), "")),
+        ("shadow: reports and passes", route({"ledger": {"mode": "shadow", "wait_minutes": 1}}), (0, ("check",), "")),
+        ("enforce allow: digest handed over", route(hold_enf), (0, ("wait",), f"approved_digest={D}")),
+        ("enforce refuse: no digest", route(hold_enf, waited=(6, "no")), (6, ("wait",), "")),
+        ("enforce unknown: no digest", route(hold_enf, waited=(7, "down")), (7, ("wait",), "")),
+    ]
+    for name, got, want in gcases:
+        if got != want:
+            bad += 1
+            print(f"FAIL gate {name}: got {got}, want {want}")
+    total = len(cases) + len(ycases) + len(pcases) + len(gcases) + 1
+    print(f"selftest: {total - bad}/{total} passed")
+    return 1 if bad else 0
+
+
+def main() -> int:
+    if sys.argv[1:] == ["--selftest"]:
+        return _selftest()
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("check")
+    g = sub.add_parser("gate")
+    for sp in (c, g):
+        for name in ("repository", "version", "digest", "commit", "image"):
+            sp.add_argument(f"--{name}", required=True)
+    a = p.parse_args()
+    return gate(a) if a.cmd == "gate" else check(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
