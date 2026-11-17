@@ -152,6 +152,8 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     # outside the cluster, and mctl-api no longer routes it.
     "platform-gitops/bootstrap/values.yaml": frozenset({
         '  glovo.mctl.ai: []',
+        # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+        "mctlGlovo:",
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
@@ -189,6 +191,35 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     "platform-gitops/release-bindings.yaml": frozenset({
         "  ghcr.io/mctlhq/mctl-glovo: mctlhq/mctl-glovo",
     }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml": frozenset({
+        "This file is the ONLY path the leak guard (scripts/validate-glovo-m1-staging.py,",
+        '{{- $app := "mctl-glovo" }}',
+        "{{- $v := .Values.mctlGlovo }}",
+        '{{- $rt := "glovo_c2_runtime" }}',
+        '{{- $tsTag := "tag:glovo-egress" }}',
+        "  repository: ghcr.io/mctlhq/mctl-glovo",
+        '        GLOVO_MIGRATE_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_C2_AUDIT_KEY: "{{ `{{ .audit_key }}` }}"',
+        '        GLOVO_C2_ALLOWED_PRINCIPALS: "{{ `{{ .allowed_principals }}` }}"',
+        '        GLOVO_C2_CONTROL_SUBJECTS: "{{ `{{ .subjects }}` }}"',
+        '        GLOVO_C2_CONTROL_AUDIENCE: "{{ `{{ .audience }}` }}"',
+        '          command: ["glovo-migrate"]',
+        '            - {name: GLOVO_C2_ENABLED, value: "true"}',
+        '            - {name: GLOVO_C2_CAPACITY, value: "10"}',
+        '            - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}',
+        "            - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}",
+        '            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}',
+        '            - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}',
+        '            - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}',
+        '            - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}',
+        '            - {name: GLOVO_C2_CONTROL_JWKS_URL, value: "https://auth.mctl.ai/oauth/v2/keys"}',
+    }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml": frozenset({
+        '      "mctl-glovo"',
+    }),
 }
 
 # Exact files whose PATH may match LEAK (the name check only). This is not an
@@ -216,6 +247,10 @@ C2_SERVICE_FILES: tuple[str, ...] = (
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml",
     "platform-gitops/argo-workflows/config/image-names.txt",
     "platform-gitops/release-bindings.yaml",
+    # Part 2: the namespace template, its AppProject destination and switches.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml",
+    "platform-gitops/bootstrap/values.yaml",
 )
 
 
