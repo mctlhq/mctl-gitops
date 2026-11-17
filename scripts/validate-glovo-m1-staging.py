@@ -88,6 +88,13 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         "  name: glovo-c2-migrator-db-creds",
         "    name: glovo-c2-migrator-db-creds",
         "        key: platform/mctl-glovo/database-migrator",
+        # Their namespaced store in platform-db (mctlhq/mctl-gitops#2759).
+        "    name: glovo-db-creds",
+    }),
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml": frozenset({
+        "  name: glovo-db-creds",
+        '          role: "glovo-db-creds"',
+        "            name: glovo-db-creds",
     }),
     # Step Z: the approval page client in zitadel-iac.
     "platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf": frozenset({
@@ -203,6 +210,7 @@ C2_SERVICE_FILES: tuple[str, ...] = (
     "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/databases.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml",
     "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml",
