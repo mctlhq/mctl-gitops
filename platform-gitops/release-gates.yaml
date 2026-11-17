@@ -356,7 +356,7 @@ version_holds:
       # mode (mctlhq/mctl-api#1022 S4). Covers only the 4.167.0 tag of release
       # PR mctlhq/mctl-api#1107.
       - version: "4.167.0"
-        grant: mctlhq/mctl-gitops#PENDING
+        grant: mctlhq/mctl-gitops#2776
         approved_by: mashkovd
         expires: 2026-12-01
 
