@@ -1430,6 +1430,24 @@ jobs:
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
 
+      # The values mctl-api refuses to boot on (MCTL_OIDC_PROVIDERS, the
+      # ZITADEL_HOOK_* cross-checks), run through the DEPLOYED image's own
+      # validator (`mctl-api --check-config`), not a copy of its rules.
+      # gitops#2737 put service_subjects on the customers_org_id entry and the
+      # 4.166.0 rollout crash-looped (2026-11-17). `tofu test` above proves the
+      # fixture equals what the root renders; this step feeds it to the image
+      # pinned in mctl-api.yaml. Fail closed on a missing docker, a failed pull
+      # or an image without the ok line; the only skip is a pin older than the
+      # first release with the flag (MIN_CHECKER_VERSION in the script), with a
+      # visible warning. --selftest first: a detector never seen to fire is not
+      # known to work.
+      - name: mctl-api accepts the rendered OIDC configuration (deployed image's own validator)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/check-mctl-api-oidc-config.py --selftest
+          scripts/check-mctl-api-oidc-config.py
+
       # Customers rollout phase 3: every Actions v2 execution is
       # instance-wide and lives behind a toggle in customers_executions.tf
       # (its tests prove the toggles). One declared anywhere else would apply
