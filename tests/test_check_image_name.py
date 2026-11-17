@@ -558,6 +558,11 @@ latest = [ln for ln in push.splitlines() if "latest" in ln]
 check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
       "build-image must push :latest only for release (workflow_call) builds")
 
+# mctl-glovo is built centrally for team admins (mctlhq/mctl-glovo#29): the
+# real list must let admins build it and no other team. Both directions.
+check(run(REPO, "admins", "mctl-glovo", "--build") == 0, "the real list must let admins build mctl-glovo")
+check(run(REPO, "labs", "mctl-glovo", "--build") != 0, "the real list must not let labs build mctl-glovo")
+
 if failures:
     print("\n".join(f"FAIL: {f}" for f in failures))
     sys.exit(1)
