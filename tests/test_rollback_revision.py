@@ -128,7 +128,7 @@ check("refuses when the image repository changed since",
 MUT = {
     "no digest check": (lambda s: s.replace('[ "$got" = "$DIGEST" ]', "true"), dict(expected_digest=D2)),
     "no main ancestry check": (lambda s: s.replace('git merge-base --is-ancestor "${TARGET}" origin/main', "true"), None),
-    "no immutable keys check": (lambda s: s.replace("'.image.repository' ", ""), None),
+    "no immutable keys check": (lambda s: s.replace('same "$(yq -o=json \'.image.repository // null\' "${VALUES}")"', 'true "x"'), None),
 }
 
 

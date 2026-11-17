@@ -186,11 +186,12 @@ spec:
           # image repository (not a takeover of the service by another image)
           # and where it is reachable (ingress hosts were checked against
           # reserved hosts when they were set, not when they are restored).
-          for key in '.image.repository' '.ingress.host' '.ingress.hosts' '.ingress.enabled'; do
-            a=$(yq -o=json "${key} // null" "${VALUES}")
-            b=$(yq -o=json "${key} // null" /tmp/restored.yaml)
-            [ "$a" = "$b" ] || { echo "ERROR: ${key} differs between main and ${TARGET}; a rollback does not change it: roll forward instead" >&2; exit 1; }
-          done
+          # Literal expressions, one call each: a key never reaches a yq program.
+          same() { [ "$1" = "$2" ] || { echo "ERROR: $3 differs between main and ${TARGET}; a rollback does not change it: roll forward instead" >&2; exit 1; }; }
+          same "$(yq -o=json '.image.repository // null' "${VALUES}")" "$(yq -o=json '.image.repository // null' /tmp/restored.yaml)" image.repository
+          same "$(yq -o=json '.ingress.host // null' "${VALUES}")" "$(yq -o=json '.ingress.host // null' /tmp/restored.yaml)" ingress.host
+          same "$(yq -o=json '.ingress.hosts // null' "${VALUES}")" "$(yq -o=json '.ingress.hosts // null' /tmp/restored.yaml)" ingress.hosts
+          same "$(yq -o=json '.ingress.enabled // null' "${VALUES}")" "$(yq -o=json '.ingress.enabled // null' /tmp/restored.yaml)" ingress.enabled
 
           # Release gate (mctlhq/mctl-agents#1007), the same shared guard every
           # writer calls: anything it cannot read or decide is a refusal.
