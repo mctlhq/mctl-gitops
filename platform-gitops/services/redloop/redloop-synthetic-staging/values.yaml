@@ -9,9 +9,17 @@
 image:
   # Switched from nginxinc/nginx-unprivileged (1 CRITICAL: CVE-2026-111497 / brotli-libs)
   # to Chainguard Wolfi (nginx 1.31.8, 0 CVEs at all severities).
-  # Digest is immutable linux/amd64; image created 2026-11-15T22:10:17Z.
-  # tag: "latest" is the only public Chainguard tag; the digest field below
-  # provides the immutable pin — Kubernetes resolves by digest at pull time.
+  # The digest is a single-platform linux/amd64 OCI manifest (not an index),
+  # created 2026-11-15T22:10:17Z. Kubernetes pulls by digest; the "latest"
+  # tag in the rendered ref is ignored at pull time.
+  # Retention risk (open, see PR #2744): as of 2026-11-17 "latest" already
+  # points at a newer index, so this digest is untagged on Docker Hub. It
+  # still pulled on 2026-11-17, but nothing guarantees it keeps doing so.
+  # If it is garbage-collected, a pod on a node without the image cached
+  # fails with ErrImagePull, and this ref stops working as a rollback target.
+  # Anonymous Docker Hub pull limits also apply on first pull per node.
+  # The durable fix is a mirror into an internal registry, which is an infra
+  # change and out of scope for this PR.
   repository: docker.io/chainguard/nginx
   tag: "latest"
   digest: "sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98"
@@ -41,12 +49,21 @@ containerSecurityContext:
     drop:
       - ALL
 
-# Chainguard nginx requires two writable paths under readOnlyRootFilesystem:
-#   /run              — pid file (/run/nginx.pid, per nginx.conf)
-#   /var/lib/nginx/tmp — nginx proxy/cache temp files (dir uid=65532, 0777 in image)
-# /tmp is kept (chart default) for any runtime temp use.
-# /var/log/nginx/{access,error}.log are symlinks to /dev/stdout and /dev/stderr
-# (verified from image layers) — no writable volume needed there.
+# Writable paths under readOnlyRootFilesystem. Taken from `nginx -V` and the
+# image's nginx.conf at the pinned digest:
+#   /run               pid /run/nginx.pid, lock /run/nginx.lock
+#   /var/lib/nginx/tmp client_body, proxy, fastcgi, uwsgi and scgi temp paths
+#                      (all five compiled in under this directory)
+#   /tmp               chart default, unused by nginx
+# Each emptyDir starts empty and hides the image's directory. nginx (uid
+# 65532) creates nginx.pid and the five *_temp subdirectories itself at
+# startup. This was observed with empty tmpfs mounts and a read-only root.
+# Logs need no volume. /var/log/nginx/{access,error}.log are symlinks to
+# /dev/stdout and /dev/stderr, and the image's CMD passes `-e /dev/stderr`.
+# Without that flag nginx would try the compiled-in default error log
+# /var/lib/nginx/logs/error.log and print a non-fatal [alert] on the
+# read-only root. The chart sets no command/args, so the image CMD stays in
+# effect.
 writablePaths:
   - /tmp
   - /run
@@ -81,6 +98,15 @@ ingress:
       hosts:
         - staging-redloop.mctl.ai
 
+# No startupProbe, and the chart defaults of timeoutSeconds 1 and
+# failureThreshold 3 are kept. These numbers come from a local Docker run of
+# the pinned amd64 image under emulation on arm64 with --cpus 0.1, which is
+# pessimistic:
+#   - time from `docker run` to the first /healthz 200 was 0.9-1.9 s over 5
+#     cold starts;
+#   - /healthz latency was at most 0.17 s over 20 requests.
+# Readiness then passes on its first or second attempt (3 s delay). Liveness
+# would need 3 failures in a row, more than 25 s after start.
 probes:
   liveness:
     path: /healthz
@@ -138,10 +164,16 @@ extraVolumes:
       name: redloop-synthetic-staging-conf
 
 extraVolumeMounts:
-  # Mount as nginx.default.conf to replace the Chainguard image's built-in
-  # default server block (nginx.default.conf on port 8080). If mounted as
-  # default.conf instead, both files are loaded and nginx picks nginx.default.conf
-  # first (alphabetically), causing all custom locations to 404.
+  # The image's only server block is /etc/nginx/conf.d/nginx.default.conf
+  # (listen 8080, server_name localhost). nginx.conf includes
+  # conf.d/*.conf. Mounting over that exact file name replaces it, so
+  # `nginx -T` shows a single 8080 server.
+  # If the ConfigMap were mounted as default.conf instead, both servers would
+  # load. default.conf sorts first, so ours would become the default server,
+  # but the image's server still matches Host "localhost" by name. Requests
+  # with that Host (curl localhost:8080, kubectl port-forward) would then
+  # return 404 on /healthz, while probes, which send the pod IP as Host,
+  # would pass. Reproduced locally at the pinned digest.
   - name: nginx-conf
     mountPath: /etc/nginx/conf.d/nginx.default.conf
     subPath: default.conf
