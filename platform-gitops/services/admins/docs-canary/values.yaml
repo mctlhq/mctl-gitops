@@ -12,7 +12,8 @@
 image:
   # promote-deployment accepts only ghcr.io/<org>/<component>.
   repository: ghcr.io/mctlhq/docs-canary
-  tag: "seed-1"
+  tag: "rev-61d8e97406bc55d3f7b961a263b1cd5809c27a3c"
+  digest: sha256:724f2b59010de2ce4b575d824a9b128b0d62d3c2d3653c08a6c0c7e39fc6e943
 imagePullSecrets:
   - name: ghcr-credentials
 # Port 8080 so that a governed preview of this service renders the same
