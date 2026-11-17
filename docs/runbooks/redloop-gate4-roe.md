@@ -55,7 +55,7 @@ its own:**
 | Limit | Value | Enforced by |
 |---|---|---|
 | Scanner request rate | at most **5 req/s** sustained, single thread or equivalent | the tester (scanner config) |
-| Backstop per client | 10 req/s average, burst 20, **per Traefik replica** (3 today, HPA up to 10), answered with 429; keyed on `CF-Connecting-IP`, which in-cluster clients and other Cloudflare zones can forge | Traefik Middleware `redloop-staging-ratelimit` (renders only with the Ingress) |
+| Backstop per client | 10 req/s average, burst 20, **per Traefik replica** (3 today, HPA up to 10), answered with 429; keyed on `CF-Connecting-IP`, which an in-cluster client reaching Traefik directly can forge (Cloudflare overwrites it on proxied requests) | Traefik Middleware `redloop-staging-ratelimit` (renders only with the Ingress) |
 | Concurrency | at most 2 connections | the tester |
 
 The Traefik limit is a backstop, not the budget. A scanner that gets 429s

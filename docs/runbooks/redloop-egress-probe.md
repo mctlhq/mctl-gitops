@@ -100,7 +100,6 @@ Read-only lookups first. The manifest commits no cluster addresses (this
 repository is public), so they are filled in at apply time:
 
 ```bash
-set -euo pipefail
 export KUBECONFIG=~/.kube/mctl-preview-config.yaml
 API=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
 DNS=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
@@ -112,7 +111,7 @@ render() {
       -e "s/__BLACKBOX_CLUSTER_IP__/$BB/" -e "s/__REDLOOP_SVC_CLUSTER_IP__/$RL/" \
       docs/runbooks/redloop/egress-probe-pod.yaml
 }
-render | grep -c '__' # must print 0
+if render | grep -q '__'; then echo 'unrendered placeholder, stop'; else echo 'rendered OK'; fi
 render | kubectl apply --dry-run=server -f -
 ```
 
@@ -121,10 +120,15 @@ Then the mutation, the evidence and the cleanup:
 ```bash
 render | kubectl apply -f -
 # Succeeded = PASS, Failed = FAIL or UNKNOWN (the log's last line says which).
-until kubectl -n redloop get pod redloop-egress-probe -o jsonpath='{.status.phase}' | grep -Eq 'Succeeded|Failed'; do sleep 5; done
+# Bounded: a pod that is never scheduled has no startTime, so
+# activeDeadlineSeconds never fires. Give up after 6 minutes and treat it as UNKNOWN.
+for i in $(seq 1 72); do
+  ph=$(kubectl -n redloop get pod redloop-egress-probe -o jsonpath='{.status.phase}')
+  case "$ph" in Succeeded|Failed) break ;; esac; sleep 5
+done; echo "phase=$ph"   # anything but Succeeded/Failed: describe the pod, delete it, result UNKNOWN
 kubectl -n redloop logs redloop-egress-probe | tee redloop-egress-probe-$(date -u +%Y%m%dT%H%M%SZ).log
 kubectl -n redloop delete pod redloop-egress-probe --wait=true
-kubectl -n redloop get pod redloop-egress-probe   # must be NotFound
+kubectl -n redloop get pod redloop-egress-probe   # must say NotFound (non-zero exit is expected)
 ```
 
 The last log line must read `probe checks=9 result=PASS`. Put the log, the output of `kubectl -n redloop get networkpolicy -o yaml`
