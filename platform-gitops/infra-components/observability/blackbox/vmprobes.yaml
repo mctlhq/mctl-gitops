@@ -253,7 +253,8 @@ metadata:
 spec:
   jobName: redloop-staging-healthz
   # 30s rather than 60s: during a DAST window this is the stop signal, and
-  # two minutes of failures should be two consecutive probes at most.
+  # a 30s interval gives the 2m `for:` of RedLoopStagingDown about five
+  # samples to decide on instead of two or three.
   interval: 30s
   module: http_2xx
   vmProberSpec:

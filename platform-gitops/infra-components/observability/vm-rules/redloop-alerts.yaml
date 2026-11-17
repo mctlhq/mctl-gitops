@@ -24,7 +24,8 @@ spec:
       interval: 30s
       rules:
         - alert: RedLoopStagingDown
-          # At a 30s probe interval, 2m is four consecutive failures. That is
+          # At a 30s probe interval, firing needs every sample over 2m to be a
+          # failure: about five consecutive failed probes. That is
           # long enough to ride out a pod being replaced (a rolling update keeps
           # the old pod until the new one is Ready), and short enough to stop a
           # DAST run that has knocked the fixture over.
@@ -68,17 +69,19 @@ spec:
           # The failure mode the two rules above cannot see: if the VMProbe is
           # deleted or vmagent stops selecting it, the series disappears and
           # both rules silently stop evaluating. A DAST window must never open
-          # against a fixture nothing is watching.
+          # against a fixture nothing is watching. 3m, not the 15m that
+          # BlackboxProbeMetricAbsent uses: during a window this bounds how
+          # long a scan can run unwatched.
           expr: absent(probe_success{job="redloop-staging-healthz"})
-          for: 10m
+          for: 3m
           labels:
             severity: warning
             service: redloop
           annotations:
-            summary: "No RedLoop staging probe data for 10 minutes"
+            summary: "No RedLoop staging probe data for 3 minutes"
             description: >-
               There has been no probe_success series with
-              job="redloop-staging-healthz" for 10 minutes, so RedLoopStagingDown
+              job="redloop-staging-healthz" for 3 minutes, so RedLoopStagingDown
               and RedLoopStagingSlow cannot fire. Check that the
               redloop-staging-healthz VMProbe exists in the monitoring namespace
               and that blackbox-exporter is running. Do not open a DAST window
