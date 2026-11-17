@@ -8,9 +8,9 @@ which was never executed. The PR #1082 research is reused as provenance only; it
 
 Not deployed or live state.
 
-- Baseline: `tests/fixtures/context_eval/baseline.json`. A metadata header with
-  `evaluator_name: "issue-investigator-context-eval"`, `evaluator_version: "1.0.0"`,
-  `metrics_contract_version: "adr-015/1"`, written by `_regenerate` under the key `_header`. All other
+- Baseline: `tests/fixtures/context_eval/baseline.json`. Verified in the full file: a TOP-LEVEL key `_header`
+  containing `evaluator_name: "issue-investigator-context-eval"`, `evaluator_version: "1.0.0"`,
+  `metrics_contract_version: "adr-015/1"`, written by `_regenerate`. All other
   top-level keys are case ids (for example `01-all-fresh-labelled`), each mapping strategy name
   (for example `deterministic-fixed-order`) to a metrics object. Metrics include scalars
   (`f1`, `stale_rate`, `context_bytes`, ...), a list `missing_expected`, and a nested list of objects
@@ -68,22 +68,21 @@ Smallest sufficient, test-local; no runtime `context_eval` change, no new identi
    - Output: sorted, named paths `case/strategy/metric` with side.
 2. **Do not rewrite or read the baseline for repair.** No auto-regeneration; failure messages point to the
    existing deliberate procedure.
-3. **Update-procedure note** (short, in the module docstring or an existing docs location chosen by the
-   owner): regeneration only for deliberate changes, with a written reason; the diff of
+3. **Update-procedure note** (short, in the module docstring of `tests/test_context_eval.py`): regeneration only for deliberate changes, with a written reason; the diff of
    `baseline.json` including `_header` is reviewed by the owner; a changed `evaluator_version` or
    `metrics_contract_version` is a reviewed bump of the constants plus a regenerated baseline, never
    a silent upgrade; the existing baseline is **not** regenerated to get a green run.
 
 ### Allowlist for the later implementation
 
-- `tests/test_context_eval.py` (shared comparison function and new tests).
-- Optionally one small test-local helper module under `tests/` if the owner prefers it.
-- The short update-procedure note (docstring of the same module, or one existing runbook chosen by the
-  owner).
-- Not allowed: `orchestrator/**`, `baseline.json`, other fixtures, CI, workflows.
+Exact minimal allowlist: `tests/test_context_eval.py` only (shared test-local helper, tests, and the update
+procedure in the module docstring).
 
-If `_header` nesting in the file differs from the source reading of `_regenerate`, the implementer must stop
-and ask rather than adapt silently.
+- Not allowed: `orchestrator/**`, `baseline.json`, other fixtures, CI, workflows, and any other path. A
+  separate helper module or a runbook is not authorized; it needs a separate scope decision.
+
+Drift preflight: re-read the latest source (`baseline.json`, the test module, the constants) before
+implementing. If it differs from this document, report it before coding. No new schema is needed.
 
 ## Alternatives
 

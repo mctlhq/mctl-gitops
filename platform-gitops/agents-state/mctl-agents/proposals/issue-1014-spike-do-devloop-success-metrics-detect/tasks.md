@@ -4,9 +4,11 @@ Proposal only. None of these tasks is approved for implementation; start only af
 approval. No uv, install, regeneration or test run is part of the documentation task that produced this file.
 
 - [ ] 1. Verify sources and overlap. Re-read `tests/test_context_eval.py`, `orchestrator/context_eval.py`
-  constants and `tests/fixtures/context_eval/baseline.json` at current `main`; confirm the `_header`
-  nesting; re-check open PRs for `context_eval` overlap; record exact paths and fields.
-  DoD: paths, symbols and header nesting written down; any mismatch with the design is raised before coding.
+  constants and `tests/fixtures/context_eval/baseline.json` at current `main` as a drift preflight (the
+  top-level `_header` is already verified at `4d7efd3555eafbb4af969687e029c5b5b9863b14`); re-check open PRs
+  for `context_eval` overlap; record exact paths and fields.
+  DoD: paths and symbols written down; any drift from the design is raised before coding. Only
+  `tests/test_context_eval.py` may be changed; any other path needs a separate scope decision.
 - [ ] 2. Implement one shared comparison function in `tests/test_context_eval.py` that checks the header
   against `EVALUATOR_NAME`, `EVALUATOR_VERSION`, `METRICS_CONTRACT_VERSION`, symmetric membership of cases,
   strategies and metrics (ignoring only `_header` at case level), explicit `None` vs absent, and exact `!=`
@@ -14,7 +16,7 @@ approval. No uv, install, regeneration or test run is part of the documentation 
   DoD: no tolerance introduced; failures are sorted named paths; the baseline file is not modified.
 - [ ] 3. Describe the update procedure (existing `--regenerate` command as documentation, reason, owner
   review of the `baseline.json` diff including `_header`, no regeneration to turn a red run green).
-  (depends on 1) DoD: note placed in the allowlisted location.
+  (depends on 1) DoD: note placed in the module docstring of `tests/test_context_eval.py`.
 - [ ] 4. Run existing local checks listed below and report results honestly. (depends on 2, 3)
 
 ## Tests (real fixture format, no new corpus)
@@ -36,7 +38,14 @@ Regressions mutate in-memory copies (`copy.deepcopy`) of the real baseline; the 
 
 ## Independent mutations (done on a temporary commit, then restored with `git restore`)
 
-- [ ] M1. Make the shared function one-sided again (iterate only baseline metrics). T2 and T3 must go red.
+- [ ] M1. Disable only metric-name membership (iterate only baseline metrics, as today). The T2
+  extra/missing-metric test must go red. T3 does not cover this guard and is not the proof.
+- [ ] M1a. Disable only case-id membership, independently and in isolation. The T3 case-membership
+  assertions (baseline-only and current-only case) must go red, and each must fail for the omitted case
+  difference, not for an unrelated artifact such as a `KeyError` or a header difference.
+- [ ] M1b. Disable only strategy membership, independently and in isolation. The T3 strategy-membership
+  assertions must go red for the omitted strategy difference, for the same reason.
+  M1a and M1b are required only if those guards are claimed as proven; otherwise state them as unproven.
 - [ ] M2. Disable the header check. T4 must go red.
   Each mutation is committed-first, edited, run, restored and confirmed clean with `git status`.
 

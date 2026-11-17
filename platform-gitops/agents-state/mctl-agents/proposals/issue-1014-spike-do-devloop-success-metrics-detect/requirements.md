@@ -32,7 +32,8 @@ The existing drift check `test_baseline_matches` in `tests/test_context_eval.py`
 - the inner loop iterates the **baseline's** metrics, so a metric the code newly emits (extra actual metric)
   or a metric deleted from the baseline escapes;
 - `actual.get(metric)` collapses an explicit `None` and an absent key;
-- the baseline `_header` (`evaluator_name`, `evaluator_version`, `metrics_contract_version`) is written by
+- the baseline's top-level `_header` (`evaluator_name`, `evaluator_version`, `metrics_contract_version`;
+  verified present in the full `baseline.json` at `4d7efd3555eafbb4af969687e029c5b5b9863b14`) is written by
   the maintenance entry point but never checked by any test.
 
 Comparison is exact Python `!=`, including nested values (for example `coverage_by_kind`). There is **no
@@ -64,8 +65,8 @@ numeric tolerance** in this comparator and none is to be introduced.
   field or an unequal value SHALL fail with a named message. There is no fallback and no silent upgrade.
 - WHEN the check fails THE SYSTEM SHALL NOT rewrite the baseline. Updating it remains the existing
   deliberate `--regenerate` action, with a written reason and owner review.
-- WHILE this proposal is executed THE SYSTEM SHALL change only the existing test module, optionally one
-  small test-local helper, and a short update-procedure note. No runtime `context_eval` change is needed
+- WHILE this proposal is executed THE SYSTEM SHALL change only `tests/test_context_eval.py` (a shared
+  test-local helper, the tests, and the update procedure in the module docstring). No runtime `context_eval` change is needed
   and none is proposed; no new evaluator identity fields or schema are added.
 
 ## Out of scope
@@ -80,9 +81,7 @@ numeric tolerance** in this comparator and none is to be introduced.
 
 ## Open questions
 
-- The baseline file shows the three identity fields as a header. Source says `_regenerate` writes them
-  under the top-level key `_header`. The implementer must confirm the exact nesting in the file before
-  writing the check.
-- Where the shared comparison lives: a test-local helper in `tests/test_context_eval.py` is the preferred
-  minimum. The owner may prefer a separate helper module.
 - Re-check open mctl-agents PRs for `context_eval` overlap immediately before implementation.
+- Drift preflight: re-read the latest `baseline.json`, `tests/test_context_eval.py` and the constants before
+  implementing. The header shape is verified at `4d7efd3555eafbb4af969687e029c5b5b9863b14`, not open.
+- Any helper module or runbook path outside `tests/test_context_eval.py` needs a separate scope decision.
