@@ -27,7 +27,7 @@ Every run is recorded here. A later run never replaces an earlier result.
 
 | Run | Date (UTC) | Manifest | Result | Evidence |
 |---|---|---|---|---|
-| 1 | 2026-11-17 22:22 | `4ba3ba91d` (single phase) | `result=FAIL`: both external-IP checks connected, every other check was refused or timed out | log and verdict table on #2769; detailed analysis held by the operator, not in this repository |
+| 1 | 2026-11-17 22:22 | `4ba3ba91d` (single phase) | `result=FAIL` | log and verdict table on #2769; analysis held privately by the operator, not in this repository |
 | 2 | not run | this revision (startup, wait, steady) | | |
 
 Run 1 stays a FAIL. Its manifest had no startup phase, so it cannot be
@@ -52,9 +52,8 @@ a one-shot pod in `redloop` that runs only `curl` and `nslookup`.
 
 ## Phases and output
 
-A policy controller programs a new pod asynchronously, so a check made in
-the first seconds of a pod's life measures the controller, not the policy.
-The probe keeps the two apart:
+A check taken at container start and a check taken once enforcement has
+been observed answer different questions, so the probe reports them apart:
 
 | Phase | Output | Counts toward the steady-state result |
 |---|---|---|
@@ -66,8 +65,7 @@ The probe keeps the two apart:
 | result | `probe checks=<n> result=PASS\|FAIL\|UNKNOWN`, always the last line; exit code 0, 1 or 2 | |
 
 If enforcement is not observed within `WAIT_MAX`, the steady checks do not
-run: a check that was still connecting gives `result=FAIL` (the egress is
-open, not merely late), anything else gives `result=UNKNOWN`.
+run: a check that was still connecting gives `result=FAIL` (egress is open), anything else gives `result=UNKNOWN`.
 
 ### Verdicts
 
@@ -111,11 +109,11 @@ that a `REFUSED` cannot be a service that is simply down.
 | **steady-state PASS** | last line `result=PASS`, node evidence from both holds (step 4), every in-cluster target had a ready endpoint | steady-state isolation observed for this pod |
 | steady-state FAIL | `result=FAIL` | a finding |
 | UNKNOWN | anything else: `result=UNKNOWN`, missing log or result line, missing or contradicting node evidence, a target without a ready endpoint | isolation **not observed**; find out why and rerun |
-| startup finding | `probe startup=OPEN` | the pod's first seconds were not filtered; recorded separately, whatever the steady-state result |
+| startup observation | `probe startup=OPEN` | recorded for the operator, whatever the steady-state result, and assessed outside this runbook |
 
 **A steady-state PASS is not a Gate 4 approval.** It closes the steady-state
-half of Gate 4 criterion 4 only. A `startup=OPEN` line, or a startup-window
-finding from an earlier run, stays open until the operator resolves or
+half of Gate 4 criterion 4 only. A `startup=OPEN` line, or an open finding
+from an earlier run, stays open until the operator resolves or
 explicitly accepts it in the Gate 4 decision.
 
 ### The detector was proven both ways
@@ -126,8 +124,8 @@ standing in for the cluster ones, `WAIT_MAX=6` and `HOLD=1`:
 
 | Run | Result |
 |---|---|
-| unfiltered network all along | `startup=OPEN`, `observed=no last=REACHABLE`, `result=FAIL`, exit 1: open egress is a FAIL, not a startup effect |
-| network removed 3 s after start | `startup=OPEN`, `enforcement-wait=3s observed=yes`, then the steady checks: the startup window and the steady state are reported apart |
+| unfiltered network all along | `startup=OPEN`, `observed=no last=REACHABLE`, `result=FAIL`, exit 1: open egress is a FAIL |
+| network removed during the run | `startup=OPEN`, `observed=yes`, then the steady checks: the two results are reported apart |
 | `--network none` | `startup=CLOSED`, every TCP check `REFUSED`, `kube-dns-udp` `UNKNOWN`, `result=UNKNOWN`, exit 2. It also shows why an in-pod `REFUSED` needs node evidence |
 | unrendered `__KUBE_API_CLUSTER_IP__` | `bad-target`, `result=UNKNOWN`, exit 2 |
 | `WAIT_MAX=abc` | `bad-config`, `result=UNKNOWN`, exit 2 |

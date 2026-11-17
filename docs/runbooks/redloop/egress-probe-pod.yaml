@@ -16,9 +16,8 @@
 # public repository.
 #
 # The run has two results, and only the second one is steady-state
-# isolation. A policy controller programs a new pod asynchronously, so a
-# check made in the first seconds of the pod's life measures the controller,
-# not the policy. The probe therefore reports a `startup` line first, then
+# isolation. A check taken at container start does not show steady-state
+# policy, so the probe reports it as a separate `startup` line first, then
 # waits (bounded by WAIT_MAX) until it observes enforcement, holds for HOLD
 # seconds so the operator can read the node's rules, runs the steady-state
 # checks, holds again, and prints the steady-state result last.
@@ -132,7 +131,7 @@ spec:
           case "$WAIT_MAX$HOLD" in *[!0-9]*|'') echo "probe bad-config"; finish UNKNOWN ;; esac
 
           # 1. Startup: one external check at once, before enforcement may
-          # exist. OPEN here is a finding about the policy controller, not a
+          # exist. OPEN here is reported to the operator only, never as a
           # steady-state result.
           check external-ip-https - https://1.1.1.1/
           case "$v" in REACHABLE) s=OPEN ;; BLOCKED|REFUSED) s=CLOSED ;; *) s=UNKNOWN ;; esac
@@ -150,7 +149,7 @@ spec:
           el=$(( $(date +%s) - t0 ))
           echo "probe enforcement-wait=${el}s observed=$observed last=$v"
           if [ "$observed" = no ]; then
-            # Still connecting after WAIT_MAX: not a startup effect.
+            # Still connecting after WAIT_MAX: egress is open.
             echo "probe hold=start seconds=$HOLD"; sleep "$HOLD"
             if [ "$v" = REACHABLE ]; then finish FAIL; else finish UNKNOWN; fi
           fi
