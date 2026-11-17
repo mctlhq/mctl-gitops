@@ -358,7 +358,7 @@ version_holds:
       # image digest; it now reads the workflow's root node as well).
       # Covers only the 4.167.0 tag of release PR mctlhq/mctl-api#1107.
       - version: "4.167.0"
-        grant: mctlhq/mctl-gitops#TBD
+        grant: mctlhq/mctl-gitops#2779
         approved_by: mashkovd
         expires: 2026-12-01
 
