@@ -8,7 +8,13 @@ Usage:
                                          as KEY=VALUE lines (for
                                          .github/workflows/mirror-image.yaml)
 
-A missing, unreadable or malformed file is an error, never "no mirrors".
+Every mirror name must also be `reserved` in
+platform-gitops/argo-workflows/config/image-names.txt and must not appear in a
+`grant` or `shared` line. Otherwise a tenant build with that component name
+could push its own tags into the mirror package.
+
+A missing, unreadable or malformed file is an error, never "no mirrors" or
+"nothing reserved".
 """
 import re
 import sys
@@ -16,7 +22,9 @@ from pathlib import Path
 
 import yaml
 
-MIRRORS = Path(__file__).resolve().parent.parent / "platform-gitops/images/mirrors.yaml"
+ROOT = Path(__file__).resolve().parent.parent
+MIRRORS = ROOT / "platform-gitops/images/mirrors.yaml"
+IMAGE_NAMES = ROOT / "platform-gitops/argo-workflows/config/image-names.txt"
 
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 # registry/repo[/repo...]@sha256:<64 hex>; no tag part, so the ref cannot move.
@@ -63,6 +71,34 @@ def check(doc):
     return errors
 
 
+def check_reservations(doc, names_text):
+    """Mirror names must be reserved and never granted or shared.
+
+    Call only with a doc that check() accepted. Returns a list of errors.
+    """
+    reserved, opened = set(), {}
+    for line in names_text.splitlines():
+        parts = line.split()
+        if not parts or parts[0].startswith("#"):
+            continue
+        if parts[0] == "reserved" and len(parts) == 2:
+            reserved.add(parts[1])
+        elif parts[0] == "grant" and len(parts) == 3:
+            opened.setdefault(parts[2], []).append(" ".join(parts))
+        elif parts[0] == "shared" and len(parts) == 2:
+            opened.setdefault(parts[1], []).append(" ".join(parts))
+    if not reserved:
+        return ["image-names.txt has no `reserved` lines; refusing to read that as nothing reserved"]
+    errors = []
+    for m in doc["mirrors"]:
+        name = m["name"]
+        if name not in reserved:
+            errors.append(f"mirror {name}: add `reserved {name}` to image-names.txt")
+        for line in opened.get(name, []):
+            errors.append(f"mirror {name}: `{line}` in image-names.txt lets a team push to it")
+    return errors
+
+
 def load(path):
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -98,7 +134,20 @@ def selftest():
     }
     for label, doc in bad.items():
         assert check(doc), f"selftest: {label} was accepted"
-    print(f"selftest OK: 1 valid fixture accepted, {len(bad)} mutations rejected")
+
+    names_ok = "registry ghcr.io/mctlhq\nreserved-prefix mctl-\nreserved chainguard-nginx\n"
+    assert check_reservations(good, names_ok) == [], check_reservations(good, names_ok)
+    bad_names = {
+        "not reserved": "registry ghcr.io/mctlhq\nreserved other\n",
+        "commented out": "registry ghcr.io/mctlhq\nreserved other\n# reserved chainguard-nginx\n",
+        "granted": names_ok + "grant labs chainguard-nginx\n",
+        "shared": names_ok + "shared chainguard-nginx\n",
+        "empty list": "",
+    }
+    for label, text in bad_names.items():
+        assert check_reservations(good, text), f"selftest: reservation {label} was accepted"
+    print(f"selftest OK: 1 valid fixture accepted, {len(bad)} mutations rejected; "
+          f"reservations: 1 accepted, {len(bad_names)} rejected")
 
 
 def main(argv):
@@ -117,6 +166,13 @@ def main(argv):
         print(f"ERROR: cannot read {MIRRORS}: {e}", file=sys.stderr)
         return 1
     errors = check(doc)
+    if not errors:
+        try:
+            names_text = IMAGE_NAMES.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"ERROR: cannot read {IMAGE_NAMES}: {e}", file=sys.stderr)
+            return 1
+        errors = check_reservations(doc, names_text)
     if errors:
         for e in errors:
             print(f"ERROR: {e}", file=sys.stderr)
