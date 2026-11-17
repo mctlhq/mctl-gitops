@@ -1,0 +1,88 @@
+# Alerts on the RedLoop synthetic staging fixture
+# (blackbox/vmprobes.yaml, job redloop-staging-healthz).
+#
+# These are the monitoring half of RedLoop Gate 4. The Rules of Engagement
+# (docs/runbooks/redloop-gate4-roe.md) treat every alert below as a stop
+# condition for a DAST window. They route to the operator's Telegram only (see
+# bootstrap/templates/observability/monitoring.yaml). mctl-agent must not get
+# them: during a test it would try to remediate the very target under test.
+#
+# Severity is warning, not critical. This is a disposable test fixture with no
+# users. Its being down is news for whoever runs the test, not a platform
+# outage.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: redloop-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: availability
+spec:
+  groups:
+    - name: redloop.staging
+      interval: 30s
+      rules:
+        - alert: RedLoopStagingDown
+          # At a 30s probe interval, firing needs every sample over 2m to be a
+          # failure: about five consecutive failed probes. That is
+          # long enough to ride out a pod being replaced (a rolling update keeps
+          # the old pod until the new one is Ready), and short enough to stop a
+          # DAST run that has knocked the fixture over.
+          expr: probe_success{job="redloop-staging-healthz"} == 0
+          for: 2m
+          labels:
+            severity: warning
+            service: redloop
+          annotations:
+            summary: "RedLoop staging {{ $labels.instance }} is failing its health check"
+            description: >-
+              blackbox-exporter has not had a 2xx from {{ $labels.instance }}
+              for 2 minutes. If a DAST window is open, this is a stop condition:
+              halt the scanner first, then investigate
+              (docs/runbooks/redloop-gate4-roe.md). Look at
+              probe_http_status_code for the same instance, and use
+              mctl_get_service_pods for team redloop. A 5xx or a timeout while a
+              scan is running most likely means the 100m CPU limit is
+              saturated.
+
+        - alert: RedLoopStagingSlow
+          # Degradation that precedes an outage. The fixture answers /healthz
+          # in a few milliseconds; locally under 0.1 CPU the worst of 20
+          # requests was 0.17s. A sustained 1s means the scan is too
+          # aggressive for the RoE rate, and the RoE stops on it.
+          expr: probe_success{job="redloop-staging-healthz"} == 1 and probe_duration_seconds{job="redloop-staging-healthz"} > 1
+          for: 2m
+          labels:
+            severity: warning
+            service: redloop
+          annotations:
+            summary: "RedLoop staging {{ $labels.instance }} answers /healthz slower than 1s"
+            description: >-
+              /healthz on {{ $labels.instance }} has taken more than 1s for 2
+              minutes. Normally it takes a few milliseconds. If a DAST window is
+              open, the scan rate is higher than the RoE allows or the scanner
+              is not honouring it: stop the scanner
+              (docs/runbooks/redloop-gate4-roe.md).
+
+        - alert: RedLoopStagingProbeAbsent
+          # The failure mode the two rules above cannot see: if the VMProbe is
+          # deleted or vmagent stops selecting it, the series disappears and
+          # both rules silently stop evaluating. A DAST window must never open
+          # against a fixture nothing is watching. 3m, not the 15m that
+          # BlackboxProbeMetricAbsent uses: during a window this bounds how
+          # long a scan can run unwatched.
+          expr: absent(probe_success{job="redloop-staging-healthz"})
+          for: 3m
+          labels:
+            severity: warning
+            service: redloop
+          annotations:
+            summary: "No RedLoop staging probe data for 3 minutes"
+            description: >-
+              There has been no probe_success series with
+              job="redloop-staging-healthz" for 3 minutes, so RedLoopStagingDown
+              and RedLoopStagingSlow cannot fire. Check that the
+              redloop-staging-healthz VMProbe exists in the monitoring namespace
+              and that blackbox-exporter is running. Do not open a DAST window
+              until the series is back.
