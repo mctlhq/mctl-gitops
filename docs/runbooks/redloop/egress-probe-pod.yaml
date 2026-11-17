@@ -62,40 +62,71 @@ spec:
       command: ["/bin/sh", "-c"]
       args:
         - |
-          # Every check prints one line: name, curl exit code, verdict.
-          # Exit codes: 0 = connected (FAIL for the deny checks); 28 = timed
-          # out (the expected default-deny outcome); 7 = refused; 6 = DNS
-          # failure. Anything other than 28 or 6 on a deny check needs a
-          # human to look at it. A refusal means a packet reached something.
+          # One line per check: name, exit code, time_connect, verdict. The
+          # last line is the overall result: PASS, FAIL or UNKNOWN. Only a
+          # PASS line is evidence of isolation.
+          #
+          # Default-deny: a verdict is UNKNOWN unless a rule below positively
+          # explains it. "Not reachable" must be shown, never inferred from
+          # the absence of a success.
+          #   REACHABLE  a TCP connection completed (time_connect > 0), or
+          #              DNS answered. FAIL.
+          #   BLOCKED    curl timed out before any connection completed
+          #              (rc 28, time_connect 0), or DNS timed out. Expected.
+          #   REFUSED    rc 7: a reset or ICMP reject came back. The packet
+          #              was stopped, but something on the path answered.
+          #              Acceptable, and worth writing down.
+          #   NO_DNS     rc 6. Acceptable only for external-name, where
+          #              failing to resolve is the point.
+          #   UNKNOWN    anything else: a bad target, a missing binary, a TLS
+          #              or protocol error, an unexpected code.
+          fail=0; unknown=0
+          note() { echo "probe name=$1 rc=$2 connect=$3 verdict=$4"
+            case "$4" in REACHABLE) fail=1 ;; UNKNOWN) unknown=1 ;; esac; }
           check() {
-            name="$1"; shift
-            curl -sS -o /dev/null --connect-timeout 5 --max-time 8 "$@" 2>/dev/null
+            name="$1"; allow_nodns="$2"; shift 2
+            out=$(curl -sS -o /dev/null -w 'tc=%{time_connect}' --connect-timeout 5 --max-time 8 "$@" 2>&1)
             rc=$?
-            case "$rc" in
-              0) v=REACHABLE ;;
-              28) v=BLOCKED ;;
-              6) v=NO_DNS ;;
-              *) v=OTHER ;;
-            esac
-            echo "probe name=$name rc=$rc verdict=$v"
+            tc=$(printf '%s' "$out" | sed -n 's/.*tc=\([0-9.]*\).*/\1/p')
+            [ -n "$tc" ] || tc=missing
+            if [ "$tc" != missing ] && [ "$tc" != "0.000000" ] && [ "$tc" != "0" ]; then v=REACHABLE
+            elif [ "$tc" = missing ]; then v=UNKNOWN
+            elif [ "$rc" = 28 ]; then v=BLOCKED
+            elif [ "$rc" = 7 ]; then v=REFUSED
+            elif [ "$rc" = 6 ] && [ "$allow_nodns" = nodns-ok ]; then v=NO_DNS
+            else v=UNKNOWN; fi
+            note "$name" "$rc" "$tc" "$v"
           }
-          # Control: nothing listens on loopback port 1, so this must return a
-          # fast refusal (rc=7, verdict OTHER). That proves curl runs and that
-          # the exit codes below mean what the case statement says. A 28 here
-          # would mean the timeouts, not the network, decide the results.
-          check loopback-control http://127.0.0.1:1/
-          check external-ip-https https://1.1.1.1/
-          check external-ip-http http://1.1.1.1/
-          check external-name https://example.com/
-          check kube-api "https://${TARGET_KUBE_API}:443/version" -k
+          # Targets come from read-only lookups at apply time. An empty or
+          # unrendered one would make curl fail fast with rc 3 and look like
+          # a block, so refuse to run at all.
+          for t in "$TARGET_KUBE_API" "$TARGET_KUBE_DNS" "$TARGET_CROSS_NS" "$TARGET_SAME_NS"; do
+            if ! printf '%s' "$t" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?$'; then
+              echo "probe bad-target value='$t'"; echo "probe result=UNKNOWN"; exit 2
+            fi
+          done
+          # Control: nothing listens on loopback port 1, so this must be a
+          # fast REFUSED. Anything else means the exit codes cannot be
+          # trusted, and the run is UNKNOWN.
+          check loopback-control - http://127.0.0.1:1/
+          case "$v" in REFUSED) ;; *) unknown=1 ;; esac
+          check external-ip-https - https://1.1.1.1/
+          check external-ip-http - http://1.1.1.1/
+          check external-name nodns-ok https://example.com/
+          check kube-api - -k "https://${TARGET_KUBE_API}:443/version"
+          check cross-namespace - "http://${TARGET_CROSS_NS}/"
+          check same-namespace - "http://${TARGET_SAME_NS}/healthz"
+          check metadata-169 - http://169.254.169.254/
           # DNS over UDP to kube-dns. default-deny-all has no DNS exception,
-          # so this is expected to time out (rc=1). rc=0 means the pod can
-          # resolve names, which is a DNS exfiltration channel even with
-          # every other port closed.
-          timeout 8 nslookup -timeout=3 kubernetes.default.svc.cluster.local "${TARGET_KUBE_DNS}" >/dev/null 2>&1
-          rc=$?; [ "$rc" = 0 ] && v=REACHABLE || v=BLOCKED
-          echo "probe name=kube-dns-udp rc=$rc verdict=$v"
-          check cross-namespace "http://${TARGET_CROSS_NS}/"
-          check same-namespace "http://${TARGET_SAME_NS}/healthz"
-          check metadata-169 http://169.254.169.254/
-          echo "probe done"
+          # so this must time out. Any reply, even NXDOMAIN or SERVFAIL,
+          # proves a packet reached a resolver and back, and that is a DNS
+          # exfiltration channel.
+          out=$(timeout 15 nslookup -timeout=3 kubernetes.default.svc.cluster.local "$TARGET_KUBE_DNS" 2>&1)
+          rc=$?
+          if printf '%s' "$out" | grep -Eq 'Name:|Address:? .*#53|NXDOMAIN|SERVFAIL|REFUSED|can.t find|Non-authoritative'; then v=REACHABLE
+          elif printf '%s' "$out" | grep -q 'connection timed out'; then v=BLOCKED
+          else v=UNKNOWN; fi
+          note kube-dns-udp "$rc" - "$v"
+          if [ "$fail" = 1 ]; then r=FAIL; elif [ "$unknown" = 1 ]; then r=UNKNOWN; else r=PASS; fi
+          echo "probe checks=9 result=$r"
+          case "$r" in PASS) exit 0 ;; FAIL) exit 1 ;; *) exit 2 ;; esac

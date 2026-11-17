@@ -55,7 +55,7 @@ its own:**
 | Limit | Value | Enforced by |
 |---|---|---|
 | Scanner request rate | at most **5 req/s** sustained, single thread or equivalent | the tester (scanner config) |
-| Hard limit per client IP | 10 req/s average, burst 20, answered with 429 | Traefik Middleware `redloop-staging-ratelimit` (renders only with the Ingress) |
+| Backstop per client | 10 req/s average, burst 20, **per Traefik replica** (3 today, HPA up to 10), answered with 429; keyed on `CF-Connecting-IP`, which in-cluster clients and other Cloudflare zones can forge | Traefik Middleware `redloop-staging-ratelimit` (renders only with the Ingress) |
 | Concurrency | at most 2 connections | the tester |
 
 The Traefik limit is a backstop, not the budget. A scanner that gets 429s
@@ -186,8 +186,11 @@ the way. It is a proposal; nothing in this PR changes Cloudflare.
   - It skips **only** the managed phase. It must **not** use
     `ruleset = "current"`, which would skip the remaining custom rules,
     including the kill switch, for the scanner.
-  - It sits **after** `block_staging_redloop_emergency` in the rules list,
-    so the kill switch still wins.
+  - The kill switch still wins: a `skip` that lists only `phases` does not
+    stop evaluation of the custom ruleset, so `block_staging_redloop_emergency`
+    is evaluated, and blocks, wherever the skip rule sits. The ban on
+    `ruleset = "current"` above is what makes this true. Place it after the
+    kill switch anyway, so the intent is visible.
   - It is committed with `enabled = false`. It is enabled for one window by
     PR and Cloudflare Apply, and disabled again by PR afterwards. A rule
     left enabled after its window is a finding.
