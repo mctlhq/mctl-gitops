@@ -3,6 +3,13 @@
 # Keep the existing English resource address: translations cannot be deleted.
 locals {
   customer_copy_languages = toset(keys(jsondecode(file("${path.module}/login_texts.json"))))
+  # The failure and recovery pages are shared by every customer IdP, so they
+  # name each one that is switched on. Naming only GitHub sent Google
+  # sign-ins (on since customers_google_idp_enabled) to check a GitHub email.
+  customer_idp_names = var.customers_google_idp_enabled ? "GitHub or Google" : "GitHub"
+  customer_invited_hint = var.customers_google_idp_enabled ? (
+    "Already invited? Sign in with the same GitHub or Google account you were invited with. For GitHub, your email address must be verified in GitHub."
+  ) : "Already invited? Check your GitHub verified email and try again."
   customer_login_copy_en = {
     common = { title = "Sign in to MCTL" }
     loginname = {
@@ -22,11 +29,11 @@ locals {
       # why an individual sign-in failed or disclosing cohort membership.
       loginError = {
         title       = "MCTL access is by invitation"
-        description = "New here? Request access at https://mctl.ai/#request-access. You do not need to sign in to send a request. Already invited? Check your GitHub verified email and try again. MCTL staff and partners: go back and choose Sign in with MCTL account. For help, contact https://mctl.ai/#contact."
+        description = "New here? Request access at https://mctl.ai/#request-access. You do not need to sign in to send a request. ${local.customer_invited_hint} MCTL staff and partners: go back and choose Sign in with MCTL account. For help, contact https://mctl.ai/#contact."
       }
       accountNotFound = {
         title       = "Your MCTL account is not available"
-        description = "Try signing in again with GitHub."
+        description = "Try signing in again with ${local.customer_idp_names}, using the same account as before."
         info        = "If the problem continues, contact MCTL at https://mctl.ai/#contact. Do not create a separate password account."
       }
       completeRegister = {
