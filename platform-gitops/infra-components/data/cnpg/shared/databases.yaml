@@ -290,3 +290,16 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+# C2 cluster service: ciphertext-only token store. Owned by the migrator
+# role; the runtime role is granted DML by the migration Job.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mctl-glovo-db
+spec:
+  name: "mctl-glovo"
+  owner: "glovo_c2_migrator"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
