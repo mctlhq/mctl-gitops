@@ -52,6 +52,14 @@ SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASC
 REPO = re.compile(r"[a-z0-9][a-z0-9-]*/[a-z0-9._-]+", re.ASCII)
 
 ALLOW, REFUSE, UNKNOWN = "allow", "refuse", "unknown"
+# Cloudflare in front of api.mctl.ai refuses urllib's default User-Agent
+# ("Python-urllib/3.x") with 403 "error code: 1010" before the request
+# reaches mctl-api; the first live run (4.166.0) read nothing because of it.
+USER_AGENT = "mctl-gitops-release-ledger-shadow/1"
+
+
+def _request(url: str, headers: dict[str, str]) -> urllib.request.Request:
+    return urllib.request.Request(url, headers={**headers, "User-Agent": USER_AGENT})
 
 
 def _ts(raw: Any) -> datetime.datetime:
@@ -151,8 +159,8 @@ def _id_token() -> str:
     if not url or not bearer:
         raise RuntimeError("no GitHub OIDC request environment (job lacks id-token: write?)")
     sep = "&" if "?" in url else "?"
-    req = urllib.request.Request(f"{url}{sep}audience={urllib.parse.quote(AUDIENCE, safe='')}",
-                                 headers={"Authorization": f"bearer {bearer}"})
+    req = _request(f"{url}{sep}audience={urllib.parse.quote(AUDIENCE, safe='')}",
+                   {"Authorization": f"bearer {bearer}"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         val = json.load(resp).get("value")
     if not isinstance(val, str) or not val:
@@ -162,8 +170,8 @@ def _id_token() -> str:
 
 def _read_ledger(repository: str, version: str) -> Any:
     q = urllib.parse.urlencode({"repository": repository, "version": version})
-    req = urllib.request.Request(f"{API}/api/v1/release/grants?{q}",
-                                 headers={"Authorization": f"Bearer {_id_token()}", "Accept": "application/json"})
+    req = _request(f"{API}/api/v1/release/grants?{q}",
+                   {"Authorization": f"Bearer {_id_token()}", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         if resp.status != 200:
             raise RuntimeError(f"HTTP {resp.status}")
@@ -180,7 +188,11 @@ def check(args: argparse.Namespace) -> int:
         body = _read_ledger(args.repository, args.version)
         ledger = judge_ledger(body, args.repository, args.version, args.digest, args.commit, now)
     except urllib.error.HTTPError as exc:
-        ledger = (UNKNOWN, f"ledger read failed: HTTP {exc.code}")
+        try:
+            detail = exc.read(200).decode("utf-8", "replace").strip().replace("\n", " ")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        ledger = (UNKNOWN, f"ledger read failed: HTTP {exc.code} {detail}".rstrip())
     except Exception as exc:  # noqa: BLE001 - could not observe is unknown, never refuse/allow
         ledger = (UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}")
     try:
@@ -271,7 +283,11 @@ def _selftest() -> int:
         if got != want:
             bad += 1
             print(f"FAIL yaml {name}: got {got}, want {want}")
-    total = len(cases) + len(ycases)
+    ua = _request("https://example.invalid/", {}).get_header("User-agent", "")
+    if not ua or ua.lower().startswith("python-urllib"):
+        bad += 1
+        print(f"FAIL requests carry urllib's default User-Agent ({ua!r}), which Cloudflare refuses")
+    total = len(cases) + len(ycases) + 1
     print(f"selftest: {total - bad}/{total} passed")
     return 1 if bad else 0
 
