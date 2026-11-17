@@ -43,12 +43,23 @@ ALL_SWITCHES = ["--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", 
                 "--set", "mctlGlovo.consent=true", "--set", "mctlGlovo.control=true"]
 
 
+def set_image_tag(template_text, tag):
+    """Rewrite the image block's tag line whatever tag is committed (the release flow
+    rewrites it, so a test keyed on the placeholder literal silently stops testing).
+    Exactly one match is required: a miss must fail loudly, never leave the tag alone."""
+    pat = re.compile(r'(repository: ghcr\.io/mctlhq/mctl-glovo\n\s+tag: )"[^"\n]*"')
+    out, n = pat.subn(lambda m: m.group(1) + '"' + tag + '"', template_text)
+    if n != 1:
+        raise SystemExit(f"set_image_tag: expected exactly one image tag line, found {n}")
+    return out
+
+
 def render(template_text, tag="1.2.3", switches=None):
     switches = SWITCHES if switches is None else switches
     with tempfile.TemporaryDirectory() as tmp:
         chart = pathlib.Path(tmp) / "bootstrap"
         shutil.copytree(CHART, chart)
-        (chart / TEMPLATE).write_text(template_text.replace('tag: "0.0.0-unreleased"', f'tag: "{tag}"', 1))
+        (chart / TEMPLATE).write_text(set_image_tag(template_text, tag))
         return subprocess.run(["helm", "template", "t", str(chart), "-f", str(VALUES), "--show-only", TEMPLATE, *switches],
                               capture_output=True, text=True)
 
@@ -208,6 +219,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         chart = pathlib.Path(tmp) / "bootstrap"
         shutil.copytree(CHART, chart)
+        (chart / TEMPLATE).write_text(set_image_tag(text, "0.0.0-unreleased"))
         g = subprocess.run(["helm", "template", "t", str(chart), "-f", str(VALUES), *SWITCHES],
                            capture_output=True, text=True)
         check(g.returncode != 0 and "placeholder" in g.stderr, "placeholder tag with deploy on must fail the render")

@@ -733,6 +733,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # RedLoop synthetic staging (vm-rules/redloop-alerts.yaml).
+                  # Telegram only, no ticket, and that is load-bearing: these
+                  # alerts are the stop conditions of a DAST window
+                  # (docs/runbooks/redloop-gate4-roe.md). The remedy is a human
+                  # halting the scanner. If mctl-agent got them, it would try to
+                  # remediate the very target under test. Prefix match, so the
+                  # next RedLoop alert is not agent-only by default.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "RedLoop.*"
                   # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
                   # Telegram only, no ticket: every remedy is a human's -- the
                   # dashboard's "Re-authenticate server", a token, or a sync
