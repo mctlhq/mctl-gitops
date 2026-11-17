@@ -199,13 +199,12 @@ extraVolumeMounts:
 # remote address instead would put every visitor behind the same Cloudflare
 # edge IP into one bucket. The websecure entrypoint admits only Cloudflare
 # ranges (traefik/cloudflare-origin), but that does NOT make the header
-# unforgeable. cloudflare-origin-allowlist.yaml.tpl lists two gaps it leaves
-# open:
-#   - an in-cluster client can reach Traefik directly and send its own PROXY
-#     header;
-#   - another Cloudflare customer's zone can route to this origin.
-# Either one can choose its own CF-Connecting-IP. The limit is therefore
-# per-client for honest traffic only, and it is not an access control.
+# unforgeable. cloudflare-origin-allowlist.yaml.tpl notes that an in-cluster
+# client can reach Traefik directly with its own PROXY header, and such a
+# client can then set any CF-Connecting-IP. Requests through Cloudflare,
+# including through another customer's zone (the allowlist's other open gap),
+# carry a value Cloudflare overwrites. The limit is therefore a per-client
+# backstop, not an access control.
 #
 # The counters live in each Traefik replica's memory (no Redis configured).
 # There are 3 replicas today, and the HPA allows 3-10. The effective ceiling
