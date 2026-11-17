@@ -39,12 +39,17 @@ def check(cond, msg):
         failures.append(msg)
 
 
-def render(template_text, tag="1.2.3"):
+ALL_SWITCHES = ["--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true",
+                "--set", "mctlGlovo.consent=true", "--set", "mctlGlovo.control=true"]
+
+
+def render(template_text, tag="1.2.3", switches=None):
+    switches = SWITCHES if switches is None else switches
     with tempfile.TemporaryDirectory() as tmp:
         chart = pathlib.Path(tmp) / "bootstrap"
         shutil.copytree(CHART, chart)
         (chart / TEMPLATE).write_text(template_text.replace('tag: "0.0.0-unreleased"', f'tag: "{tag}"', 1))
-        return subprocess.run(["helm", "template", "t", str(chart), "-f", str(VALUES), *SWITCHES],
+        return subprocess.run(["helm", "template", "t", str(chart), "-f", str(VALUES), "--show-only", TEMPLATE, *switches],
                               capture_output=True, text=True)
 
 
@@ -125,6 +130,67 @@ def migration_problems(text):
     return out
 
 
+STORE, STORE_SA, STORE_ROLE = "mctl-glovo-vault", "mctl-glovo-eso", "eso-mctl-glovo"
+
+
+def store_problems(text):
+    """Problems with how the ExternalSecrets reach Vault (mctlhq/mctl-gitops#2759); empty means consistent.
+
+    Every ExternalSecret must use the namespaced SecretStore bound to the
+    service's own Vault role, never the cluster-wide vault-backend (readable
+    from every namespace, all of secret/platform/*).
+    """
+    out: list[str] = []
+    r = render(text, switches=ALL_SWITCHES)
+    if r.returncode:
+        return [f"render failed: {r.stderr[-200:]}"]
+    docs = [d for d in yaml.safe_load_all(r.stdout) if d]
+    ess = [d for d in docs if d["kind"] == "ExternalSecret"]
+    if len(ess) < 6:
+        out.append(f"expected at least 6 ExternalSecrets with every switch on, got {len(ess)}")
+    for e in ess:
+        ref = e["spec"]["secretStoreRef"]
+        n = e["metadata"]["name"]
+        if ref["kind"] == "ClusterSecretStore" or ref["name"] == "vault-backend":
+            out.append(f"ExternalSecret {n} uses the cluster-wide store {ref['kind']}/{ref['name']}")
+        elif ref != {"kind": "SecretStore", "name": STORE}:
+            out.append(f"ExternalSecret {n} uses {ref}, want SecretStore {STORE}")
+    stores = [d for d in docs if d["kind"] == "SecretStore"]
+    if len(stores) != 1 or stores[0]["metadata"]["name"] != STORE or stores[0]["metadata"]["namespace"] != "mctl-glovo":
+        out.append(f"expected exactly one SecretStore {STORE} in mctl-glovo, got {[d['metadata'] for d in stores]}")
+    else:
+        auth = stores[0]["spec"]["provider"]["vault"]["auth"]["kubernetes"]
+        if auth.get("role") != STORE_ROLE:
+            out.append(f"store Vault role {auth.get('role')!r}, want {STORE_ROLE!r}")
+        if auth.get("serviceAccountRef") != {"name": STORE_SA}:
+            out.append(f"store serviceAccountRef {auth.get('serviceAccountRef')!r}, want name {STORE_SA} and no namespace")
+    sas = [d for d in docs if d["kind"] == "ServiceAccount" and d["metadata"]["name"] == STORE_SA]
+    if len(sas) != 1:
+        out.append(f"expected exactly one ServiceAccount {STORE_SA}, got {len(sas)}")
+    elif sas[0].get("automountServiceAccountToken") is not False:
+        out.append(f"ServiceAccount {STORE_SA} must set automountServiceAccountToken: false")
+    for d in docs:  # the ESO ServiceAccount is mounted nowhere
+        if d["kind"] in ("Deployment", "Job"):
+            spec = d["spec"]["template"]["spec"]
+            if spec.get("serviceAccountName") == STORE_SA:
+                out.append(f"{d['kind']} {d['metadata']['name']} runs as the ESO ServiceAccount")
+    return out
+
+
+def dark_problems(text):
+    """The default render must stay Namespace, ServiceAccounts and NetworkPolicies."""
+    r = render(text, switches=[])
+    if r.returncode:
+        return [f"dark render failed: {r.stderr[-200:]}"]
+    kinds = {d["kind"] for d in yaml.safe_load_all(r.stdout) if d}
+    extra = kinds - {"Namespace", "ServiceAccount", "NetworkPolicy"}
+    names = [d["metadata"]["name"] for d in yaml.safe_load_all(r.stdout) if d and d["kind"] == "ServiceAccount"]
+    out = [f"dark render has extra kinds {sorted(extra)}"] if extra else []
+    if sorted(names) != ["mctl-glovo", "mctl-glovo-migrate"]:
+        out.append(f"dark render ServiceAccounts {sorted(names)}, want the two it had before")
+    return out
+
+
 def main():
     text = (ROOT / "platform-gitops/bootstrap" / TEMPLATE).read_text()
     r = render(text)
@@ -133,6 +199,10 @@ def main():
         for p in pod_problems(r.stdout):
             check(False, p)
     for p in migration_problems(text):
+        check(False, p)
+    for p in store_problems(text):
+        check(False, p)
+    for p in dark_problems(text):
         check(False, p)
     # the placeholder tag must still fail the render when deploy is on
     with tempfile.TemporaryDirectory() as tmp:

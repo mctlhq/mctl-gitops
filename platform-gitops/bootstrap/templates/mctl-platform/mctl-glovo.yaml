@@ -237,6 +237,43 @@ spec:
 {{- end }}
 {{- if $v.deploy }}
 ---
+# Vault access for the ExternalSecrets below: a namespaced SecretStore bound to
+# its own Vault role (eso-$app, policy: secret/data/platform/$app/* only), NOT
+# the cluster-wide vault-backend, which every namespace can use and which reads
+# all of secret/platform/* (mctlhq/mctl-gitops#2759). Same shape as tenant-store
+# and cnpg-db-creds. The ServiceAccount below exists only so ESO can request a
+# token for it (TokenRequest): no pod uses it and nothing is mounted. Rendered
+# together with the first ExternalSecret (the deploy switch), so the dark render
+# is unchanged. Vault side (policy, role): vault-config/README.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $app }}-eso
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: {{ $app }}-vault
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  provider:
+    vault:
+      server: "http://vault.vault.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "eso-{{ $app }}"
+          serviceAccountRef:
+            name: {{ $app }}-eso
+---
 # The migration Job's connection string, from the migrator credentials in
 # Vault (host, port, database, username, password). TLS is mandatory (the
 # migrator refuses anything weaker than sslmode=require).
@@ -254,8 +291,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-migrate-db
     creationPolicy: Owner
@@ -284,8 +321,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-runtime
     creationPolicy: Owner
@@ -319,8 +356,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-egress
     creationPolicy: Owner
@@ -349,8 +386,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-access
     creationPolicy: Owner
@@ -381,8 +418,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-control
     creationPolicy: Owner
@@ -416,8 +453,8 @@ metadata:
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    kind: ClusterSecretStore
-    name: vault-backend
+    kind: SecretStore
+    name: {{ $app }}-vault
   target:
     name: {{ $app }}-consent-reader
     creationPolicy: Owner
