@@ -177,3 +177,30 @@ resource "cloudflare_dns_record" "anthropic_domain_verify" {
   type    = "TXT"
   zone_id = local.zone_id
 }
+
+# Yandex Webmaster ownership proof for alice.mctl.ai, the one Russian-language
+# property (mctlhq/.github#349, D1). Any record at a name stops the wildcard
+# from answering for that name (RFC 4592), so the TXT alone would leave
+# alice.mctl.ai without an A record and take the site down. The explicit A
+# mirrors the wildcard exactly, and depends_on makes sure it exists before the
+# TXT is created.
+resource "cloudflare_dns_record" "alice" {
+  comment = "Explicit copy of the wildcard A; required once alice.mctl.ai has its own TXT"
+  content = local.origin_ip
+  name    = "alice.mctl.ai"
+  proxied = true
+  ttl     = 1
+  type    = "A"
+  zone_id = local.zone_id
+}
+
+resource "cloudflare_dns_record" "alice_yandex_verify" {
+  comment    = "Yandex Webmaster domain verification for alice.mctl.ai (.github#349)"
+  content    = "yandex-verification: 355a14c4f36fcc81"
+  name       = "alice.mctl.ai"
+  proxied    = false
+  ttl        = 1
+  type       = "TXT"
+  zone_id    = local.zone_id
+  depends_on = [cloudflare_dns_record.alice]
+}

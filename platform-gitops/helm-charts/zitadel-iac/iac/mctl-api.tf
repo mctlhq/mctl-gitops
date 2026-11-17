@@ -287,6 +287,32 @@ resource "zitadel_application_oidc" "mctl_api_deploy_approval" {
   id_token_userinfo_assertion = true
 }
 
+# The release approval page (mctl-api#1022, slice S2): the only place a
+# release.grant (a per-version "this image of mctl-api may reach production"
+# decision) is decided. The owner signs in here, fresh, for that one
+# decision (prompt=login, max_age=0, PKCE, nonce). Stricter than the deploy
+# page on the mctl-api side: the ID token must name this client alone (aud
+# exactly this client id, azp too), and its amr must report a second factor.
+# The aud check is why this is a client of its own and not a redirect on
+# mctl-api-deploy-approval: a token issued for any other page is refused.
+# Same shape as mctl-api-deploy-approval otherwise: client secret plus PKCE,
+# one redirect, opaque (BEARER) access token. Do not switch it to JWT. Not in
+# ZITADEL_HOOK_CLAIM_CLIENT_IDS (customers.tf).
+resource "zitadel_application_oidc" "mctl_api_release_approval" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-release-approval"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/release/approvals/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -314,6 +340,17 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         issuer           = "https://auth.mctl.ai"
         audiences        = [zitadel_application_api.mctl_api.client_id]
         customers_org_id = zitadel_org.customers.id
+        # The C2 consent reader is a ZITADEL machine user (JWT profile): its
+        # token carries the project id in aud, never this entry's client id.
+        # service_subjects (mctl-api 4.165.0, docs/federation.md) makes that
+        # one exact subject a `kind: service` identity, pinned to the project
+        # id as the only audience it may present. The entry stays human, and
+        # a subject listed here must not also be a subject_audiences key
+        # (mctl-api refuses to boot). The orchestrator DevLoop machine user
+        # is not listed here yet; see mctl-api docs/orchestrator-devloop.md.
+        service_subjects = {
+          (zitadel_machine_user.c2_consent_reader.id) = zitadel_project.mctl_api.id
+        }
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).
@@ -346,6 +383,12 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # unmounted).
     DEPLOY_APPROVAL_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_deploy_approval.client_id
     DEPLOY_APPROVAL_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_deploy_approval.client_secret
+    # The release approval page client (mctl-api#1022 S2). Nothing reads
+    # these keys until the mctl-api values mount them and set
+    # RELEASE_APPROVAL_UI_ENABLED to "true" (it is unset, so the page stays
+    # unmounted).
+    RELEASE_APPROVAL_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_release_approval.client_id
+    RELEASE_APPROVAL_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_release_approval.client_secret
     # The development client above, for an operator to copy into a local
     # run. Not read by mctl-api: the chart references keys by name, and these
     # names are none of them.
