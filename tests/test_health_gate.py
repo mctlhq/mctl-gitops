@@ -397,6 +397,8 @@ outs = {p["name"]: p["valueFrom"]["parameter"] for p in pipeline.get("outputs", 
 for name in ("health", "health_url", "argo_revision", "image_digest"):
     check(outs.get(name) == f"{{{{tasks.health-gate.outputs.parameters.{name}}}}}",
           f"deploy-pipeline must output {name} from health-gate")
+check(outs.get("commit_sha") == "{{tasks.commit.outputs.parameters.commit_sha}}",
+      "deploy-pipeline must output commit_sha from the commit task (rollback by revision, mctl-api#1048)")
 src = templates.get("health-gate", {}).get("script", {}).get("source", "")
 check("health-gate.sh" in src, "health-gate template must run health-gate.sh")
 check("{{" not in src, "health-gate script source must take parameters through env (gitops#992)")
