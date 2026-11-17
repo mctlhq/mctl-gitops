@@ -514,12 +514,13 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        # The kubelet writes secret volume files as root:<fsGroup>; without an
+        # fsGroup the 0440 key files below are root:root and unreadable by uid
+        # 10001 (the refresher would exit 2). With it they are root:10001 0440.
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       {{- if $v.c2 }}
-      {{- if $v.consent }}
-      {{- $_ := required "refresherImage: the ZITADEL token refresher image does not exist yet (TODO); set it, pinned by digest, together with the consent switch" $v.refresherImage }}
-      {{- end }}
       initContainers:
         # Copies the static tailscale CLI next to the forwarder, which has
         # socat but not the CLI (UNVERIFIED path, see the forwarder).
@@ -665,7 +666,10 @@ spec:
         {{- if $v.consent }}
         # Writes the ZITADEL machine-user access token (JWT) to
         # /var/run/secrets/mctl-api/token atomically, refreshing it well before
-        # expiry. TODO: this image does not exist. Contract: reads the key
+        # expiry. It is the third binary (token-refresher) of the same image as
+        # the server (service repo PR 37; the image ENTRYPOINT is the server,
+        # hence the command below), so it ships and pins with the image tag
+        # above and has no image of its own. Contract: reads the key
         # file and the ids below, signs a JWT-profile assertion (RFC 7523,
         # iss = sub = user id, kid = key id), exchanges it at the issuer's
         # token endpoint for the scope, writes the token to a temp file and
@@ -673,7 +677,8 @@ spec:
         # cannot refresh before expiry (so the pod restarts rather than
         # serving a dead token). The server reads the file on every call.
         - name: consent-token-refresher
-          image: {{ $v.refresherImage }}
+          image: {{ $image.repository }}:{{ $image.tag }}
+          command: ["token-refresher"]
           env:
             - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
             - {name: TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}

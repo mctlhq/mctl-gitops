@@ -722,5 +722,3 @@ mctlGlovo:
   allowlist: false
   consent: false
   control: false
-  # TODO: the ZITADEL token refresher image (digest-pinned) does not exist.
-  refresherImage: ""
