@@ -1,0 +1,123 @@
+# Unit tests for redloop-alerts.yaml (group redloop.staging).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+- generated/redloop-alerts.yaml
+evaluation_interval: 30s
+tests:
+- interval: 30s
+  name: a healthy fixture stays quiet
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1x40
+  - series: probe_duration_seconds{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 0.01x40
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: RedLoopStagingDown
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: RedLoopStagingSlow
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: RedLoopStagingProbeAbsent
+    exp_alerts: []
+- interval: 30s
+  name: three failed probes (90s) are under the 2m threshold
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1 1 1 1 0 0 0 1 1 1 1 1
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: RedLoopStagingDown
+    exp_alerts: []
+- interval: 30s
+  name: a fixture down for more than 2m fires
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1 1 0x20
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RedLoopStagingDown
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        service: redloop
+        job: redloop-staging-healthz
+        instance: http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+      exp_annotations:
+        summary: RedLoop staging http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+          is failing its health check
+        description: 'blackbox-exporter has not had a 2xx from http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+          for 2 minutes. If a DAST window is open, this is a stop condition: halt the scanner first, then
+          investigate (docs/runbooks/redloop-gate4-roe.md). Look at probe_http_status_code for the same
+          instance, and use mctl_get_service_pods for team redloop. A 5xx or a timeout while a scan is
+          running most likely means the 100m CPU limit is saturated.'
+- interval: 30s
+  name: sustained slow but successful probes fire Slow, not Down
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1x20
+  - series: probe_duration_seconds{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 0.01 0.01 1.5x18
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RedLoopStagingSlow
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        service: redloop
+        job: redloop-staging-healthz
+        instance: http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+      exp_annotations:
+        summary: RedLoop staging http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+          answers /healthz slower than 1s
+        description: '/healthz on http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
+          has taken more than 1s for 2 minutes. Normally it takes a few milliseconds. If a DAST window
+          is open, the scan rate is higher than the RoE allows or the scanner is not honouring it: stop
+          the scanner (docs/runbooks/redloop-gate4-roe.md).'
+  - eval_time: 4m
+    alertname: RedLoopStagingDown
+    exp_alerts: []
+- interval: 30s
+  name: a single slow probe does not fire
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1x20
+  - series: probe_duration_seconds{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 0.01 0.01 1.5 0.01x17
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RedLoopStagingSlow
+    exp_alerts: []
+- interval: 30s
+  name: a failed probe is Down, never Slow, even if it took long
+  input_series:
+  - series: probe_success{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 1 1 0x18
+  - series: probe_duration_seconds{job="redloop-staging-healthz",instance="http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz"}
+    values: 0.01 0.01 5x18
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RedLoopStagingSlow
+    exp_alerts: []
+- interval: 30s
+  name: no probe series for 10m fires Absent
+  input_series:
+  - series: up{job="something-else"}
+    values: 1x30
+  alert_rule_test:
+  - eval_time: 11m
+    alertname: RedLoopStagingProbeAbsent
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        service: redloop
+        job: redloop-staging-healthz
+      exp_annotations:
+        summary: No RedLoop staging probe data for 10 minutes
+        description: There has been no probe_success series with job="redloop-staging-healthz" for 10
+          minutes, so RedLoopStagingDown and RedLoopStagingSlow cannot fire. Check that the redloop-staging-healthz
+          VMProbe exists in the monitoring namespace and that blackbox-exporter is running. Do not open
+          a DAST window until the series is back.
