@@ -37,9 +37,14 @@ path "secret/metadata/platform/github-app-agents*" {
 # key, tailnet auth key). This store is usable from every namespace, so anything
 # it can read is readable from any of them. The service reads its keys through
 # its own namespaced SecretStore `mctl-glovo-vault` and Vault role
-# `eso-mctl-glovo` (vault-policy-eso-mctl-glovo.hcl). A deny wins over the
-# platform/* grant above. Apply this only AFTER that store is live and its
-# ExternalSecrets are Ready (README.md, "Glovo C2 ESO role"), or they lose access.
+# `eso-mctl-glovo` (vault-policy-eso-mctl-glovo.hcl); the database role
+# passwords synced in platform-db use the store `glovo-db-creds` and role
+# `glovo-db-creds` (vault-policy-glovo-db-creds-read.hcl). A deny wins over the
+# platform/* grant above. Apply this only AFTER both stores are live and every
+# ExternalSecret reading the prefix is Ready through them (README.md, "Glovo C2
+# ESO roles"), or they lose access. tests/test_no_glovo_prefix_on_vault_backend.py
+# keeps any ExternalSecret in this repo from reading the prefix through a
+# ClusterSecretStore.
 path "secret/data/platform/mctl-glovo*" {
   capabilities = ["deny"]
 }

@@ -6,7 +6,12 @@
   other capability;
 - vault-policy-external-secrets-read.hcl denies the same prefix (data and
   metadata forms), next to the github-app-agents deny, and still grants
-  platform/* (the deny is what narrows it).
+  platform/* (the deny is what narrows it);
+- vault-policy-argo-workflow-teams-rw.hcl (live role argo-workflow, SA
+  argo-workflow-sa, which tenant-writable WorkflowTemplates can run as) carries
+  the same deny, so its platform/* grant cannot read, overwrite or delete the prefix;
+- vault-policy-glovo-db-creds-read.hcl (platform-db store glovo-db-creds) grants
+  only read on the database-* keys and read,list on their metadata.
 
 Self-tests run first and prove each check red on a deliberate mutation.
 Run: python3 tests/test_vault_glovo_eso_policy.py
@@ -25,6 +30,10 @@ PREFIX = "secret/data/platform/mctl-glovo/"
 META = "secret/metadata/platform/mctl-glovo/"
 ESO_FILE = "vault-policy-eso-mctl-glovo.hcl"
 CLUSTER_FILE = "vault-policy-external-secrets-read.hcl"
+ARGO_FILE = "vault-policy-argo-workflow-teams-rw.hcl"
+DB_FILE = "vault-policy-glovo-db-creds-read.hcl"
+DB_PREFIX = "secret/data/platform/mctl-glovo/database-"
+DB_META = "secret/metadata/platform/mctl-glovo/database-"
 
 
 def eso_problems(rules):
@@ -62,6 +71,23 @@ def cluster_problems(rules):
     return out
 
 
+def db_problems(rules):
+    out = []
+    want = {DB_PREFIX + "*": ["read"], DB_META + "*": ["list", "read"]}
+    got = {}
+    for pat, caps in rules:
+        got.setdefault(pat, []).extend(caps)
+    for pat, caps in got.items():
+        if pat not in want:
+            out.append(f"path {pat!r} is outside the database-* keys")
+        elif sorted(set(caps)) != want[pat]:
+            out.append(f"path {pat!r} has capabilities {sorted(set(caps))}, want {want[pat]}")
+    for pat in want:
+        if pat not in got:
+            out.append(f"missing rule for {pat!r}")
+    return out
+
+
 def selftest():
     good_eso = [(PREFIX + "*", ["read"]), (META + "*", ["read", "list"])]
     assert not eso_problems(good_eso)
@@ -79,6 +105,14 @@ def selftest():
     # a deny narrowed to a different prefix does not count
     assert cluster_problems(base + [("secret/data/platform/mctl-glovo-x*", ["deny"]),
                                     ("secret/metadata/platform/mctl-glovo-x*", ["deny"])])
+    # argo-workflow-teams-rw has the same shape as the cluster store: a broad
+    # platform/* grant that only the deny narrows. cluster_problems checks both.
+    assert cluster_problems(base + [("secret/data/platform/mctl-glovo*", ["deny"])])
+    good_db = [(DB_PREFIX + "*", ["read"]), (DB_META + "*", ["read", "list"])]
+    assert not db_problems(good_db)
+    assert db_problems(good_db + [("secret/data/platform/mctl-glovo/*", ["read"])])
+    assert db_problems([(DB_PREFIX + "*", ["read", "update"]), (DB_META + "*", ["read", "list"])])
+    assert db_problems(good_db[:1])
     print("selftests: ok")
 
 
@@ -88,10 +122,14 @@ def main():
     cluster = V.canonical_rules(V.parse(D / CLUSTER_FILE))
     problems = [f"{ESO_FILE}: {p}" for p in eso_problems(eso)]
     problems += [f"{CLUSTER_FILE}: {p}" for p in cluster_problems(cluster)]
+    argo = V.canonical_rules(V.parse(D / ARGO_FILE))
+    problems += [f"{ARGO_FILE}: {p}" for p in cluster_problems(argo)]
+    db = V.canonical_rules(V.parse(D / DB_FILE))
+    problems += [f"{DB_FILE}: {p}" for p in db_problems(db)]
     if problems:
         print("\n".join("FAIL " + p for p in problems), file=sys.stderr)
         return 1
-    print("ok: glovo ESO policy and cluster-store deny")
+    print("ok: glovo ESO policy, db-creds policy, cluster-store and argo-workflow deny")
     return 0
 
 

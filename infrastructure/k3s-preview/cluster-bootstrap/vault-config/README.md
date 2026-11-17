@@ -453,6 +453,7 @@ naming another tenant's `remoteRef.key` is enough to read it.
 | `vault-backend` | ClusterSecretStore | `external-secrets` | `secret/data/platform/*` only |
 | `tenant-store` (per tenant ns) | SecretStore | `eso-tenant-{name}` | `secret/data/teams/{name}/*` |
 | `cnpg-db-creds` (platform-db) | SecretStore | `cnpg-db-creds` | `secret/data/teams/+/+/database` |
+| `glovo-db-creds` (platform-db) | SecretStore | `glovo-db-creds` | `secret/data/platform/mctl-glovo/database-*` |
 
 **Never add `teams/*` back to `external-secrets-read`** — that single line is
 what made every tenant's secrets readable from every other tenant namespace.
@@ -488,48 +489,98 @@ Verify a tenant cannot reach another tenant's prefix:
 vault token capabilities <tenant-token> secret/data/teams/<other-tenant>/x  # → deny
 ```
 
-### Glovo C2 ESO role
+### Glovo C2 ESO roles
 
-The Glovo C2 service (namespace `mctl-glovo`) reads `secret/platform/mctl-glovo/*`
-through its own namespaced SecretStore `mctl-glovo-vault`, not through
-`vault-backend` (mctlhq/mctl-gitops#2759). Its ServiceAccount `mctl-glovo-eso`
-exists only so ESO can request a token for it; no pod uses it.
+The Glovo C2 service's keys under `secret/platform/mctl-glovo/*` are read through
+namespaced SecretStores with their own Vault roles, never through `vault-backend`
+(mctlhq/mctl-gitops#2759). `vault-backend` and `argo-workflow-teams-rw` both deny
+the prefix once the last step below is done.
 
-| Store | Kind | Vault role | Scope |
-|---|---|---|---|
-| `mctl-glovo-vault` (mctl-glovo ns) | SecretStore | `eso-mctl-glovo` | `secret/data/platform/mctl-glovo/*` |
+| Store | Kind | Vault role | Policy | Scope |
+|---|---|---|---|---|
+| `mctl-glovo-vault` (mctl-glovo ns) | SecretStore | `eso-mctl-glovo` (SA `mctl-glovo-eso`) | `eso-mctl-glovo` | `secret/data/platform/mctl-glovo/*` |
+| `glovo-db-creds` (platform-db ns) | SecretStore | `glovo-db-creds` (SA `glovo-db-creds`) | `glovo-db-creds-read` | `secret/data/platform/mctl-glovo/database-*` |
 
-Policy file: `vault-policy-eso-mctl-glovo.hcl` (read on `secret/data/...`, read and
-list on `secret/metadata/...`, same capabilities as the tenant template).
+The second store exists because the CNPG managed-role passwords are synced into
+platform-db (`glovo-c2-runtime-db-creds`, `glovo-c2-migrator-db-creds` in
+`infra-components/data/cnpg/shared/secrets.yaml`), so the service's own namespace
+store cannot serve them. It follows the `cnpg-db-creds` pattern exactly; the policy
+grants only the two `database-*` keys, not the signing keys or the control-caller.
+
+Policy files: `vault-policy-eso-mctl-glovo.hcl`, `vault-policy-glovo-db-creds-read.hcl`
+(read on `secret/data/...`, read and list on `secret/metadata/...`).
 
 ```bash
 vault policy write eso-mctl-glovo vault-policy-eso-mctl-glovo.hcl
-
 vault write auth/kubernetes/role/eso-mctl-glovo \
   bound_service_account_names=mctl-glovo-eso \
   bound_service_account_namespaces=mctl-glovo \
-  policies=eso-mctl-glovo \
-  ttl=1h
+  policies=eso-mctl-glovo ttl=1h
+
+vault policy write glovo-db-creds-read vault-policy-glovo-db-creds-read.hcl
+vault write auth/kubernetes/role/glovo-db-creds \
+  bound_service_account_names=glovo-db-creds \
+  bound_service_account_namespaces=platform-db \
+  policies=glovo-db-creds-read ttl=1h
 ```
 
-Same flags as the `eso-tenant-*` roles (no `audience` is set there either).
+No `audience` is set, same as the `eso-tenant-*` roles. Whoever runs these writes
+should first compare any existing live policy or role with the repo file and not
+overwrite a different one blindly.
 
-**Order matters.** `external-secrets-read` now denies `secret/{data,metadata}/platform/mctl-glovo*`,
-so applying it early cuts off the live Glovo ExternalSecrets:
+**Order matters.** Two policies deny the prefix: `external-secrets-read` (the
+`vault-backend` identity) and `argo-workflow-teams-rw` (identity `argo-workflow`).
+Applying either early cuts off every consumer still on `vault-backend`. Order:
 
-1. Create the policy `eso-mctl-glovo` and the role `eso-mctl-glovo` (above).
-2. Merge and sync the SecretStore PR (mctlhq/mctl-gitops#2736); confirm every
-   ExternalSecret in `mctl-glovo` is `Ready` through `mctl-glovo-vault`
-   (`kubectl -n mctl-glovo get externalsecret,secretstore`; status only, never
-   read Secret data).
-3. ONLY THEN write the new `external-secrets-read`
-   (`vault policy write external-secrets-read vault-policy-external-secrets-read.hcl`).
-   Compare it with the live policy first (`vault policy read external-secrets-read`):
-   the only difference must be the two new deny blocks.
+1. Create both policies and both roles (above).
+2. Merge this PR and the namespace PR (mctlhq/mctl-gitops#2736); Argo CD syncs the
+   SecretStores and the switched ExternalSecrets.
+3. Verify every ExternalSecret that reads the prefix is `Ready` through the new
+   stores (`kubectl get externalsecret -A`, status only, never Secret data):
+   `mctl-glovo` -> `mctl-glovo-vault`, `platform-db` -> `glovo-db-creds`.
+4. ONLY THEN write BOTH `external-secrets-read` and `argo-workflow-teams-rw` from
+   the repo files, after a read-only pre-flight shows step 3 holds and that no
+   ExternalSecret or ClusterExternalSecret anywhere reads the prefix through a
+   ClusterSecretStore. Compare each live policy with its repo file first: lines the repo adds
+   (the prefix denies; the `writers/*` denies that the live `external-secrets-read`
+   still lacks) are expected, but any rule present live and absent from the repo
+   file means stop and reconcile the repo file first.
+
+`tests/test_no_glovo_prefix_on_vault_backend.py` (CI, `vault-policy-check`) fails if
+any ExternalSecret in the repository, plain YAML or Helm template, reads the prefix
+through a ClusterSecretStore, so the deny cannot silently break a consumer again.
+
+**The `argo-workflow-teams-rw` deny and its caveat.** The live role `argo-workflow`
+(SA `argo-workflow-sa` in `argo-workflows`) carries `argo-workflow-teams-rw`, whose
+`platform/*` grant could read, overwrite and delete the prefix. Tenant SSO users can
+write WorkflowTemplates (open risk from earlier audits, not fixed here), so a
+tenant-controlled workflow may run as that SA; the explicit deny removes this prefix
+from its reach. The other platform-path policies do not reach it
+(`github-actions-erpact-images`: one `forgejo` path; `github-actions-repo-pat`:
+`teams/+/+/repo-pat`; `argo-workflow-platform-rotator`: `github-app`, `mctl-agent/tokens`;
+`backstage-teams-rw` and `provisioning`: `platform/teams/*` only). The deny does not
+fix the wider exposure of `platform/*` to that SA.
+
+**mctl-api control-caller.** `platform/mctl-glovo/control-caller` is meant to be read
+by mctl-api for the kill switch (mctlhq/mctl-gitops#2742, draft, still on
+`vault-backend`). That consumer does not exist on the cluster yet, so the deny can go
+in first; but #2742 cannot merge as drafted: the repo test fails it, and the deny must
+not be written while such an ExternalSecret is live. #2742 needs its own namespaced SecretStore in the
+mctl-api namespace with a dedicated role whose policy reads only that one key, added
+to this README and the expectations table, before it lands.
+
+**Identity caveats.** A pod creator in a namespace can set `serviceAccountName` to any
+ServiceAccount there, so `mctl-glovo-eso` (and `glovo-db-creds` in platform-db) is only
+as private as the namespace's RBAC: keep pod creation in `mctl-glovo` and `platform-db`
+platform-only (no tenant RoleBindings there). `automountServiceAccountToken: false` on
+the SA does not stop a pod spec that opts in. ESO obtains tokens for these SAs through
+its ClusterRole `external-secrets-controller` (`serviceaccounts/token` `create`,
+cluster-wide, no `resourceNames`).
 
 Verify the split: a token from the `eso-mctl-glovo` role must not read
 `secret/data/platform/argocd/*` (nothing outside its prefix is granted), and a token
-from the `external-secrets` role must get `deny` on `secret/data/platform/mctl-glovo/x`
+from the `external-secrets` role or the `argo-workflow` role must get `deny` on
+`secret/data/platform/mctl-glovo/x`
 (`vault token capabilities <token> secret/data/platform/mctl-glovo/x`).
 
 ## Vault Secret Structure

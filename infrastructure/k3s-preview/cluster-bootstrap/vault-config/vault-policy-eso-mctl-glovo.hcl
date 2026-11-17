@@ -8,7 +8,7 @@
 # the switch the keys under it are readable only through this role
 # (mctlhq/mctl-gitops#2759).
 #
-# Apply (see README.md, "Glovo C2 ESO role", for the order):
+# Apply (see README.md, "Glovo C2 ESO roles", for the order):
 #   vault policy write eso-mctl-glovo vault-policy-eso-mctl-glovo.hcl
 
 path "secret/data/platform/mctl-glovo/*" {
