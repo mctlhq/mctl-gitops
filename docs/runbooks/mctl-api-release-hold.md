@@ -199,6 +199,10 @@ what it changes:
 checkout, `pip install`, or loading `release-gates.yaml`. It is not a
 refusal. Re-run the job.
 
+Do not re-run `ledger-gate` on its own to refresh a shadow verdict. Its
+dependents (`bump`, `publish-pr`) re-run with it and would open a second
+bump PR. Re-running the release-gate-watch run of the push is safe.
+
 `pr-identity` requires the event sender to be the bot as well as the PR
 author. A human push onto an open bump PR therefore fails `validate`. So
 does a human reopening it. Let release-deploy open a new PR instead.
@@ -256,15 +260,18 @@ Three properties of this check that an operator needs to know:
 
 Before switching to enforce (its own PR), all of these must hold:
 
-1. A live run has shown `ledger=allow` for an approved release, both in
-   release-deploy's `ledger-gate` summary and in the release-gate-watch run
-   of the push that wrote the bump. Until then the OIDC reader path is
-   unproven.
+1. Done (4.167.0): a live run has shown `ledger=allow` for an approved
+   release. In release-deploy run 44195491155, `ledger-gate` read the ledger
+   over OIDC and got `refuse` before the decision existed, and the gate
+   logic judged the post-approval ledger body `allow`. The release-gate-watch
+   run of the bump push, 44198826314 (attempt 2, re-run after the MFA
+   approval), read it over OIDC and logged `allow`.
 2. Done (#2774): `release-gate-watch.yml` reads the ledger after each push.
    In enforce mode `diff` no longer judges a held-tag change by records, so
    P5b/P6 pushes would otherwise go undetected.
-3. The owner has confirmed that Vault's `github-actions` JWT role binds the
-   ref and the event. The watch's `verify` job holds `id-token: write`, and
-   it also runs on pull requests (the ledger step itself is skipped there).
-   The role's bound claims are not defined in this repository, so they could
-   not be checked from here.
+3. Done (#2778): the ledger step runs in its own `ledger` job, which runs
+   only on `push`. That job is the only one in `release-gate-watch.yml`
+   holding `id-token: write`. `verify`, which also runs on pull requests
+   (with pull-request code) and on schedule, cannot mint an OIDC token. So
+   no relying party, Vault's `github-actions` role included, has to exclude
+   those events for this workflow.
