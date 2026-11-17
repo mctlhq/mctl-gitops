@@ -94,6 +94,35 @@ jobs:
         # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
         run: python3 tests/test_release_gate_bootstrap_hold.py
 
+      - name: Release gate ledger mode (shadow / enforce)
+        # mctlhq/mctl-api#1022 S4: cases and mutants for the ledger block.
+        run: python3 tests/test_release_gate_ledger_hold.py
+
+      # With a hold's ledger enforced, pull-request CI cannot read the release
+      # ledger (mctl-api admits only workflows on refs/heads/main as its
+      # reader), so it checks who proposes a change of the held tag instead:
+      # only the release bot's bump PR, which release-deploy opens after its
+      # ledger-gate job saw the approval. The policy is read from the base
+      # (HEAD^1 of the merge ref), never from the pull request. The event
+      # sender must be the bot too: a human push onto the bot's branch keeps
+      # the bot as PR author but makes the sender that human. A no-op while
+      # every ledger hold is in shadow mode. Not run on merge_group: the queue
+      # payload carries no author, and the PR passed this on its own head.
+      - name: Release ledger holds - who may change a held tag
+        if: github.event_name == 'pull_request'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          # Who caused this run: the pusher on synchronize. A re-run keeps it.
+          PUSHER: ${{ github.event.sender.login }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          # A fork's branch name proves nothing; treat it as no branch at all.
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || BRANCH="fork:$HEAD_REPO:$BRANCH"
+          python3 scripts/release-gate.py pr-identity --base HEAD^1 --head HEAD \
+            --author "$AUTHOR" --branch "$BRANCH" --pusher "$PUSHER"
+
   validate-2:
     runs-on: ubuntu-latest
     steps:
@@ -879,6 +908,15 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_pod_security_level.py
+
+      - name: Unit-test the health gate in preview-deploy
+        # A preview used to end green when helm returned, and its DeployRecord
+        # never showed health, so it could never be promoted
+        # (mctl-api#1049). This runs the gate against stubbed kubectl and curl
+        # for each failure shape and checks the workflow exposes its verdict.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_health_gate.py
 
       - name: Unit-test the post-sync health gate in deploy-service
         # deploy-service used to end green once its commit was pushed, even

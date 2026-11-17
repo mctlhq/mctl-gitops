@@ -191,25 +191,32 @@ jobs:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
-  # Release ledger, SHADOW MODE (mctlhq/mctl-api#1022 S3). Reads the MFA-backed
-  # release decisions mctl-api keeps and reports what a ledger-based gate would
-  # decide for exactly the image just built (repository, version, tag commit,
-  # digest), next to what the YAML allow records decide. It enforces nothing:
-  # continue-on-error, and no job needs it, so the release never waits on it.
-  # The verdict (allow / refuse / unknown) lands in the job summary; collect
-  # agreement here before the ledger replaces the YAML (S4).
-  # id-token: write is the whole credential: mctl-api accepts this workflow's
-  # GitHub OIDC token as the read-only release gate reader, only from
-  # mctlhq/mctl-gitops on refs/heads/main. No secrets, no environment.
-  ledger-shadow:
+  # Release ledger gate (mctlhq/mctl-api#1022 S3 shadow, S4 enforce). Reads
+  # the MFA-backed release decisions mctl-api keeps for exactly the image just
+  # built (repository, version, tag commit, digest). What it does is read from
+  # the image's version hold in release-gates.yaml on main (`ledger.mode`):
+  #   no ledger block: nothing, the job succeeds at once (every other image);
+  #   shadow:  reports the ledger verdict next to the YAML allow records and
+  #            always succeeds; the YAML records still decide in the bump;
+  #   enforce: waits up to ledger.wait_minutes for an approval of exactly this
+  #            digest and hands the digest to the bump, whose release-gate.py
+  #            check refuses the held image without it. A rejection, the
+  #            deadline or an unreadable ledger fails this job, so nothing is
+  #            bumped; re-run the workflow after the decision.
+  # It runs for every image because bump needs it, and a skipped need would
+  # skip the bump. id-token: write is the whole credential: mctl-api accepts
+  # this workflow's GitHub OIDC token as the read-only release gate reader,
+  # only from mctlhq/mctl-gitops on refs/heads/main. No secrets, no environment.
+  ledger-gate:
     needs: build
-    if: inputs.repo == 'mctlhq/mctl-api'
     runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 5
+    # ledger.wait_minutes is at most 180 (release-gate.py validates it).
+    timeout-minutes: 200
     permissions:
       contents: read
       id-token: write
+    outputs:
+      approved_digest: ${{ steps.gate.outputs.approved_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -219,7 +226,8 @@ jobs:
       - name: Install PyYAML
         run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
-      - name: Release ledger verdict (shadow)
+      - name: Release ledger decision
+        id: gate
         env:
           REPO: ${{ inputs.repo }}
           IMAGE_NAME: ${{ inputs.image_name }}
@@ -227,7 +235,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
           REVISION: ${{ needs.build.outputs.revision }}
         run: |
-          python3 scripts/release-ledger-shadow.py check --repository "$REPO" --version "$IMAGE_TAG" \
+          python3 scripts/release-ledger-shadow.py gate --repository "$REPO" --version "$IMAGE_TAG" \
             --digest "$IMAGE_DIGEST" --commit "$REVISION" --image "$IMAGE_NAME"
 
   # The bump is prepared here and published by exactly one of two jobs below.
@@ -236,7 +244,7 @@ jobs:
   # The publishing jobs apply that patch to a fresh checkout of main, run the
   # release gate on the tree that would result, and only then write.
   bump:
-    needs: build
+    needs: [build, ledger-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -280,6 +288,9 @@ jobs:
           VALUES_GLOB: ${{ inputs.values_glob }}
           IMAGE_NAME: ${{ inputs.image_name }}
           NEW_TAG: ${{ inputs.image_tag }}
+          # Only an enforced ledger hold reads these (release-gate.py check).
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          LEDGER_APPROVED_DIGEST: ${{ needs.ledger-gate.outputs.approved_digest }}
         run: |
           set -euo pipefail
           python3 <<'PYEOF'
@@ -397,7 +408,9 @@ jobs:
           _gate = subprocess.run(
               [sys.executable, "scripts/release-gate.py", "check",
                "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag,
-               "--policy-rev", "origin/main", "--image", image_name]
+               "--policy-rev", "origin/main", "--image", image_name,
+               "--new-digest", os.environ.get("IMAGE_DIGEST", ""),
+               "--ledger-approved-digest", os.environ.get("LEDGER_APPROVED_DIGEST", "")]
           )
           if _gate.returncode != 0:
               print("ERROR: release gate refused this bump", file=sys.stderr)
