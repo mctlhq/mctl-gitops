@@ -880,6 +880,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_pod_security_level.py
 
+      - name: Unit-test the health gate in preview-deploy
+        # A preview used to end green when helm returned, and its DeployRecord
+        # never showed health, so it could never be promoted
+        # (mctl-api#1049). This runs the gate against stubbed kubectl and curl
+        # for each failure shape and checks the workflow exposes its verdict.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_health_gate.py
+
       - name: Unit-test the post-sync health gate in deploy-service
         # deploy-service used to end green once its commit was pushed, even
         # when the new version crashed on start (gitops#2653). This runs
