@@ -340,6 +340,17 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         issuer           = "https://auth.mctl.ai"
         audiences        = [zitadel_application_api.mctl_api.client_id]
         customers_org_id = zitadel_org.customers.id
+        # The C2 consent reader is a ZITADEL machine user (JWT profile): its
+        # token carries the project id in aud, never this entry's client id.
+        # service_subjects (mctl-api 4.165.0, docs/federation.md) makes that
+        # one exact subject a `kind: service` identity, pinned to the project
+        # id as the only audience it may present. The entry stays human, and
+        # a subject listed here must not also be a subject_audiences key
+        # (mctl-api refuses to boot). The orchestrator DevLoop machine user
+        # is not listed here yet; see mctl-api docs/orchestrator-devloop.md.
+        service_subjects = {
+          (zitadel_machine_user.c2_consent_reader.id) = zitadel_project.mctl_api.id
+        }
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).

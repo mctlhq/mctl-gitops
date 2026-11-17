@@ -319,6 +319,11 @@ jobs:
         # The restore step runs against a local bare repository: every refusal
         # leaves it untouched, and each guard is removed in turn to prove a test fails.
         run: python3 tests/test_rollback_revision.py
+      - name: Promote by digest pins the preview's image
+        # verify-image and pin-image run against a local bare repository and a
+        # stub registry: every refusal leaves it untouched, each guard is
+        # removed in turn to prove a test fails.
+        run: python3 tests/test_promote_deployment.py
 
       - name: Release bump PR route (routes file, tag-only diff guard, wiring)
         # #2543 stage 1 fast track: the route decision fails closed, the guard
@@ -327,6 +332,7 @@ jobs:
         run: |
           python3 tests/test_release_bump_route.py
           python3 tests/test_release_bump_diff_guard.py
+          python3 tests/test_release_bump_checks_ready.py
           python3 tests/test_release_bump_digest.py
           python3 tests/test_release_bump_pr_route.py
           python3 tests/test_release_bump_supersede.py
@@ -450,6 +456,18 @@ jobs:
           docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
             python:3.12-alpine sh -c 'pip install -q pyyaml &&
               python3 tests/test_preview_deploy_server_set_id.py'
+
+      - name: preview-deploy deploys values compiled from an intent
+        # mctlhq/mctl-gitops#2654: a service with no values.yaml in gitops
+        # gets a preview from server-set compiled values. Each guard (hash,
+        # existing-service refusal, image repository pin, failure cleanup,
+        # gitops_ref, size cap) is removed in turn to prove a case fails.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_compiled_values.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_compiled_values.py'
 
       - name: Preview ttl_hours is stamped and enforced
         # Nothing deleted expired previews before preview-reaper; a May
@@ -730,6 +748,11 @@ jobs:
           python3 scripts/release-gate.py --selftest
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
+
+      - name: Release ledger shadow verdicts (selftest)
+        # mctlhq/mctl-api#1022 S3: allow / refuse / unknown stay distinct; a
+        # failed or malformed ledger read is unknown, never refuse or allow.
+        run: python3 scripts/release-ledger-shadow.py --selftest
 
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
