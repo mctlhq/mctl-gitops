@@ -1,0 +1,31 @@
+# Third-party images mirrored into ghcr.io/mctlhq/<name>:<tag>.
+#
+# .github/workflows/mirror-image.yaml copies `source` byte-for-byte with
+# `regctl image copy`. Each entry is a single-platform manifest pinned by
+# digest, so the mirror ends up with exactly the same digest, and scan
+# evidence bound to that digest still applies. The workflow refuses to finish
+# when the digests differ.
+#
+# Why mirror: an upstream registry can garbage-collect an untagged digest.
+# chainguard/nginx publishes only `latest`, which moves on every rebuild.
+# Once that happens, a node without a cached copy cannot pull the image, and
+# the ref no longer works as a rollback target. A GHCR package keeps the
+# version until someone deletes it.
+#
+# Rules (scripts/validate-image-mirrors.py; CI and the workflow both run it):
+#   name      the GHCR package name, [a-z0-9-]
+#   source    registry/repo@sha256:<64 hex>; no tag, not ghcr.io/mctlhq
+#   platform  linux/amd64 only (the cluster's nodes)
+#   tag       immutable: never `latest`; a tag never moves to another digest
+#
+# Adding or changing an entry is a reviewed PR. Running the workflow is a
+# separate decision, made after merge.
+mirrors:
+  # RedLoop synthetic staging (mctl-gitops#2744). Gate 4 scan evidence is
+  # bound to this digest: 0 CRITICAL, 0 HIGH (redloop-image-scan run
+  # 44048121064). nginx 1.31.8, image created 2026-11-15T22:10:17Z, uid
+  # 65532. The tag is the nginx version plus the image's creation date.
+  - name: chainguard-nginx
+    source: docker.io/chainguard/nginx@sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98
+    platform: linux/amd64
+    tag: 1.31.8-20261115
