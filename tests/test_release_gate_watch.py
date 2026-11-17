@@ -91,6 +91,39 @@ check("mutant caught: a bare call loses the state under bash -e", "state=violate
 rc, out = run(lower_one, script=VERIFY.replace("state=violated", "state=clean"))
 check("mutant caught: the violation state is what the alert keys on", "state=violated" not in out, out)
 
+# The ledger step (mctlhq/mctl-api#1022 S4b), run under bash -e with a stub in
+# place of release-ledger-shadow.py: each exit code must land in its own state.
+LEDGER = [s for s in STEPS if s.get("id") == "ledger"][0]["run"]
+
+
+def ledger_run(code, script=LEDGER):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        (tmp / "scripts").mkdir()
+        (tmp / "scripts/release-ledger-shadow.py").write_text(f"import sys\nsys.exit({code})\n")
+        out = tmp / "gh_output"
+        out.touch()
+        (tmp / "step.sh").write_text(script)
+        r = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(tmp / "step.sh")], cwd=tmp,
+                           capture_output=True, text=True,
+                           env={**os.environ, "GITHUB_OUTPUT": str(out), "BEFORE": "a" * 40, "SHA": "b" * 40})
+        return r.returncode, out.read_text()
+
+
+rc, out = ledger_run(0)
+check("ledger: approved or shadow passes with no state", rc == 0 and "state=" not in out, f"{rc} {out}")
+rc, out = ledger_run(6)
+check("ledger: an unapproved enforced write is a violation", rc == 6 and "state=violated" in out, f"{rc} {out}")
+rc, out = ledger_run(7)
+check("ledger: an unreadable ledger is unknown, never clean",
+      rc == 7 and "state=unknown" in out and "violated" not in out, f"{rc} {out}")
+rc, out = ledger_run(1)
+check("ledger: a crash goes red but is no violation", rc == 1 and "state=" not in out, f"{rc} {out}")
+LFORM = "|| rc=$?"
+assert LEDGER.count(LFORM) == 1
+rc, out = ledger_run(6, LEDGER.replace(LFORM, "\nrc=$?"))
+check("mutant caught: a bare ledger call loses the state under bash -e", "state=violated" not in out, out)
+
 on = doc.get(True) or doc.get("on")
 check("runs on every push to main", on["push"]["branches"] == ["main"])
 check("runs daily, independent of pushes", bool(on["schedule"]))
@@ -100,6 +133,16 @@ other = by_name["Notify Telegram - the check itself failed"]["if"]
 check("the violation alert needs the violated state", "== 'violated'" in viol and "failure()" in viol)
 check("the other alert excludes it", "!= 'violated'" in other and "failure()" in other)
 check("a pull request never alerts", "!= 'pull_request'" in viol and "!= 'pull_request'" in other)
+check("a ledger violation alerts as a violation", "steps.ledger.outputs.state == 'violated'" in viol, viol)
+check("the could-not-run alert excludes a ledger violation", "steps.ledger.outputs.state != 'violated'" in other,
+      other)
+lif = by_name["Release ledger decisions for held-image writes"].get("if", "")
+check("the ledger step runs only on a push, also after a failed step",
+      "github.event_name == 'push'" in lif and "success()" in lif and "failure()" in lif and "always()" not in lif,
+      lif)
+perms = doc["jobs"]["verify"].get("permissions", {})
+check("the job may mint the ledger reader token and reads contents only",
+      perms == {"contents": "read", "id-token": "write"}, perms)
 
 conc = doc["concurrency"]["group"]
 check("a push gets its own concurrency group per commit",

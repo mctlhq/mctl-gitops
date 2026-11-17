@@ -11,6 +11,13 @@ name: Release gate watch
 # between the parent and the pushed commit by content, reading the policy from
 # the parent. A read that fails is reported as unknown, never as clean. A push
 # can change this file too, so the daily run reads whatever main then holds.
+#
+# Release ledger (mctlhq/mctl-api#1022 S4b): on a push that writes the image of
+# a hold with a `ledger:` block, it asks mctl-api whether that exact digest was
+# approved with MFA. Under `enforce` a write without such a decision is a
+# violation and an unreadable ledger is unknown; under `shadow` it only
+# reports. Only push runs read it: mctl-api admits GitHub OIDC tokens from
+# push, workflow_dispatch and release events on main, not schedule.
 
 on:
   push:
@@ -21,6 +28,7 @@ on:
     paths:
       - '.github/workflows/release-gate-watch.yml'
       - 'scripts/release-gate.py'
+      - 'scripts/release-ledger-shadow.py'
       - 'platform-gitops/release-gates.yaml'
   workflow_dispatch:
 
@@ -39,6 +47,10 @@ jobs:
   verify:
     name: main satisfies the release gates
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The ledger step's reader token for mctl-api (audience https://api.mctl.ai).
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -68,6 +80,28 @@ jobs:
           esac
           exit "$rc"
 
+      - name: Release ledger decisions for held-image writes
+        id: ledger
+        if: (success() || failure()) && github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # 6 = an enforced hold's image was written with no approved MFA
+          # decision for its digest, 7 = the ledger, the registry or a commit
+          # could not be read. A shadow hold only reports and exits 0.
+          rc=0
+          python3 scripts/release-ledger-shadow.py watch --base "$BEFORE" --head "$SHA" || rc=$?
+          case "$rc" in
+            0) echo "no enforced held-image write lacks a ledger decision" ;;
+            6) echo "state=violated" >> "$GITHUB_OUTPUT"
+               echo "::error::the push wrote a held image the release ledger did not approve" ;;
+            7) echo "state=unknown" >> "$GITHUB_OUTPUT"
+               echo "::error::could not judge the push against the release ledger" ;;
+            *) echo "::error::release-ledger-shadow.py exited $rc, nothing was judged" ;;
+          esac
+          exit "$rc"
+
       - name: Verify
         id: verify
         # Runs even when the comparison step failed, so both results are
@@ -89,7 +123,7 @@ jobs:
           exit "$rc"
 
       - name: Notify Telegram - gate violated
-        if: failure() && github.event_name != 'pull_request' && (steps.verify.outputs.state == 'violated' || steps.diff.outputs.state == 'violated')
+        if: failure() && github.event_name != 'pull_request' && (steps.verify.outputs.state == 'violated' || steps.diff.outputs.state == 'violated' || steps.ledger.outputs.state == 'violated')
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -101,12 +135,12 @@ jobs:
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Notify Telegram - the check itself failed
-        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state != 'violated' && steps.diff.outputs.state != 'violated'
+        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state != 'violated' && steps.diff.outputs.state != 'violated' && steps.ledger.outputs.state != 'violated'
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             🔧 *Release gate check could not run*
-            Main is unverified, not known to be clean: checkout, PyYAML, the script or a read of the parent commit failed.
+            Main is unverified, not known to be clean: checkout, PyYAML, the script, a read of the parent commit, or the release ledger read failed.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
