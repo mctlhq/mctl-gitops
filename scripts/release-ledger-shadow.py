@@ -3,6 +3,7 @@
 
   release-ledger-shadow.py check --repository R --version V --digest D --commit C --image I
   release-ledger-shadow.py gate  --repository R --version V --digest D --commit C --image I
+  release-ledger-shadow.py watch --base B --head H
   release-ledger-shadow.py --selftest
 
 `gate` (mctlhq/mctl-api#1022 S4) is what release-deploy's ledger-gate job
@@ -18,6 +19,11 @@ release-gates.yaml (read from main) and acts on its `ledger.mode`:
                    wait at once (exit 6). The deadline ends it with exit 6, or
                    7 when the last read was unknown: no approval was observed
                    either way, and nothing is bumped.
+
+`watch` (S4b) is what release-gate-watch runs after each push to main. For
+every ledger hold whose image.tag or image.digest the push changed, it asks
+the ledger whether that write was approved with MFA (see watch_verdict). An
+enforce hold fails it (6 refused, 7 unknown); a shadow hold is only reported.
 
 Reads the release decisions mctl-api keeps for one release
 (GET /api/v1/release/grants) and says what a ledger-based gate WOULD decide
@@ -89,9 +95,18 @@ def _ts(raw: Any) -> datetime.datetime:
     return datetime.datetime.fromisoformat(f"{m.group(1)}.{frac}{tz}")
 
 
-def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: str,
-                 now: datetime.datetime) -> tuple[str, str]:
-    """What a ledger gate would decide for this exact artifact. Pure."""
+def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: str | None,
+                 now: datetime.datetime, *, historical: bool = False) -> tuple[str, str]:
+    """What a ledger gate would decide for this exact artifact. Pure.
+
+    `gate` passes a commit and historical=False: a decision must be live
+    (unexpired, unconsumed) for exactly this digest and tag commit.
+    `watch` passes commit=None and historical=True: it asks whether a write
+    that already happened was approved, so an MFA approval of exactly this
+    repository, version and digest counts even after it expired or was
+    consumed (by the very bump being judged). The digest is immutable, so it
+    names the image without the commit. A rejection still wins.
+    """
     if not isinstance(body, dict) or not isinstance(body.get("grants"), list):
         return UNKNOWN, "response is not an object with a grants list"
     if body.get("repository") != repository or body.get("version") != version:
@@ -108,7 +123,7 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
             return UNKNOWN, f"grant {i} is malformed"
         if (art.get("repository"), art.get("version")) != (repository, version):
             return UNKNOWN, f"grant {a['id']} is for another release"
-        if art.get("image_digest") != digest or art.get("tag_commit") != commit:
+        if art.get("image_digest") != digest or (commit is not None and art.get("tag_commit") != commit):
             others += 1
             continue
         state = a["state"]
@@ -120,6 +135,9 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
                 return UNKNOWN, f"grant {a['id']} is approved but carries no decision evidence"
             if "mfa" not in dec["amr"]:
                 refused.append(f"{a['id']} approved without mfa")
+                continue
+            if historical:
+                approved.append(a["id"])
                 continue
             try:
                 expires = _ts(a.get("expires_at"))
@@ -138,7 +156,8 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
     if approved:
         return ALLOW, f"approved by {', '.join(approved)}"
     if others:
-        return REFUSE, f"no decision for this digest and commit ({others} grant(s) bind another artifact)"
+        return REFUSE, (f"no decision for this digest{'' if commit is None else ' and commit'} "
+                        f"({others} grant(s) bind another artifact)")
     return REFUSE, "no approved decision for this release"
 
 
@@ -274,13 +293,19 @@ def wait_for_decision(read, judge, digest: str, commit: str, wait_seconds: int, 
         sleep(POLL_SECONDS)
 
 
-def _ledger_hold(image: str) -> dict | None:
-    """The version hold for `image`, validated by release-gate.py itself; any doubt raises."""
+def _release_gate():
+    """scripts/release-gate.py as a module: its policy validation is the one that counts."""
     import importlib.util  # noqa: PLC0415
-    import yaml  # noqa: PLC0415
     spec = importlib.util.spec_from_file_location("release_gate", ROOT / "scripts/release-gate.py")
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def _ledger_hold(image: str) -> dict | None:
+    """The version hold for `image`, validated by release-gate.py itself; any doubt raises."""
+    import yaml  # noqa: PLC0415
+    mod = _release_gate()
     holds = mod._holds(yaml.safe_load((ROOT / GATE).read_text()))
     found = [h for h in holds if h["repository"] == image and h.get("ledger")]
     if len(found) > 1:
@@ -333,6 +358,123 @@ def gate(args: argparse.Namespace) -> int:
     print(f"::error title=release ledger::{verdict}: {why}. Nothing is bumped; re-run this workflow after "
           f"the decision.", file=sys.stderr)
     return code
+
+
+# -- watch (mctlhq/mctl-api#1022 S4b): was a held-image write on main approved? --
+
+REGISTRY = "ghcr.io"
+MANIFEST_TYPES = ", ".join((
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+))
+
+
+def _registry_digest(image: str, tag: str) -> str:
+    """The digest GHCR serves for image:tag now (anonymous pull token; the package is public).
+
+    It is the digest release-deploy's build pushes and the ledger binds (the
+    manifest list), because the index types are accepted first.
+    """
+    name = image[len(REGISTRY) + 1:]
+    q = urllib.parse.urlencode({"scope": f"repository:{name}:pull"})
+    with urllib.request.urlopen(_request(f"https://{REGISTRY}/token?{q}", {}), timeout=30) as resp:
+        token = json.load(resp).get("token")
+    if not isinstance(token, str) or not token:
+        raise RuntimeError("registry returned no pull token")
+    req = _request(f"https://{REGISTRY}/v2/{name}/manifests/{urllib.parse.quote(tag, safe='')}",
+                   {"Authorization": f"Bearer {token}", "Accept": MANIFEST_TYPES})
+    req.method = "HEAD"
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        digest = resp.headers.get("Docker-Content-Digest")
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise RuntimeError(f"registry answered no digest ({digest!r})")
+    return digest
+
+
+def watch_verdict(change: dict, read, resolve, now: datetime.datetime) -> tuple[str, str]:
+    """Was this held-image write approved in the ledger? Pure but for the injected IO.
+
+    The image is named by the digest the file pins, or, when it pins none
+    (the bootstrap file today), by the digest the registry serves for the tag:
+    that is what the cluster pulls. Any read that fails is UNKNOWN.
+    """
+    image, version = change["repository"], change["version"]
+    repo = image[len(REGISTRY) + 1:] if image.startswith(REGISTRY + "/") else ""
+    if not REPO.fullmatch(repo) or not SEMVER.fullmatch(str(version)):
+        return UNKNOWN, f"cannot name the release of {image} {version!r} in the ledger"
+    digest = change.get("digest")
+    if digest is None:
+        src = "registry"
+        try:
+            digest = resolve(image, version)
+        except Exception as exc:  # noqa: BLE001 - could not observe
+            return UNKNOWN, f"registry digest of {image}:{version} unreadable: {type(exc).__name__}: {exc}"
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            return UNKNOWN, f"registry digest of {image}:{version} is malformed: {digest!r}"
+    else:
+        src = "pinned"
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            # The file was read; what it pins names no image a decision can bind.
+            return REFUSE, f"pinned image.digest {digest!r} is not a sha256 digest"
+    try:
+        body = read(repo, version)
+    except urllib.error.HTTPError as exc:
+        return UNKNOWN, f"ledger read failed: HTTP {exc.code}"
+    except Exception as exc:  # noqa: BLE001 - could not observe is never refuse or allow
+        return UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}"
+    verdict, why = judge_ledger(body, repo, version, digest, None, now, historical=True)
+    return verdict, f"{repo} {version} @ {digest} ({src} digest): {why}"
+
+
+def watch(args: argparse.Namespace) -> int:
+    """Judge every held-image write the push base..head made.
+
+    Exit 0: nothing to judge, every enforced write was approved, or every
+    hold involved is in shadow mode (reported, never failed). 6: an enforced
+    hold's write has no approved MFA decision (or a rejected one). 7: an
+    enforced write, or the policy itself, could not be judged; unknown
+    outranks a refusal, as in `release-gate.py diff`.
+    """
+    for name in ("base", "head"):
+        if not COMMIT.fullmatch(getattr(args, name) or ""):
+            print(f"::error::bad --{name} {getattr(args, name)!r}", file=sys.stderr)
+            return 7
+    try:
+        changes, unk = _release_gate().ledger_changes(ROOT, args.base, args.head)
+    except Exception as exc:  # noqa: BLE001 - could not observe
+        print(f"::error title=release ledger watch::UNKNOWN: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 7
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows: list[tuple[str, str, str, str]] = []  # (mode, what, verdict, why)
+    for mode, why in unk:
+        rows.append((mode or "enforce", "(read)", UNKNOWN, why))
+    for c in changes:
+        verdict, why = watch_verdict(c, _read_ledger, _registry_digest, now)
+        rows.append((c["mode"], f"{c['hold']} {c['old_version']} -> {c['version']}", verdict, why))
+    if not rows:
+        print("ledger-watch: the push wrote no ledger-held image")
+        return 0
+    for mode, what, verdict, why in rows:
+        if mode != "enforce":
+            print(f"::notice title=release ledger watch (shadow, enforces nothing)::{what}: {verdict}: {why}")
+        elif verdict == ALLOW:
+            print(f"::notice title=release ledger watch::{what}: allow: {why}")
+        else:
+            print(f"::error title=release ledger watch::{what}: {verdict}: {why}", file=sys.stderr)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Release ledger watch\n\n| mode | write | verdict | why |\n|---|---|---|---|\n")
+            for mode, what, verdict, why in rows:
+                f.write(f"| {mode} | {what} | {verdict} | {why} |\n")
+    enforced = [v for m, _, v, _ in rows if m == "enforce"]
+    if UNKNOWN in enforced:
+        return 7
+    if REFUSE in enforced:
+        return 6
+    return 0
 
 
 def _selftest() -> int:
@@ -502,7 +644,12 @@ def main() -> int:
     for sp in (c, g):
         for name in ("repository", "version", "digest", "commit", "image"):
             sp.add_argument(f"--{name}", required=True)
+    w = sub.add_parser("watch")
+    w.add_argument("--base", required=True)
+    w.add_argument("--head", required=True)
     a = p.parse_args()
+    if a.cmd == "watch":
+        return watch(a)
     return gate(a) if a.cmd == "gate" else check(a)
 
 

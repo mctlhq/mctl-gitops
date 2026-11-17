@@ -792,6 +792,12 @@ jobs:
         # failed or malformed ledger read is unknown, never refuse or allow.
         run: python3 scripts/release-ledger-shadow.py --selftest
 
+      - name: Release ledger watch (S4b cases and mutants)
+        # mctlhq/mctl-api#1022 S4b: release-gate-watch judges every write of
+        # a ledger-held image on main against the ledger; enforce fails on a
+        # missing approval (6) or an unreadable read (7), shadow only reports.
+        run: python3 tests/test_release_ledger_watch.py
+
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
 

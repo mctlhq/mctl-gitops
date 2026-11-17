@@ -312,9 +312,10 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
     held image) and by the pull-request identity check (`pr-identity`).
     Direct pushes with another bypassing deploy key (runbook
     mctl-api-release-hold.md, P5b/P6) are not judged by either, and in
-    enforce mode the offline `diff` no longer flags them either: a ledger
-    read in release-gate-watch after each push (S4b) must land before any
-    hold is switched to enforce.
+    enforce mode the offline `diff` no longer flags them either. They are
+    caught after the push by release-gate-watch's ledger step (S4b,
+    `ledger_changes` + release-ledger-shadow.py watch), which asks the
+    ledger whether the written digest was approved.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
     out: list[str] = []
@@ -725,6 +726,69 @@ def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: 
                            f"bot's PR, but this run was caused by {pusher!r}, not {led['bump_pr_author']}: a commit "
                            f"pushed onto the bump branch carries no ledger decision")
     return out
+
+
+def _held_image(repo: Path, rev: str, hold: dict) -> tuple[str, str | None]:
+    """(image.tag, image.digest or None) of the hold's file at `rev`; any doubt raises.
+
+    A file without a digest key yields None (the bootstrap file pins none
+    today); a digest key that is present but not a string is an error.
+    """
+    raw = _blob(repo, rev, hold["file"])
+    if raw is None:
+        raise ValueError(f"{hold['file']} absent at {rev[:12]}")
+    with tempfile.TemporaryDirectory() as t:
+        (Path(t) / hold["file"]).parent.mkdir(parents=True)
+        (Path(t) / hold["file"]).write_bytes(raw)
+        tag = _bootstrap_tag(Path(t), hold)
+        digest = block_values((Path(t) / hold["file"]).read_text())["image"].get("digest")
+    if digest is not None and not isinstance(digest, str):
+        raise ValueError(f"image.digest is not a string: {digest!r}")
+    return tag, digest or None
+
+
+def ledger_changes(repo: Path, base: str, head: str) -> tuple[list[dict], list[tuple[str | None, str]]]:
+    """Held-image writes a push made, for the S4b ledger read in release-gate-watch.
+
+    For every hold with a `ledger:` block in the policy at `base` (the trusted
+    side, as in `diff`): when the push changed the file's image.tag or
+    image.digest to a version at or above held_from, one change
+    {mode, hold, repository, version, digest, old_version}. `digest` is None
+    when the file pins none. A tag or digest that did not move is the
+    deployed state, not a write, and yields nothing.
+
+    Unknowns are (mode, why); mode None means the policy itself could not be
+    read, so no hold's mode is known. A read that fails is never "no change".
+    """
+    try:
+        raw = _blob(repo, base, GATE)
+        if raw is None:
+            return [], [(None, f"{GATE} absent at {base[:12]}")]
+        holds = _holds(_parse(raw))
+    except Exception as exc:  # noqa: BLE001
+        return [], [(None, f"policy unreadable at {base[:12]}: {type(exc).__name__}: {exc}")]
+    changes: list[dict] = []
+    unk: list[tuple[str | None, str]] = []
+    for h in holds:
+        led = h.get("ledger")
+        if not led:
+            continue
+        try:
+            old = _held_image(repo, base, h)
+            new = _held_image(repo, head, h)
+        except Exception as exc:  # noqa: BLE001
+            unk.append((led["mode"], f"{h['name']}: {h['file']} image unreadable: {type(exc).__name__}: {exc}"))
+            continue
+        if new == old:
+            continue
+        v = _semver(new[0])
+        if v is None:
+            unk.append((led["mode"], f"{h['name']}: pushed tag {new[0]!r} is not X.Y.Z"))
+            continue
+        if v >= _semver(h["held_from"]):  # type: ignore[operator]  # below it the hold does not apply
+            changes.append({"mode": led["mode"], "hold": h["name"], "repository": h["repository"],
+                            "version": new[0], "digest": new[1], "old_version": old[0]})
+    return changes, unk
 
 
 def ledger_holds(root: Path) -> list[str]:
