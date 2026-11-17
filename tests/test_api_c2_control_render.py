@@ -151,6 +151,15 @@ def main():
               "lit: scope comes from the ids ConfigMap")
         check(sc["securityContext"]["readOnlyRootFilesystem"] is True
               and sc["securityContext"]["capabilities"]["drop"] == ["ALL"], "lit: sidecar hardening")
+        ssc = sc["securityContext"]
+        check(ssc.get("runAsNonRoot") is True and ssc.get("runAsUser") == 1000
+              and ssc.get("allowPrivilegeEscalation") is False
+              and ssc.get("seccompProfile") == {"type": "RuntimeDefault"},
+              "lit: sidecar securityContext must satisfy PSA restricted "
+              "(runAsNonRoot, numeric runAsUser, no privilege escalation, seccomp RuntimeDefault)")
+        mounts = [m["name"] for m in v["extraVolumeMounts"]]
+        check(mounts == ["c2-control-token"],
+              "lit: the main container mounts only the token volume, never the key")
         vols = {x["name"]: x for x in v["extraVolumes"]}
         check(vols["c2-control-key"]["secret"]["secretName"] == "mctl-api-c2-control-caller", "lit: key volume")
         check(vols["c2-control-key"]["secret"]["defaultMode"] == 0o444,

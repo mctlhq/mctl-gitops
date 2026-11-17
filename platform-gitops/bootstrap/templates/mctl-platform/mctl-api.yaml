@@ -722,9 +722,9 @@ spec:
           # expires_in (the instance lifetime is 12 h) and exits non-zero if it
           # cannot renew before expiry.
           # The key is mounted 0444 because the chart sets no fsGroup and the
-          # kubelet writes secret files as root; it is readable by the main
-          # container too, which is the accepted shape (the key is held in this
-          # pod, mctl-gitops#2737).
+          # kubelet writes secret files as root. Only the sidecar mounts the
+          # key volume; the main container mounts the c2-control-token volume
+          # alone, read-only, and never sees the key (mctl-gitops#2737).
           extraContainers:
             - name: c2-control-token-refresher
               image: "{{ $c2.refresherImage.repository }}:{{ $c2.refresherImage.tag }}"
@@ -753,6 +753,8 @@ spec:
                 runAsUser: 1000
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
                 capabilities:
                   drop: [ALL]
               resources:

@@ -153,6 +153,8 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"',
         '            GLOVO_C2_KILLSWITCH_ENABLED: "true"',
     }),
+    # The host stays reserved with no owner: since 2026-11-15 it is served
+    # outside the cluster, and mctl-api no longer routes it.
     # C2 kill switch caller: the refresher image repository (the tag is a
     # separate line and never matches).
     "platform-gitops/bootstrap/values.yaml": frozenset({
@@ -165,8 +167,6 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml": frozenset({
         '        key: platform/mctl-glovo/control-caller',
     }),
-    # The host stays reserved with no owner: since 2026-11-15 it is served
-    # outside the cluster, and mctl-api no longer routes it.
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
         '        GLOVO_DB_USER: "{{ `{{ .username }}` }}"',
