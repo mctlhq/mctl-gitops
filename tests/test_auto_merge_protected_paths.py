@@ -34,6 +34,7 @@ PROTECTED = [
     CT + "wft-deploy-service.yaml",
     CT + "wft-provision-database.yaml",
     CT + "wft-remove-custom-domain.yaml",
+    CT + "wft-rollback-revision.yaml",
     CT + "wft-rollback-service.yaml",
     ".github/workflows/auto-merge.yml",
     ".github/workflows/gitops-bump.yaml",

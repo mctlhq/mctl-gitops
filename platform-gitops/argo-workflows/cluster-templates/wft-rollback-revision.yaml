@@ -1,0 +1,287 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: rollback-revision
+  annotations:
+    workflows.argoproj.io/description: |
+      Roll a service back to the state of an earlier deploy: restore its whole
+      values.yaml (image digest included) as it was at that deploy's gitops
+      commit, push it through the release gate, then run the post-sync health
+      gate on the new commit (mctlhq/mctl-api#1048). Unlike rollback-service
+      this restores more than image.tag, and it is only reachable from mctl-api
+      with a DeployRecord of the same tenant and service.
+spec:
+  entrypoint: rollback-pipeline
+  serviceAccountName: argo-workflow-sa
+  # Pod Security "restricted": this workflow runs in the tenant namespace
+  # (mctl-api operations.WorkflowNamespace), which is moving from
+  # enforce=baseline to restricted (handoff audit, block B step 3). The pod
+  # securityContext covers every container; container-level fields are not
+  # inherited from it, so podSpecPatch adds them to Argo's own init and wait
+  # containers (argoexec runs as root by default) and to main. HOME=/tmp
+  # because python, alpine/k8s and alpine/git have no passwd entry for uid
+  # 1000; steps that use ssh run mctl-workflow-tools, which has one.
+  # Templates reached through templateRef (tpl-*, the completion hook) run
+  # under this spec too.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+          - name: HOME
+            value: /tmp
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      # 40-hex mctl-gitops commit a DeployRecord holds (commit_sha): the
+      # state to restore. mctl-api has already checked the record belongs to
+      # this team and component.
+      - name: target_commit
+      # sha256 the record ran. The values at target_commit must pin exactly
+      # this digest, or the rollback is refused: a record and a commit that
+      # disagree are not the same revision.
+      - name: expected_digest
+
+  templates:
+    - name: rollback-pipeline
+      # The workflow's own outputs, read by mctl-api for the rollback's own
+      # DeployRecord. commit_sha comes from the restore step, so it is known
+      # whatever the gate concludes.
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health}}"
+          - name: health_url
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health_url}}"
+          - name: argo_revision
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.argo_revision}}"
+          - name: image_digest
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.image_digest}}"
+          - name: commit_sha
+            valueFrom:
+              parameter: "{{tasks.restore-values.outputs.parameters.commit_sha}}"
+      dag:
+        tasks:
+          - name: restore-values
+            template: restore-values
+          - name: health-gate
+            dependencies: [restore-values]
+            template: health-gate
+            arguments:
+              parameters:
+                - name: commit_sha
+                  value: "{{tasks.restore-values.outputs.parameters.commit_sha}}"
+
+    - name: restore-values
+      outputs:
+        parameters:
+          - name: commit_sha
+            valueFrom:
+              path: /tmp/commit_sha
+      script:
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_TARGET_COMMIT
+            value: "{{workflow.parameters.target_commit}}"
+          - name: PARAM_EXPECTED_DIGEST
+            value: "{{workflow.parameters.expected_digest}}"
+        source: |
+          set -euo pipefail
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992).
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TARGET="$PARAM_TARGET_COMMIT"
+          DIGEST="$PARAM_EXPECTED_DIGEST"
+
+          # Shape first. TEAM and COMPONENT build a path, TARGET and DIGEST
+          # reach git and yq: each is held to its grammar here, whatever the
+          # caller already checked.
+          case "$TEAM" in "" | -* | *[!a-z0-9-]* ) echo "target team_name is not a DNS label: ${TEAM}" >&2; exit 1 ;; esac
+          case "$COMPONENT" in "" | -* | *[!a-z0-9-]* ) echo "component_name is not a DNS label: ${COMPONENT}" >&2; exit 1 ;; esac
+          case "$TARGET" in *[!0-9a-f]* | "") echo "target_commit is not a 40-hex commit: ${TARGET}" >&2; exit 1 ;; esac
+          [ "${#TARGET}" -eq 40 ] || { echo "target_commit is not a 40-hex commit: ${TARGET}" >&2; exit 1; }
+          case "$DIGEST" in sha256:*) H=${DIGEST#sha256:} ;; *) echo "expected_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          case "$H" in *[!0-9a-f]*) echo "expected_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          [ "${#H}" -eq 64 ] || { echo "expected_digest is not sha256:<64 hex>" >&2; exit 1; }
+
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # GitHub's published SSH host keys, pinned (see rollback-service).
+          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          GITHUB_HOST_KEYS
+          chmod 600 ~/.ssh/known_hosts
+          git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
+
+          REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          # Full history: the target must be shown to be an ancestor of main.
+          git clone --filter=blob:none -q "${REPO}" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+
+          [ -f "${VALUES}" ] || { echo "ERROR: ${VALUES} not found: the service does not exist" >&2; exit 1; }
+
+          # The target commit must be on main. A commit that is not (a force
+          # pushed branch, a fork, a pull request head) is not a deploy.
+          git cat-file -e "${TARGET}^{commit}" 2>/dev/null || { echo "ERROR: ${TARGET} is not a commit of this repository" >&2; exit 1; }
+          git merge-base --is-ancestor "${TARGET}" origin/main \
+            || { echo "ERROR: ${TARGET} is not on main" >&2; exit 1; }
+          git cat-file -e "${TARGET}:${VALUES}" 2>/dev/null \
+            || { echo "ERROR: ${VALUES} did not exist at ${TARGET}" >&2; exit 1; }
+
+          git show "${TARGET}:${VALUES}" > /tmp/restored.yaml
+
+          # The record and the commit must be the same revision: the values at
+          # the commit pin the digest the record says ran.
+          got=$(yq '.image.digest // ""' /tmp/restored.yaml)
+          [ "$got" = "$DIGEST" ] \
+            || { echo "ERROR: values at ${TARGET} pin image.digest '${got}', not ${DIGEST}" >&2; exit 1; }
+
+          # Things a rollback may not change, whatever the old values say: the
+          # image repository (not a takeover of the service by another image)
+          # and where it is reachable (ingress hosts were checked against
+          # reserved hosts when they were set, not when they are restored).
+          for key in '.image.repository' '.ingress.host' '.ingress.hosts' '.ingress.enabled'; do
+            a=$(yq -o=json "${key} // null" "${VALUES}")
+            b=$(yq -o=json "${key} // null" /tmp/restored.yaml)
+            [ "$a" = "$b" ] || { echo "ERROR: ${key} differs between main and ${TARGET}; a rollback does not change it: roll forward instead" >&2; exit 1; }
+          done
+
+          # Release gate (mctlhq/mctl-agents#1007), the same shared guard every
+          # writer calls: anything it cannot read or decide is a refusal.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
+
+          if cmp -s /tmp/restored.yaml "${VALUES}"; then
+            echo "No changes needed (${VALUES} already matches ${TARGET})"
+            git rev-parse HEAD > /tmp/commit_sha
+            exit 0
+          fi
+
+          cp /tmp/restored.yaml "${VALUES}"
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-rollback"
+          git add "${VALUES}"
+          git commit -q -m "chore: rollback ${TEAM}/${COMPONENT} to the state at ${TARGET}"
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+          for attempt in 1 2 3; do
+            if git push -q; then break; fi
+            [ "$attempt" -lt 3 ] || { echo "ERROR: push refused 3 times" >&2; exit 1; }
+            git pull -q --rebase origin main
+            sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+          done
+          git rev-parse HEAD > /tmp/commit_sha
+          echo "Rolled back ${TEAM}/${COMPONENT} to the state at ${TARGET}: $(cat /tmp/commit_sha)"
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
+
+    - name: health-gate
+      inputs:
+        parameters:
+          - name: commit_sha
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              path: /tmp/health-gate/health
+          - name: health_url
+            valueFrom:
+              path: /tmp/health-gate/health_url
+          - name: argo_revision
+            valueFrom:
+              path: /tmp/health-gate/argo_revision
+          - name: image_digest
+            valueFrom:
+              path: /tmp/health-gate/image_digest
+      # The script's own deadline is HG_TIMEOUT (600s) plus the stability
+      # window; this is the backstop for a hung clone or kubectl call.
+      activeDeadlineSeconds: 900
+      script:
+        # kubectl, git, jq, yq and curl: what health-gate.sh needs.
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_COMMIT_SHA
+            value: "{{inputs.parameters.commit_sha}}"
+          # The tenant pull secret, to resolve the deployed tag to a digest.
+          - name: DOCKER_CONFIG_JSON
+            value: /secrets/ghcr/.dockerconfigjson
+        volumeMounts:
+          - name: ghcr-credentials
+            mountPath: /secrets/ghcr
+            readOnly: true
+        source: |
+          set -eu
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992); the script shape-checks them again.
+          mkdir -p /tmp/health-gate
+          echo unknown > /tmp/health-gate/health
+          for f in health_url argo_revision image_digest; do : > "/tmp/health-gate/$f"; done
+
+          # Read-only and public. Blobless but with full history: the gate
+          # checks that Argo CD's revision contains the deploy's commit, and
+          # reads the service's values at that commit.
+          git clone --filter=blob:none --no-checkout -q \
+            "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          git -C /tmp/mctl-gitops checkout -q origin/HEAD -- platform-gitops/argo-workflows/scripts
+
+          sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/health-gate.sh \
+            /tmp/mctl-gitops "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME" "$PARAM_COMMIT_SHA"
+      volumes:
+        - name: ghcr-credentials
+          secret:
+            secretName: ghcr-credentials

@@ -11,6 +11,7 @@ template_reach:
   preview-deploy: [github-actions-pat]
   provision-database: [mctl-gitops-deploy-key]
   retire-service: [mctl-gitops-deploy-key]
+  rollback-revision: [mctl-gitops-deploy-key]
   rollback-service: [mctl-gitops-deploy-key]
   tpl-git-commit: [mctl-gitops-deploy-key]
 # readers: [subject, Role, way] for the subjects that can read the credential
