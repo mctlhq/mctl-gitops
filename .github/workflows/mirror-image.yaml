@@ -1,0 +1,196 @@
+name: Mirror Image
+run-name: "mirror-image: ${{ inputs.name }}"
+
+# Copies one third-party image listed in platform-gitops/images/mirrors.yaml
+# into ghcr.io/mctlhq/<name>:<tag>, byte for byte. The mirror keeps the
+# source digest, so scan evidence bound to that digest still applies.
+#
+# Why: upstream registries may garbage-collect untagged digests. Chainguard
+# publishes only `latest`, so a pinned digest falls out of the tag on the
+# next rebuild. Once it is collected, nodes without a cached copy get
+# ErrImagePull and the ref stops working as a rollback target (mctl-gitops#2744).
+#
+# Guarantees:
+#   - Only entries from mirrors.yaml on main. The input is a name, never a
+#     ref, and the job refuses to run on any other branch.
+#   - The source must be a single-platform manifest for the listed platform
+#     whose digest equals the pinned one. Indexes are refused, because
+#     copying an index would mirror platforms nobody scanned.
+#   - Tags are immutable. If the destination tag already exists with the same
+#     digest, the run is a no-op. If it exists with another digest, the run
+#     fails. Only an HTTP 404 from an authenticated read counts as "absent";
+#     401, 403, 5xx and network errors fail the run.
+#   - After the push, the destination digest is read back and must equal the
+#     pinned digest.
+#
+# Package visibility: a package that GITHUB_TOKEN creates is private and
+# linked to this repository. Tenants that pull it without a pull secret need
+# it public. That switch is a one-time owner step in the GHCR package
+# settings, because GitHub has no API for it. Until it is done, pods fail
+# with ErrImagePull, which is loud, not silent.
+#
+# Nothing in this workflow deletes package versions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Mirror name from platform-gitops/images/mirrors.yaml (e.g. chainguard-nginx)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-image-${{ inputs.name }}
+  cancel-in-progress: false
+
+env:
+  REGCTL_VERSION: v0.11.6
+  REGCTL_SHA256: 8e0e62a497fcdb8048d18aa927a139613176ba0531f412bc541044e28f9856bd
+
+jobs:
+  mirror:
+    name: Mirror
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Resolve entry
+        id: entry
+        env:
+          NAME: ${{ inputs.name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$NAME" | grep -qE '^[a-z0-9][a-z0-9-]{0,63}$' || {
+            echo "::error::invalid mirror name: $NAME"; exit 1; }
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 scripts/validate-image-mirrors.py --selftest
+          python3 scripts/validate-image-mirrors.py --get "$NAME" > "$RUNNER_TEMP/entry"
+          cat "$RUNNER_TEMP/entry"
+          cat "$RUNNER_TEMP/entry" >> "$GITHUB_OUTPUT"
+
+      - name: Install regctl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/regctl" \
+            "https://github.com/regclient/regclient/releases/download/${REGCTL_VERSION}/regctl-linux-amd64"
+          echo "${REGCTL_SHA256}  $RUNNER_TEMP/regctl" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/regctl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Verify source
+        env:
+          SOURCE: ${{ steps.entry.outputs.source }}
+          DIGEST: ${{ steps.entry.outputs.digest }}
+          PLATFORM: ${{ steps.entry.outputs.platform }}
+        run: |
+          set -euo pipefail
+          media=$(regctl manifest get "$SOURCE" --format '{{.GetDescriptor.MediaType}}')
+          case "$media" in
+            application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json) ;;
+            *) echo "::error::$SOURCE is $media, not a single-platform image manifest"; exit 1 ;;
+          esac
+          got=$(regctl image digest "$SOURCE")
+          [ "$got" = "$DIGEST" ] || { echo "::error::source digest $got != pinned $DIGEST"; exit 1; }
+          plat=$(regctl image config "$SOURCE" --format '{{.OS}}/{{.Architecture}}')
+          [ "$plat" = "$PLATFORM" ] || { echo "::error::source platform $plat != $PLATFORM"; exit 1; }
+          echo "source OK: $SOURCE ($media, $plat)"
+
+      - name: Check destination tag
+        id: dest
+        env:
+          PACKAGE: ${{ steps.entry.outputs.package }}
+          TAG: ${{ steps.entry.outputs.tag }}
+          DIGEST: ${{ steps.entry.outputs.digest }}
+          GH_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          token=$(curl -fsS -u "$GH_ACTOR:$GITHUB_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:mctlhq/$PACKAGE:pull" \
+            | jq -r '.token // empty')
+          [ -n "$token" ] || { echo "::error::GHCR token request failed"; exit 1; }
+          echo "::add-mask::$token"
+          code=$(curl -sS -o /dev/null -D "$RUNNER_TEMP/headers" -w '%{http_code}' -I \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/mctlhq/$PACKAGE/manifests/$TAG" || echo 000)
+          case "$code" in
+            404)
+              echo "ghcr.io/mctlhq/$PACKAGE:$TAG does not exist yet"
+              echo "present=false" >> "$GITHUB_OUTPUT" ;;
+            200)
+              have=$(tr -d '\r' < "$RUNNER_TEMP/headers" | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')
+              if [ "$have" = "$DIGEST" ]; then
+                echo "ghcr.io/mctlhq/$PACKAGE:$TAG already holds $DIGEST; nothing to copy"
+                echo "present=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "::error::ghcr.io/mctlhq/$PACKAGE:$TAG holds ${have:-an unreadable digest}, not $DIGEST; tags are immutable"
+                exit 1
+              fi ;;
+            *) echo "::error::could not check ghcr.io/mctlhq/$PACKAGE:$TAG (HTTP $code)"; exit 1 ;;
+          esac
+
+      - name: Copy
+        if: steps.dest.outputs.present == 'false'
+        env:
+          SOURCE: ${{ steps.entry.outputs.source }}
+          DEST: ${{ steps.entry.outputs.dest }}
+          GH_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GITHUB_TOKEN" | regctl registry login ghcr.io -u "$GH_ACTOR" --pass-stdin
+          regctl image copy "$SOURCE" "$DEST"
+          regctl registry logout ghcr.io
+
+      - name: Verify destination
+        id: verify
+        env:
+          DEST: ${{ steps.entry.outputs.dest }}
+          DIGEST: ${{ steps.entry.outputs.digest }}
+          PLATFORM: ${{ steps.entry.outputs.platform }}
+          GH_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Authenticated: a new package is private until the owner makes it public.
+          printf '%s' "$GITHUB_TOKEN" | regctl registry login ghcr.io -u "$GH_ACTOR" --pass-stdin
+          got=$(regctl image digest "$DEST")
+          plat=$(regctl image config "$DEST" --format '{{.OS}}/{{.Architecture}}')
+          regctl registry logout ghcr.io
+          [ "$got" = "$DIGEST" ] || { echo "::error::$DEST resolves to $got, not $DIGEST"; exit 1; }
+          [ "$plat" = "$PLATFORM" ] || { echo "::error::$DEST platform $plat != $PLATFORM"; exit 1; }
+          echo "digest=$got" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        env:
+          SOURCE: ${{ steps.entry.outputs.source }}
+          DEST: ${{ steps.entry.outputs.dest }}
+          DIGEST: ${{ steps.verify.outputs.digest }}
+          PRESENT: ${{ steps.dest.outputs.present }}
+        run: |
+          {
+            echo "## Image mirrored"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Source | \`$SOURCE\` |"
+            echo "| Mirror | \`$DEST\` |"
+            echo "| Pull by digest | \`${DEST%:*}@$DIGEST\` |"
+            echo "| Already present | $PRESENT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -rf "$HOME/.regctl" "$RUNNER_TEMP/headers"

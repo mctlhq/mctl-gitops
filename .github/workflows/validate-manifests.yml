@@ -195,6 +195,15 @@ jobs:
           python3 scripts/validate-usage-pricing-catalog.py --selftest
           python3 scripts/validate-usage-pricing-catalog.py
 
+      # Third-party images mirrored into GHCR by mirror-image.yaml
+      # (mctl-gitops#2744): every entry digest-pinned, immutable tag.
+      - name: Validate image mirrors
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-image-mirrors.py --selftest
+          python3 scripts/validate-image-mirrors.py
+
       - name: Validate agent platform catalog
         run: |
           python3 -m pip install --quiet pyyaml jsonschema
