@@ -12,6 +12,7 @@ on:
       - scripts/check-vault-policy-capabilities.py
       - scripts/vault-policy-expectations.json
       - tests/test_vault_policy_capabilities.py
+      - tests/test_vault_glovo_eso_policy.py
       - .github/workflows/vault-policy-check.yml
 
 permissions:
@@ -25,6 +26,9 @@ jobs:
 
       - name: Unit-test the capability check (green and red cases)
         run: python3 tests/test_vault_policy_capabilities.py
+
+      - name: Glovo ESO policy is scoped to its own prefix and denied on the cluster store
+        run: python3 tests/test_vault_glovo_eso_policy.py
 
       - name: Check committed policy files against the capability table
         run: python3 scripts/check-vault-policy-capabilities.py

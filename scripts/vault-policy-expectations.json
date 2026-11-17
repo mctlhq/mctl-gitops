@@ -3,7 +3,8 @@
   "base_dir": "infrastructure/k3s-preview/cluster-bootstrap/vault-config",
   "identities": {
     "external-secrets": {"policies": ["vault-policy-external-secrets-read.hcl"]},
-    "argo-workflow": {"policies": ["vault-policy-argo-workflow-teams-rw.hcl"]}
+    "argo-workflow": {"policies": ["vault-policy-argo-workflow-teams-rw.hcl"]},
+    "eso-mctl-glovo": {"policies": ["vault-policy-eso-mctl-glovo.hcl"]}
   },
   "expectations": [
     {"identity": "external-secrets", "path": "secret/data/platform/backstage/ghcr-credentials", "effective": ["read"]},
@@ -11,9 +12,16 @@
     {"identity": "external-secrets", "path": "secret/data/platform/github-app", "effective": ["read"]},
     {"identity": "external-secrets", "path": "secret/data/platform/github-app-agents", "effective": ["deny"]},
     {"identity": "external-secrets", "path": "secret/metadata/platform/github-app-agents", "effective": ["deny"]},
+    {"identity": "external-secrets", "path": "secret/data/platform/mctl-glovo/control-caller", "effective": ["deny"]},
+    {"identity": "external-secrets", "path": "secret/metadata/platform/mctl-glovo/control-caller", "effective": ["deny"]},
     {"identity": "external-secrets", "path": "secret/data/teams/example/service", "effective": []},
     {"identity": "external-secrets", "path": "secret/metadata/platform/backstage", "effective": ["list", "read"]},
     {"identity": "argo-workflow", "path": "secret/data/teams/example/service", "effective": ["create", "delete", "list", "read", "update"]},
-    {"identity": "argo-workflow", "path": "secret/data/platform/example", "effective": ["create", "delete", "list", "read", "update"]}
+    {"identity": "argo-workflow", "path": "secret/data/platform/example", "effective": ["create", "delete", "list", "read", "update"]},
+    {"identity": "eso-mctl-glovo", "path": "secret/data/platform/mctl-glovo/control-caller", "effective": ["read"]},
+    {"identity": "eso-mctl-glovo", "path": "secret/metadata/platform/mctl-glovo/control-caller", "effective": ["list", "read"]},
+    {"identity": "eso-mctl-glovo", "path": "secret/data/platform/github-app", "effective": []},
+    {"identity": "eso-mctl-glovo", "path": "secret/data/platform/argocd/github-oauth", "effective": []},
+    {"identity": "eso-mctl-glovo", "path": "secret/data/teams/example/service", "effective": []}
   ]
 }

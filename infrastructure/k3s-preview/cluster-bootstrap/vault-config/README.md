@@ -488,6 +488,50 @@ Verify a tenant cannot reach another tenant's prefix:
 vault token capabilities <tenant-token> secret/data/teams/<other-tenant>/x  # → deny
 ```
 
+### Glovo C2 ESO role
+
+The Glovo C2 service (namespace `mctl-glovo`) reads `secret/platform/mctl-glovo/*`
+through its own namespaced SecretStore `mctl-glovo-vault`, not through
+`vault-backend` (mctlhq/mctl-gitops#2759). Its ServiceAccount `mctl-glovo-eso`
+exists only so ESO can request a token for it; no pod uses it.
+
+| Store | Kind | Vault role | Scope |
+|---|---|---|---|
+| `mctl-glovo-vault` (mctl-glovo ns) | SecretStore | `eso-mctl-glovo` | `secret/data/platform/mctl-glovo/*` |
+
+Policy file: `vault-policy-eso-mctl-glovo.hcl` (read on `secret/data/...`, read and
+list on `secret/metadata/...`, same capabilities as the tenant template).
+
+```bash
+vault policy write eso-mctl-glovo vault-policy-eso-mctl-glovo.hcl
+
+vault write auth/kubernetes/role/eso-mctl-glovo \
+  bound_service_account_names=mctl-glovo-eso \
+  bound_service_account_namespaces=mctl-glovo \
+  policies=eso-mctl-glovo \
+  ttl=1h
+```
+
+Same flags as the `eso-tenant-*` roles (no `audience` is set there either).
+
+**Order matters.** `external-secrets-read` now denies `secret/{data,metadata}/platform/mctl-glovo*`,
+so applying it early cuts off the live Glovo ExternalSecrets:
+
+1. Create the policy `eso-mctl-glovo` and the role `eso-mctl-glovo` (above).
+2. Merge and sync the SecretStore PR (mctlhq/mctl-gitops#2736); confirm every
+   ExternalSecret in `mctl-glovo` is `Ready` through `mctl-glovo-vault`
+   (`kubectl -n mctl-glovo get externalsecret,secretstore`; status only, never
+   read Secret data).
+3. ONLY THEN write the new `external-secrets-read`
+   (`vault policy write external-secrets-read vault-policy-external-secrets-read.hcl`).
+   Compare it with the live policy first (`vault policy read external-secrets-read`):
+   the only difference must be the two new deny blocks.
+
+Verify the split: a token from the `eso-mctl-glovo` role must not read
+`secret/data/platform/argocd/*` (nothing outside its prefix is granted), and a token
+from the `external-secrets` role must get `deny` on `secret/data/platform/mctl-glovo/x`
+(`vault token capabilities <token> secret/data/platform/mctl-glovo/x`).
+
 ## Vault Secret Structure
 
 ```
