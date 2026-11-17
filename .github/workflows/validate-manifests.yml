@@ -749,6 +749,11 @@ jobs:
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
 
+      - name: Release ledger shadow verdicts (selftest)
+        # mctlhq/mctl-api#1022 S3: allow / refuse / unknown stay distinct; a
+        # failed or malformed ledger read is unknown, never refuse or allow.
+        run: python3 scripts/release-ledger-shadow.py --selftest
+
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
 
