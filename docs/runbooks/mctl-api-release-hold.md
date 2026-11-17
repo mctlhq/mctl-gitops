@@ -203,10 +203,68 @@ refusal. Re-run the job.
 author. A human push onto an open bump PR therefore fails `validate`. So
 does a human reopening it. Let release-deploy open a new PR instead.
 
-Before switching to enforce (its own PR), both of these must hold:
+### After the fact: release-gate-watch reads the ledger (S4b, #2774)
 
-1. A live run has shown `ledger=allow` for an approved release. Until one
-   does, the OIDC reader path is unproven.
-2. `release-gate-watch.yml` reads the ledger after each push (S4b). In
-   enforce mode `diff` no longer judges a held-tag change by records, so
+On every push to `main`, `release-gate-watch.yml` runs
+`release-ledger-shadow.py watch --base <before> --head <sha>`. It finds every
+write of a ledger-held image in that push, meaning `image.tag` or
+`image.digest` moved to a version at or above `held_from`, with the policy
+read from the parent commit. It then asks the ledger whether that image was
+approved.
+
+- **shadow**: notice only, exit 0.
+- **enforce**: a write with no approval is a violation (exit 6, Telegram
+  "gate violated"). Any read that fails is unknown (exit 7, Telegram "check
+  could not run"). Unknown outranks a refusal.
+
+Three properties of this check that an operator needs to know:
+
+- **The digest comes from GHCR, not from the file.** The bootstrap file pins
+  no `image.digest`, because `release-bump-digest.py` skips bootstrap
+  templates. When the file pins none, the watch asks GHCR (anonymous token;
+  the package is public) which digest the written tag serves now, index
+  manifest types first. That is the digest the cluster pulls and the one
+  release-deploy's build pushed and the ledger binds. A registry that
+  cannot be read is unknown, never clean. If a digest is ever pinned in the
+  file, the pinned one is judged instead. One consequence: a tag that is
+  overwritten in GHCR after the push is judged by its new digest. A digest
+  that no decision binds then reads as refused, which is the safe
+  direction.
+- **Only push runs read the ledger.** mctl-api accepts the GitHub Actions
+  OIDC reader only for `push`, `workflow_dispatch` and `release` events from
+  `mctlhq/mctl-gitops` workflows on `refs/heads/main`. The daily `schedule`
+  run and pull-request runs cannot read it, so they do not try; the daily
+  `verify` is unchanged. A write is therefore judged once, on the push that
+  made it. If that run failed to read the ledger (exit 7), re-run that same
+  run: a re-run keeps the `push` event. A `workflow_dispatch` of the
+  workflow does not help, because the ledger step runs on `push` only.
+  Nothing judges that write again automatically.
+- **A past approval of the same digest still counts (stale approval).** The
+  watch asks whether a write that already happened was approved. It binds
+  repository, version and digest, but not the tag commit, and it accepts an
+  MFA approval that has since expired or been consumed, because the bump
+  being judged is what consumed it. A rejection of the digest still wins,
+  and an approval without MFA or without decision evidence does not count.
+  The gap: once a digest has been approved with MFA, a later write of that
+  same digest through a path that bypasses the gate (a P5b/P6 deploy-key
+  push, for example a rollback-and-reapply) reads as allowed. That write
+  can only deploy an image the owner already approved, so this is accepted
+  for now. Closing it needs the ledger to record which commit or PR
+  consumed the approval, so the watch can require that this push is that
+  consumer. The bump gate itself (`ledger-gate`) does not share the gap: it
+  requires a live, unconsumed decision bound to the tag commit.
+
+Before switching to enforce (its own PR), all of these must hold:
+
+1. A live run has shown `ledger=allow` for an approved release, both in
+   release-deploy's `ledger-gate` summary and in the release-gate-watch run
+   of the push that wrote the bump. Until then the OIDC reader path is
+   unproven.
+2. Done (#2774): `release-gate-watch.yml` reads the ledger after each push.
+   In enforce mode `diff` no longer judges a held-tag change by records, so
    P5b/P6 pushes would otherwise go undetected.
+3. The owner has confirmed that Vault's `github-actions` JWT role binds the
+   ref and the event. The watch's `verify` job holds `id-token: write`, and
+   it also runs on pull requests (the ledger step itself is skipped there).
+   The role's bound claims are not defined in this repository, so they could
+   not be checked from here.
