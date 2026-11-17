@@ -319,6 +319,11 @@ jobs:
         # The restore step runs against a local bare repository: every refusal
         # leaves it untouched, and each guard is removed in turn to prove a test fails.
         run: python3 tests/test_rollback_revision.py
+      - name: Promote by digest pins the preview's image
+        # verify-image and pin-image run against a local bare repository and a
+        # stub registry: every refusal leaves it untouched, each guard is
+        # removed in turn to prove a test fails.
+        run: python3 tests/test_promote_deployment.py
 
       - name: Release bump PR route (routes file, tag-only diff guard, wiring)
         # #2543 stage 1 fast track: the route decision fails closed, the guard

@@ -9,6 +9,7 @@
 template_reach:
   deploy-service: [github-actions-pat, mctl-gitops-deploy-key]
   preview-deploy: [github-actions-pat]
+  promote-deployment: [mctl-gitops-deploy-key]
   provision-database: [mctl-gitops-deploy-key]
   retire-service: [mctl-gitops-deploy-key]
   rollback-revision: [mctl-gitops-deploy-key]

@@ -1,0 +1,358 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: promote-deployment
+  annotations:
+    workflows.argoproj.io/description: |
+      Promote the image a successful preview ran to production: pin
+      image.tag together with image.digest in the service's values.yaml, push
+      it through the release gate, then run the post-sync health gate on the
+      new commit (mctlhq/mctl-api#1049, mctlhq/mctl-gitops#2652). The digest
+      comes from the preview's DeployRecord and is never a caller input; the
+      tag must still resolve to it in the registry, or nothing is written.
+      Only reachable from mctl-api behind an owner's grant.
+spec:
+  entrypoint: promote-pipeline
+  serviceAccountName: argo-workflow-sa
+  # Pod Security "restricted": this workflow runs in the tenant namespace
+  # (mctl-api operations.WorkflowNamespace), which is moving from
+  # enforce=baseline to restricted (handoff audit, block B step 3). The pod
+  # securityContext covers every container; container-level fields are not
+  # inherited from it, so podSpecPatch adds them to Argo's own init and wait
+  # containers (argoexec runs as root by default) and to main. HOME=/tmp
+  # because python, alpine/k8s and alpine/git have no passwd entry for uid
+  # 1000; steps that use ssh run mctl-workflow-tools, which has one.
+  # Templates reached through templateRef (tpl-*, the completion hook) run
+  # under this spec too.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+          - name: HOME
+            value: /tmp
+
+  arguments:
+    parameters:
+      - name: team_name
+      - name: component_name
+      # What the preview ran, read by mctl-api from the preview's DeployRecord
+      # (same tenant and service, succeeded, healthy). The tag is the name the
+      # digest was built under; production pins both.
+      - name: image_tag
+      - name: image_digest
+
+  templates:
+    - name: promote-pipeline
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health}}"
+          - name: health_url
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health_url}}"
+          - name: argo_revision
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.argo_revision}}"
+          - name: image_digest
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.image_digest}}"
+          - name: commit_sha
+            valueFrom:
+              parameter: "{{tasks.pin-image.outputs.parameters.commit_sha}}"
+      dag:
+        tasks:
+          - name: verify-image
+            template: verify-image
+          - name: pin-image
+            dependencies: [verify-image]
+            template: pin-image
+            arguments:
+              parameters:
+                - name: image_repository
+                  value: "{{tasks.verify-image.outputs.parameters.image_repository}}"
+          - name: health-gate
+            dependencies: [pin-image]
+            template: health-gate
+            arguments:
+              parameters:
+                - name: commit_sha
+                  value: "{{tasks.pin-image.outputs.parameters.commit_sha}}"
+
+    # The tag must still resolve to the digest, and the digest must exist in
+    # the registry: a record that no longer describes the registry is not a
+    # promotion. Read-only: nothing is written here.
+    - name: verify-image
+      outputs:
+        parameters:
+          - name: image_repository
+            valueFrom:
+              path: /tmp/image_repository
+      activeDeadlineSeconds: 300
+      script:
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{workflow.parameters.image_tag}}"
+          - name: PARAM_IMAGE_DIGEST
+            value: "{{workflow.parameters.image_digest}}"
+          - name: DOCKER_CONFIG_JSON
+            value: /secrets/ghcr/.dockerconfigjson
+        volumeMounts:
+          - name: ghcr-credentials
+            mountPath: /secrets/ghcr
+            readOnly: true
+        source: |
+          set -eu
+
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TAG="$PARAM_IMAGE_TAG"
+          DIGEST="$PARAM_IMAGE_DIGEST"
+
+          case "$TEAM" in "" | -* | *[!a-z0-9-]* ) echo "team_name is not a DNS label: ${TEAM}" >&2; exit 1 ;; esac
+          case "$COMPONENT" in "" | -* | *[!a-z0-9-]* ) echo "component_name is not a DNS label: ${COMPONENT}" >&2; exit 1 ;; esac
+          case "$TAG" in "" | [!A-Za-z0-9_]* | *[!A-Za-z0-9._-]* ) echo "image_tag is not an image tag: ${TAG}" >&2; exit 1 ;; esac
+          [ "${#TAG}" -le 128 ] || { echo "image_tag is longer than 128 characters" >&2; exit 1; }
+          case "$DIGEST" in sha256:*) H=${DIGEST#sha256:} ;; *) echo "image_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          case "$H" in *[!0-9a-f]*) echo "image_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          [ "${#H}" -eq 64 ] || { echo "image_digest is not sha256:<64 hex>" >&2; exit 1; }
+
+          : > /tmp/image_repository
+          git clone --filter=blob:none --no-checkout -q \
+            "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+          git checkout -q origin/HEAD -- platform-gitops/argo-workflows/scripts "${VALUES}" 2>/dev/null \
+            || { echo "ERROR: ${VALUES} not found: the service does not exist" >&2; exit 1; }
+
+          REPO=$(yq '.image.repository // ""' "${VALUES}")
+          # Only the platform's own registry namespace: a promotion does not
+          # point a service at another image.
+          case "$REPO" in "ghcr.io/${GITOPS_ORG}/${COMPONENT}") ;; *) echo "ERROR: image.repository '${REPO}' is not ghcr.io/${GITOPS_ORG}/${COMPONENT}" >&2; exit 1 ;; esac
+
+          # PROMOTE_RESOLVE overrides the resolver (tests only: nothing in
+          # this template sets it, and a caller cannot reach the pod's env).
+          RESOLVE=${PROMOTE_RESOLVE:-"sh platform-gitops/argo-workflows/scripts/check-image-user.sh resolve-digest"}
+          got=$($RESOLVE "${REPO}@${DIGEST}") || { echo "ERROR: ${REPO}@${DIGEST} does not resolve in the registry" >&2; exit 1; }
+          [ "$got" = "$DIGEST" ] || { echo "ERROR: ${REPO}@${DIGEST} resolved to '${got}'" >&2; exit 1; }
+          got=$($RESOLVE "${REPO}:${TAG}") || { echo "ERROR: ${REPO}:${TAG} does not resolve in the registry" >&2; exit 1; }
+          [ "$got" = "$DIGEST" ] \
+            || { echo "ERROR: ${REPO}:${TAG} now points at '${got}', not ${DIGEST}: the preview no longer describes the registry" >&2; exit 1; }
+          printf '%s' "$REPO" > /tmp/image_repository
+          echo "${REPO}:${TAG} is ${DIGEST}"
+      volumes:
+        - name: ghcr-credentials
+          secret:
+            secretName: ghcr-credentials
+
+    - name: pin-image
+      inputs:
+        parameters:
+          - name: image_repository
+      outputs:
+        parameters:
+          - name: commit_sha
+            valueFrom:
+              path: /tmp/commit_sha
+      script:
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        volumeMounts:
+          - name: deploy-key
+            mountPath: /secrets/deploy-key
+            readOnly: true
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{workflow.parameters.image_tag}}"
+          - name: PARAM_IMAGE_DIGEST
+            value: "{{workflow.parameters.image_digest}}"
+          - name: PARAM_IMAGE_REPOSITORY
+            value: "{{inputs.parameters.image_repository}}"
+        source: |
+          set -euo pipefail
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992).
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          TAG="$PARAM_IMAGE_TAG"
+          DIGEST="$PARAM_IMAGE_DIGEST"
+          REPO_EXPECTED="$PARAM_IMAGE_REPOSITORY"
+
+          case "$TEAM" in "" | -* | *[!a-z0-9-]* ) echo "team_name is not a DNS label: ${TEAM}" >&2; exit 1 ;; esac
+          case "$COMPONENT" in "" | -* | *[!a-z0-9-]* ) echo "component_name is not a DNS label: ${COMPONENT}" >&2; exit 1 ;; esac
+          case "$TAG" in "" | [!A-Za-z0-9_]* | *[!A-Za-z0-9._-]* ) echo "image_tag is not an image tag: ${TAG}" >&2; exit 1 ;; esac
+          [ "${#TAG}" -le 128 ] || { echo "image_tag is longer than 128 characters" >&2; exit 1; }
+          case "$DIGEST" in sha256:*) H=${DIGEST#sha256:} ;; *) echo "image_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          case "$H" in *[!0-9a-f]*) echo "image_digest is not sha256:<64 hex>" >&2; exit 1 ;; esac
+          [ "${#H}" -eq 64 ] || { echo "image_digest is not sha256:<64 hex>" >&2; exit 1; }
+          [ "$REPO_EXPECTED" = "ghcr.io/${GITOPS_ORG}/${COMPONENT}" ] \
+            || { echo "verified image repository '${REPO_EXPECTED}' is not this service's" >&2; exit 1; }
+
+          mkdir -p ~/.ssh
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # GitHub's published SSH host keys, pinned (see rollback-service).
+          cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
+          [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          GITHUB_HOST_KEYS
+          chmod 600 ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          git config --global url."ssh://git@ssh.github.com:443/".insteadOf "https://github.com/"
+
+          REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
+          VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
+
+          git clone --filter=blob:none -q "${REPO}" /tmp/mctl-gitops
+          cd /tmp/mctl-gitops
+          [ -f "${VALUES}" ] || { echo "ERROR: ${VALUES} not found: the service does not exist" >&2; exit 1; }
+
+          # The repository verified a step ago must still be the one in the
+          # values: nothing moved the service to another image in between.
+          [ "$(yq '.image.repository // ""' "${VALUES}")" = "$REPO_EXPECTED" ] \
+            || { echo "ERROR: image.repository changed since the image was verified" >&2; exit 1; }
+
+          # Release gate (mctlhq/mctl-agents#1007), the shared guard every
+          # writer calls: anything it cannot read or decide is a refusal.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
+
+          if [ "$(yq '.image.tag // ""' "${VALUES}")" = "$TAG" ] && [ "$(yq '.image.digest // ""' "${VALUES}")" = "$DIGEST" ]; then
+            echo "No changes needed (${VALUES} already pins ${TAG}@${DIGEST})"
+            git rev-parse HEAD > /tmp/commit_sha
+            exit 0
+          fi
+
+          cp "${VALUES}" /tmp/before.yaml
+          # Literal expressions; the values are loaded from the environment,
+          # never spliced into the program.
+          TAG="$TAG" DIGEST="$DIGEST" yq -i '.image.tag = strenv(TAG) | .image.digest = strenv(DIGEST)' "${VALUES}"
+
+          # The edit is image.tag and image.digest and nothing else.
+          rest() { yq -o=json 'del(.image.tag) | del(.image.digest)' "$1"; }
+          [ "$(rest /tmp/before.yaml)" = "$(rest "${VALUES}")" ] \
+            || { echo "ERROR: the edit changed more than image.tag and image.digest" >&2; exit 1; }
+          [ "$(yq '.image.tag' "${VALUES}")" = "$TAG" ] && [ "$(yq '.image.digest' "${VALUES}")" = "$DIGEST" ] \
+            || { echo "ERROR: image.tag and image.digest were not written as given" >&2; exit 1; }
+
+          git config user.email "ci@mctl.ai"
+          git config user.name "mctl-promote"
+          git add "${VALUES}"
+          git commit -q -m "chore: promote ${TEAM}/${COMPONENT} to ${TAG}@${DIGEST}"
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+          for attempt in 1 2 3; do
+            if git push -q; then break; fi
+            [ "$attempt" -lt 3 ] || { echo "ERROR: push refused 3 times" >&2; exit 1; }
+            git pull -q --rebase origin main
+            sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+          done
+          git rev-parse HEAD > /tmp/commit_sha
+          echo "Promoted ${TEAM}/${COMPONENT} to ${TAG}@${DIGEST}: $(cat /tmp/commit_sha)"
+      volumes:
+        - name: deploy-key
+          secret:
+            secretName: mctl-gitops-deploy-key
+
+    - name: health-gate
+      inputs:
+        parameters:
+          - name: commit_sha
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              path: /tmp/health-gate/health
+          - name: health_url
+            valueFrom:
+              path: /tmp/health-gate/health_url
+          - name: argo_revision
+            valueFrom:
+              path: /tmp/health-gate/argo_revision
+          - name: image_digest
+            valueFrom:
+              path: /tmp/health-gate/image_digest
+      # The script's own deadline is HG_TIMEOUT (600s) plus the stability
+      # window; this is the backstop for a hung clone or kubectl call.
+      activeDeadlineSeconds: 900
+      script:
+        # kubectl, git, jq, yq and curl: what health-gate.sh needs.
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_COMMIT_SHA
+            value: "{{inputs.parameters.commit_sha}}"
+          # The tenant pull secret, to resolve the deployed tag to a digest.
+          - name: DOCKER_CONFIG_JSON
+            value: /secrets/ghcr/.dockerconfigjson
+        volumeMounts:
+          - name: ghcr-credentials
+            mountPath: /secrets/ghcr
+            readOnly: true
+        source: |
+          set -eu
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992); the script shape-checks them again.
+          mkdir -p /tmp/health-gate
+          echo unknown > /tmp/health-gate/health
+          for f in health_url argo_revision image_digest; do : > "/tmp/health-gate/$f"; done
+
+          # Read-only and public. Blobless but with full history: the gate
+          # checks that Argo CD's revision contains the deploy's commit, and
+          # reads the service's values at that commit.
+          git clone --filter=blob:none --no-checkout -q \
+            "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          git -C /tmp/mctl-gitops checkout -q origin/HEAD -- platform-gitops/argo-workflows/scripts
+
+          sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/health-gate.sh \
+            /tmp/mctl-gitops "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME" "$PARAM_COMMIT_SHA"
+      volumes:
+        - name: ghcr-credentials
+          secret:
+            secretName: ghcr-credentials
