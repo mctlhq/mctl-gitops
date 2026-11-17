@@ -80,6 +80,7 @@ jobs:
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-portal.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-repo-binding.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-security-code-scanning.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml
             platform-gitops/argocd/templates/argocd-rbac-cm.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template

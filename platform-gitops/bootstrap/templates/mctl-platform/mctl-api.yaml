@@ -443,6 +443,23 @@ spec:
             # page disabled" at Error level; the boot is not refused.
             # Rollback: delete this line and the /deploy extra path.
             DEPLOY_APPROVAL_UI_ENABLED: "true"
+            {{- $c2 := default dict .Values.apiC2Control }}
+            {{- if $c2.enabled }}
+            # Kill switch caller (mctl-api >= 4.164.0, the kill switch client):
+            # the control endpoint of the C2 service and the file the token
+            # refresher sidecar below keeps fresh. The client re-reads the file
+            # on every call and a missing file only makes the call answer
+            # "unknown", so these two lines cannot fail a boot. Without the
+            # switch below they change nothing: the route stays dark.
+            # Rollback: set apiC2Control.enabled to false.
+            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"
+            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"
+            {{- end }}
+            {{- if and $c2.enabled $c2.killSwitch }}
+            # Turns the kill switch route on. Needs the two lines above, or the
+            # boot is refused. Rollback: set apiC2Control.killSwitch to false.
+            GLOVO_C2_KILLSWITCH_ENABLED: "true"
+            {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -657,6 +674,64 @@ spec:
               - reopened_by_user
               - fixed
               - closed_by_user
+          {{- end }}
+          {{- if $c2.enabled }}
+
+          # Token refresher for the kill switch caller. TODO(chart): the chart
+          # at the pinned revision has no extraContainers / extraVolumes /
+          # extraVolumeMounts slots (it ignores them silently). They are a
+          # separate mctl-api change; the render fails unless
+          # apiC2Control.chartSlots confirms the pin carries them.
+          #
+          # Contract (mctl-gitops#2736 consent refresher, same image, other
+          # command): signs a JWT-profile assertion (RFC 7523, iss = sub =
+          # user id, kid = key id) with KEY_FILE, exchanges it at
+          # ZITADEL_ISSUER/oauth/v2/token for ZITADEL_SCOPE, writes the access
+          # token atomically to TOKEN_FILE (mode 0644), renews at half of
+          # expires_in (the instance lifetime is 12 h) and exits non-zero if it
+          # cannot renew before expiry.
+          # The key is mounted 0444 because the chart sets no fsGroup and the
+          # kubelet writes secret files as root; it is readable by the main
+          # container too, which is the accepted shape (the key is held in this
+          # pod, mctl-gitops#2737).
+          extraContainers:
+            - name: c2-control-token-refresher
+              image: "{{ $c2.refresherImage.repository }}:{{ $c2.refresherImage.tag }}"
+              command: {{ toJson $c2.refresherImage.command }}
+              env:
+                - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
+                - {name: TOKEN_FILE, value: "/var/run/secrets/c2-control/token"}
+                - {name: KEY_FILE, value: "/var/run/secrets/c2-control-key/key"}
+                - name: ZITADEL_USER_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: user_id}}
+                - name: ZITADEL_KEY_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: key_id}}
+                - name: ZITADEL_SCOPE
+                  valueFrom: {configMapKeyRef: {name: mctl-api-c2-machine-ids, key: control_scope}}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 64Mi}
+              volumeMounts:
+                - {name: c2-control-token, mountPath: /var/run/secrets/c2-control}
+                - {name: c2-control-key, mountPath: /var/run/secrets/c2-control-key, readOnly: true}
+          extraVolumes:
+            - name: c2-control-token
+              emptyDir: {medium: Memory, sizeLimit: 1Mi}
+            - name: c2-control-key
+              secret:
+                secretName: mctl-api-c2-control-caller
+                defaultMode: 0444
+                items:
+                  - {key: key, path: key}
+          extraVolumeMounts:
+            - {name: c2-control-token, mountPath: /var/run/secrets/c2-control, readOnly: true}
           {{- end }}
 
           resources:

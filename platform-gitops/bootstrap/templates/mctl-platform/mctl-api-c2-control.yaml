@@ -1,0 +1,42 @@
+{{- /*
+The control-caller credential of the C2 kill switch client in the mctl-api pod
+(switches: apiC2Control in bootstrap/values.yaml; the sidecar and env are in
+mctl-api.yaml). Renders nothing while apiC2Control.enabled is false.
+
+Vault platform/<c2 service>/control-caller, written by the owner after
+mctlhq/mctl-gitops#2737 applied: user_id, key_id, key (the private key PEM).
+The scope comes from the ConfigMap mctl-api-c2-machine-ids (control_scope),
+which holds ids only. The Secret is separate from mctl-api-secrets so a
+missing Vault property cannot take DB_PASSWORD down with it.
+
+Network: nothing to add. The mctl-api namespace has no egress policy, and the
+peer allow rule on the C2 service side (ingress from the mctl-api pods on
+8080) is part of mctlhq/mctl-gitops#2736 (control switch).
+*/}}
+{{- $c2 := default dict .Values.apiC2Control }}
+{{- if $c2.enabled }}
+{{- if not $c2.chartSlots }}{{ fail "apiC2Control.enabled needs apiC2Control.chartSlots: the pinned mctl-api chart has no extraContainers/extraVolumes/extraVolumeMounts slots (TODO, separate mctl-api change)" }}{{ end }}
+{{- if eq $c2.refresherImage.tag "0.0.0-unreleased" }}{{ fail "apiC2Control.enabled needs a released refresher image: the tag is still the placeholder" }}{{ end }}
+{{- if not $c2.refresherImage.command }}{{ fail "apiC2Control.enabled needs refresherImage.command (the refresher image does not exist yet)" }}{{ end }}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-c2-control-caller
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-c2-control-caller
+    creationPolicy: Owner
+  data:
+    {{- range $f := list "user_id" "key_id" "key" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/mctl-glovo/control-caller
+        property: {{ $f }}
+    {{- end }}
+{{- end }}
+{{- if and $c2.killSwitch (not $c2.enabled) }}{{ fail "apiC2Control.killSwitch requires apiC2Control.enabled" }}{{ end }}
