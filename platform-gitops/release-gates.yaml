@@ -263,6 +263,22 @@ version_holds:
         grant: mctlhq/mctl-gitops#2718
         approved_by: mashkovd
         expires: 2026-11-30
+      # Fifteenth grant (owner GO in chat, 2026-11-17): 4.164.0 is 4.163.0
+      # plus the admin route for the C2 kill switch (mctlhq/mctl-api#1088,
+      # dark until its feature setting is on), the ledger kind and routes
+      # for owner release grants (S1, mctlhq/mctl-api#1090, dark behind
+      # RELEASE_GRANTS_ENABLED) and the release credential fixes. Widened
+      # after a second owner GO the same night: the fresh-MFA release
+      # approval page (S2, mctlhq/mctl-api#1093, dark behind
+      # RELEASE_APPROVAL_UI_ENABLED) and its optional Helm slot
+      # releaseApprovalUISecret (mctlhq/mctl-api#1095, empty by default,
+      # default render unchanged). Nothing in this release turns any of it
+      # on; that is a separate, owner-approved PR.
+      # Covers only the 4.164.0 tag of the release PR mctlhq/mctl-api#1092.
+      - version: "4.164.0"
+        grant: mctlhq/mctl-gitops#2729
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
