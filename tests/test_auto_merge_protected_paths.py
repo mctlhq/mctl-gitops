@@ -32,6 +32,7 @@ PROTECTED = [
     CT + "tpl-validate-tenant.yaml",
     CT + "wft-add-custom-domain.yaml",
     CT + "wft-deploy-service.yaml",
+    CT + "wft-promote-deployment.yaml",
     CT + "wft-provision-database.yaml",
     CT + "wft-remove-custom-domain.yaml",
     CT + "wft-rollback-revision.yaml",
