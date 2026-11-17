@@ -66,6 +66,10 @@ spec:
               # fresh-login decide page for agent deploy plans. Rollback:
               # delete this line together with DEPLOY_APPROVAL_UI_ENABLED.
               - /deploy
+              # Release approval page (mctlhq/mctl-api#1022, #1093): the
+              # fresh-MFA owner decision on a release.grant. Rollback: delete
+              # this line together with RELEASE_APPROVAL_UI_ENABLED.
+              - /release
             hosts:
               - host: api.mctl.ai
 
@@ -81,10 +85,11 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout turns the deploy approval page on (mctl-api#1026):
+            # This rollout turns the release approval page on (mctl-api#1022):
             # its client id and secret come from mctl-api-oidc-zitadel
-            # (mctl-gitops#2651) and are read only at container start.
-            ROLLOUT_MARKER: "2026-11-14-deploy-approval-ui"
+            # (mctl-gitops#2730) and the decider list from mctl-api-secrets,
+            # both read only at container start.
+            ROLLOUT_MARKER: "2026-11-17-release-approval-ui"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -444,6 +449,24 @@ spec:
             # page disabled" at Error level; the boot is not refused.
             # Rollback: delete this line and the /deploy extra path.
             DEPLOY_APPROVAL_UI_ENABLED: "true"
+            # Release grants (mctlhq/mctl-api#1022 S1): the release.grant
+            # ledger kind and its routes. An admin requests a grant for a
+            # version; mctl-api verifies the tag and the GHCR image itself
+            # (the package is public, so an anonymous pull token reads it).
+            # Reading grants is for admins and, later, the gitops release
+            # gate (S3). Nothing here consults them yet: release-gates.yaml
+            # still decides. Rollback: delete this line.
+            RELEASE_GRANTS_ENABLED: "true"
+            # Release approval page (mctlhq/mctl-api#1022 S2): the only place
+            # a release.grant is decided, after a fresh ZITADEL sign-in with a
+            # second factor (prompt=login, max_age=0, PKCE, amr must contain
+            # "mfa"), by a principal in RELEASE_APPROVAL_DECIDERS (Vault, via
+            # mctl-api-secrets) who is also an admin. Needs the grants flag
+            # above, SELF_URL, the releaseApprovalUISecret slot below and the
+            # /release extra path; if an input is missing the page stays off
+            # and the pod logs "release approval page disabled" at Error
+            # level. Rollback: delete this line and the /release extra path.
+            RELEASE_APPROVAL_UI_ENABLED: "true"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -557,6 +580,13 @@ spec:
           # Secret (mctl-gitops#2651). Optional refs. Chart slot from
           # mctl-api#1050 (4.159.0). Rollback: delete this line and the flag.
           deployApprovalUISecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the release approval page
+          # (mctlhq/mctl-api#1022): the confidential ZITADEL client
+          # mctl-api-release-approval that zitadel-iac writes into the same
+          # Secret (mctl-gitops#2730). Optional refs. Chart slot from
+          # mctl-api#1095 (4.164.0). Rollback: delete this line and the flag.
+          releaseApprovalUISecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
