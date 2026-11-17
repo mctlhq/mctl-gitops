@@ -66,6 +66,13 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         "          name: glovo-runtime-db-creds",
         "      - name: glovo_migrator",
         "          name: glovo-migrator-db-creds",
+        # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+        "      - host mctl-glovo glovo_c2_runtime all scram-sha-256",
+        "      - host mctl-glovo glovo_c2_migrator all scram-sha-256",
+        "      - name: glovo_c2_runtime",
+        "          name: glovo-c2-runtime-db-creds",
+        "      - name: glovo_c2_migrator",
+        "          name: glovo-c2-migrator-db-creds",
     }),
     "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml": frozenset({
         "  name: glovo-runtime-db-creds",
@@ -74,6 +81,13 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         "  name: glovo-migrator-db-creds",
         "    name: glovo-migrator-db-creds",
         "        key: platform/mctl-api/glovo-migrator-database",
+        # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+        "  name: glovo-c2-runtime-db-creds",
+        "    name: glovo-c2-runtime-db-creds",
+        "        key: platform/mctl-glovo/database-runtime",
+        "  name: glovo-c2-migrator-db-creds",
+        "    name: glovo-c2-migrator-db-creds",
+        "        key: platform/mctl-glovo/database-migrator",
     }),
     # Step Z: the approval page client in zitadel-iac.
     "platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf": frozenset({
@@ -139,6 +153,35 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '    name: mctl-api-glovo-runtime-db',
         '  name: mctl-api-glovo-runtime-db',
     }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/argo-workflows/config/image-names.txt": frozenset({
+        "grant admins mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/infra-components/data/cnpg/shared/databases.yaml": frozenset({
+        "  name: mctl-glovo-db",
+        '  name: "mctl-glovo"',
+        '  owner: "glovo_c2_migrator"',
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/release-bindings.yaml": frozenset({
+        "  ghcr.io/mctlhq/mctl-glovo: mctlhq/mctl-glovo",
+    }),
 }
 
 # Exact files whose PATH may match LEAK (the name check only). This is not an
@@ -151,6 +194,21 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
 ALLOWED_PATHS: frozenset[str] = frozenset({
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
 })
+
+
+# Files whose ALLOWED_LINES entries belong to the C2 cluster service, so the
+# self-test can prove each of them (mctlhq/mctl-glovo#11). Part 1: the
+# database, the peer policies and the release wiring.
+C2_SERVICE_FILES: tuple[str, ...] = (
+    "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/databases.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml",
+    "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml",
+    "platform-gitops/argo-workflows/config/image-names.txt",
+    "platform-gitops/release-bindings.yaml",
+)
 
 
 class Refused(Exception):
@@ -521,7 +579,27 @@ def selftest() -> int:
     ):
         add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
 
-    failed = 0
+    # The C2 cluster service entries (mctlhq/mctl-glovo#11), proven on the real
+    # ALLOWED_LINES, one file at a time and both ways: the listed line passes
+    # in its own file only, and an unlisted sibling, a whitespace change and
+    # the same line in another file all refuse.
+    unlisted_c2_files: list[str] = []
+    for rel in C2_SERVICE_FILES:
+        listed = sorted(ALLOWED_LINES.get(rel, frozenset()))
+        if not listed:
+            unlisted_c2_files.append(rel)
+            continue
+        one = next((x for x in listed if LEAK.search(x)), listed[0])
+        add(f"c2 entries: {rel}: a listed line passes", 0, put(rel, f"x: 1\n{one}\n"))
+        add(f"c2 entries: {rel}: an unlisted sibling line refuses", REFUSED,
+            put(rel, f"{one}\n  - name: glovo_unlisted_sibling\n"))
+        add(f"c2 entries: {rel}: changed whitespace refuses", REFUSED, put(rel, f" {one}\n"))
+        add(f"c2 entries: {rel}: the same line in another file refuses", REFUSED,
+            put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
+
+    failed = len(unlisted_c2_files)
+    for rel in unlisted_c2_files:
+        print(f"FAIL c2 entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
     pinned = ALLOWED_PATHS == {svc}
     failed += not pinned
     print(f"{'ok  ' if pinned else 'FAIL'} paths: ALLOWED_PATHS is exactly the one service template",

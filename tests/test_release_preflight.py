@@ -100,7 +100,7 @@ CALLERS = [("mctl-telegram", "mctl-telegram"), ("mctl-telegram", "agent-worker")
            ("mctl-academy", "mctl-academy"), ("mctl-web", "mctl-web"), ("mctl-docs", "mctl-docs"),
            ("mctl-design", "mctl-design"), ("portfolio", "portfolio"), ("seerrsense", "seerrsense"),
            ("mctl-alice", "mctl-alice"), ("mctl-api", "mctl-api"), ("mctl-agents", "mctl-agents"),
-           ("mctl-agent", "mctl-agent"), ("mctl-portal", "mctl-portal")]
+           ("mctl-agent", "mctl-agent"), ("mctl-portal", "mctl-portal"), ("mctl-glovo", "mctl-glovo")]
 table = yaml.safe_load((ROOT / BIND).read_text())["bindings"]
 check("the binding table is exactly the real callers",
       table == {f"ghcr.io/mctlhq/{i}": f"mctlhq/{r}" for r, i in CALLERS}, table)
