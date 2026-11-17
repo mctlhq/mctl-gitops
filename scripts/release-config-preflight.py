@@ -45,8 +45,9 @@ def main():
         cmd += ["--min-version", a.min_version]
     rc = subprocess.run(cmd).returncode
     if rc != 0:
-        print(f"::error::release config preflight: {IMAGE}:{tag} does not accept the configuration main renders today; "
-              "the bump is refused (fix the config first, in its own PR)", file=sys.stderr)
+        print(f"::error::release config preflight: the check of {IMAGE}:{tag} did not pass; the bump is refused. "
+              "Read the check's own line above: 'CONFIG REJECTED' means fix the config first, in its own PR; "
+              "'REGISTRY/PULL PROBLEM' or 'RUNNER PROBLEM' means nothing was evaluated, rerun the job", file=sys.stderr)
         return 1
     print(f"release config preflight: {IMAGE}:{tag} ok")
     return 0

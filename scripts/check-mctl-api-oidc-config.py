@@ -166,7 +166,7 @@ def run(cmd, **kw):
 
 def check_image(image, env, docker="docker"):
     if shutil.which(docker) is None:
-        raise Refuse(f"{docker} not found: cannot run {image}")
+        raise Refuse(f"RUNNER PROBLEM, not a config rejection: {docker} not found, cannot run {image}")
     have = run([docker, "image", "inspect", image])
     if have.returncode != 0:
         for attempt in range(1, PULL_ATTEMPTS + 1):
@@ -175,7 +175,7 @@ def check_image(image, env, docker="docker"):
                 break
             print(f"docker pull {image} failed (attempt {attempt}/{PULL_ATTEMPTS}): {pulled.stderr.strip()[-300:]}", file=sys.stderr)
             if attempt == PULL_ATTEMPTS:
-                raise Refuse(f"could not pull {image}; unknown is not ok")
+                raise Refuse(f"REGISTRY/PULL PROBLEM, not a config rejection: could not pull {image} after {PULL_ATTEMPTS} attempts; the configuration was NOT evaluated and unknown is not ok. Rerun the job; there is no skip switch")
             import time
             time.sleep(float(os.environ.get("CHECK_PULL_DELAY", "10")) * attempt)
     name = f"mctl-api-config-check-{os.getpid()}"
@@ -194,7 +194,7 @@ def check_image(image, env, docker="docker"):
     lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
     if res.returncode != 0:
         out = (res.stderr.strip() + "\n" + res.stdout.strip()).strip()
-        raise Refuse(f"mctl-api refused this configuration, or does not implement --check-config (exit {res.returncode}):\n{out[-1500:]}")
+        raise Refuse(f"CONFIG REJECTED by the image (not a registry problem), or the image does not implement --check-config (exit {res.returncode}):\n{out[-1500:]}")
     if not lines or lines[-1].strip() != OK_LINE:
         raise Refuse(f"{image} exited 0 without the line {OK_LINE!r}: it does not implement --check-config, so nothing was validated")
 
@@ -278,10 +278,10 @@ def selftest():
         assert json.loads(env["MCTL_OIDC_PROVIDERS"]) == json.loads(FIXTURE.read_text())["MCTL_OIDC_PROVIDERS"]
 
         expect("good input, image prints the ok line", g("ok"), "ok")
-        expect("image refuses the configuration", g("refuse"), "refused this configuration")
+        expect("image refuses the configuration", g("refuse"), "CONFIG REJECTED by the image")
         expect("image without the flag (boots, exit 0, no ok line)", g("old_image"), "does not implement --check-config")
         expect("ok line not last (output not trusted)", g("ok_text_in_middle"), "does not implement --check-config")
-        expect("pull fails every attempt", g("pull_fails"), "could not pull")
+        expect("pull fails every attempt (named as a registry/pull problem)", g("pull_fails"), "REGISTRY/PULL PROBLEM, not a config rejection")
         expect("docker missing", lambda: check_image("x:1", {}, docker="/nonexistent/docker"), "not found")
         expect("tag unparsable", g("ok", tag="latest"), "is not MAJOR.MINOR.PATCH")
         expect("tag with v prefix", g("ok", tag="v4.167.0"), "is not MAJOR.MINOR.PATCH")

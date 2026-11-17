@@ -33,6 +33,7 @@ WF = ROOT / ".github/workflows"
 VM = "validate-manifests.yml"
 GUARD_STEP = "mctl-api accepts the rendered OIDC configuration"
 PREFLIGHT = "release-config-preflight.py"
+EXPECTED_RUN = "python3 scripts/release-config-preflight.py"
 BUMP_STEP = {"release-deploy.yaml": "Bump image tag(s)", "gitops-bump.yaml": "Bump image tags"}
 WRAPPER = ROOT / "scripts" / PREFLIGHT
 CHECK = ROOT / "scripts/check-mctl-api-oidc-config.py"
@@ -89,8 +90,13 @@ def bump_wiring(text, bump_step):
         return [f"bump step {bump_step!r} not found"]
     if i > names.index(bump_step):
         out.append("preflight runs after the tag edit")
-    if "if" in s or s.get("continue-on-error"):
-        out.append("preflight step has if/continue-on-error")
+    if "if" in s or "continue-on-error" in s or "shell" in s:
+        out.append("preflight step has if/continue-on-error/shell (any value, expressions included)")
+    job = jobs_of(text).get("bump") or {}
+    if "continue-on-error" in job:
+        out.append("bump job has continue-on-error")
+    if str(s.get("run", "")).strip() != EXPECTED_RUN:
+        out.append(f"preflight run is not exactly {EXPECTED_RUN!r} (a swallowed failure such as `|| true`, `; true`, `set +e` or a wrapper): {s.get('run')!r}")
     e = s.get("env") or {}
     if "inputs.image_name" not in str(e.get("IMAGE_NAME")) or "inputs.image_tag" not in str(e.get("IMAGE_TAG")):
         out.append("preflight env is not the dispatch image_name/image_tag")
@@ -188,6 +194,18 @@ def main():
         must_fail(f"{f}: preflight made conditional", bump_wiring(t.replace(
             "      - name: New image accepts the rendered configuration (config preflight)\n",
             "      - name: New image accepts the rendered configuration (config preflight)\n        if: false\n"), step))
+        for label, new in (("`|| true`", EXPECTED_RUN + " || true"), ("`; true`", EXPECTED_RUN + "; true"),
+                           ("`set +e`", "set +e\n          " + EXPECTED_RUN)):
+            mt = t.replace(f"run: {EXPECTED_RUN}", "run: |\n          " + new if "\n" in new or label != "`|| true`" else f"run: {new}", 1)
+            assert mt != t, label
+            must_fail(f"{f}: preflight run swallows failure with {label}", bump_wiring(mt, step))
+        for label, line in (("continue-on-error: true", "true"), ("continue-on-error expression", "${{ always() }}"),
+                            ("continue-on-error: false string expr", "${{ inputs.image_tag == 'x' }}")):
+            mt = t.replace(f"        run: {EXPECTED_RUN}", f"        continue-on-error: {line}\n        run: {EXPECTED_RUN}", 1)
+            assert mt != t, label
+            must_fail(f"{f}: preflight step has {label}", bump_wiring(mt, step))
+        must_fail(f"{f}: preflight step has shell override", bump_wiring(t.replace(
+            f"        run: {EXPECTED_RUN}", f"        shell: bash {{0}} || true\n        run: {EXPECTED_RUN}", 1), step))
         must_fail(f"{f}: preflight moved after the tag edit", bump_wiring(
             t.replace("      - name: New image accepts the rendered configuration (config preflight)",
                       "      - name: moved\n        run: echo\n      - name: New image accepts the rendered configuration (config preflight)", 1)
