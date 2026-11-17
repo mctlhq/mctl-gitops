@@ -10,18 +10,19 @@ image:
   # Switched from nginxinc/nginx-unprivileged (1 CRITICAL: CVE-2026-111497 / brotli-libs)
   # to Chainguard Wolfi (nginx 1.31.8, 0 CVEs at all severities).
   # The digest is a single-platform linux/amd64 OCI manifest (not an index),
-  # created 2026-11-15T22:10:17Z. Kubernetes pulls by digest; the "latest"
-  # tag in the rendered ref is ignored at pull time.
-  # Retention risk (open, see PR #2744): as of 2026-11-17 "latest" already
-  # points at a newer index, so this digest is untagged on Docker Hub. It
-  # still pulled on 2026-11-17, but nothing guarantees it keeps doing so.
-  # If it is garbage-collected, a pod on a node without the image cached
-  # fails with ErrImagePull, and this ref stops working as a rollback target.
-  # Anonymous Docker Hub pull limits also apply on first pull per node.
-  # The durable fix is a mirror into an internal registry, which is an infra
-  # change and out of scope for this PR.
-  repository: docker.io/chainguard/nginx
-  tag: "latest"
+  # created 2026-11-15T22:10:17Z, and it is the image the Gate 4 scan covered.
+  #
+  # It is pulled from the GHCR mirror, not from Docker Hub. Upstream
+  # (docker.io/chainguard/nginx) publishes only "latest", which has already
+  # moved on, so Docker Hub may garbage-collect this digest.
+  # .github/workflows/mirror-image.yaml (#2758, run 44146416635) copied it byte
+  # for byte, so the mirror has the identical digest. The package is public, so
+  # the tenant needs no pull secret. Entry: platform-gitops/images/mirrors.yaml.
+  #
+  # Kubernetes pulls by digest. The tag is for humans and cannot move the
+  # pin.
+  repository: ghcr.io/mctlhq/chainguard-nginx
+  tag: "1.31.8-20261115"
   digest: "sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98"
   pullPolicy: IfNotPresent
 
