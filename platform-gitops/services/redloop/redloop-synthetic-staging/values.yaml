@@ -1,11 +1,20 @@
 # Service: redloop-synthetic-staging
 # Team: redloop
 # Chart: base-service
+#
+# Phase P2 — Chainguard Wolfi image (Gate 4 CVE remediation)
+# Scan evidence: run #44048121064 — 0 CRITICAL, 0 HIGH, CVE-2026-111497 CLEAN
+# See: .github/workflows/redloop-image-scan.yml (PR #2728, merge 1e927341)
 
 image:
-  repository: nginxinc/nginx-unprivileged
-  tag: "1.30-alpine"
-  digest: "sha256:782bb89768cc87b7f95c18b95baa1af250e5d451f26794f59363540161147c01"
+  # Switched from nginxinc/nginx-unprivileged (1 CRITICAL: CVE-2026-111497 / brotli-libs)
+  # to Chainguard Wolfi (nginx 1.31.8, 0 CVEs at all severities).
+  # Digest is immutable linux/amd64; image created 2026-11-15T22:10:17Z.
+  # tag: "latest" is the only public Chainguard tag; the digest field below
+  # provides the immutable pin — Kubernetes resolves by digest at pull time.
+  repository: docker.io/chainguard/nginx
+  tag: "latest"
+  digest: "sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98"
   pullPolicy: IfNotPresent
 
 service:
@@ -17,9 +26,12 @@ backstage:
 
 automountServiceAccountToken: false
 
+# Chainguard nginx runs as UID/GID 65532 (user: nginx, defined in /etc/passwd).
+# nginx-unprivileged used 101; updated to match the Chainguard image USER.
+# runAsNonRoot is preserved via containerSecurityContext below.
 podSecurityContext:
-  runAsUser: 101
-  runAsGroup: 101
+  runAsUser: 65532
+  runAsGroup: 65532
 
 containerSecurityContext:
   runAsNonRoot: true
@@ -28,6 +40,17 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
+
+# Chainguard nginx requires two writable paths under readOnlyRootFilesystem:
+#   /run              — pid file (/run/nginx.pid, per nginx.conf)
+#   /var/lib/nginx/tmp — nginx proxy/cache temp files (dir uid=65532, 0777 in image)
+# /tmp is kept (chart default) for any runtime temp use.
+# /var/log/nginx/{access,error}.log are symlinks to /dev/stdout and /dev/stderr
+# (verified from image layers) — no writable volume needed there.
+writablePaths:
+  - /tmp
+  - /run
+  - /var/lib/nginx/tmp
 
 resources:
   requests:
@@ -115,6 +138,10 @@ extraVolumes:
       name: redloop-synthetic-staging-conf
 
 extraVolumeMounts:
+  # Mount as nginx.default.conf to replace the Chainguard image's built-in
+  # default server block (nginx.default.conf on port 8080). If mounted as
+  # default.conf instead, both files are loaded and nginx picks nginx.default.conf
+  # first (alphabetically), causing all custom locations to 404.
   - name: nginx-conf
-    mountPath: /etc/nginx/conf.d/default.conf
+    mountPath: /etc/nginx/conf.d/nginx.default.conf
     subPath: default.conf
