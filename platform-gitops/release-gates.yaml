@@ -294,7 +294,7 @@ version_holds:
       # a commit, its workflow template is mctlhq/mctl-gitops#2734, merged).
       # Covers only the 4.165.0 tag of the release PR mctlhq/mctl-api#1097.
       - version: "4.165.0"
-        grant: mctlhq/mctl-gitops#PLACEHOLDER
+        grant: mctlhq/mctl-gitops#2745
         approved_by: mashkovd
         expires: 2026-12-01
 
