@@ -451,6 +451,18 @@ jobs:
             python:3.12-alpine sh -c 'pip install -q pyyaml &&
               python3 tests/test_preview_deploy_server_set_id.py'
 
+      - name: preview-deploy deploys values compiled from an intent
+        # mctlhq/mctl-gitops#2654: a service with no values.yaml in gitops
+        # gets a preview from server-set compiled values. Each guard (hash,
+        # existing-service refusal, image repository pin, failure cleanup,
+        # gitops_ref, size cap) is removed in turn to prove a case fails.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_compiled_values.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'pip install -q pyyaml &&
+              python3 tests/test_preview_deploy_compiled_values.py'
+
       - name: Preview ttl_hours is stamped and enforced
         # Nothing deleted expired previews before preview-reaper; a May
         # preview release was still on record in October. Runs the reaper's
