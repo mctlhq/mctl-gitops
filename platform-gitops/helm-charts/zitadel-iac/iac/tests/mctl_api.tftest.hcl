@@ -321,6 +321,14 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     target = zitadel_org.customers
     values = { id = "customers-org-id" }
   }
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "mctl-api-project" }
+  }
+  override_resource {
+    target = zitadel_machine_user.c2_consent_reader
+    values = { id = "consent-reader-user" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.mctl_api_oidc.metadata[0].name == "mctl-api-oidc-zitadel" && kubernetes_secret_v1_data.mctl_api_oidc.metadata[0].namespace == "mctl-api"
@@ -383,9 +391,15 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
   # unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf).
   assert {
     condition = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"])) == [
-      { name = "zitadel", issuer = "https://auth.mctl.ai", audiences = ["api-client-id"], customers_org_id = "customers-org-id" },
+      {
+        name              = "zitadel"
+        issuer            = "https://auth.mctl.ai"
+        audiences         = ["api-client-id"]
+        customers_org_id  = "customers-org-id"
+        subject_audiences = { "consent-reader-user" = ["mctl-api-project"] }
+      },
     ]
-    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id."
+    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id, plus the project audience for the C2 consent reader's subject only."
   }
 }
 

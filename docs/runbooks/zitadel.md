@@ -660,6 +660,48 @@ new user-creating, IdP-linking or metadata-writing RPC is a path into
 `customers` that skips the hook. SCIM is not covered by any execution:
 `customers` must not get SCIM provisioning.
 
+## C2 machine users (c2-machine-users.tf)
+
+Two machine users, one per direction of trust, each with its own JWT-profile
+key (public half in Terraform, private half held by the operator, never in
+the repository or the state):
+
+| User | Used by | Audience (`aud`) | Verified by |
+|---|---|---|---|
+| `c2-consent-reader` | the C2 service's token refresher | the MCTL API project id | mctl-api, `subject_audiences` of the `zitadel` entry (this subject only) |
+| `c2-control-caller` | mctl-api's kill switch client | the project `MCTL C2 control` id | the C2 service itself: issuer, JWKS, exact subject, audience |
+
+The ids are in ConfigMap `mctl-api/mctl-api-c2-machine-ids` (no credential;
+read it with `kubectl get cm`, never a Secret): `consent_user_id`,
+`consent_key_id`, `consent_audience`, `consent_scope`, `control_user_id`,
+`control_key_id`, `control_audience`, `control_scope`, `issuer`,
+`token_endpoint`, `jwks_url` and the key expiry dates.
+
+Token exchange (both users): sign an RS256 assertion with `iss` = `sub` = the
+user id, `aud` = `https://auth.mctl.ai`, header `kid` = the key id, lifetime
+at most one hour; POST it to `token_endpoint` with
+`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`, the assertion and
+`scope` = the user's `*_scope` value. The answer is a JWT access token
+(instance default lifetime 12 h, `expires_in`); renew at half of
+`expires_in`. Keys expire after a year (rotation: new keypair, replace
+`public_key`, store the new private key, point the consumer at the new key id).
+
+After the first apply (operator, in order):
+
+1. Read the ids: `kubectl -n mctl-api get cm mctl-api-c2-machine-ids -o yaml`.
+2. Store the consumer values in Vault (operator, not an agent): the consent
+   reader's private key, user id, key id and scope under the C2 service's
+   `consent-reader` path; the control subject and audience under its
+   `control` path; the control caller's private key where mctl-api's refresher
+   reads it.
+3. Bump `ROLLOUT_MARKER` in `bootstrap/templates/mctl-platform/mctl-api.yaml`
+   (mctl-api reads `MCTL_OIDC_PROVIDERS` at container start), in its own PR,
+   only after the Job has written the new entry.
+4. Verify without printing a token: decode the claims of a freshly minted
+   token locally and compare `iss`, `sub` and `aud` with the ConfigMap; the
+   consent token must be refused by the control route and the control token
+   by the consent route (wrong audience, 401).
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.

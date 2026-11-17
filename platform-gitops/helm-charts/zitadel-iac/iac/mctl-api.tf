@@ -314,6 +314,14 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         issuer           = "https://auth.mctl.ai"
         audiences        = [zitadel_application_api.mctl_api.client_id]
         customers_org_id = zitadel_org.customers.id
+        # A machine user signing in with its own key gets the project id in
+        # aud, not this entry's client id (docs/federation.md). Keyed by
+        # subject, so the project audience is accepted from this one user
+        # only (c2-machine-users.tf). The orchestrator DevLoop machine user
+        # is not listed here yet; see mctl-api docs/orchestrator-devloop.md.
+        subject_audiences = {
+          (zitadel_machine_user.c2_consent_reader.id) = [zitadel_project.mctl_api.id]
+        }
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).

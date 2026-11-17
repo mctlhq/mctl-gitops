@@ -81,6 +81,11 @@ image:
 #   the deploy approval page, in the MCTL API project): no new action; a
 #   create, plus an in-place update of the data of
 #   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   C2 machine users (c2-machine-users.tf: two machine users, their public
+#   keys, the control audience project, the data of
+#   mctl-api/mctl-api-c2-machine-ids): no new action; all creates, plus an
+#   in-place update of the data of mctl-api/mctl-api-oidc-zitadel
+#   (subject_audiences in the entry).
 #   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
 #   for coolify-mcp and mctl-academy, one grant of each project per tenant
 #   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel
