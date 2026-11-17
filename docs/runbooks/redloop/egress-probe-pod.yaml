@@ -1,0 +1,101 @@
+# RedLoop Gate 4 egress probe (docs/runbooks/redloop-egress-probe.md).
+#
+# NOT synced by ArgoCD: nothing under docs/ is an Application source. The
+# operator applies this by hand, once, after a separate GO, and deletes it
+# afterwards. See the runbook for the exact commands and expected outcomes.
+#
+# The pod is shaped to pass Pod Security "restricted", which redloop
+# enforces, and to stay inside the redloop quota and LimitRange. It carries
+# none of the labels any redloop NetworkPolicy selects on (in particular no
+# workflows.argoproj.io/workflow, which allow-workflow-internet-egress keys on
+# and the mctl-deny-forged-workflow-labels policy rejects). It is therefore
+# subject only to default-deny-all, the same as the synthetic-staging pod.
+#
+# The TARGET_* values are placeholders. The runbook fills them in at apply
+# time from read-only lookups, so no cluster address is committed to this
+# public repository.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redloop-egress-probe
+  namespace: redloop
+  labels:
+    app.kubernetes.io/name: redloop-egress-probe
+    app.kubernetes.io/part-of: redloop-gate4
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 300
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      # curl 8.11.1, multi-arch index digest, resolved 2026-11-17.
+      image: docker.io/curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      env:
+        - name: TARGET_KUBE_API
+          value: "__KUBE_API_CLUSTER_IP__"
+        - name: TARGET_KUBE_DNS
+          value: "__KUBE_DNS_CLUSTER_IP__"
+        - name: TARGET_CROSS_NS
+          value: "__BLACKBOX_CLUSTER_IP__:9115"
+        - name: TARGET_SAME_NS
+          value: "__REDLOOP_SVC_CLUSTER_IP__:80"
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Every check prints one line: name, curl exit code, verdict.
+          # Exit codes: 0 = connected (FAIL for the deny checks); 28 = timed
+          # out (the expected default-deny outcome); 7 = refused; 6 = DNS
+          # failure. Anything other than 28 or 6 on a deny check needs a
+          # human to look at it. A refusal means a packet reached something.
+          check() {
+            name="$1"; shift
+            curl -sS -o /dev/null --connect-timeout 5 --max-time 8 "$@" 2>/dev/null
+            rc=$?
+            case "$rc" in
+              0) v=REACHABLE ;;
+              28) v=BLOCKED ;;
+              6) v=NO_DNS ;;
+              *) v=OTHER ;;
+            esac
+            echo "probe name=$name rc=$rc verdict=$v"
+          }
+          # Control: nothing listens on loopback port 1, so this must return a
+          # fast refusal (rc=7, verdict OTHER). That proves curl runs and that
+          # the exit codes below mean what the case statement says. A 28 here
+          # would mean the timeouts, not the network, decide the results.
+          check loopback-control http://127.0.0.1:1/
+          check external-ip-https https://1.1.1.1/
+          check external-ip-http http://1.1.1.1/
+          check external-name https://example.com/
+          check kube-api "https://${TARGET_KUBE_API}:443/version" -k
+          # DNS over UDP to kube-dns. default-deny-all has no DNS exception,
+          # so this is expected to time out (rc=1). rc=0 means the pod can
+          # resolve names, which is a DNS exfiltration channel even with
+          # every other port closed.
+          timeout 8 nslookup -timeout=3 kubernetes.default.svc.cluster.local "${TARGET_KUBE_DNS}" >/dev/null 2>&1
+          rc=$?; [ "$rc" = 0 ] && v=REACHABLE || v=BLOCKED
+          echo "probe name=kube-dns-udp rc=$rc verdict=$v"
+          check cross-namespace "http://${TARGET_CROSS_NS}/"
+          check same-namespace "http://${TARGET_SAME_NS}/healthz"
+          check metadata-169 http://169.254.169.254/
+          echo "probe done"
