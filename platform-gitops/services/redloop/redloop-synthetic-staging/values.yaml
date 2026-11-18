@@ -143,6 +143,8 @@ configMaps:
           server_tokens off;
           add_header X-Content-Type-Options "nosniff" always;
           add_header X-Frame-Options "DENY" always;
+          # Permissions-Policy disables only the five features listed; features
+          # not named here keep their browser defaults.
           add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
 
           # Synthetic landing page for passive crawling
