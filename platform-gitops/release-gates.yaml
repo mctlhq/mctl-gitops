@@ -365,7 +365,7 @@ version_holds:
       # enforced mctl-api#1117). No API or workflow behaviour changes. Covers
       # only the 4.168.0 tag of release PR mctlhq/mctl-api#1113.
       - version: "4.168.0"
-        grant: mctlhq/mctl-gitops#PENDING
+        grant: mctlhq/mctl-gitops#2787
         approved_by: mashkovd
         expires: 2026-12-01
 
