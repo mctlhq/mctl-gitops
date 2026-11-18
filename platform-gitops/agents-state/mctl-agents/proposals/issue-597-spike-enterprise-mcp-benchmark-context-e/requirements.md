@@ -1,5 +1,39 @@
 # Benchmark context-efficient MCP tool exposure on real mcp.mctl.ai workloads (decision spike)
 
+## Review disposition and boundaries (2026-11-18)
+
+**CHANGES REQUESTED / RESEARCH INTAKE ONLY.** The revised GitOps
+`requirements.md`, `design.md` and `tasks.md` comprise the authorized
+research-only proposal. A normal Temporal approval is **not** authorization
+to proceed with research: it accepts the proposal and starts Tier 2.
+Therefore do not signal `approve` or run the implementer. The tools/fixtures,
+test additions, benchmark document PR and any measured execution are all
+**candidate future slices** that require separately explicit owner GO.
+This amendment of the *proposal text* does not authorize code/PR work in
+`mctl-agents`, Portal mutation or data access.
+
+Review corrections:
+- P1 scope: no implementation, documentation PR, or benchmark run under the
+  current research-only gate.
+- P1 fallback: **no automatic eager fallback** from discovery errors.
+  Authentication, policy, missing/unknown identity, catalog mismatch,
+  timeout, deny, require-approval and any unknown reason must fail closed.
+  A separately approved, typed non-security recovery may not enlarge the
+  sealed capability set, bypass audit or change actor/tenant.
+- P2 comparability: TC1, TC2 and TC3 use distinct mctl-api tool families in
+  both required arms; TC4 cross-upstream is separate and potentially
+  `not measurable` in discovery.
+- P2 trace join: require stable run/parent/child-call and policy-decision
+  identifiers plus actor, tenant, outcome and durable receipt, not only
+  `arguments_hash`. Evidence missing => `INCOMPLETE`, never PASS.
+- P2 authorization: the eligible set is independently resolved from
+  profile, tenant and policy; an oracle's `expected_capabilities` proves
+  **task correctness only**, never permission.
+- P2 adoption: no observed security/correctness regression is permissible.
+  Five runs per cell are exploratory, and not a statistically powered
+  adoption decision; insufficient confirmatory evidence => `DEFER`.
+
+
 ## Context
 
 mctlhq/mctl-agents#242 added the mctl-native `CapabilityGateway` (`orchestrator/capability_gateway.py`). With it, a run sees three gateway tools (`capability_search`, `capability_describe`, `capability_invoke`) instead of every `mcp__mctl__*` schema.
@@ -28,14 +62,12 @@ The 2026-11-18 research extension adds three things:
 
 The research must neither reopen nor mutate the Cloudflare portal, which mctlhq/.github#63 PARKed on an M8 audit-correlation failure. It must not run live probes without a separately approved experiment plan.
 
-This proposal delivers the parts an implementer can build safely and offline:
-
-- versioned task oracles;
-- run-record capture and aggregation tooling in `tools/capability_bench.py`;
-- a pre-registered decision rule;
-- the bounded experiment plan and matrices, written into the existing benchmark document.
-
-Every unmeasured cell says `NOT_RUN`. The measured runs and the posted decision are operator steps, gated on approval of that plan.
+This research-only proposal specifies a candidate future set of versioned
+task oracles, run-record schema, offline aggregation tool, a bounded
+experiment plan and matrices for the canonical benchmark document.
+**None of the target-repository changes is currently authorized.**
+Every unmeasured cell must read `NOT_RUN`. Real repetitions and the
+posted decision are later operator steps with a separate scoped GO.
 
 ## User stories
 
@@ -77,12 +109,23 @@ Every unmeasured cell says `NOT_RUN`. The measured runs and the posted decision 
 
 **Permission and audit checks**
 
-- IF any recorded tool call or invocation trace names a capability outside the task's `expected_capabilities` united with the run's eligible set, or a negative probe's excluded capability becomes visible or invokable, THEN THE SYSTEM SHALL set `permission_preserved=false` for that cell.
-- IF any invoked capability lacks a matching audit record THEN THE SYSTEM SHALL set `audit_complete=false`. The matching record is:
-  - in eager mode, a `POLICY_DECISION` line from `orchestrator/policy_checkpoint.py` `emit()`;
-  - in discovery mode, a `CAPABILITY_INVOCATION` line from `orchestrator/capability_gateway.py` `_emit_trace`.
-
-  The matching record SHALL carry a non-`absent` policy result and the run's execution context id.
+- IF any tool call or exposed capability is outside the **independently resolved
+eligible set** for the pinned identity/tenant/profile/catalog, or a denied
+probe becomes visible contrary to the sealed exposure rule or is invokable,
+THEN THE SYSTEM SHALL set `permission_preserved=false` for that cell.
+`expected_capabilities` SHALL only score task correctness; an oracle SHALL
+NEVER grant authority. Missing eligible-set evidence SHALL produce
+`UNVERIFIABLE`, never a permission PASS.
+- IF an invocation or denial lacks a unique and exact action-time audit join
+THEN THE SYSTEM SHALL set `audit_complete=false`. The required chain is
+`run_id -> parent_execution_id / parent_script_id -> child_call_id ->
+policy_decision_id -> invocation/outcome -> durable_trace_id`, with
+sealed actor/tenant, canonical argument digest, policy outcome and final
+outcome on each child. Eager `POLICY_DECISION` and discovery
+`CAPABILITY_INVOCATION` log lines are **candidate evidence sources**, not
+proof that the full chain already exists. Repeated identical hashes must
+still yield distinct child IDs. Missing, ambiguous or multiplied joins are
+`INCOMPLETE` even when tokens and correctness look good.
 
 **Compatibility and comparison**
 
@@ -109,6 +152,13 @@ Every unmeasured cell says `NOT_RUN`. The measured runs and the posted decision 
   - the Cloudflare portal configuration (`code_mode: off`);
   - every deployed service.
 - IF an experiment plan has not been approved by an operator THEN THE SYSTEM SHALL NOT execute measured model runs or live probes, and every results cell SHALL read `NOT_RUN`.
+
+**Research-only addendum:** running or changing the offline benchmark harness,
+writing fixture/test/benchmark documentation PRs, accepting the GitOps
+proposal, enabling the implementer, or auto-falling-back across an
+authorization boundary require separate authorization. Only drafting/reviewing
+the proposal text is within current scope.
+
 
 ## Out of scope
 
