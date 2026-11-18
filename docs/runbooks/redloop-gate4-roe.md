@@ -29,18 +29,30 @@ which is a separate gate.
 **PROPOSED GO-1 command** (origin path; the tester's machine, during the window only):
 
 ```bash
+set -u
+OUT="$PWD/zap-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$OUT" && chmod 0777 "$OUT"   # the image runs as uid 1000 (zap)
 kubectl -n redloop port-forward svc/redloop-redloop-synthetic-staging-base-service 18080:80 &
-PF=$!   # stop it by this PID afterwards
-docker run --rm -v "$PWD/zap:/zap/wrk" \
+PF=$!
+trap 'kill "$PF" 2>/dev/null' EXIT     # the port-forward never outlives the scan
+for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 1; done
+docker run --rm --network host -v "$OUT:/zap/wrk" \
   ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
-  zap-baseline.py -t http://host.docker.internal:18080/ -m 1 -I \
+  zap-baseline.py -t http://127.0.0.1:18080/ -m 1 -T 10 -I \
     -r report.html -J report.json \
     -z "-config spider.thread=1 -config connection.timeoutInSecs=10"
-kill "$PF"
 ```
 
-`host.docker.internal` is how Docker Desktop reaches the host's
-port-forward; on Linux add `--add-host=host.docker.internal:host-gateway`.
+The port-forward listens on the tester's loopback only, so nothing is
+exposed beyond that machine. `--network host` lets the container reach that
+loopback directly on Linux. On Docker Desktop (macOS, Windows) host
+networking must be enabled in its settings; without it, replace
+`--network host` with nothing and the target with
+`http://host.docker.internal:18080/`. `-m 1` caps the spider at one minute
+and `-T 10` caps the whole run at ten. `-I` stops warnings from failing the
+exit code, so judge the outcome from the report, not the exit status.
+Flags were checked against `zap-baseline.py -h` in the pinned image
+(offline, `--network none`).
 One spider thread against a fixture of four paths stays far below the
 5 req/s budget in section 3. The baseline scan sends no attack payloads.
 An active (full) scan is a separate approval.
