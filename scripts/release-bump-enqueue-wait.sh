@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Decide whether a release-bump/* pull request may enter the merge queue, and
-# wait until it may. Run by .github/workflows/release-bump-enqueue.yml from a
-# checkout of main, with a READ-ONLY token in GH_TOKEN; that workflow enqueues
-# with the mctl-gitops-pr App token only after this script has said ready=true.
+# wait until it may. Run by the enqueue-bump job of release-deploy.yaml and
+# gitops-bump.yaml from a checkout of main, with a READ-ONLY token in GH_TOKEN;
+# that job enqueues with the mctl-gitops-pr App token only after this script has
+# said ready=true.
 #
 #     REPO=o/r PR=N GITHUB_OUTPUT=... RUNNER_TEMP=... bash scripts/release-bump-enqueue-wait.sh
 #

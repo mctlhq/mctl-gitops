@@ -59,7 +59,7 @@ at or above 4.155.0 can be written until a reviewed PR adds an allow record.
 | P2 | `gitops-bump.yaml` (any holder of `actions: write` on mctl-gitops). `bump` `:96`, `publish-direct` `:446`, `publish-pr` `:493` | yes | same | KNOWN-ENFORCED |
 | P3 | Human PR to `main` | yes | review plus `validate` (verify runs on the PR tree) | KNOWN-ENFORCED |
 | P4 | `claude/*` PR auto-merged on a bot approval | yes | `auto-merge.yml` `protected_re` (line 82) lists the gate files and the two bump workflows; `validate` | KNOWN-ENFORCED for the gate files. Whether `mctl-api.yaml` itself is in `protected_re` was not confirmed: it is not named in the pattern, so a `claude/*` PR that only changes the tag is held back by `validate` alone |
-| P4b | `release-bump/*` PR opened by the `mctl-gitops-pr` App and enqueued by `release-bump-enqueue.yml` (called from the two bump workflows on `main`; guards in `scripts/release-bump-enqueue-wait.sh`) | yes, a tag line | App author, `auto-merge.yml` `protected_re`, diff guard (tag/digest lines only, forward moves), approval on the exact head, `validate` runs `release-gate.py verify`, route limited to `ghcr.io/mctlhq/mctl-api` in `release-bump-routes.yaml` | KNOWN-ENFORCED; used live for 4.167.0 (#2780) and 4.168.0 (#2792) |
+| P4b | `release-bump/*` PR opened by the `mctl-gitops-pr` App and enqueued by the `enqueue-bump` job of the two bump workflows on `main` (guards in `scripts/release-bump-enqueue-wait.sh`) | yes, a tag line | App author, `auto-merge.yml` `protected_re`, diff guard (tag/digest lines only, forward moves), approval on the exact head, `validate` runs `release-gate.py verify`, route limited to `ghcr.io/mctlhq/mctl-api` in `release-bump-routes.yaml` | KNOWN-ENFORCED; used live for 4.167.0 (#2780) and 4.168.0 (#2792) |
 | P5a | Argo `wft-deploy-service`, `wft-rollback-service`, `tpl-git-commit` as written | no: paths are `platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml` (`wft-deploy-service.yaml:399`, `wft-rollback-service.yaml:131`, `tpl-git-commit.yaml:342-345`); `release-gate-guard.sh outgoing` (`wft-deploy-service.yaml:457`) covers gated groups only | n/a | KNOWN-NOT-A-PATH for the template code |
 | P5b | Write deploy key `argo-workflows-bot-2026-10` (id 166128843) used outside the template code | yes: the ruleset 18465404 bypass entry (`DeployKey`, `actor_id: null`, `always`) lets it push any path to `main` with no PR and no check | none at push time; `release-gate-watch.yml` detects after the fact | **BLOCKING-UNKNOWN** until #2543 |
 | P6 | mctl-agents CWFT `commit-and-push` steps (deploy-key push to `main`) | the credential can push any path; template code scopes `git add` to `agents-state/**` | template guard only | **BLOCKING-UNKNOWN** with P5b (same credential class) |
@@ -225,7 +225,8 @@ Events caused by `GITHUB_TOKEN` start no workflow run, and that includes the
 `merge_group` event of a queue entry it created. This is what happened to
 4.167.0 (#2780) and 4.168.0 (#2792) while `auto-merge.yml` enqueued bump PRs.
 
-Since the fix, `release-bump-enqueue.yml` enqueues with the `mctl-gitops-pr`
+Since the fix, the `enqueue-bump` job of `release-deploy.yaml` and
+`gitops-bump.yaml` enqueues with the `mctl-gitops-pr`
 App token, whose events do start workflows. If an entry stalls again (a run
 from before the fix, or a regression), the remedy is a human re-enqueue of the
 same head:
@@ -240,6 +241,12 @@ gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(in
 
 Check first that `head` is the commit the approval is on. The `merge_group`
 runs start at once; the release run's `await-bump` then sees the merge.
+
+The same remedy applies when `enqueue-bump` itself goes red: a refused or
+failed App token (as on 4.169.0, #2798, when the job was still a reusable
+workflow and the environment secret arrived empty), or a bump approved more
+than 45 minutes after `publish-pr` opened it (the wait gives up; re-running
+the failed `enqueue-bump` job also works while the release run is retained).
 
 ### After the fact: release-gate-watch reads the ledger (S4b, #2774)
 

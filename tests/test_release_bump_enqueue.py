@@ -5,17 +5,21 @@ Plain script: `python3 tests/test_release_bump_enqueue.py`.
 Release-bump PRs used to be enqueued from auto-merge.yml with GITHUB_TOKEN.
 Events caused by GITHUB_TOKEN start no workflow run, merge_group included, so
 those queue entries sat in AWAITING_CHECKS until a person re-enqueued them
-(mctl-api 4.167.0 #2780, 4.168.0 #2792). release-bump-enqueue.yml now enqueues
-with the mctl-gitops-pr App token, from main, after
-scripts/release-bump-enqueue-wait.sh has judged the head. Three layers, each
-with mutants that must turn a case red:
+(mctl-api 4.167.0 #2780, 4.168.0 #2792). The enqueue-bump job of
+release-deploy.yaml and gitops-bump.yaml now enqueues with the mctl-gitops-pr
+App token, from main, after scripts/release-bump-enqueue-wait.sh has judged the
+head. It is a plain job in the release workflow: as a reusable (workflow_call)
+workflow the app-gitops-pr environment secret arrived empty (4.169.0, #2798).
+Three layers, each with mutants that must turn a case red:
   * the wait script, run for real with a fake gh: every guard auto-merge.yml
     applied (App author, head in this repository, full file list, protected
     paths, tag-only diff, approval on the exact head, green checks) refuses;
-  * the wiring of release-bump-enqueue.yml: workflow_call only, main-only
+  * the wiring of the enqueue-bump job, identical in both workflows: main-only
     environment, the App token minted after the wait and used for the one
     enqueue, pinned with expectedHeadOid;
-  * repo-wide: no workflow step enqueues with GITHUB_TOKEN.
+  * repo-wide: no workflow step enqueues with GITHUB_TOKEN, and every job that
+    mints the mctl-gitops-pr App token is a plain job in the app-gitops-pr
+    environment of a workflow that is not a workflow_call file.
 """
 import json
 import os
@@ -31,7 +35,7 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/release-bump-enqueue-wait.sh"
 WF_DIR = ROOT / ".github/workflows"
-ENQ_WF = WF_DIR / "release-bump-enqueue.yml"
+CALLERS = ("release-deploy.yaml", "gitops-bump.yaml")
 REQ = "cloudflare-plan,reserved-hosts,validate"
 HEAD = "a" * 40
 APP = "mctl-gitops-pr[bot]"
@@ -200,14 +204,24 @@ def enqueue_steps(docs):
     return out
 
 
+def on_triggers(doc):
+    on = doc.get(True, doc.get("on"))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return set(on)
+    return set(on or {})
+
+
 def wiring_cases(texts):
     """texts: {workflow file name: text}. (name, ok)."""
     docs = {fn: yaml.safe_load(t) for fn, t in texts.items()}
     out = []
     # Repo-wide: an enqueue never runs with GITHUB_TOKEN, only with an App token.
     eqs = enqueue_steps(docs)
-    out.append(("exactly one step in the repository enqueues, in release-bump-enqueue.yml",
-                [fn for fn, _, _ in eqs] == ["release-bump-enqueue.yml"]))
+    out.append(("exactly the two enqueue-bump jobs enqueue, one in each release workflow",
+                sorted(fn for fn, _, _ in eqs) == sorted(CALLERS)
+                and all(docs[fn]["jobs"].get("enqueue-bump") is job for fn, job, _ in eqs)))
     for fn, job, s in eqs:
         env = s.get("env") or {}
         tok = str(env.get("GH_TOKEN", ""))
@@ -216,72 +230,120 @@ def wiring_cases(texts):
                     m is not None and m.group(1) in app_token_step_ids(job)))
         out.append((f"{fn}: the enqueue step never names GITHUB_TOKEN or github.token",
                     not re.search(r"GITHUB_TOKEN|github\.token", str(env) + str(s.get("run", "")))))
-    doc = docs["release-bump-enqueue.yml"]
-    on = doc.get(True) or doc.get("on")
-    out.append(("release-bump-enqueue.yml is workflow_call only", isinstance(on, dict) and set(on) == {"workflow_call"}))
-    out.append(("release-bump-enqueue.yml grants nothing by default", doc.get("permissions") == {}))
-    job = doc["jobs"].get("enqueue") or {}
-    out.append(("the job runs in the main-only app-gitops-pr environment", job.get("environment") == "app-gitops-pr"))
-    out.append(("the job's GITHUB_TOKEN is read-only",
-                job.get("permissions") == {"contents": "read", "pull-requests": "read", "checks": "read"}))
-    co = step(job, uses="actions/checkout@") or {}
-    out.append(("the scripts come from main, without persisted credentials",
-                (co.get("with") or {}).get("ref") == "main" and (co.get("with") or {}).get("persist-credentials") is False))
-    wait = step(job, sid="ready") or {}
-    out.append(("the wait runs the script with the read-only GITHUB_TOKEN and no secret",
-                wait.get("run", "").strip() == "bash scripts/release-bump-enqueue-wait.sh"
-                and (wait.get("env") or {}).get("GH_TOKEN") == "${{ github.token }}"
-                and "secrets." not in str(wait) and (wait.get("env") or {}).get("PR") == "${{ inputs.pr }}"))
-    tok = step(job, sid="token") or {}
-    w = tok.get("with") or {}
-    out.append(("the App token is minted only after a ready verdict",
-                tok.get("if") == "steps.ready.outputs.ready == 'true'"
-                and job["steps"].index(tok) > job["steps"].index(wait) if tok and wait else False))
-    out.append(("the App token is scoped to mctl-gitops, contents and pull-requests write",
-                str(tok.get("uses", "")).startswith("actions/create-github-app-token@")
-                and w.get("owner") == "mctlhq" and w.get("repositories") == "mctl-gitops"
-                and {k: v for k, v in w.items() if k.startswith("permission-")} == {"permission-contents": "write", "permission-pull-requests": "write"}
-                and "GITOPS_PR_APP_PRIVATE_KEY" in str(w.get("private-key")) and "GITOPS_PR_APP_CLIENT_ID" in str(w.get("client-id"))))
-    enq = step(job, name="Enqueue") or {}
-    env = enq.get("env") or {}
-    run = enq.get("run", "")
-    out.append(("the enqueue is gated on the ready verdict and pinned to the judged head",
-                enq.get("if") == "steps.ready.outputs.ready == 'true'"
-                and "expectedHeadOid:$h" in run and '-f h="$HEAD_SHA"' in run and '-f id="$PR_ID"' in run
-                and env.get("HEAD_SHA") == "${{ steps.ready.outputs.head_sha }}"
-                and env.get("PR_ID") == "${{ steps.ready.outputs.pr_id }}"))
-    out.append(("a refused enqueue fails the job", re.search(r'was refused: \$\{out\}"\n\s*exit 1', run) is not None))
-    out.append(("no other step of the job holds a secret",
-                all("secrets." not in str(s) for s in job.get("steps", []) if s is not tok)))
+    # Repo-wide: the App key is only read by a plain job in app-gitops-pr, in a
+    # workflow that is not itself a workflow_call file. In a reusable workflow
+    # the environment secret arrived empty (#2798).
+    minters = [(fn, jn, job) for fn, doc in docs.items() for jn, job in (doc.get("jobs") or {}).items()
+               if "GITOPS_PR_APP_PRIVATE_KEY" in str(job)]
+    out.append(("both enqueue-bump jobs are among the jobs that read the App key",
+                all((fn, "enqueue-bump") in {(f, j) for f, j, _ in minters} for fn in CALLERS)))
+    for fn, jn, job in minters:
+        out.append((f"{fn}/{jn}: the job reading the App key is a plain job in app-gitops-pr, not in a workflow_call file",
+                    "uses" not in job and job.get("environment") == "app-gitops-pr"
+                    and "workflow_call" not in on_triggers(docs[fn]) and "secrets" not in job))
+    out.append(("no workflow passes secrets: inherit", not any(
+        isinstance(j, dict) and j.get("secrets") == "inherit" for d in docs.values() for j in (d.get("jobs") or {}).values())))
+    # The job itself, identical in both workflows.
+    jobs = [docs[fn]["jobs"].get("enqueue-bump") for fn in CALLERS]
+    out.append(("enqueue-bump is the same job in both release workflows", jobs[0] is not None and jobs[0] == jobs[1]))
+    for fn in CALLERS:
+        doc = docs[fn]
+        job = doc["jobs"].get("enqueue-bump") or {}
+        out.append((f"{fn}: enqueue-bump follows publish-pr in the main-only app-gitops-pr environment",
+                    job.get("needs") == "publish-pr" and job.get("if") == "needs.publish-pr.result == 'success'"
+                    and job.get("environment") == "app-gitops-pr" and "uses" not in job
+                    and on_triggers(doc) == {"workflow_dispatch"}))
+        out.append((f"{fn}: the job's GITHUB_TOKEN is read-only",
+                    job.get("permissions") == {"contents": "read", "pull-requests": "read", "checks": "read"}))
+        if "steps" not in job:
+            out.append((f"{fn}: enqueue-bump has steps", False))
+            continue
+        co = step(job, uses="actions/checkout@") or {}
+        out.append((f"{fn}: the scripts come from main, without persisted credentials",
+                    (co.get("with") or {}).get("ref") == "main" and (co.get("with") or {}).get("persist-credentials") is False))
+        wait = step(job, sid="ready") or {}
+        out.append((f"{fn}: the wait runs the script with the read-only GITHUB_TOKEN and no secret",
+                    wait.get("run", "").strip() == "bash scripts/release-bump-enqueue-wait.sh"
+                    and (wait.get("env") or {}).get("GH_TOKEN") == "${{ github.token }}"
+                    and "secrets." not in str(wait) and (wait.get("env") or {}).get("PR") == "${{ needs.publish-pr.outputs.pr }}"))
+        tok = step(job, sid="token") or {}
+        w = tok.get("with") or {}
+        out.append((f"{fn}: the App token is minted only after a ready verdict",
+                    bool(tok and wait) and tok.get("if") == "steps.ready.outputs.ready == 'true'"
+                    and job["steps"].index(tok) > job["steps"].index(wait)))
+        out.append((f"{fn}: the App token is scoped to mctl-gitops, contents and pull-requests write",
+                    str(tok.get("uses", "")).startswith("actions/create-github-app-token@")
+                    and w.get("owner") == "mctlhq" and w.get("repositories") == "mctl-gitops"
+                    and {k: v for k, v in w.items() if k.startswith("permission-")} == {"permission-contents": "write", "permission-pull-requests": "write"}
+                    and w.get("private-key") == "${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}"
+                    and w.get("client-id") == "${{ vars.GITOPS_PR_APP_CLIENT_ID }}"))
+        enq = step(job, name="Enqueue") or {}
+        env = enq.get("env") or {}
+        run = enq.get("run", "")
+        out.append((f"{fn}: the enqueue is gated on the ready verdict and pinned to the judged head",
+                    enq.get("if") == "steps.ready.outputs.ready == 'true'"
+                    and "expectedHeadOid:$h" in run and '-f h="$HEAD_SHA"' in run and '-f id="$PR_ID"' in run
+                    and env.get("HEAD_SHA") == "${{ steps.ready.outputs.head_sha }}"
+                    and env.get("PR_ID") == "${{ steps.ready.outputs.pr_id }}"))
+        out.append((f"{fn}: a refused enqueue fails the job", re.search(r'was refused: \$\{out\}"\n\s*exit 1', run) is not None))
+        out.append((f"{fn}: no other step of the job holds a secret",
+                    all("secrets." not in str(s) for s in job.get("steps", []) if s is not tok)))
+        out.append((f"{fn}: enqueue-bump is in no concurrency group", "concurrency" not in job))
     out.append(("auto-merge.yml enqueues nothing", "enqueuePullRequest" not in texts["auto-merge.yml"]))
     return out
 
 
+RD, GB = CALLERS
+REUSABLE = """name: x
+on:
+  workflow_call:
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+"""
 WIRING_MUTANTS = [
-    ("GITHUB_TOKEN back on the enqueue", "release-bump-enqueue.yml",
-     "          GH_TOKEN: ${{ steps.token.outputs.token }}", "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}"),
-    ("github.token on the enqueue", "release-bump-enqueue.yml",
-     "          GH_TOKEN: ${{ steps.token.outputs.token }}", "          GH_TOKEN: ${{ github.token }}"),
-    ("the enqueue reads a non-App step output", "release-bump-enqueue.yml",
-     "          GH_TOKEN: ${{ steps.token.outputs.token }}", "          GH_TOKEN: ${{ steps.ready.outputs.token }}"),
+    # (name, file, old, new); old None adds `new` as a whole new file.
+    ("GITHUB_TOKEN back on the enqueue", RD,
+     "          GH_TOKEN: ${{ steps.token.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}", "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PR: ${{ needs.publish-pr.outputs.pr }}"),
+    ("github.token on the enqueue", GB,
+     "          GH_TOKEN: ${{ steps.token.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}", "          GH_TOKEN: ${{ github.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}"),
+    ("the enqueue reads a non-App step output", RD,
+     "          GH_TOKEN: ${{ steps.token.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}", "          GH_TOKEN: ${{ steps.ready.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}"),
     ("enqueue back in auto-merge.yml with GITHUB_TOKEN", "auto-merge.yml",
      "      - name: Merge PR\n",
      "      - name: Enqueue\n        run: gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'\n"
      "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      - name: Merge PR\n"),
-    ("App token minted before the wait verdict", "release-bump-enqueue.yml",
+    ("App key minted in a workflow_call file", "release-bump-enqueue.yml", None, REUSABLE),
+    ("release workflow made callable", RD, "on:\n  workflow_dispatch:\n", "on:\n  workflow_call:\n  workflow_dispatch:\n"),
+    ("enqueue-bump turned back into a reusable-workflow call", GB,
+     "    runs-on: ubuntu-latest\n    environment: app-gitops-pr\n    # The wait gives up",
+     "    uses: ./.github/workflows/release-bump-enqueue.yml\n    environment: app-gitops-pr\n    # The wait gives up"),
+    ("secrets: inherit", RD, "    timeout-minutes: 50\n    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n",
+     "    timeout-minutes: 50\n    secrets: inherit\n    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n"),
+    ("App token minted before the wait verdict", RD,
      "        id: token\n        if: steps.ready.outputs.ready == 'true'\n", "        id: token\n"),
-    ("enqueue not pinned", "release-bump-enqueue.yml", '-f h="$HEAD_SHA"', '-f h=""'),
-    ("enqueue not gated", "release-bump-enqueue.yml",
+    ("enqueue not pinned", GB, '-f h="$HEAD_SHA"', '-f h=""'),
+    ("enqueue not gated", RD,
      "      - name: Enqueue the judged head with the App token\n        if: steps.ready.outputs.ready == 'true'\n",
      "      - name: Enqueue the judged head with the App token\n"),
-    ("wait step gets the App key", "release-bump-enqueue.yml",
-     "          GH_TOKEN: ${{ github.token }}\n", "          GH_TOKEN: ${{ github.token }}\n          KEY: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
-    ("pull_request trigger added", "release-bump-enqueue.yml", "on:\n  workflow_call:\n", "on:\n  pull_request_review:\n  workflow_call:\n"),
-    ("environment dropped", "release-bump-enqueue.yml", "    environment: app-gitops-pr\n", ""),
-    ("job token gets write", "release-bump-enqueue.yml",
-     "    permissions:\n      contents: read\n      pull-requests: read\n", "    permissions:\n      contents: write\n      pull-requests: write\n"),
-    ("scripts from the caller's ref", "release-bump-enqueue.yml", "          ref: main\n", "          ref: ${{ github.sha }}\n"),
-    ("refused enqueue ignored", "release-bump-enqueue.yml", 'was refused: ${out}"\n            exit 1', 'was refused: ${out}"\n            exit 0'),
+    ("wait step gets the App key", GB,
+     "        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n",
+     "        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n          KEY: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
+    ("environment dropped", RD, "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n    environment: app-gitops-pr\n",
+     "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n"),
+    ("job token gets write", GB,
+     "    timeout-minutes: 50\n    permissions:\n      contents: read\n      pull-requests: read\n",
+     "    timeout-minutes: 50\n    permissions:\n      contents: write\n      pull-requests: write\n"),
+    ("scripts from the caller's ref", RD, "          ref: main\n          persist-credentials: false\n\n      - name: Wait for the approval",
+     "          ref: ${{ github.sha }}\n          persist-credentials: false\n\n      - name: Wait for the approval"),
+    ("refused enqueue ignored", GB, 'was refused: ${out}"\n            exit 1', 'was refused: ${out}"\n            exit 0'),
+    ("the two jobs drift apart", RD, "    timeout-minutes: 50\n", "    timeout-minutes: 55\n"),
 ]
 
 
@@ -303,9 +365,14 @@ def main():
     assert not failed, f"wiring: {failed}"
     print(f"ok   {len(res)} wiring checks")
     for name, fn, old, new in WIRING_MUTANTS:
-        assert texts[fn].count(old) == 1, f"mutant anchor {name}: {texts[fn].count(old)}"
+        if old is None:
+            assert fn not in texts, f"mutant {name}: {fn} already exists"
+            mutated = new
+        else:
+            assert texts[fn].count(old) == 1, f"mutant anchor {name}: {texts[fn].count(old)}"
+            mutated = texts[fn].replace(old, new)
         try:
-            killed = any(not ok for _, ok in wiring_cases({**texts, fn: texts[fn].replace(old, new)}))
+            killed = any(not ok for _, ok in wiring_cases({**texts, fn: mutated}))
         except Exception:
             killed = True
         assert killed, f"wiring mutant survives: {name}"

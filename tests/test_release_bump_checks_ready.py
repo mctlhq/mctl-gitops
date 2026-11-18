@@ -4,7 +4,7 @@ Plain script: `python3 tests/test_release_bump_checks_ready.py`.
 
 When auto-merge.yml enqueued release-bump PRs, its step was itself a pending
 check run on the PR it waited for (mctl-gitops#2739, #2748), hence --own-check.
-The enqueue now runs from release-bump-enqueue.yml, whose wait script passes an
+The enqueue now runs in the release workflows, whose wait script passes an
 empty --own-check; that wiring, and the step that calls this script, are tested
 in tests/test_release_bump_enqueue.py. Here: the script on check-run lists, with
 mutants that must turn a case red.
