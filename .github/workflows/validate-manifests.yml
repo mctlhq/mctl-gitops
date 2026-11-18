@@ -1138,6 +1138,16 @@ jobs:
           scripts/validate-gha-expression-injection.py --selftest
           scripts/validate-gha-expression-injection.py
 
+      - name: nginx effective-config detector proves itself
+        run: |
+          set -euo pipefail
+          # Detector for features gated by the nginx advisories of 2026-11-18
+          # (docs/security/nginx-2026-11-18-inventory.md). It runs against
+          # `nginx -T` output by hand or by an operator, so CI only proves it
+          # is green on a clean input and red on every mutation, and that an
+          # unreadable or truncated input is UNVERIFIED (exit 2), never clean.
+          scripts/check-nginx-effective-config.py --selftest
+
       - name: Tenant workflow pods pass Pod Security "restricted"
         run: |
           set -euo pipefail

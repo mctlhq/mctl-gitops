@@ -19,6 +19,16 @@ updating once a fixed image is built. This is not an emergency, it is version de
   The full `nginx -T` output was not stored (it can contain secrets).
 - No restart, reload, rollout, or file change was made on any workload.
 
+## Result by image (103 distinct images)
+
+| Status | Images |
+|---|---|
+| NGINX found, VERIFIED | 6 |
+| ABSENT, VERIFIED (shell plus filesystem search) | 58 |
+| UNVERIFIED (no shell 24, completed pods 4, not probed 11) | 39 |
+
+58 includes mctl-api, which had to be re-probed after its pod was replaced during the run.
+
 ## NGINX found (6 images)
 
 | Namespace / workload | Running digest | nginx | Effective config | Status |
@@ -58,9 +68,13 @@ no exploitation conditions. NOT APPLICABLE follows from the effective
 configuration, not from a reading of each advisory's code.
 
 Re-evaluate this table when any NGINX configuration, module set, listener or
-image changes. Run `scripts/check-nginx-effective-config.py` on the
-`nginx -T` output of the changed workload: it fails on every gated feature above
-and exits 2 (UNVERIFIED) when the input is not a readable configuration.
+image changes. Run
+`scripts/check-nginx-effective-config.py -- kubectl exec POD -- nginx -T` for the
+changed workload: it fails on every gated feature above and exits 2 (UNVERIFIED)
+when the command fails, reports no "test is successful", or the dump is empty or
+truncated (unbalanced braces, no `events` or `http` block). Do not pipe into it:
+a pipe hides the producer's exit status. CI runs only its `--selftest`; the
+detector itself is run by an operator against a workload.
 
 ## Images that were not verified (39 of 103)
 

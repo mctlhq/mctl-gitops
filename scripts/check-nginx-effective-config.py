@@ -15,11 +15,17 @@ ten advisories fixed in nginx 1.31.9 / 1.30.7 (nginx.org, 2026-11-18):
   load_module              can add mail or stream behind our back
 
 Exit codes: 0 = no gated feature found, 1 = at least one found, 2 = the input
-could not be read as an nginx configuration. "Could not observe" is never
-"clean": empty input, or input with no `listen` directive, exits 2.
+could not be read as a complete nginx configuration. "Could not observe" is
+never "clean": empty input, no `listen`, no `events` or `http` block, or
+unbalanced braces (a truncated dump) all exit 2.
 
-Usage:  kubectl exec POD -- nginx -T | scripts/check-nginx-effective-config.py
+Usage (preferred, checks the command itself):
+        scripts/check-nginx-effective-config.py -- kubectl exec POD -- nginx -T
+        The command must exit 0 and report "test is successful" on stderr;
+        otherwise the result is exit 2, never clean.
+        scripts/check-nginx-effective-config.py FILE      (or stdin)
         scripts/check-nginx-effective-config.py --selftest
+A pipe from `nginx -T` hides the producer's exit status; use `--` instead.
 
 This is a config check, not a version check: a patched nginx (>= 1.31.9 or
 >= 1.30.7) makes these features safe to enable. Do not write the full `nginx -T`
@@ -82,6 +88,23 @@ def check(text):
     return findings, listens
 
 
+def incomplete(text):
+    """Return why the input cannot be a whole `nginx -T` dump, else None."""
+    depth, seen = 0, set()
+    for _, t in statements(text):
+        if t[-1] == "{":
+            depth += 1
+            seen.add(t[0])
+    opens = depth
+    closes = sum(re.sub(r"#.*$", "", l).count("}") for l in text.splitlines())
+    if opens != closes:
+        return "unbalanced braces (%d open, %d close): truncated dump" % (opens, closes)
+    for need in ("events", "http"):
+        if need not in seen:
+            return "no %s block: not a complete nginx -T dump" % need
+    return None
+
+
 def run(text):
     if not text.strip():
         print("UNVERIFIED: empty input, nothing was observed", file=sys.stderr)
@@ -91,9 +114,29 @@ def run(text):
         print("UNVERIFIED: no listen directive found; not an nginx -T dump",
               file=sys.stderr)
         return 2
+    why = incomplete(text)
+    if why:
+        print("UNVERIFIED: " + why, file=sys.stderr)
+        return 2
     for n, what in findings:
         print("line %d: %s" % (n, what))
     return 1 if findings else 0
+
+
+def run_command(cmd):
+    import subprocess
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("UNVERIFIED: command failed to run: %s" % e, file=sys.stderr)
+        return 2
+    if r.returncode != 0:
+        print("UNVERIFIED: command exited %d" % r.returncode, file=sys.stderr)
+        return 2
+    if "test is successful" not in r.stderr:
+        print("UNVERIFIED: no 'test is successful' on stderr", file=sys.stderr)
+        return 2
+    return run(r.stdout)
 
 
 CLEAN = """
@@ -139,6 +182,26 @@ def selftest():
     }
     for name, line in mutations.items():
         expect("mutation:" + name, CLEAN.replace("listen 8080;", line + " listen 8080;"), 1)
+    expect("only-listen", "listen 8080;", 2)
+    expect("truncated", CLEAN.rstrip().rstrip("}"), 2)
+    expect("no-events", CLEAN.replace("events { worker_connections 1024; }", ""), 2)
+    py = sys.executable
+
+    def cmd(out, err, rc):
+        code = "import sys;sys.stdout.write(%r);sys.stderr.write(%r);sys.exit(%d)" % (out, err, rc)
+        return [py, "-c", code]
+
+    for name, c, rc in (
+        ("cmd-ok", cmd(CLEAN, "test is successful", 0), 0),
+        ("cmd-finding", cmd(CLEAN.replace("listen 8080;", "listen 8080 http2;"), "test is successful", 0), 1),
+        ("cmd-nonzero", cmd(CLEAN, "test is successful", 1), 2),
+        ("cmd-no-success-line", cmd(CLEAN, "", 0), 2),
+        ("cmd-missing", ["/nonexistent/nginx-binary"], 2),
+    ):
+        got = run_command(c)
+        if got != rc:
+            ok = False
+            print("SELFTEST FAIL: %s: rc %d, want %d" % (name, got, rc), file=sys.stderr)
     expect("mail-block", CLEAN + "mail { server { listen 25; } }", 1)
     expect("stream-block", CLEAN + "stream { server { listen 53; } }", 1)
     print("selftest: %s" % ("ok" if ok else "FAILED"))
@@ -148,5 +211,7 @@ def selftest():
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    if "--" in sys.argv:
+        sys.exit(run_command(sys.argv[sys.argv.index("--") + 1:]))
     src = open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()
     sys.exit(run(src))
