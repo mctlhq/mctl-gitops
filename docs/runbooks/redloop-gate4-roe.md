@@ -540,6 +540,465 @@ cat "$CHK"
 case "$V" in PASS) exit 0 ;; FAIL) exit 4 ;; *) exit 5 ;; esac
 ```
 
+## 12. GO-2: controlled public exposure and passive edge baseline (PROPOSED)
+
+**Status: PROPOSED, not approved.** Nothing in this section is authorised
+until the operator approves it in this PR and then gives a separate GO-2
+EXECUTE decision. Active DAST, WAF bypass and the production pentest stay out
+of scope.
+
+**Why.** GO-1 and GO-1b tested the application through the origin path. They
+cannot see the edge: Cloudflare TLS, the HTTP-to-HTTPS redirect, the missing
+HSTS header (a seeded gap) and the Traefik route. GO-2 opens the Ingress for
+one short window, runs one passive baseline through the edge, and closes the
+Ingress again.
+
+### Window and absolute deadline
+
+| Field | Value |
+|---|---|
+| Approved period | **PROPOSED: operator to set** `P` (start) and the **absolute deadline `D` (UTC)**, with `D - P` at most **60 minutes** |
+| Exposure | starts when the Ingress PR (#2799) is synced, never before `P`; must end by `D` |
+| Scan | the script refuses to start later than `D - 35 min` and stops itself at `D - 25 min` |
+| Tester / contact | **PROPOSED:** the platform owner; operator Telegram |
+| Scanner IP | the tester's egress IP, recorded privately, never in this repository |
+
+The merge queue took 10-20 minutes per PR on 2026-11-18. That is an
+observation, not a guarantee. If #2799 has not synced by `P + 25 min`, the
+scan cannot start, and the window closes without a scan (step 5).
+
+### Timeline
+
+| Step | Latest time | Done when |
+|---|---|---|
+| 1. `redloop-waf-verify` dispatched (read-only); GO-1b PASS on file; preconditions below hold | before `P` | green run within 24 h of step 2 |
+| 2. Enqueue #2799 | at `P`, not before | merged with a merge commit |
+| 3. Prepare the revert PR at once: `git revert -m 1 <merge sha>`, pushed and opened, CI running | right after step 2 | PR open |
+| 4. Edge preflight (below) | after Argo CD sync | all checks pass, else go to step 6 |
+| 5. Passive edge baseline (script below) | start by `D - 35 min` | script exits; it stops itself at `D - 25 min` |
+| 6. Enqueue the revert | right after step 5, **at the latest `D - 25 min`** | enqueued |
+| 7. Verify closure | before `D - 5 min` | all closure checks below pass |
+| 8. Fallback: Cloudflare kill switch | **at `D - 5 min` if step 7 has not passed** | the edge answers 403 for the host |
+| 9. Close-out | after step 7 (or 8) | all close-out checks below pass |
+| 10. Edge cache expiry check | at `D + 125 min` | no seed path returns the fixture from the edge (below) |
+
+**Closure means verified, not enqueued.** Enqueueing the revert is not
+closure. Closure needs **all** of:
+- the revert merged and Argo CD `Synced`/`Healthy` on that revision;
+- no Ingress and no Middleware in namespace `redloop` (read-only `kubectl get`);
+- `https://staging-redloop.mctl.ai/healthz` no longer answering 200 from the
+  fixture (Traefik's 404, or 403 if the kill switch is on).
+
+**The edge cache outlives the Ingress.** The zone uses Cloudflare's default
+caching (cache level standard, no cache rule for this host), and the fixture
+sends no `Cache-Control`. Cloudflare therefore caches `/static/app.js` and
+`/robots.txt` for up to 120 minutes after a 200 response, and 404 for 3
+minutes. Removing the Ingress does not evict them. Every copy was filled while
+the origin was reachable, that is no later than closure, so none can be served
+after `D + 120 min`. Step 10 checks this. No purge is planned: it would be a
+Cloudflare change outside this approval, and the cached content is the static
+synthetic text listed under 10015 below. If the operator wants the copies gone
+sooner, a URL purge needs its own decision.
+
+**Fallback (step 8).** The fast path of section 6 (an emergency toggle of
+`block_staging_redloop_emergency`) is used if closure is not verified 5
+minutes before `D`. It is the already authorised emergency control, not a
+routine one. Afterwards, a Terraform reconciliation PR and a Cloudflare Apply
+follow, and the revert still has to land.
+
+**The rollback was validated before activation.** On a simulated local merge
+of #2799 (2026-11-18), `git revert -m 1` restored `main`'s tree exactly, and
+the render then contained no Ingress and no Middleware.
+
+### Preconditions (all must hold at step 2)
+
+1. GO-1b is PASS, with a sanitized summary in #2769.
+2. This section is approved and merged.
+3. The operator has accepted the separate public-exposure risk assessment, which is held privately. The acceptance that covers the origin windows does not cover public exposure.
+4. `redloop-waf-verify` is green within 24 h, and the kill switch rule is present and disabled.
+5. The image digest and config checksum match #2796. `probe_success` = 1, no RedLoop alerts, no unexpected restarts, Argo CD Synced/Healthy, no Ingress yet.
+6. The Security Events decision below is recorded.
+7. The operator contact is reachable for the whole period, including the kill switch fallback.
+
+### Edge preflight (step 4)
+
+- The Certificate `redloop-synthetic-staging-tls` is `Ready`, issued by `letsencrypt-prod`.
+- The Ingress names only `staging-redloop.mctl.ai` and references `redloop-redloop-staging-ratelimit@kubernetescrd`. The Middleware exists with `average 10, burst 20`.
+- `https://staging-redloop.mctl.ai/healthz` returns 200 through Cloudflare.
+- The in-cluster `redloop-staging-healthz` probe reads 1.
+
+**The RedLoop probe stays on the in-cluster path.** `RedLoopStagingDown`
+fires per instance after 2 minutes. An edge target would fail while the
+certificate is being issued and again during the revert, so it would trip a
+stop condition on every activation and every rollback. Instead, the script
+watches the edge `/healthz` itself during the scan.
+
+### Request rate: what is enforced, and when
+
+| Control | What it does | Real time? |
+|---|---|---|
+| ZAP rate-limit rule, 4 req/s | enforces the scanner's budget for spidered and scanned requests | yes, enforced |
+| Seed pacing in the hook, about 1 req/s | the five seed requests go through `access_url`, which the rate-limit rule did not throttle in GO-1b (all five fell in one second, exactly at the budget). The hook now waits 1 s between them | yes |
+| Live watch in the script (every 5 s) | stops ZAP when the scanner exceeds 5 req/s (FAIL), or when all traffic to the origin does (stop condition, INCONCLUSIVE) | yes, within about 5 s |
+| Post-scan check of the full origin log | the evidence on record; fails closed | no, after the scan |
+| Traefik Middleware, 10 req/s per client and replica | a backstop only. Verified by configuration, **not** by a burst test, which would be an active test | yes, but not the budget |
+
+The scanner sends a unique User-Agent (`RedLoop-GO2-ZAP/<run>`), so the
+origin log tells its requests apart from unrelated public clients. Those are
+counted separately and kept privately. `zap-baseline.py` also sends one
+reachability check with a `python-requests` User-Agent, which counts as
+unrelated.
+
+### Stop conditions
+
+Section 5 applies in full. In addition, stop the scan at once and go to step 6
+(or step 8 if it is urgent) if any of these happen:
+
+1. the edge `/healthz` fails twice in a row, or the edge answers 5xx (for example 526, an origin certificate error);
+2. the scanner, or all traffic together, exceeds 5 req/s in the origin log;
+3. the live origin log cannot be read (the rate is no longer observable);
+4. any Traefik or `PublicEndpointDown` alert fires for another host;
+5. the scanner requests anything outside `staging-redloop.mctl.ai`;
+6. `D - 25 min` is reached.
+
+Conditions 1, 2, 3 and 6 are enforced by the script itself.
+
+### Passive edge baseline (step 5)
+
+Only passive rules run: no active scan, no fuzzing, no WAF bypass (section 8
+stays not approved). Five seed paths are used, as in GO-1b.
+
+| Check | Required for PASS | Otherwise |
+|---|---|---|
+| Seeded controls | 10038 (CSP) **and** 10035 (HSTS) reported on `/` | INCONCLUSIVE |
+| Accepted findings | 90004, 10049 and 10015. All optional. 10015 is accepted for this static synthetic fixture only (operator decision 2026-11-18, below) | - |
+| Any other finding | none. A header that Cloudflare adds or changes counts too, until the operator has classified it | FAIL, for review |
+| HTTP to HTTPS | `http://` redirects to `https://` (Always Use HTTPS) | FAIL |
+| Certificate | the edge certificate verifies | unverified: ABORT before the scan, or INCONCLUSIVE |
+| TLS 1.1 | refused **by the server**, shown by a `protocol_version` alert with no cipher negotiated | accepted: FAIL. Client cannot offer TLS 1.1, or unknown: INCONCLUSIVE |
+| HSTS at the edge | absent, as seeded: the zone sets no HSTS | present: INCONCLUSIVE |
+| Coverage | all five seed paths in ZAP's site tree, and in the origin log as scanner requests | INCONCLUSIVE |
+| Rate | scanner requests present in the full origin log, at most 5 req/s | missing: INCONCLUSIVE; over 5: FAIL |
+| Evidence | report present and parsing, ZAP exited 0 | INCONCLUSIVE |
+
+A zero ZAP exit code alone is never PASS. Exit codes: 0 PASS, 4 FAIL,
+5 INCONCLUSIVE, 1 ABORT (nothing scanned).
+
+**10015 (Re-examine Cache-control Directives): accepted for this fixture
+only.** ZAP raises it on HTTPS responses without `Cache-Control`. The operator
+accepted it on 2026-11-18 as an optional, documented finding for this static
+synthetic fixture alone. The ZAP rule is not disabled: it still runs, and the
+validator only lists it as optional. Every response of the fixture is a fixed
+string from this repository's values file: an HTML title page, a health JSON,
+`robots.txt`, one line of JavaScript, and `Not Found`. None sets a cookie or
+depends on the requester, so caching cannot expose anything sensitive or
+user-specific. The acceptance does not carry over to any other host.
+
+**The TLS 1.1 check needs a client that can offer TLS 1.1**, such as Homebrew
+OpenSSL with `-cipher DEFAULT:@SECLEVEL=0`. `OPENSSL` points the script at
+it. A client that cannot offer TLS 1.1 is reported as such. That result is
+INCONCLUSIVE and is never counted as a server refusal.
+
+**Rehearsal (local only, 2026-11-18; the real hostname was never contacted).**
+- The pinned nginx image served the #2796 configuration over TLS, using a
+  local CA, on an internal Docker network with no route out.
+- ZAP ran only on that network, under the fixture's name.
+- Host-side `curl` and `openssl` were pinned to loopback.
+- A separate local OpenSSL server stood in for an edge that accepts TLS 1.1.
+
+| # | Scenario (local fixture) | Expected | Got |
+|---|---|---|---|
+| 1 | #2796 config, redirect, trusted cert, TLS 1.1 refused, no HSTS | PASS | PASS (exit 0). Seeds one per second; scanner max 3 req/s, all traffic 4 |
+| 2 | HSTS present at the edge | INCONCLUSIVE | INCONCLUSIVE (5): HSTS present, 10035 not reported |
+| 3 | edge accepts TLS 1.1 (separate OpenSSL server) | FAIL | FAIL (4): `tls11=accepted` |
+| 4 | client cannot offer TLS 1.1 (no `@SECLEVEL=0`) | INCONCLUSIVE | INCONCLUSIVE (5): `tls11=client_cannot_offer`, not counted as a refusal |
+| 5 | `http://` served, not redirected | FAIL | FAIL (4) |
+| 6 | pre-#2796 config (no hardening headers) | FAIL | FAIL (4): 10020, 10021, 10036 unexpected |
+| 7 | origin log unreadable | INCONCLUSIVE | INCONCLUSIVE (5): live stream lost, ZAP stopped within one tick |
+| 8 | edge certificate not trusted | ABORT | ABORT (1), ZAP not started |
+| 9 | ZAP fails, no report | INCONCLUSIVE | INCONCLUSIVE (5) |
+| 10 | burst of 30 req/s with the scanner User-Agent | FAIL | FAIL (4): live watch stopped ZAP |
+| 11 | burst of 30 req/s from an unrelated client | INCONCLUSIVE | INCONCLUSIVE (5): stopped, counted as unrelated, not as scanner |
+| 12 | less than 35 min to `D` | ABORT | ABORT (1), nothing scanned |
+| 13 | edge reports `cf-cache-status: HIT` | PASS with notes | PASS (0); both cacheable paths recorded as cached, for the close-out |
+
+**Request rate in the rehearsal.** The five seeds reached the origin one per
+second in every complete run, for example `/` at :14, `/robots.txt` at :15,
+`/healthz` at :16, `/static/app.js` at :17 and `/does-not-exist` at :18. The
+spider phase that followed peaked at 3-4 req/s under the 4 req/s rule. No
+complete run went above 4 req/s for the scanner.
+
+In every scenario the report directory was `0700`, and no ZAP container or
+log stream was left running.
+
+**Defects found and fixed before this PR:**
+1. `s_client` prints `Protocol: TLSv1.1` even when the handshake fails. Only
+   a negotiated cipher now counts as accepted.
+2. 10015 appears on HTTPS only. It is now accepted, as described above.
+3. GO-1b sent the five seeds within one second. The hook now paces them at
+   about 1 req/s.
+4. The script now records `cf-cache-status` for the two cacheable paths, so
+   the close-out knows what the edge holds.
+
+```bash
+#!/usr/bin/env bash
+# GO-2 passive edge baseline. Run on the tester's machine, inside the approved
+# exposure window only, after the Ingress is on and the edge preflight passed.
+set -euo pipefail
+umask 077
+IMG=ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+DEP=deploy/redloop-redloop-synthetic-staging-base-service
+HOST=staging-redloop.mctl.ai
+URL="https://$HOST"
+OPENSSL="${OPENSSL:-openssl}"       # an OpenSSL able to offer TLS 1.1 (checked below)
+# Absolute exposure deadline (UTC), from the operator's approval. The scan must
+# end early enough to leave 25 minutes for closing the exposure.
+DEADLINE="${GO2_DEADLINE:?set GO2_DEADLINE to the approved deadline, e.g. 2026-11-20T10:45:00Z}"
+epoch() { python3 -I -c 'import sys,datetime;print(int(datetime.datetime.strptime(sys.argv[1],"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()))' "$1"; }
+DL=$(epoch "$DEADLINE")
+STOP_AT=$(( DL - 25*60 ))           # scan is stopped here at the latest
+[ "$(date +%s)" -le $(( DL - 35*60 )) ] || { echo "ABORT: less than 35 min to the deadline; scan not started" >&2; exit 1; }
+
+RUN=$(date -u +%Y%m%dT%H%M%SZ)
+UA="RedLoop-GO2-ZAP/$RUN"           # marks the scanner's requests in the origin log
+WUA="RedLoop-GO2-watch/$RUN"        # the tester's own health and TLS requests
+ZNAME="redloop-go2-zap-$RUN"
+OUT="$HOME/.local/share/mctl-forensics/redloop-go2-$RUN"
+mkdir -p -m 0700 "$OUT"             # private: reports never leave this directory
+START=$(date -u +%FT%TZ)
+
+cat >"$OUT/seed_hook.py" <<'HOOK'
+import time
+
+SEEDS = ["", "robots.txt", "healthz", "static/app.js", "does-not-exist"]
+
+def zap_started(zap, target):
+    # access_url is not throttled by ZAP's rate-limit rule (GO-1b sent all five
+    # seeds within one second), so the hook paces itself at about 1 req/s.
+    base = target.rstrip("/") + "/"
+    for i, path in enumerate(SEEDS):
+        if i:
+            time.sleep(1.0)
+        zap.core.access_url(url=base + path, followredirects=False)
+
+def zap_pre_shutdown(zap):
+    with open("/zap/wrk/zap-urls.txt", "w") as f:
+        f.write("\n".join(zap.core.urls()) + "\n")
+HOOK
+
+cat >"$OUT/validate.py" <<'PY'
+import json, re, sys
+
+report, urls, access, ua = sys.argv[1:5]
+BASE = "https://staging-redloop.mctl.ai"
+SEEDS = ["/", "/robots.txt", "/healthz", "/static/app.js", "/does-not-exist"]
+REQUIRED = {"10038": "/", "10035": "/"}  # seeded CSP and HSTS gaps: detection controls
+OPTIONAL = {"90004", "10049", "10015"}  # 10015: informational, HTTPS only; accepted as not applicable
+lines = []
+
+def path_of(uri):
+    return (uri[len(BASE):] or "/") if uri.startswith(BASE) else uri
+
+try:
+    sites = json.load(open(report))["site"]
+except Exception as e:
+    sites = None
+    lines.append(f"INCONCLUSIVE: report.json unreadable ({type(e).__name__})")
+try:
+    zap_paths = {path_of(u.strip()) for u in open(urls) if u.strip()}
+except OSError:
+    zap_paths = None
+    lines.append("INCONCLUSIVE: ZAP URL list missing")
+try:
+    scanner_log = [l for l in open(access) if ua in l]
+except OSError:
+    scanner_log = None
+    lines.append("INCONCLUSIVE: origin access log missing")
+
+for p in SEEDS:
+    if zap_paths is not None and p not in zap_paths:
+        lines.append(f"INCONCLUSIVE: seed path {p} not in ZAP's site tree")
+    pat = re.compile(r'"GET ' + re.escape(p) + r' HTTP/')
+    if scanner_log is not None and not any(pat.search(l) for l in scanner_log):
+        lines.append(f"INCONCLUSIVE: seed path {p} not in the origin log as a scanner request")
+
+if sites is not None:
+    found = {}
+    for site in sites:
+        for a in site.get("alerts", []):
+            entry = found.setdefault(a["pluginid"], [a.get("name", ""), set()])
+            entry[1].update(path_of(i.get("uri", "")) for i in a.get("instances", []))
+    for pid, (name, paths) in sorted(found.items()):
+        where = " ".join(sorted(paths))
+        if pid in REQUIRED or pid in OPTIONAL:
+            lines.append(f"OK: {pid} {name} on {where}")
+        else:
+            lines.append(f"FAIL: unexpected finding {pid} {name} on {where}")
+    for pid, path in REQUIRED.items():
+        if path not in found.get(pid, ["", set()])[1]:
+            lines.append(f"INCONCLUSIVE: seeded control {pid} not reported on {path}")
+
+print("\n".join(lines))
+PY
+
+CHK="$OUT/checks.txt"; : >"$CHK"
+LF=""
+cleanup() {
+  docker kill "$ZNAME" >/dev/null 2>&1 || true
+  [ -z "$LF" ] || kill "$LF" 2>/dev/null || true
+  chmod -R go-rwx "$OUT" || true
+}
+trap cleanup EXIT INT TERM
+
+# Fail closed: the edge must answer /healthz with 200 within 20 s, or no scan.
+ready=0
+for _ in $(seq 1 20); do
+  if curl -fsS -o /dev/null --max-time 5 -A "$WUA" "$URL/healthz"; then ready=1; break; fi
+  sleep 1
+done
+[ "$ready" = 1 ] || { echo "ABORT: edge not ready (or certificate not trusted); ZAP not started" >&2; exit 1; }
+
+# Edge TLS and HTTPS checks, recorded privately.
+{
+  echo "http_redirect=$(curl -sS -o /dev/null --max-time 5 -A "$WUA" -w '%{http_code} %{redirect_url}' "http://$HOST/" 2>&1)"
+  if curl -fsS -o /dev/null --max-time 5 -A "$WUA" "$URL/healthz" 2>/dev/null; then echo "cert=verified"; else echo "cert=failed"; fi
+  echo "hsts_header=$(curl -sS -o /dev/null -D - --max-time 5 -A "$WUA" "$URL/" | tr -d '\r' | grep -ci '^strict-transport-security:' || true)"
+} >"$OUT/tls.txt"
+# TLS 1.1: only a protocol_version alert from the server counts as refused. A
+# client that cannot offer TLS 1.1 at all proves nothing (INCONCLUSIVE).
+S11=$("$OPENSSL" s_client -connect "$HOST:443" -servername "$HOST" -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0' </dev/null 2>&1 || true)
+printf '%s\n' "$S11" >"$OUT/tls11-handshake.txt"
+# s_client prints "Protocol: TLSv1.1" even when the handshake fails, and labels
+# a TLS 1.1 session's cipher "TLSv1.0". With -tls1_1 forced, any negotiated
+# cipher (not "(NONE)") means the server accepted TLS 1.1.
+if printf '%s' "$S11" | grep -Eq '^New, [^,]+, Cipher is [A-Z0-9]'; then echo "tls11=accepted"
+elif printf '%s' "$S11" | grep -qi 'alert protocol version' && printf '%s' "$S11" | grep -q 'Cipher is (NONE)'; then echo "tls11=refused_by_server"
+elif printf '%s' "$S11" | grep -Eqi 'no protocols available|unsupported protocol|unknown option'; then echo "tls11=client_cannot_offer"
+else echo "tls11=unknown"; fi >>"$OUT/tls.txt"
+cat "$OUT/tls.txt"
+grep -q "^http_redirect=30[178] https://$HOST/" "$OUT/tls.txt" || echo "FAIL: http:// is not redirected to https://" >>"$CHK"
+grep -q '^cert=verified' "$OUT/tls.txt" || echo "INCONCLUSIVE: edge certificate not verified" >>"$CHK"
+case "$(grep '^tls11=' "$OUT/tls.txt")" in
+  tls11=refused_by_server) ;;
+  tls11=accepted) echo "FAIL: edge accepts TLS 1.1" >>"$CHK" ;;
+  *) echo "INCONCLUSIVE: TLS 1.1 rejection not shown (client limitation or unknown)" >>"$CHK" ;;
+esac
+grep -q '^hsts_header=0' "$OUT/tls.txt" || echo "INCONCLUSIVE: HSTS present at the edge, so the seeded gap cannot be detected" >>"$CHK"
+
+# Enforced budget: ZAP's own rate limiter, 4 req/s, one rule for every host.
+RL="-config network.ratelimit.rules.rule(0).description=redloop-budget"
+RL+=" -config network.ratelimit.rules.rule(0).enabled=true"
+RL+=" -config network.ratelimit.rules.rule(0).matchStr=.*"
+RL+=" -config network.ratelimit.rules.rule(0).regex=true"
+RL+=" -config network.ratelimit.rules.rule(0).reqsPerSec=4"
+RL+=" -config network.ratelimit.rules.rule(0).groupBy=rule"
+
+# Live origin log for the real-time watch below. The post-scan check further
+# down re-reads the full log independently.
+kubectl -n redloop logs -f "$DEP" --since=5s >"$OUT/origin-live.log" 2>"$OUT/origin-live.err" &
+LF=$!
+
+docker run --rm --name "$ZNAME" -v "$OUT:/zap/wrk" "$IMG" \
+  zap-baseline.py -t "$URL/" -m 1 -T 10 -I \
+    --hook=/zap/wrk/seed_hook.py \
+    -r report.html -J report.json \
+    -z "-config spider.thread=1 -config connection.timeoutInSecs=10 -config connection.defaultUserAgent=$UA $RL" \
+  >"$OUT/zap.log" 2>&1 &
+ZP=$!
+
+# Real-time watch, every 5 s, while ZAP runs. It stops ZAP at once when:
+#   - the scanner itself exceeds 5 req/s in the live origin log  -> FAIL
+#   - all traffic together exceeds 5 req/s (stop condition)       -> INCONCLUSIVE
+#   - the live log stream is lost: rate unobservable              -> INCONCLUSIVE
+#   - the edge /healthz fails twice in a row                       -> INCONCLUSIVE
+#   - the scan would run into the closing time before the deadline -> INCONCLUSIVE
+persec() { awk '{ if (match($0, /\[[^]]+\]/)) print substr($0, RSTART+1, 20) }' | sort | uniq -c | sort -rn | awk 'NR==1 { print $1 }'; }
+STOPPED=""; HFAIL=0; TICK=0
+while kill -0 "$ZP" 2>/dev/null; do
+  sleep 5; TICK=$((TICK+1))
+  if ! kill -0 "$LF" 2>/dev/null; then STOPPED="INCONCLUSIVE: live origin log stream lost; scan stopped"; break; fi
+  S=$(grep -F "$UA" "$OUT/origin-live.log" | persec || true)
+  A=$(grep -v 'kube-probe/' "$OUT/origin-live.log" | persec || true)
+  if [ "${S:-0}" -gt 5 ]; then STOPPED="FAIL: scanner exceeded 5 req/s ($S) in the live origin log; scan stopped"; break; fi
+  if [ "${A:-0}" -gt 5 ]; then STOPPED="INCONCLUSIVE: origin traffic exceeded 5 req/s ($A, scanner ${S:-0}); scan stopped"; break; fi
+  if [ $((TICK % 2)) = 0 ]; then
+    if curl -fsS -o /dev/null --max-time 5 -A "$WUA" "$URL/healthz"; then HFAIL=0; else HFAIL=$((HFAIL+1)); fi
+    if [ "$HFAIL" -ge 2 ]; then STOPPED="INCONCLUSIVE: edge /healthz failed twice; scan stopped"; break; fi
+  fi
+  if [ "$(date +%s)" -ge "$STOP_AT" ]; then STOPPED="INCONCLUSIVE: closing time before the deadline reached; scan stopped"; break; fi
+done
+if [ -n "$STOPPED" ]; then
+  echo "$STOPPED" >>"$CHK"
+  docker kill "$ZNAME" >/dev/null 2>&1 || true
+fi
+set +e; wait "$ZP"; ZAP_RC=$?; set -e
+kill "$LF" 2>/dev/null || true; LF=""
+[ "$ZAP_RC" = 0 ] || echo "INCONCLUSIVE: ZAP exit code $ZAP_RC" >>"$CHK"
+
+# Post-scan rate evidence from the full origin log. A failed fetch is recorded,
+# never suppressed, and an empty log is never "zero requests".
+if ! kubectl -n redloop logs "$DEP" --since-time="$START" >"$OUT/origin-raw.log" 2>"$OUT/origin-logs.err"; then
+  echo "INCONCLUSIVE: origin access log could not be fetched" >>"$CHK"
+fi
+grep -v 'kube-probe/' "$OUT/origin-raw.log" >"$OUT/origin-access.log" || true
+SCAN_N=$(grep -cF "$UA" "$OUT/origin-access.log" || true)
+SCAN_MAX=$(grep -F "$UA" "$OUT/origin-access.log" | persec || true)
+ALL_MAX=$(persec <"$OUT/origin-access.log" || true)
+OTHER_N=$(grep -vF "RedLoop-GO2-" "$OUT/origin-access.log" | grep -vc 'Blackbox Exporter' || true)
+if [ "${SCAN_N:-0}" = 0 ] || [ -z "$SCAN_MAX" ]; then
+  echo "INCONCLUSIVE: no scanner requests in the origin log, so no rate evidence" >>"$CHK"; SCAN_MAX=unknown
+elif [ "$SCAN_MAX" -gt 5 ]; then
+  echo "FAIL: scanner exceeded 5 req/s ($SCAN_MAX)" >>"$CHK"
+fi
+[ "${OTHER_N:-0}" = 0 ] || echo "NOTE: $OTHER_N origin requests from unrelated clients during the scan (kept privately)" >>"$CHK"
+
+# Edge cache evidence for the close-out. Cloudflare caches .js and robots.txt
+# by default (200: up to 120 min) and 404 for 3 min; the Ingress revert does
+# not evict them, so the close-out waits out that TTL (RoE section 12).
+for p in /static/app.js /robots.txt; do
+  c=$(curl -sS -o /dev/null -D - --max-time 5 -A "$WUA" "$URL$p" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
+  echo "edge_cache $p=${c:-none}" >>"$OUT/tls.txt"
+  case "$c" in HIT|MISS|EXPIRED|REVALIDATED|UPDATING|STALE) echo "NOTE: $p is cached at the edge ($c); fixture copies expire by D + 120 min" >>"$CHK" ;; esac
+done
+
+python3 -I "$OUT/validate.py" "$OUT/report.json" "$OUT/zap-urls.txt" "$OUT/origin-access.log" "$UA" >>"$CHK" 2>&1 \
+  || echo "INCONCLUSIVE: report validator failed" >>"$CHK"
+
+if grep -q '^FAIL:' "$CHK"; then V=FAIL; elif grep -q '^INCONCLUSIVE:' "$CHK"; then V=INCONCLUSIVE; else V=PASS; fi
+echo "verdict=$V zap_rc=$ZAP_RC scanner_requests=${SCAN_N:-0} scanner_max_req_per_sec=$SCAN_MAX all_max_req_per_sec=${ALL_MAX:-unknown} unrelated_requests=${OTHER_N:-0}" | tee "$OUT/verdict.txt"
+cat "$CHK"
+case "$V" in PASS) exit 0 ;; FAIL) exit 4 ;; *) exit 5 ;; esac
+```
+
+### Close-out (step 9)
+
+- Closure is verified (step 7).
+- If the kill switch was used, Terraform is reconciled and applied, and no
+  Cloudflare drift is left.
+- At `D + 125 min` (step 10), each of the five seed paths is requested once
+  through the edge, and none returns the fixture. Every answer is 404 from
+  Traefik, or 403 if the kill switch is still on. A cached 200 at that point
+  is a stop and an escalation to the operator, never a close.
+- No RedLoop alerts. The pod has had no restarts and its digest is unchanged.
+- A sanitized summary goes to #2769. The report, the request logs, the
+  scanner IP, the times and the alert history stay private.
+- **Gate 4 cannot close** until the Ingress change is reverted and verified,
+  the edge cache check has passed, and every Cloudflare change, if any, is
+  reconciled.
+
+### Cloudflare Security Events (proposed decision)
+
+The Cloudflare token has no Analytics Read, so edge blocks and challenges in
+the window cannot be read afterwards. **Proposed:** accept the missing
+Analytics Read conditionally, for this one bounded, passive GO-2 window
+only. This is recorded as a **limitation of observability**: it does not
+mean that WAF events were checked. It does not cover active testing, a WAF
+bypass, or any later window. Visibility in the window comes from:
+- the RedLoop monitoring;
+- the origin access log;
+- the scan report, including any 403 answers;
+- the proven kill switch.
+
 ## Approval
 
 The operator's approval was given in writing in the operator session on
@@ -554,5 +1013,6 @@ the agent did not approve anything on its own behalf.
 | Approval PR | #2784 |
 | Scope approved | GO-1 only: OWASP ZAP 2.17.0 baseline (pinned digest), origin path through `kubectl port-forward`, window 2026-11-18 02:00-03:00 UTC, tester the platform owner, contact operator Telegram, budget enforced at 4 req/s and checked against 5 req/s |
 | GO-1b | Approved in section 11 by the operator's written decision of 2026-11-18 ("RedLoop Gate 4 GO-1b — Operator Decisions"): origin only, window 2026-11-18 13:00-14:00 UTC. Running it needs a separate EXECUTE GO |
-| Not approved | GO-2 (public Ingress, edge path), active or full scans, WAF bypass or scanner exception, production pentest |
+| GO-2 | PROPOSED in section 12, not approved. Needs approval of this section, GO-1b PASS, the separate public-exposure risk acceptance, and a separate GO-2 EXECUTE decision with `P` and `D` |
+| Not approved | GO-2 (public Ingress, edge path) until the row above is satisfied, active or full scans, WAF bypass or scanner exception, production pentest |
 | Related | The residual pod-startup risk for this workload only is accepted conditionally until 2026-12-18 at the latest. That record is held privately |
