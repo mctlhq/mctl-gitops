@@ -51,10 +51,13 @@ not_ready() { echo "::notice::$*"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 
 
 # --- One read of the PR; every later check is pinned to this head. ---------
 if ! info=$(gh api "repos/${REPO}/pulls/${PR}" \
-      --jq '[.head.sha, .changed_files, .user.login, (.head.repo.full_name // ""), .head.ref, .state, .merged, .node_id] | @tsv'); then
+      --jq '[.head.sha, .changed_files, .user.login, (.head.repo.full_name // ""), .head.ref, .state, .merged, .node_id] | map(tostring) | join("\u001f")'); then
   die "could not read #${PR}; not enqueueing."
 fi
-IFS=$'\t' read -r head_sha expected author head_repo head_ref state merged pr_id <<<"$info"
+# Unit separator, not tab: tab is IFS whitespace, so `read` would collapse an
+# empty field (a head repository that no longer exists) and shift every later
+# field into the wrong variable. A non-whitespace IFS keeps empty fields.
+IFS=$'\x1f' read -r head_sha expected author head_repo head_ref state merged pr_id <<<"$info"
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || die "#${PR} has no readable head sha; not enqueueing."
 [[ -n "$pr_id" ]] || die "#${PR} has no node id; not enqueueing."
 if [ "$merged" = true ]; then not_ready "#${PR} is already merged."; fi
@@ -142,7 +145,7 @@ while :; do
     echo "waiting for an approval on ${head_sha} (review decision ${decision})"
   fi
   if [ "$SECONDS" -ge "$deadline" ]; then
-    die "#${PR} was not approved and green within $((WAIT_SECONDS / 60)) minutes; not enqueueing."
+    die "#${PR} was not approved and green within $((WAIT_SECONDS / 60)) minutes; not enqueueing. Once it is approved and green, re-run only this failed enqueue-bump job, or re-enqueue by hand (docs/runbooks/mctl-api-release-hold.md, merge queue stall); never re-run ledger-gate or publish-pr."
   fi
   sleep 30
 done

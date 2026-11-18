@@ -50,7 +50,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.169.0"
+            tag: "4.169.1"
 
           ingress:
             enabled: true
@@ -484,6 +484,20 @@ spec:
             # and the pod logs "release approval page disabled" at Error
             # level. Rollback: delete this line and the /release extra path.
             RELEASE_APPROVAL_UI_ENABLED: "true"
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # Link consent routes and the consent read of the C2 service (its
+            # epic 11, C2-1c). The reader identity (service provider and
+            # subject) comes from the optional Secret below, so no identifier
+            # lives in this public repository. The cap is the one value the
+            # C2 service reads too (the capacity value in bootstrap/values.yaml).
+            # The store uses AUDIT_DB_URL. Read at container start: bump
+            # ROLLOUT_MARKER in the PR that flips this.
+            # Rollback: set the apiConsent switch back to false.
+            GLOVO_CONSENT_ENABLED: "true"
+            # Quoted: the release gate parses this block as YAML, and an
+            # unquoted inline directive is not a scalar there.
+            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
+            {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
@@ -516,6 +530,12 @@ spec:
             # ROLLOUT_MARKER.
             - mctl-api-glovo-runtime-db
             - mctl-api-workitems-db
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # The consent reader identity (mctl-api-secrets.yaml). Optional
+            # like its neighbours; with the switch on and the Secret missing
+            # the config guard refuses the release.
+            - mctl-api-glovo-consent
+            {{- end }}
             {{- if (default dict .Values.securityCodeScanning).receiver }}
             - mctl-api-security-code-scanning
             {{- end }}
