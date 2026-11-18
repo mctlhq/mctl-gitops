@@ -580,6 +580,7 @@ scan cannot start, and the window closes without a scan (step 5).
 | 7. Verify closure | before `D - 5 min` | all closure checks below pass |
 | 8. Fallback: Cloudflare kill switch | **at `D - 5 min` if step 7 has not passed** | the edge answers 403 for the host |
 | 9. Close-out | after step 7 (or 8) | all close-out checks below pass |
+| 10. Edge cache expiry check | at `D + 125 min` | no seed path returns the fixture from the edge (below) |
 
 **Closure means verified, not enqueued.** Enqueueing the revert is not
 closure. Closure needs **all** of:
@@ -587,6 +588,17 @@ closure. Closure needs **all** of:
 - no Ingress and no Middleware in namespace `redloop` (read-only `kubectl get`);
 - `https://staging-redloop.mctl.ai/healthz` no longer answering 200 from the
   fixture (Traefik's 404, or 403 if the kill switch is on).
+
+**The edge cache outlives the Ingress.** The zone uses Cloudflare's default
+caching (cache level standard, no cache rule for this host), and the fixture
+sends no `Cache-Control`. Cloudflare therefore caches `/static/app.js` and
+`/robots.txt` for up to 120 minutes after a 200 response, and 404 for 3
+minutes. Removing the Ingress does not evict them. Every copy was filled while
+the origin was reachable, that is no later than closure, so none can be served
+after `D + 120 min`. Step 10 checks this. No purge is planned: it would be a
+Cloudflare change outside this approval, and the cached content is the static
+synthetic text listed under 10015 below. If the operator wants the copies gone
+sooner, a URL purge needs its own decision.
 
 **Fallback (step 8).** The fast path of section 6 (an emergency toggle of
 `block_staging_redloop_emergency`) is used if closure is not verified 5
@@ -625,7 +637,8 @@ watches the edge `/healthz` itself during the scan.
 
 | Control | What it does | Real time? |
 |---|---|---|
-| ZAP rate-limit rule, 4 req/s | enforces the scanner's budget | yes, enforced |
+| ZAP rate-limit rule, 4 req/s | enforces the scanner's budget for spidered and scanned requests | yes, enforced |
+| Seed pacing in the hook, about 1 req/s | the five seed requests go through `access_url`, which the rate-limit rule did not throttle in GO-1b (all five fell in one second, exactly at the budget). The hook now waits 1 s between them | yes |
 | Live watch in the script (every 5 s) | stops ZAP when the scanner exceeds 5 req/s (FAIL), or when all traffic to the origin does (stop condition, INCONCLUSIVE) | yes, within about 5 s |
 | Post-scan check of the full origin log | the evidence on record; fails closed | no, after the scan |
 | Traefik Middleware, 10 req/s per client and replica | a backstop only. Verified by configuration, **not** by a burst test, which would be an active test | yes, but not the budget |
@@ -658,7 +671,7 @@ stays not approved). Five seed paths are used, as in GO-1b.
 | Check | Required for PASS | Otherwise |
 |---|---|---|
 | Seeded controls | 10038 (CSP) **and** 10035 (HSTS) reported on `/` | INCONCLUSIVE |
-| Accepted findings | 90004, 10049 and 10015 (cache-control review, raised on HTTPS only). All optional | - |
+| Accepted findings | 90004, 10049 and 10015. All optional. 10015 is accepted for this static synthetic fixture only (operator decision 2026-11-18, below) | - |
 | Any other finding | none. A header that Cloudflare adds or changes counts too, until the operator has classified it | FAIL, for review |
 | HTTP to HTTPS | `http://` redirects to `https://` (Always Use HTTPS) | FAIL |
 | Certificate | the edge certificate verifies | unverified: ABORT before the scan, or INCONCLUSIVE |
@@ -670,6 +683,16 @@ stays not approved). Five seed paths are used, as in GO-1b.
 
 A zero ZAP exit code alone is never PASS. Exit codes: 0 PASS, 4 FAIL,
 5 INCONCLUSIVE, 1 ABORT (nothing scanned).
+
+**10015 (Re-examine Cache-control Directives): accepted for this fixture
+only.** ZAP raises it on HTTPS responses without `Cache-Control`. The operator
+accepted it on 2026-11-18 as an optional, documented finding for this static
+synthetic fixture alone. The ZAP rule is not disabled: it still runs, and the
+validator only lists it as optional. Every response of the fixture is a fixed
+string from this repository's values file: an HTML title page, a health JSON,
+`robots.txt`, one line of JavaScript, and `Not Found`. None sets a cookie or
+depends on the requester, so caching cannot expose anything sensitive or
+user-specific. The acceptance does not carry over to any other host.
 
 **The TLS 1.1 check needs a client that can offer TLS 1.1**, such as Homebrew
 OpenSSL with `-cipher DEFAULT:@SECLEVEL=0`. `OPENSSL` points the script at
@@ -685,7 +708,7 @@ INCONCLUSIVE and is never counted as a server refusal.
 
 | # | Scenario (local fixture) | Expected | Got |
 |---|---|---|---|
-| 1 | #2796 config, redirect, trusted cert, TLS 1.1 refused, no HSTS | PASS | PASS (exit 0); scanner max 3 req/s, all traffic 4 |
+| 1 | #2796 config, redirect, trusted cert, TLS 1.1 refused, no HSTS | PASS | PASS (exit 0). Seeds one per second; scanner max 3 req/s, all traffic 4 |
 | 2 | HSTS present at the edge | INCONCLUSIVE | INCONCLUSIVE (5): HSTS present, 10035 not reported |
 | 3 | edge accepts TLS 1.1 (separate OpenSSL server) | FAIL | FAIL (4): `tls11=accepted` |
 | 4 | client cannot offer TLS 1.1 (no `@SECLEVEL=0`) | INCONCLUSIVE | INCONCLUSIVE (5): `tls11=client_cannot_offer`, not counted as a refusal |
@@ -697,15 +720,25 @@ INCONCLUSIVE and is never counted as a server refusal.
 | 10 | burst of 30 req/s with the scanner User-Agent | FAIL | FAIL (4): live watch stopped ZAP |
 | 11 | burst of 30 req/s from an unrelated client | INCONCLUSIVE | INCONCLUSIVE (5): stopped, counted as unrelated, not as scanner |
 | 12 | less than 35 min to `D` | ABORT | ABORT (1), nothing scanned |
+| 13 | edge reports `cf-cache-status: HIT` | PASS with notes | PASS (0); both cacheable paths recorded as cached, for the close-out |
+
+**Request rate in the rehearsal.** The five seeds reached the origin one per
+second in every complete run, for example `/` at :14, `/robots.txt` at :15,
+`/healthz` at :16, `/static/app.js` at :17 and `/does-not-exist` at :18. The
+spider phase that followed peaked at 3-4 req/s under the 4 req/s rule. No
+complete run went above 4 req/s for the scanner.
 
 In every scenario the report directory was `0700`, and no ZAP container or
 log stream was left running.
 
-**Two script defects found by this rehearsal and fixed before this PR:**
+**Defects found and fixed before this PR:**
 1. `s_client` prints `Protocol: TLSv1.1` even when the handshake fails. Only
    a negotiated cipher now counts as accepted.
-2. 10015 appears on HTTPS only. It is now listed above for the operator to
-   accept or reject.
+2. 10015 appears on HTTPS only. It is now accepted, as described above.
+3. GO-1b sent the five seeds within one second. The hook now paces them at
+   about 1 req/s.
+4. The script now records `cf-cache-status` for the two cacheable paths, so
+   the close-out knows what the edge holds.
 
 ```bash
 #!/usr/bin/env bash
@@ -735,11 +768,17 @@ mkdir -p -m 0700 "$OUT"             # private: reports never leave this director
 START=$(date -u +%FT%TZ)
 
 cat >"$OUT/seed_hook.py" <<'HOOK'
+import time
+
 SEEDS = ["", "robots.txt", "healthz", "static/app.js", "does-not-exist"]
 
 def zap_started(zap, target):
+    # access_url is not throttled by ZAP's rate-limit rule (GO-1b sent all five
+    # seeds within one second), so the hook paces itself at about 1 req/s.
     base = target.rstrip("/") + "/"
-    for path in SEEDS:
+    for i, path in enumerate(SEEDS):
+        if i:
+            time.sleep(1.0)
         zap.core.access_url(url=base + path, followredirects=False)
 
 def zap_pre_shutdown(zap):
@@ -913,6 +952,15 @@ elif [ "$SCAN_MAX" -gt 5 ]; then
 fi
 [ "${OTHER_N:-0}" = 0 ] || echo "NOTE: $OTHER_N origin requests from unrelated clients during the scan (kept privately)" >>"$CHK"
 
+# Edge cache evidence for the close-out. Cloudflare caches .js and robots.txt
+# by default (200: up to 120 min) and 404 for 3 min; the Ingress revert does
+# not evict them, so the close-out waits out that TTL (RoE section 12).
+for p in /static/app.js /robots.txt; do
+  c=$(curl -sS -o /dev/null -D - --max-time 5 -A "$WUA" "$URL$p" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
+  echo "edge_cache $p=${c:-none}" >>"$OUT/tls.txt"
+  case "$c" in HIT|MISS|EXPIRED|REVALIDATED|UPDATING|STALE) echo "NOTE: $p is cached at the edge ($c); fixture copies expire by D + 120 min" >>"$CHK" ;; esac
+done
+
 python3 -I "$OUT/validate.py" "$OUT/report.json" "$OUT/zap-urls.txt" "$OUT/origin-access.log" "$UA" >>"$CHK" 2>&1 \
   || echo "INCONCLUSIVE: report validator failed" >>"$CHK"
 
@@ -927,11 +975,16 @@ case "$V" in PASS) exit 0 ;; FAIL) exit 4 ;; *) exit 5 ;; esac
 - Closure is verified (step 7).
 - If the kill switch was used, Terraform is reconciled and applied, and no
   Cloudflare drift is left.
+- At `D + 125 min` (step 10), each of the five seed paths is requested once
+  through the edge, and none returns the fixture. Every answer is 404 from
+  Traefik, or 403 if the kill switch is still on. A cached 200 at that point
+  is a stop and an escalation to the operator, never a close.
 - No RedLoop alerts. The pod has had no restarts and its digest is unchanged.
 - A sanitized summary goes to #2769. The report, the request logs, the
   scanner IP, the times and the alert history stay private.
 - **Gate 4 cannot close** until the Ingress change is reverted and verified,
-  and every Cloudflare change, if any, is reconciled.
+  the edge cache check has passed, and every Cloudflare change, if any, is
+  reconciled.
 
 ### Cloudflare Security Events (proposed decision)
 
