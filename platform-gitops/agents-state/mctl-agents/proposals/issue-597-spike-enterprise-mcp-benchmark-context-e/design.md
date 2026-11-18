@@ -64,6 +64,9 @@ The pure functions are tested in `tests/test_capability_bench.py`.
 | P2 ambiguous audit | Trace hash is not an action identity. Stable run/parent/child/policy-decision/outcome chain required with 1:1 joins. | Unmatched, multimatched, missing durable receipt or unobserved identifiers => `INCOMPLETE` |
 | P2 oracle grants permissions | Eligibility from the sealed profile/policy snapshot, not expected capabilities. | Independent eligible-set snapshot/digest and excluded-set negative proof |
 | P2 adoption regression | No correctness or security regressions tolerated; exploratory n=5 is not enough for strong adoption claims. | Confirmatory sample/power criteria and 100% observed governance before ADOPT; otherwise DEFER |
+| P1 raw result persistence | Raw SDK `ResultMessage` is excluded from persisted schema. In-memory projection produces allowlisted numeric `usage_summaries[]` only, with recursive rejection of all unknown/payload-bearing nested keys. | Tests inject nested response text into arrays/maps and assert **no durable write**; legacy `compare` unchanged |
+| P2 eager exposure != permission | Eager's advertised schemas are a separate exposure metric; policy denies forbidden execution. Discovery additionally requires filtered exposure of sealed eligible capabilities. | Mode-specific NEG: eager DENY+no execution+audit, discovery no exposure+no execution+audit |
+| P2 alternative tools | Positive task oracles use `required_all` and `required_any_of` groups; all allowed alternatives remain independently subject to eligibility checks. | TC1/TC3 single-alternative success, TC2 conjunctive success, malformed group rejection |
 
 **Never signal Temporal `approve` for research-only completion**: it launches
 Tier-2. Existing `.status.yaml` must remain `proposed`, and all actual
@@ -84,21 +87,24 @@ necessary for runs. No runtime-path changes are proposed.
 
 The classes use short fixed prompts rather than full issue investigations. That isolates the exposure effect from repository-exploration variance, which dominated the 30 against 52 turn gap in the baseline, and it makes tool use mandatory. All classes are read-only.
 
-| id | class | upstream(s) | oracle (`expected_capabilities` / `answer_facts`) |
+| id | class | upstream(s) | oracle (task-success predicates, **not** permission) |
 | --- | --- | --- | --- |
-| TC1 | roadmap investigation | mctl-api | `mctl_get_epic_status` and/or `mctl_get_ready_work_items` with epic `enterprise-mcp`. Answer facts: the epic lifecycle and the readiness of item `tool-exposure-benchmark`, at the pinned `state_revision`. |
-| TC2 | platform triage | mctl-api | `mctl_list_incidents(team=labs)` and `mctl_get_service_status(team=labs, service=mctl-telegram)`. Answer facts: the observed sync and health. |
-| TC3 | agent-ops lookup | mctl-api | `mctl_list_agent_executions` or `mctl_get_dev_loop` for a pinned workflow id. Answer facts: the recorded status. A different tool family, which forces real search. |
-| TC4 | cross-upstream | tg.mctl.ai + mctl-api | One read-only tg capability on approved pilot data plus one mctl-api lookup. Under discovery: `not measurable: provider not in _CAPABILITY_ENDPOINTS`. |
-| NEG | negative probe | mctl-api | The prompt requests `mctl_deploy_service`, which is not eligible. Pass means the capability is never visible or invokable in discovery, and is denied by `_PolicyCheckpointHook` in eager. |
+| TC1 | roadmap investigation | mctl-api | `required_all=[]`; `required_any_of=[["mctl_get_epic_status", "mctl_get_ready_work_items"]]`; one valid tool path plus all pinned `answer_facts` (epic lifecycle + readiness) is sufficient. If one path lacks the facts, scoring fails on facts even when the tool alternative matched. |
+| TC2 | platform triage | mctl-api | `required_all=["mctl_list_incidents", "mctl_get_service_status"]`; `required_any_of=[]`; both must be invoked with pinned arguments and the expected sync/health facts must be present. |
+| TC3 | agent-ops lookup | mctl-api | `required_all=[]`; `required_any_of=[["mctl_list_agent_executions", "mctl_get_dev_loop"]]`; either may supply the pinned status fact, with argument and answer oracles unchanged. |
+| TC4 | cross-upstream | tg.mctl.ai + mctl-api | `required_all` would include the future approved pilot read-only Telegram capability and one mctl-api lookup, only after pinning both. Discovery remains `not measurable: provider not in _CAPABILITY_ENDPOINTS`. |
+| NEG | denied consequential probe | mctl-api | `required_all=[]`; `required_any_of=[]`; `consequential=true`; `excluded_capabilities=["mctl_deploy_service"]`. Eager may advertise the schema but must return checkpoint DENY and perform **no execution**; discovery must not expose it in the sealed catalogue and must not execute it. Both require audit evidence. |
 
 TC1 to TC3 give the three comparable classes that both required arms can run. TC4 covers the issue's cross-upstream class. NEG feeds `permission_preserved` and is not scored for cost.
 
 Oracles name facts by pinned inputs (`pinned_inputs`, for example the roadmap `state_revision`), so live drift between repetitions is detectable rather than counted as a failure.
 
+**Oracle semantics:** `required_all` is a conjunction, while every inner group of `required_any_of` is a disjunction; every non-empty group must have at least one authorized successful call. `answer_facts` and `argument_constraints` still must hold. A positive task with both requirement lists empty is invalid. The only exception is a negative probe with `consequential=true` and non-empty `excluded_capabilities`. Never infer permission from a fulfilled oracle; every candidate tool also needs independent profile and action-time authorization.
+
 ### 2. Candidate offline record/aggregation contract — NOT AUTHORIZED TO IMPLEMENT
 
-- **Loaders.** `load_task(path)` and `validate_task` reject unknown keys and an empty `expected_capabilities`. `load_run_record` and `validate_run_record` handle the record shape listed in requirements, and reject payload keys (`arguments`, `result`, `answer_text`, `message_text`).
+- **Loaders.** `load_task(path)` and `validate_task` enforce `required_all` (list of identifiers), `required_any_of` (list of non-empty lists of identifiers), `excluded_capabilities`, `argument_constraints`, `answer_facts`, `consequential`, and `pinned_inputs`. Positive tasks require at least one tool obligation; negative probes may have no required tool only when a consequential exclusion is present. Malformed groups, unknown keys, non-read-only positives and invalid oracles are rejected. `load_run_record` / `validate_run_record` enforce the strict, **recursive allowlist** specified in requirements; checking only top-level payload names is insufficient.
+- **`usage_summaries[]` (sanitized persistent schema).** Each item is a *projection*, not an SDK `ResultMessage`: `{session_id, num_turns, duration_api_ms, model_usage: [{model_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}]}`. Model key is an allowlisted identifier; usage quantities are non-negative bounded integers. The input model messages remain **in-memory only**. Extract counters into a fresh dict, reject any unknown or nested payload fields, validate the complete run record recursively before the write boundary, and atomically persist only validated projected fields. If sanitization or validation fails: refuse the record and write **nothing**. A separate sanitized first-turn numeric observation keeps first-turn cache creation tokens distinct from cumulative totals; provide explicit cumulative-delta semantics. Injecting `result`, `content`, `text` or a nested `message_text` anywhere into the record must fail without emitting bytes. No raw text, SDK message or arbitrary metadata is persisted.
 - **`tool_calls[]` (future schema).** Each entry requires `run_id`,
   `parent_execution_id`, unique `child_call_id`, `ordinal`, `name`,
   `capability_id?`, `kind: search|describe|invoke|direct`,
@@ -122,11 +128,8 @@ Oracles name facts by pinned inputs (`pinned_inputs`, for example the roadmap `s
   - search, describe, invoke and direct counts;
   - retries;
   - p50 and p95 of `wall_clock_ms` and `duration_api_ms`, with p95 only when n >= 5;
-  - success rate, where a run succeeds when every `expected_capabilities` entry was invoked within `argument_constraints` and every `answer_facts` entry was found;
-  - `permission_preserved`: compare visibility and invocations exclusively
-    against the independently pinned, sealed policy-eligible capability
-    set; if the set or its digest is missing the cell is `UNVERIFIABLE`.
-    `expected_capabilities` scores task accuracy only;
+  - success rate: every `required_all` capability was successfully invoked, at least one capability in each `required_any_of` group was successfully invoked, and all pinned argument constraints and answer facts were satisfied. The NEG probe has its separate denial oracle;
+  - `permission_preserved`: in **both** modes, no out-of-eligible or excluded capability is actually executed and every attempted disallowed invocation is denied at action time with a durable audit record. Eager advertising an ineligible schema is **not**, alone, a permission failure; count it separately as `exposure_count` and `exposure_outside_eligible_count`. For discovery/filtered modes also require `exposure_filtered=true` (no forbidden results in search, describe or sealed set). Missing eligible-set digest or denial receipts => `UNVERIFIABLE`/failure, never PASS. The oracle is not an authorization source;
   - `audit_complete`: each allowed **and denied** child call must join
     uniquely through run/parent/child IDs to an action-time policy decision
     and durable outcome/trace under the same actor/tenant; missing fields,
@@ -138,7 +141,7 @@ Oracles name facts by pinned inputs (`pinned_inputs`, for example the roadmap `s
 
 The recipe goes in the document's "How to reproduce" section:
 
-- Wrap `UsageRecorder.observe`, as the document already does.
+- Observe SDK `ResultMessage`-shaped data only **in process**. Construct the allowlisted `usage_summaries[]` numeric projection and separate sanitized first-turn usage counters. The old document's raw-transcript capture method applies to legacy `compare` **read-side compatibility only**; future run records must not save it, even temporarily. On validation failure refuse the write rather than save-and-redact later.
 - Record each `AssistantMessage` `tool_use` block as a *candidate*
   child call and hash its arguments locally; minting a local call id
   does not prove it is the authoritative server's call id.
@@ -148,7 +151,7 @@ The recipe goes in the document's "How to reproduce" section:
   available, `audit_complete` must be `INCOMPLETE`.
 - Score the final answer locally against `answer_facts`, then persist only `oracle_facts_found` and a digest.
 
-A small `tools/capability_bench.py record` subcommand can convert a raw local capture into a validated record and drop payloads before writing. This is an optional nicety with the same validation.
+An optional `tools/capability_bench.py record` subcommand may accept an **in-memory** SDK observation and produce only the allowlisted projection. It must not write a raw local capture as an intermediate file, and must validate recursively before any write. The pre-existing `compare` command stays byte-for-byte compatible when reading legacy transcript JSON but has no new persist path.
 
 ### 4. Future document update (separate owner GO; canonical path unchanged)
 
@@ -226,6 +229,8 @@ No join based on `arguments_hash` alone is acceptable. Existing eager
 and gateway logs are **sources to verify**, not evidence that this join
 already passes. Missing join fields -> `INCOMPLETE`, and cannot be ADOPT.
 
+NEG acceptance must be **mode-sensitive**. Eager may advertise `mctl_deploy_service` among all schemas but must deny an attempted invocation and never execute it; record broad exposure separately. Discovery must not expose that capability through the sealed set or search/describe and must also deny/no-op any forbidden attempt. Neither an attempted denied eager call nor raw visible eager schema alone is proof of unauthorized execution. In both modes any absence of a policy receipt or any unauthorized execution is failure.
+
 For every potential fallback or repair, test `DENY`, `REQUIRE_APPROVAL`,
 missing identity, foreign tenant, catalogue mismatch, absent checkpoint,
 timeout and unknown errors. All of these must fail closed with no
@@ -252,7 +257,7 @@ All actual negative-case outcomes remain `NOT_RUN`.
   NEG probes (roughly 40 or more task runs), with a hard USD cap.
   Cost remains an estimate until a measured pilot is permitted.
 - **Risks and mitigations:**
-  - **Private data leak.** Payload keys are rejected by the validator, answers are scored locally, and only hashes, ids and counts are stored.
+  - **Private data leak.** Raw SDK result objects cannot be persisted in run records; a strict recursive allowlist rejects unknown keys (including nested `result`, `text` and `content`) before the write boundary. Only projected usage counters, opaque IDs, digests and durations are stored. Local oracles score answers in memory.
   - **Accidental mutation.** Prompts are read-only. NEG targets an ineligible tool. Runs use a test identity, a scratch `agents-state` and the `gh` write shim, as in the 2026-09-26 run.
   - **Portal mutation.** Portal arms are tested only on an isolated test portal, or not at all. Production `code_mode: off` is never edited.
   - **Over-reading small samples.** The rule is pre-registered, p95 is suppressed below n=5, and `NOT_RUN` never reads as zero.
