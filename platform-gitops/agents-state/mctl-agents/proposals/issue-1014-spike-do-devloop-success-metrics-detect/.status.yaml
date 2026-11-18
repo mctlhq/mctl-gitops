@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-18T16:11:18Z'
+updated_at: '2026-11-18T16:26:52Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-00643983805ac5bc
@@ -56,3 +56,4 @@ notes: 'implementer declined to act: Only failing test is tests/test_merge_watch
   (Temporal time-skipping workflow failure; 8340 others passed). This PR changes only
   tests/test_context_eval.py, and the failing test passes when re-run locally (1 passed),
   so it is a flake unrelated to the PR.'
+harness_failures: 1
