@@ -69,8 +69,13 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
         (d / "scripts/release-bump-enqueue-wait.sh").write_text(script_text or SCRIPT.read_text())
         for f in ("scripts/release-bump-diff-guard.py", "scripts/release-bump-checks-ready.py", ".github/workflows/auto-merge.yml"):
             (d / f).symlink_to(ROOT / f)
-        (d / "info").write_text("\t".join([HEAD, str(len(files) if changed is None else changed), author, head_repo,
-                                           head_ref, state, merged, "PRID"]) + "\n")
+        # The PR as the REST API returns it; the fake gh applies the script's
+        # own --jq, so the field separator is exercised, not assumed. An empty
+        # head_repo is a deleted head repository (head.repo null).
+        (d / "info").write_text(json.dumps({
+            "head": {"sha": HEAD, "ref": head_ref, "repo": {"full_name": head_repo} if head_repo else None},
+            "changed_files": len(files) if changed is None else changed, "user": {"login": author},
+            "state": state, "merged": merged == "true", "node_id": "PRID"}))
         (d / "listing").write_text("".join(f"{f}\t\n" for f in files))
         (d / "diff").write_text(diff)
         (d / "review").write_text(f"{cur} {gstate} {decision} {on_head}\n")
@@ -79,8 +84,11 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
         bin_ = d / "bin"
         bin_.mkdir()
         gh = bin_ / "gh"
+        pr_cmd = f'jq -r "$jqf" "{d}/info"' if pr_ok else "exit 1"
         gh.write_text(
-            "#!/bin/sh\n"
+            "#!/bin/bash\n"
+            # The value after --jq, for the calls whose filter is under test.
+            'jqf=; prev=; for a in "$@"; do [ "$prev" = --jq ] && jqf=$a; prev=$a; done\n'
             'case "$*" in\n'
             f'  *enqueuePullRequest*) echo "$*" >> "{d}/enqueue"; exit 0 ;;\n'
             f'  *graphql*) {"cat " + str(d / "review") if review_ok else "exit 1"} ;;\n'
@@ -90,7 +98,7 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
             f'  *"/files?"*) {"cat " + str(d / "listing") if files_ok else "exit 1"} ;;\n'
             f'  *"per_page=1 "*) cat "{d}/total" ;;\n'
             f'  *check-runs*) {"cat " + str(d / "runs") if runs_ok else "exit 1"} ;;\n'
-            f'  *"pulls/7 "*) {"cat " + str(d / "info") if pr_ok else "exit 1"} ;;\n'
+            f'  *"pulls/7 "*) {pr_cmd} ;;\n'
             '  *) echo "unexpected gh call: $*" >&2; exit 1 ;;\n'
             "esac\n")
         # A wait must not stall the test: the third sleep kills the script.
@@ -118,6 +126,10 @@ def script_cases(script_text=None):
         rc, out, log = run_script(script_text=script_text, **kw)
         return rc not in (0, -9) and "::error::" in log and "ready=true" not in out
 
+    def refused_for(msg, **kw):
+        rc, out, log = run_script(script_text=script_text, **kw)
+        return rc not in (0, -9) and "::error::" in log and msg in log and "ready=true" not in out
+
     def idle(**kw):  # neither ready nor refused: still waiting when the sleeps ran out
         rc, out, log = run_script(script_text=script_text, **kw)
         return "ready=true" not in out and "waiting" in log
@@ -133,6 +145,12 @@ def script_cases(script_text=None):
         ("another bot is refused", lambda: refused(author="mctl-agents[bot]"), True),
         ("a head in a fork is refused", lambda: refused(head_repo="evil/r"), True),
         ("a head with no repository is refused", lambda: refused(head_repo=""), True),
+        # An empty field must not shift the later ones: the refusal names the
+        # missing repository, not a branch that landed in head_repo.
+        ("a head with no repository is refused for that reason",
+         lambda: refused_for("the head of #7 is in '', not o/r", head_repo=""), True),
+        ("the deadline refusal names the recovery",
+         lambda: refused_for("re-run only this failed enqueue-bump job", runs=pending, wait_seconds=0), True),
         ("a branch outside release-bump/ is refused", lambda: refused(head_ref="claude/x"), True),
         ("an unreadable PR is refused", lambda: refused(pr_ok=False), True),
         ("an unreadable file list is refused", lambda: refused(files_ok=False), True),
@@ -177,6 +195,9 @@ SCRIPT_MUTANTS = {
     "a failed check waits": ('*) die "#${PR} is not mergeable: ${verdict}" ;;', '*) echo waiting ;;'),
     "own check excludes auto-merge": ('--own-check ""', '--own-check auto-merge'),
     "deadline ignored": ('if [ "$SECONDS" -ge "$deadline" ]; then', 'if false; then'),
+    "tab separator again": ('join("\\u001f")\'); then', '@tsv\'); then'),
+    "tab IFS again": ("IFS=$'\\x1f' read", "IFS=$'\\t' read"),
+    "deadline names no recovery": ("re-run only this failed enqueue-bump job", "give up"),
     "closed PR treated as ready": ('if [ "$state" = closed ]; then not_ready "#${PR} is closed."; fi',
                                    'if [ "$state" = closed ]; then state=open; fi'),
 }
