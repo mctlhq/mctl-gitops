@@ -323,41 +323,73 @@ all of the following hold:
 For GO-1 (origin path) the Ingress stays disabled, so criterion 3 and the
 edge controls are not exercised; they matter for GO-2.
 
-## 11. GO-1b: repeat origin baseline with seeded coverage (PROPOSED)
+## 11. GO-1b: repeat origin baseline with seeded coverage
 
-**Status: PROPOSED, not approved.** GO-1b needs its own operator GO and a
-confirmed window. Until then nothing in this section is authorised.
+**Status: APPROVED for GO-1b on merge of this section.** The operator decided
+in writing on 2026-11-18 ("RedLoop Gate 4 GO-1b — Operator Decisions"). Claude
+Code entered that decision here; it is not a cryptographic signature.
+**Running the scan needs a separate operator EXECUTE GO.** Merging this
+section authorises nothing by itself.
 
 **Why.** GO-1 (2026-11-18 02:00 UTC, #2769) reached only the linked pages,
-because the spider follows links. `/healthz` and `/static/` were never
+because the spider follows links, so `/healthz` and `/static/` were never
 passively scanned. #2796 then hardened the response headers. GO-1b checks
 that hardening on every fixture path.
 
 | Field | Value |
 |---|---|
 | Scope | Origin only, through `kubectl port-forward`, exactly as GO-1. No Ingress, no edge, no Cloudflare change |
-| Scanner | OWASP ZAP **2.17.0**, `zap-baseline.py` (passive rules only, the same rule set as GO-1), same pinned digest as section 1 |
-| Coverage | Seed hook requests `/`, `/robots.txt`, `/healthz`, `/static/app.js` and a 404 path (`/does-not-exist`) before the spider runs |
-| Request budget | Same as GO-1: ZAP rate-limit rule at 4 req/s, verified afterwards from the origin access log against 5 req/s (section 3) |
-| Tester / contact | **PROPOSED:** the platform owner; operator Telegram |
-| Testing window | **PROPOSED: operator to set** start and end in UTC, at most 1 hour. A green `redloop-waf-verify` run on `main` within the previous 24 h is required |
-| Preconditions | #2796 merged and rolled out; image digest unchanged; `ingress.enabled: false`; RedLoop risk acceptance renewed for the #2796 configuration; the section 9 GO checks hold at window start |
+| Scanner | OWASP ZAP **2.17.0**, `zap-baseline.py`: passive rules only, the same rule set as GO-1, the pinned digest from section 1 |
+| Coverage | A seed hook requests `/`, `/robots.txt`, `/healthz`, `/static/app.js` and a 404 path (`/does-not-exist`) before the spider runs, then records ZAP's site tree |
+| Request budget | Same as GO-1: ZAP's rate-limit rule at 4 req/s, checked afterwards against 5 req/s in the origin's access log (section 3) |
+| Tester / contact | **CONFIRMED:** the platform owner; operator Telegram |
+| Testing window | **CONFIRMED: 2026-11-18 13:00 to 14:00 UTC**, one window. If it is missed, a new window needs a new operator decision |
+| WAF verification | Kept for consistency with GO-1, although the origin path does not cross the WAF: a green `redloop-waf-verify` run on `main` within the previous 24 h is required |
+| Preconditions | #2796 merged and rolled out; image digest unchanged; response headers verified; Argo CD Synced/Healthy; `ingress.enabled: false`; `probe_success` = 1; no RedLoop alerts; no unexpected restarts; renewed risk acceptance in force; section 9 checks hold at window start |
 | Stop conditions | Section 5, plus the window end |
-| Reports | Private, as in GO-1 (`0700` directory); a sanitized summary only in public |
+| Reports | Private, as in GO-1 (`0700` directory), including the raw origin log; only a sanitized summary goes public |
 
-**Expected result.** Only these residual findings:
+**Result rules.** The script decides the result itself. A zero ZAP exit code
+alone is never PASS. FAIL outranks INCONCLUSIVE, which outranks PASS.
 
-| ZAP rule | Why it remains |
+| Check | Required for PASS | Otherwise |
+|---|---|---|
+| Seeded control | ZAP rule **10038** (CSP not set) reported on `/`, which proves the scanner detects the seeded gap | INCONCLUSIVE |
+| Accepted findings | **90004** (COEP / COOP / CORP) and **10049** (storable content) may appear; they are optional | - |
+| Any other finding | none | FAIL, for operator review |
+| Seed coverage | All five seed paths are in ZAP's recorded site tree **and** in the origin access log | INCONCLUSIVE |
+| Rate evidence | The origin access log was fetched and shows the scan's requests, at most 5 per second | Fetch failed or log empty: INCONCLUSIVE. Over 5 req/s: FAIL (stop condition) |
+| Report | `report.json` is present and parses; ZAP exited 0 | INCONCLUSIVE |
+
+A failed `kubectl logs` fetch is recorded, never suppressed, and missing logs
+never count as zero requests. Exit codes: 0 PASS, 4 FAIL, 5 INCONCLUSIVE.
+
+**Risk acceptance.** The RedLoop-only acceptance of the residual pod-startup
+risk, tracked privately, is renewed for:
+- the configuration merged in #2796 (merge `b495ca329`, identified by its rendered config checksum);
+- the GO-1b window.
+
+It expires on 2026-12-18 at the latest, and every earlier invalidation
+condition still applies. It covers no other workload. GO-2 needs a separate
+risk review.
+
+**Rehearsal (local only, never against RedLoop, 2026-11-18).** The script
+above was run end to end on the tester's machine. A stub `kubectl` served the
+pinned nginx image on loopback.
+
+| Scenario | Verdict (exit) |
 |---|---|
-| 10038 CSP not set | intentionally seeded (see `location = /`) |
-| 90004 COEP / COOP / CORP | not applicable to this fixture |
-| 10049 Storable and cacheable content | not applicable: public static content |
+| #2796 configuration | **PASS** (0): 5/5 seed paths, 11 requests, peak 3 req/s, findings 10038, 90004, 10049 |
+| Pre-#2796 configuration | **FAIL** (4): unexpected 10020, 10021, 10036, 10063 |
+| Origin log fetch fails | **INCONCLUSIVE** (5): fetch failure, no rate evidence, seed paths unconfirmed |
+| CSP added, so the seeded gap is gone | **FAIL** (4): unexpected 10055; 10038 missing is also reported |
 
-Any other finding, or any of the five seed paths missing from the report, makes the result FAIL or INCONCLUSIVE rather than PASS.
+The validator was also checked on its own against a report without 10038, a
+site tree without `/healthz`, a missing URL list and a malformed report. Each
+gave INCONCLUSIVE. In every scenario the report directory was `0700` and no
+container was left running.
 
-**Rehearsal (local only, never against RedLoop, 2026-11-18).** The pinned nginx image was run locally with the #2796 configuration, and the same baseline with the seed hook was run against it. It reached every seed path, peaked at 3 req/s, and reported exactly 10038, 90004 and 10049. The same run against the pre-#2796 configuration also reported 10020, 10021, 10036 and 10063.
-
-**GO-1b command** (the GO-1 script with the seed hook added; the tester's machine, during the window only):
+**GO-1b command** (the tester's machine, during the window only):
 
 ```bash
 #!/usr/bin/env bash
@@ -380,7 +412,69 @@ def zap_started(zap, target):
     base = target.rstrip("/") + "/"
     for path in SEEDS:
         zap.core.access_url(url=base + path, followredirects=False)
+
+def zap_pre_shutdown(zap):
+    # Evidence of what ZAP actually requested and passively scanned.
+    with open("/zap/wrk/zap-urls.txt", "w") as f:
+        f.write("\n".join(zap.core.urls()) + "\n")
 HOOK
+
+# Result validator: seed coverage and finding classification (run after ZAP).
+cat >"$OUT/validate.py" <<'PY'
+import json, re, sys
+
+report, urls, access = sys.argv[1:4]
+BASE = "http://host.docker.internal:18080"
+SEEDS = ["/", "/robots.txt", "/healthz", "/static/app.js", "/does-not-exist"]
+REQUIRED = {"10038": "/"}      # seeded CSP gap: positive scanner-detection control
+OPTIONAL = {"90004", "10049"}  # accepted as not applicable, may or may not appear
+lines = []
+
+def path_of(uri):
+    if not uri.startswith(BASE):
+        return uri
+    return uri[len(BASE):] or "/"
+
+try:
+    sites = json.load(open(report))["site"]
+except Exception as e:
+    sites = None
+    lines.append(f"INCONCLUSIVE: report.json unreadable ({type(e).__name__})")
+try:
+    zap_paths = {path_of(u.strip()) for u in open(urls) if u.strip()}
+except OSError:
+    zap_paths = None
+    lines.append("INCONCLUSIVE: ZAP URL list missing")
+try:
+    log = open(access).read()
+except OSError:
+    log = None
+    lines.append("INCONCLUSIVE: origin access log missing")
+
+for p in SEEDS:
+    if zap_paths is not None and p not in zap_paths:
+        lines.append(f"INCONCLUSIVE: seed path {p} not in ZAP's site tree")
+    if log is not None and not re.search(r'"GET ' + re.escape(p) + r' HTTP/', log):
+        lines.append(f"INCONCLUSIVE: seed path {p} not in the origin access log")
+
+if sites is not None:
+    found = {}
+    for site in sites:
+        for a in site.get("alerts", []):
+            entry = found.setdefault(a["pluginid"], [a.get("name", ""), set()])
+            entry[1].update(path_of(i.get("uri", "")) for i in a.get("instances", []))
+    for pid, (name, paths) in sorted(found.items()):
+        where = " ".join(sorted(paths))
+        if pid in REQUIRED or pid in OPTIONAL:
+            lines.append(f"OK: {pid} {name} on {where}")
+        else:
+            lines.append(f"FAIL: unexpected finding {pid} {name} on {where}")
+    for pid, path in REQUIRED.items():
+        if path not in found.get(pid, ["", set()])[1]:
+            lines.append(f"INCONCLUSIVE: seeded control {pid} not reported on {path}")
+
+print("\n".join(lines))
+PY
 
 kubectl -n redloop port-forward "$SVC" 18080:80 >"$OUT/port-forward.log" 2>&1 &
 PF=$!
@@ -414,15 +508,36 @@ docker run --rm -v "$OUT:/zap/wrk" "$IMG" \
 ZAP_RC=$?
 set -e
 
-# Independent check of the budget, from the origin's own access log. kube-probe
-# lines are excluded; everything else (scanner and blackbox probe) is counted,
-# so the check can only over-count.
-kubectl -n redloop logs "$DEP" --since-time="$START" | grep -v 'kube-probe/' >"$OUT/origin-access.log" || true
+# --- Evaluation. Fail closed: the ZAP exit code alone is never PASS, and
+# missing evidence is INCONCLUSIVE, never "zero requests" or "no findings".
+CHK="$OUT/checks.txt"; : >"$CHK"
+[ "$ZAP_RC" = 0 ] || echo "INCONCLUSIVE: ZAP exit code $ZAP_RC" >>"$CHK"
+
+# Independent request-rate evidence from the origin's own access log. The raw
+# fetch is kept as is; a failed fetch is recorded, never suppressed.
+if ! kubectl -n redloop logs "$DEP" --since-time="$START" >"$OUT/origin-raw.log" 2>"$OUT/origin-logs.err"; then
+  echo "INCONCLUSIVE: origin access log could not be fetched" >>"$CHK"
+fi
+# kube-probe lines are excluded; everything else (scanner and blackbox probe)
+# is counted, so the rate check can only over-count. grep exits 1 when no line
+# is left; emptiness is checked explicitly below.
+grep -v 'kube-probe/' "$OUT/origin-raw.log" >"$OUT/origin-access.log" || true
+N=$(wc -l <"$OUT/origin-access.log" | tr -d ' ')
 MAX=$(awk '{ if (match($0, /\[[^]]+\]/)) print substr($0, RSTART+1, 20) }' "$OUT/origin-access.log" \
-      | sort | uniq -c | sort -rn | awk 'NR==1 { print $1 } END { if (NR==0) print 0 }')
-echo "zap_rc=$ZAP_RC origin_requests=$(wc -l <"$OUT/origin-access.log") max_req_per_sec=$MAX" | tee "$OUT/budget.txt"
-[ "$MAX" -le 5 ] || { echo "BUDGET EXCEEDED: stop condition, report to the operator" >&2; exit 3; }
-exit "$ZAP_RC"
+      | sort | uniq -c | sort -rn | awk 'NR==1 { print $1 }')
+if [ "$N" = 0 ] || [ -z "$MAX" ]; then
+  echo "INCONCLUSIVE: no request-rate evidence in the origin access log" >>"$CHK"; MAX=unknown
+elif [ "$MAX" -gt 5 ]; then
+  echo "FAIL: budget exceeded, max $MAX req/s (stop condition, report to the operator)" >>"$CHK"
+fi
+
+python3 -I "$OUT/validate.py" "$OUT/report.json" "$OUT/zap-urls.txt" "$OUT/origin-access.log" >>"$CHK" 2>&1 \
+  || echo "INCONCLUSIVE: report validator failed" >>"$CHK"
+
+if grep -q '^FAIL:' "$CHK"; then V=FAIL; elif grep -q '^INCONCLUSIVE:' "$CHK"; then V=INCONCLUSIVE; else V=PASS; fi
+echo "verdict=$V zap_rc=$ZAP_RC origin_requests=$N max_req_per_sec=$MAX" | tee "$OUT/verdict.txt"
+cat "$CHK"
+case "$V" in PASS) exit 0 ;; FAIL) exit 4 ;; *) exit 5 ;; esac
 ```
 
 ## Approval
@@ -438,5 +553,6 @@ the agent did not approve anything on its own behalf.
 | Date (UTC) | 2026-11-18 |
 | Approval PR | #2784 |
 | Scope approved | GO-1 only: OWASP ZAP 2.17.0 baseline (pinned digest), origin path through `kubectl port-forward`, window 2026-11-18 02:00-03:00 UTC, tester the platform owner, contact operator Telegram, budget enforced at 4 req/s and checked against 5 req/s |
+| GO-1b | Approved in section 11 by the operator's written decision of 2026-11-18 ("RedLoop Gate 4 GO-1b — Operator Decisions"): origin only, window 2026-11-18 13:00-14:00 UTC. Running it needs a separate EXECUTE GO |
 | Not approved | GO-2 (public Ingress, edge path), active or full scans, WAF bypass or scanner exception, production pentest |
 | Related | The residual pod-startup risk for this workload only is accepted conditionally until 2026-12-18 at the latest. That record is held privately |
