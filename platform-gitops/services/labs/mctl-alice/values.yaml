@@ -5,8 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.14.0"
-  digest: "sha256:278214d29daa3a62182f9c14063e1c0cc9631242f64753a978ed77d051728026"
+  tag: "2.15.0"
+  digest: "sha256:9221195b718dc67413d1687bfe563278124b9f037733b2dfe31e1e4fafa6e27a"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
