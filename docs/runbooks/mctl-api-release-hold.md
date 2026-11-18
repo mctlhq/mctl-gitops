@@ -1,5 +1,29 @@
 # mctl-api release hold: write-path inventory
 
+## Purpose (2026-11-16)
+
+The hold began as an incident guard for 4.155.0 (unapproved #934 defaults).
+That incident is closed and every held version since then shipped on an owner
+GO, but the hold stays on as standing policy: an mctl-api version reaches
+production only on an owner GO for that exact version. While the hold's
+`ledger.mode` is `shadow` that GO is one allow record per version, written when
+the GO is given; in `enforce` it is the MFA-backed release-ledger decision for
+the exact digest (see "Release ledger mode" below). Do not remove the hold as
+obsolete.
+
+Its current strength, honestly: it stops unattended writers (gitops-bump,
+release-deploy, DevLoop) but not an agent session that holds the owner's
+token, because such a session can write and merge the allow record itself.
+How it moves toward a real approval gate:
+
+1. mctlhq/mctl-api#1022: the grant becomes a fresh, MFA-backed browser
+   decision recorded in the mctl-api ledger, unreachable over MCP or a bearer
+   token.
+2. The gate verifies that ledger record, bound to the image digest
+   (promote-by-digest, mctlhq/mctl-gitops#2652), instead of a YAML allow line.
+3. Admission policy in the cluster (tasks 10/11 below) refuses an image that
+   has no approval, so a write that bypasses the script still cannot run.
+
 Tasks 1, 12 and 16 of the #2528 design (PR #2589). Facts are read from the
 repository on `main` (56c31ec6 plus the #2596 merge) and from `gh api`; where
 something could not be observed it is marked so. This document grants nothing
@@ -137,3 +161,125 @@ tool the design describes.
 - 14: checker and merger Apps, their environments, and the ruleset change
   (owner actions; neither App may become a bypass actor).
 - 15: the post-sync digest verifier CronJob.
+
+## Release ledger mode (mctl-api#1022 S4)
+
+The hold carries a `ledger:` block (`mode: enforce` since 2026-11-18). Each mode, and
+what it changes:
+
+- **shadow**: the allow records decide, exactly as above. release-deploy's
+  `ledger-gate` job reads the release ledger for the image it built and puts
+  its verdict next to the YAML verdict in the run summary. It never fails
+  the run.
+- **enforce**: the ledger decides, and the allow records are not read.
+  1. After the build, `ledger-gate` waits up to `wait_minutes` for an
+     approved, MFA-backed decision for exactly the built digest and tag
+     commit.
+  2. An admin opens the request with
+     `POST https://api.mctl.ai/api/v1/release/grants` and
+     `{"repository":"mctlhq/mctl-api","version":"X.Y.Z"}`. The image must
+     already exist, so this happens after the build. The owner then approves
+     it on the release approval page.
+  3. On approval, the job hands the digest to `bump`. Its
+     `release-gate.py check` refuses the held image unless
+     `--ledger-approved-digest` equals `--new-digest`.
+  4. A rejection fails the run, and nothing is bumped. So do the deadline
+     and an unreadable ledger (exit 6 or 7). Re-run the workflow after the
+     decision.
+  5. `gitops-bump.yaml` never passes a ledger digest, so it cannot bump
+     the held image at all.
+  6. On pull requests, `validate` runs
+     `release-gate.py pr-identity` (policy read from the base). Only
+     `mctl-gitops-pr[bot]` from a `release-bump/` branch may change the held
+     tag.
+  7. `verify` accepts the held tag without a record.
+
+Releasing under enforce, in order: merge the release-please PR; when
+release-deploy's build finishes, an admin opens the request
+(`POST /api/v1/release/grants`, step 2 below); the owner approves it on the
+page within `wait_minutes`; `ledger-gate` then hands the digest to `bump`. A
+rollback to an older version needs its own decision for that version's
+digest. To fall back to allow records, set `mode: shadow` in a reviewed PR
+and add an allow record for the version being released.
+
+`ledger-gate` runs for every image, because `bump` needs it. A red
+`ledger-gate` on an image with no ledger hold is an infrastructure failure:
+checkout, `pip install`, or loading `release-gates.yaml`. It is not a
+refusal. Re-run the job.
+
+Do not re-run `ledger-gate` on its own to refresh a shadow verdict. Its
+dependents (`bump`, `publish-pr`) re-run with it and would open a second
+bump PR. Re-running the release-gate-watch run of the push is safe.
+
+`pr-identity` requires the event sender to be the bot as well as the PR
+author. A human push onto an open bump PR therefore fails `validate`. So
+does a human reopening it. Let release-deploy open a new PR instead.
+
+### After the fact: release-gate-watch reads the ledger (S4b, #2774)
+
+On every push to `main`, `release-gate-watch.yml` runs
+`release-ledger-shadow.py watch --base <before> --head <sha>`. It finds every
+write of a ledger-held image in that push, meaning `image.tag` or
+`image.digest` moved to a version at or above `held_from`, with the policy
+read from the parent commit. It then asks the ledger whether that image was
+approved.
+
+- **shadow**: notice only, exit 0.
+- **enforce**: a write with no approval is a violation (exit 6, Telegram
+  "gate violated"). Any read that fails is unknown (exit 7, Telegram "check
+  could not run"). Unknown outranks a refusal.
+
+Three properties of this check that an operator needs to know:
+
+- **The digest comes from GHCR, not from the file.** The bootstrap file pins
+  no `image.digest`, because `release-bump-digest.py` skips bootstrap
+  templates. When the file pins none, the watch asks GHCR (anonymous token;
+  the package is public) which digest the written tag serves now, index
+  manifest types first. That is the digest the cluster pulls and the one
+  release-deploy's build pushed and the ledger binds. A registry that
+  cannot be read is unknown, never clean. If a digest is ever pinned in the
+  file, the pinned one is judged instead. One consequence: a tag that is
+  overwritten in GHCR after the push is judged by its new digest. A digest
+  that no decision binds then reads as refused, which is the safe
+  direction.
+- **Only push runs read the ledger.** mctl-api accepts the GitHub Actions
+  OIDC reader only for `push`, `workflow_dispatch` and `release` events from
+  `mctlhq/mctl-gitops` workflows on `refs/heads/main`. The daily `schedule`
+  run and pull-request runs cannot read it, so they do not try; the daily
+  `verify` is unchanged. A write is therefore judged once, on the push that
+  made it. If that run failed to read the ledger (exit 7), re-run that same
+  run: a re-run keeps the `push` event. A `workflow_dispatch` of the
+  workflow does not help, because the ledger step runs on `push` only.
+  Nothing judges that write again automatically.
+- **A past approval of the same digest still counts (stale approval).** The
+  watch asks whether a write that already happened was approved. It binds
+  repository, version and digest, but not the tag commit, and it accepts an
+  MFA approval that has since expired or been consumed, because the bump
+  being judged is what consumed it. A rejection of the digest still wins,
+  and an approval without MFA or without decision evidence does not count.
+  The gap: once a digest has been approved with MFA, a later write of that
+  same digest through a path that bypasses the gate (a P5b/P6 deploy-key
+  push, for example a rollback-and-reapply) reads as allowed. That write
+  can only deploy an image the owner already approved, so this is accepted
+  for now. Closing it needs the ledger to record which commit or PR
+  consumed the approval, so the watch can require that this push is that
+  consumer. The bump gate itself (`ledger-gate`) does not share the gap: it
+  requires a live, unconsumed decision bound to the tag commit.
+
+Before switching to enforce (its own PR), all of these must hold:
+
+1. Done (4.167.0): a live run has shown `ledger=allow` for an approved
+   release. In release-deploy run 44195491155, `ledger-gate` read the ledger
+   over OIDC and got `refuse` before the decision existed, and the gate
+   logic judged the post-approval ledger body `allow`. The release-gate-watch
+   run of the bump push, 44198826314 (attempt 2, re-run after the MFA
+   approval), read it over OIDC and logged `allow`.
+2. Done (#2774): `release-gate-watch.yml` reads the ledger after each push.
+   In enforce mode `diff` no longer judges a held-tag change by records, so
+   P5b/P6 pushes would otherwise go undetected.
+3. Done (#2778): the ledger step runs in its own `ledger` job, which runs
+   only on `push`. That job is the only one in `release-gate-watch.yml`
+   holding `id-token: write`. `verify`, which also runs on pull requests
+   (with pull-request code) and on schedule, cannot mint an OIDC token. So
+   no relying party, Vault's `github-actions` role included, has to exclude
+   those events for this workflow.

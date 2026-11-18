@@ -119,7 +119,9 @@ def resolve_files():
 
 
 def check_gate():
-    gate = subprocess.run([sys.executable, "scripts/release-gate.py", "check",
+    # --preflight: no image is built yet, so an enforced ledger hold cannot be
+    # judged here; the bump step judges it with the built digest.
+    gate = subprocess.run([sys.executable, "scripts/release-gate.py", "check", "--preflight",
                            "--files", *resolve_files(), "--new-tag", env("IMAGE_TAG")])
     if gate.returncode != 0:
         refuse(6, "the release gate refused this release")

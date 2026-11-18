@@ -35,6 +35,11 @@ OLD_TAG = 'tag: "4.154.0"'
 REAL_API = LIVE_API.replace(_m.group(1), OLD_TAG)  # baseline file
 REAL_POLICY = copy.deepcopy(LIVE_POLICY)  # baseline policy
 REAL_POLICY["version_holds"][0]["allow"] = []
+# This file covers the allow-record path, which only ledger mode shadow reads.
+# The live hold is enforced (mctl-api#1022), so the baseline pins shadow;
+# enforce has its own cases in tests/test_release_gate_ledger_hold.py.
+if "ledger" in REAL_POLICY["version_holds"][0]:
+    REAL_POLICY["version_holds"][0]["ledger"]["mode"] = "shadow"
 _WORK = pathlib.Path(tempfile.mkdtemp(prefix="hold-test-"))
 atexit.register(shutil.rmtree, _WORK, ignore_errors=True)  # every tree lives under _WORK
 _N = itertools.count()
@@ -310,7 +315,7 @@ def wiring():
     for label, name in (("gitops-bump", "gitops-bump.yaml"), ("release-deploy", "release-deploy.yaml")):
         wf = (ROOT / ".github/workflows" / name).read_text()
         chk = re.search(r'"scripts/release-gate\.py", "check",\s*\n\s*"--files", \*\[os\.path\.normpath\(f\) for f in files\], '
-                        r'"--new-tag", new_tag,\s*"--policy-rev", "origin/main", "--image", image_name\]', wf)
+                        r'"--new-tag", new_tag,\s*"--policy-rev", "origin/main", "--image", image_name[\],]', wf)
         out.append((f"wiring: {label} check reads the policy from origin/main and names the image", bool(chk), True))
         # The push happens in the two publishing jobs (direct and PR route). In
         # each of them verify reads the policy from origin/main and runs before
@@ -363,7 +368,7 @@ MUTANTS = {
         "            try:\n                old_text", "diff neg: push of 4.155.0, no allow in the parent policy"),
     "diff: removed held file not reported": ('viol.append(f"{p}: held file was removed")\n                continue\n            (tmp / p).parent',
         'continue\n            (tmp / p).parent', "diff neg: push removes the held file (violation, not unknown)"),
-    "diff: a changed held tag is not a write": ("            if new_t != old_tag:", "            if False:",
+    "diff: a changed held tag is not a write": ("            if new_t != old_tag and not _enforced(hold):", "            if False:",
                                                   "diff neg: push of 4.155.0, allow expired in the parent policy"),
     "diff: parent policy not required to hold version_holds": ('holds = _holds(base_policy)', 'holds = (base_policy.get("version_holds") or []) if isinstance(base_policy, dict) else []',
                                                               "diff unknown: parent policy without version_holds"),

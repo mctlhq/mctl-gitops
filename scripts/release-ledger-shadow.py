@@ -2,7 +2,28 @@
 """Release ledger, shadow mode (mctlhq/mctl-api#1022 S3, mctlhq/mctl-gitops#2528).
 
   release-ledger-shadow.py check --repository R --version V --digest D --commit C --image I
+  release-ledger-shadow.py gate  --repository R --version V --digest D --commit C --image I
+  release-ledger-shadow.py watch --base B --head H
   release-ledger-shadow.py --selftest
+
+`gate` (mctlhq/mctl-api#1022 S4) is what release-deploy's ledger-gate job
+runs for every release. It looks up the version hold for the image in
+release-gates.yaml (read from main) and acts on its `ledger.mode`:
+  no ledger block  nothing to do, exit 0
+  shadow           the `check` report above, exit 0 whatever it says
+  enforce          poll the ledger every POLL_SECONDS for up to
+                   ledger.wait_minutes until it holds an allow for exactly
+                   this digest and commit; then write approved_digest=<digest>
+                   to $GITHUB_OUTPUT (the bump's release-gate.py check needs
+                   it) and exit 0. A rejection of this exact image ends the
+                   wait at once (exit 6). The deadline ends it with exit 6, or
+                   7 when the last read was unknown: no approval was observed
+                   either way, and nothing is bumped.
+
+`watch` (S4b) is what release-gate-watch runs after each push to main. For
+every ledger hold whose image.tag or image.digest the push changed, it asks
+the ledger whether that write was approved with MFA (see watch_verdict). An
+enforce hold fails it (6 refused, 7 unknown); a shadow hold is only reported.
 
 Reads the release decisions mctl-api keeps for one release
 (GET /api/v1/release/grants) and says what a ledger-based gate WOULD decide
@@ -74,9 +95,18 @@ def _ts(raw: Any) -> datetime.datetime:
     return datetime.datetime.fromisoformat(f"{m.group(1)}.{frac}{tz}")
 
 
-def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: str,
-                 now: datetime.datetime) -> tuple[str, str]:
-    """What a ledger gate would decide for this exact artifact. Pure."""
+def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: str | None,
+                 now: datetime.datetime, *, historical: bool = False) -> tuple[str, str]:
+    """What a ledger gate would decide for this exact artifact. Pure.
+
+    `gate` passes a commit and historical=False: a decision must be live
+    (unexpired, unconsumed) for exactly this digest and tag commit.
+    `watch` passes commit=None and historical=True: it asks whether a write
+    that already happened was approved, so an MFA approval of exactly this
+    repository, version and digest counts even after it expired or was
+    consumed (by the very bump being judged). The digest is immutable, so it
+    names the image without the commit. A rejection still wins.
+    """
     if not isinstance(body, dict) or not isinstance(body.get("grants"), list):
         return UNKNOWN, "response is not an object with a grants list"
     if body.get("repository") != repository or body.get("version") != version:
@@ -93,7 +123,7 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
             return UNKNOWN, f"grant {i} is malformed"
         if (art.get("repository"), art.get("version")) != (repository, version):
             return UNKNOWN, f"grant {a['id']} is for another release"
-        if art.get("image_digest") != digest or art.get("tag_commit") != commit:
+        if art.get("image_digest") != digest or (commit is not None and art.get("tag_commit") != commit):
             others += 1
             continue
         state = a["state"]
@@ -105,6 +135,9 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
                 return UNKNOWN, f"grant {a['id']} is approved but carries no decision evidence"
             if "mfa" not in dec["amr"]:
                 refused.append(f"{a['id']} approved without mfa")
+                continue
+            if historical:
+                approved.append(a["id"])
                 continue
             try:
                 expires = _ts(a.get("expires_at"))
@@ -123,7 +156,8 @@ def judge_ledger(body: Any, repository: str, version: str, digest: str, commit: 
     if approved:
         return ALLOW, f"approved by {', '.join(approved)}"
     if others:
-        return REFUSE, f"no decision for this digest and commit ({others} grant(s) bind another artifact)"
+        return REFUSE, (f"no decision for this digest{'' if commit is None else ' and commit'} "
+                        f"({others} grant(s) bind another artifact)")
     return REFUSE, "no approved decision for this release"
 
 
@@ -219,6 +253,230 @@ def check(args: argparse.Namespace) -> int:
     return 0
 
 
+POLL_SECONDS = 30
+
+
+def _rejected(body: Any, digest: str, commit: str) -> bool:
+    """A rejected decision names exactly this image (a final answer)."""
+    for g in body.get("grants", []) if isinstance(body, dict) else []:
+        a = g.get("approval") if isinstance(g, dict) else None
+        art = g.get("artifact") if isinstance(g, dict) else None
+        if isinstance(a, dict) and isinstance(art, dict) and a.get("state") == "rejected" \
+                and art.get("image_digest") == digest and art.get("tag_commit") == commit:
+            return True
+    return False
+
+
+def wait_for_decision(read, judge, digest: str, commit: str, wait_seconds: int, clock, sleep,
+                      log=print) -> tuple[int, str]:
+    """Poll until allow, a rejection of this image, or the deadline. Pure but for the injected IO.
+
+    Returns (exit code, last reason): 0 allow, 6 refused, 7 unknown at the deadline.
+    """
+    deadline = clock() + wait_seconds
+    verdict, why = UNKNOWN, "never read"
+    while True:
+        try:
+            body = read()
+            verdict, why = judge(body)
+            if verdict == REFUSE and _rejected(body, digest, commit):
+                return 6, why
+        except urllib.error.HTTPError as exc:
+            verdict, why = UNKNOWN, f"ledger read failed: HTTP {exc.code}"
+        except Exception as exc:  # noqa: BLE001 - could not observe, keep waiting
+            verdict, why = UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}"
+        if verdict == ALLOW:
+            return 0, why
+        log(f"ledger-gate: {verdict}: {why}")
+        if clock() + POLL_SECONDS > deadline:
+            return (7 if verdict == UNKNOWN else 6), why
+        sleep(POLL_SECONDS)
+
+
+def _release_gate():
+    """scripts/release-gate.py as a module: its policy validation is the one that counts."""
+    import importlib.util  # noqa: PLC0415
+    spec = importlib.util.spec_from_file_location("release_gate", ROOT / "scripts/release-gate.py")
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def _ledger_hold(image: str) -> dict | None:
+    """The version hold for `image`, validated by release-gate.py itself; any doubt raises."""
+    import yaml  # noqa: PLC0415
+    mod = _release_gate()
+    holds = mod._holds(yaml.safe_load((ROOT / GATE).read_text()))
+    found = [h for h in holds if h["repository"] == image and h.get("ledger")]
+    if len(found) > 1:
+        raise ValueError(f"more than one ledger hold for {image}")
+    return found[0] if found else None
+
+
+def gate(args: argparse.Namespace) -> int:
+    # Arguments are judged only once a ledger hold applies: every other image
+    # passes through here too, and must not fail on inputs it never uses.
+    try:
+        hold = _ledger_hold(args.image)
+    except Exception as exc:  # noqa: BLE001 - an unreadable policy is not "no hold"
+        print(f"::error::ledger-gate: {GATE} unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 7
+    if hold is None:
+        print(f"ledger-gate: no ledger hold for {args.image}, nothing to wait for")
+        return 0
+    for name, rx in (("repository", REPO), ("version", SEMVER), ("digest", DIGEST), ("commit", COMMIT)):
+        if not rx.fullmatch(getattr(args, name) or ""):
+            print(f"::error::bad --{name} {getattr(args, name)!r}", file=sys.stderr)
+            return 2
+    led = hold["ledger"]
+    if led["mode"] != "enforce":
+        return check(args)
+    print(f"::notice title=release ledger::waiting up to {led['wait_minutes']} min for an MFA approval of "
+          f"{args.repository} {args.version} @ {args.digest}. An admin opens the request "
+          f"(POST {API}/api/v1/release/grants with repository and version), the owner approves it on the "
+          f"release approval page.")
+    code, why = wait_for_decision(
+        lambda: _read_ledger(args.repository, args.version),
+        lambda body: judge_ledger(body, args.repository, args.version, args.digest, args.commit,
+                                  datetime.datetime.now(datetime.timezone.utc)),
+        args.digest, args.commit, led["wait_minutes"] * 60,
+        __import__("time").monotonic, __import__("time").sleep)
+    verdict = {0: ALLOW, 6: REFUSE, 7: UNKNOWN}[code]
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Release ledger (enforced)\n\n"
+                    f"`{args.repository}` `{args.version}` `{args.digest}`\n\n"
+                    f"verdict: **{verdict}** - {why}\n")
+    if code == 0:
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a", encoding="utf-8") as f:
+                f.write(f"approved_digest={args.digest}\n")
+        print(f"::notice title=release ledger::allow: {why}")
+        return 0
+    print(f"::error title=release ledger::{verdict}: {why}. Nothing is bumped; re-run this workflow after "
+          f"the decision.", file=sys.stderr)
+    return code
+
+
+# -- watch (mctlhq/mctl-api#1022 S4b): was a held-image write on main approved? --
+
+REGISTRY = "ghcr.io"
+MANIFEST_TYPES = ", ".join((
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+))
+
+
+def _registry_digest(image: str, tag: str) -> str:
+    """The digest GHCR serves for image:tag now (anonymous pull token; the package is public).
+
+    It is the digest release-deploy's build pushes and the ledger binds (the
+    manifest list), because the index types are accepted first.
+    """
+    name = image[len(REGISTRY) + 1:]
+    q = urllib.parse.urlencode({"scope": f"repository:{name}:pull"})
+    with urllib.request.urlopen(_request(f"https://{REGISTRY}/token?{q}", {}), timeout=30) as resp:
+        token = json.load(resp).get("token")
+    if not isinstance(token, str) or not token:
+        raise RuntimeError("registry returned no pull token")
+    req = _request(f"https://{REGISTRY}/v2/{name}/manifests/{urllib.parse.quote(tag, safe='')}",
+                   {"Authorization": f"Bearer {token}", "Accept": MANIFEST_TYPES})
+    req.method = "HEAD"
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        digest = resp.headers.get("Docker-Content-Digest")
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise RuntimeError(f"registry answered no digest ({digest!r})")
+    return digest
+
+
+def watch_verdict(change: dict, read, resolve, now: datetime.datetime) -> tuple[str, str]:
+    """Was this held-image write approved in the ledger? Pure but for the injected IO.
+
+    The image is named by the digest the file pins, or, when it pins none
+    (the bootstrap file today), by the digest the registry serves for the tag:
+    that is what the cluster pulls. Any read that fails is UNKNOWN.
+    """
+    image, version = change["repository"], change["version"]
+    repo = image[len(REGISTRY) + 1:] if image.startswith(REGISTRY + "/") else ""
+    if not REPO.fullmatch(repo) or not SEMVER.fullmatch(str(version)):
+        return UNKNOWN, f"cannot name the release of {image} {version!r} in the ledger"
+    digest = change.get("digest")
+    if digest is None:
+        src = "registry"
+        try:
+            digest = resolve(image, version)
+        except Exception as exc:  # noqa: BLE001 - could not observe
+            return UNKNOWN, f"registry digest of {image}:{version} unreadable: {type(exc).__name__}: {exc}"
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            return UNKNOWN, f"registry digest of {image}:{version} is malformed: {digest!r}"
+    else:
+        src = "pinned"
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            # The file was read; what it pins names no image a decision can bind.
+            return REFUSE, f"pinned image.digest {digest!r} is not a sha256 digest"
+    try:
+        body = read(repo, version)
+    except urllib.error.HTTPError as exc:
+        return UNKNOWN, f"ledger read failed: HTTP {exc.code}"
+    except Exception as exc:  # noqa: BLE001 - could not observe is never refuse or allow
+        return UNKNOWN, f"ledger read failed: {type(exc).__name__}: {exc}"
+    verdict, why = judge_ledger(body, repo, version, digest, None, now, historical=True)
+    return verdict, f"{repo} {version} @ {digest} ({src} digest): {why}"
+
+
+def watch(args: argparse.Namespace) -> int:
+    """Judge every held-image write the push base..head made.
+
+    Exit 0: nothing to judge, every enforced write was approved, or every
+    hold involved is in shadow mode (reported, never failed). 6: an enforced
+    hold's write has no approved MFA decision (or a rejected one). 7: an
+    enforced write, or the policy itself, could not be judged; unknown
+    outranks a refusal, as in `release-gate.py diff`.
+    """
+    for name in ("base", "head"):
+        if not COMMIT.fullmatch(getattr(args, name) or ""):
+            print(f"::error::bad --{name} {getattr(args, name)!r}", file=sys.stderr)
+            return 7
+    try:
+        changes, unk = _release_gate().ledger_changes(ROOT, args.base, args.head)
+    except Exception as exc:  # noqa: BLE001 - could not observe
+        print(f"::error title=release ledger watch::UNKNOWN: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 7
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows: list[tuple[str, str, str, str]] = []  # (mode, what, verdict, why)
+    for mode, why in unk:
+        rows.append((mode or "enforce", "(read)", UNKNOWN, why))
+    for c in changes:
+        verdict, why = watch_verdict(c, _read_ledger, _registry_digest, now)
+        rows.append((c["mode"], f"{c['hold']} {c['old_version']} -> {c['version']}", verdict, why))
+    if not rows:
+        print("ledger-watch: the push wrote no ledger-held image")
+        return 0
+    for mode, what, verdict, why in rows:
+        if mode != "enforce":
+            print(f"::notice title=release ledger watch (shadow, enforces nothing)::{what}: {verdict}: {why}")
+        elif verdict == ALLOW:
+            print(f"::notice title=release ledger watch::{what}: allow: {why}")
+        else:
+            print(f"::error title=release ledger watch::{what}: {verdict}: {why}", file=sys.stderr)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Release ledger watch\n\n| mode | write | verdict | why |\n|---|---|---|---|\n")
+            for mode, what, verdict, why in rows:
+                f.write(f"| {mode} | {what} | {verdict} | {why} |\n")
+    enforced = [v for m, _, v, _ in rows if m == "enforce"]
+    if UNKNOWN in enforced:
+        return 7
+    if REFUSE in enforced:
+        return 6
+    return 0
+
+
 def _selftest() -> int:
     R, V = "mctlhq/mctl-api", "4.164.0"
     D, C = "sha256:" + "d" * 64, "c" * 40
@@ -287,7 +545,91 @@ def _selftest() -> int:
     if not ua or ua.lower().startswith("python-urllib"):
         bad += 1
         print(f"FAIL requests carry urllib's default User-Agent ({ua!r}), which Cloudflare refuses")
-    total = len(cases) + len(ycases) + 1
+    # wait_for_decision: a fake clock and reader, one body per poll.
+    def poll(*bodies, wait=95):
+        t = [0.0]
+        seq = list(bodies)
+        polls = [0]
+
+        def read():
+            polls[0] += 1
+            b = seq.pop(0) if len(seq) > 1 else seq[0]
+            if isinstance(b, Exception):
+                raise b
+            return b
+
+        code, _ = wait_for_decision(read, lambda b: judge_ledger(b, R, V, D, C, now), D, C, wait,
+                                    lambda: t[0], lambda s: t.__setitem__(0, t[0] + s), log=lambda _m: None)
+        return code, polls[0]
+
+    pending = body(grant(state="pending"))
+    pcases = [
+        ("allow on the first read", poll(body(grant())), (0, 1)),
+        ("waits through pending, then allow", poll(pending, pending, body(grant())), (0, 3)),
+        ("waits through a failed read, then allow", poll(OSError("down"), body(grant())), (0, 2)),
+        ("a rejection of this image ends the wait", poll(body(grant(state="rejected")), body(grant())), (6, 1)),
+        ("a rejection of another image does not", poll(body(grant(state="rejected", digest="sha256:" + "e" * 64)),
+                                                       body(grant())), (0, 2)),
+        ("deadline while pending is refused", poll(pending), (6, 4)),
+        ("deadline while unreadable is unknown", poll(OSError("down")), (7, 4)),
+        ("approval for another digest never allows", poll(body(grant(digest="sha256:" + "e" * 64))), (6, 4)),
+    ]
+    for name, got, want in pcases:
+        if got != want:
+            bad += 1
+            print(f"FAIL poll {name}: got {got}, want {want}")
+    # gate() routing: it sits in front of every release-deploy bump, so a
+    # wrong exit here blocks every image. IO is stubbed via module globals.
+    import tempfile  # noqa: PLC0415
+    g = globals()
+    saved = {k: g[k] for k in ("_ledger_hold", "_read_ledger", "check", "wait_for_decision")}
+    hold_enf = {"ledger": {"mode": "enforce", "wait_minutes": 1}}
+
+    def route(hold, digest=D, waited=(0, "ok"), check_rc=0):
+        with tempfile.TemporaryDirectory() as td:
+            outp = Path(td) / "out"
+            outp.write_text("")
+            old_env = os.environ.get("GITHUB_OUTPUT"), os.environ.get("GITHUB_STEP_SUMMARY")
+            os.environ["GITHUB_OUTPUT"] = str(outp)
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            calls = []
+
+            def lh(_image):
+                if isinstance(hold, Exception):
+                    raise hold
+                return hold
+            g["_ledger_hold"] = lh
+            g["check"] = lambda _a: calls.append("check") or check_rc
+            g["wait_for_decision"] = lambda *a, **k: calls.append("wait") or waited
+            try:
+                ns = argparse.Namespace(repository=R, version=V, digest=digest, commit=C, image="ghcr.io/x/y")
+                import contextlib  # noqa: PLC0415
+                import io  # noqa: PLC0415
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = gate(ns)
+                return rc, tuple(calls), outp.read_text().strip()
+            finally:
+                g.update(saved)
+                for k, v in zip(("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"), old_env):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    gcases = [
+        ("no hold: pass, nothing read", route(None, digest=""), (0, (), "")),
+        ("unreadable policy: unknown", route(ValueError("x")), (7, (), "")),
+        ("bad digest under a hold: 2", route(hold_enf, digest="sha256:x"), (2, (), "")),
+        ("shadow: reports and passes", route({"ledger": {"mode": "shadow", "wait_minutes": 1}}), (0, ("check",), "")),
+        ("enforce allow: digest handed over", route(hold_enf), (0, ("wait",), f"approved_digest={D}")),
+        ("enforce refuse: no digest", route(hold_enf, waited=(6, "no")), (6, ("wait",), "")),
+        ("enforce unknown: no digest", route(hold_enf, waited=(7, "down")), (7, ("wait",), "")),
+    ]
+    for name, got, want in gcases:
+        if got != want:
+            bad += 1
+            print(f"FAIL gate {name}: got {got}, want {want}")
+    total = len(cases) + len(ycases) + len(pcases) + len(gcases) + 1
     print(f"selftest: {total - bad}/{total} passed")
     return 1 if bad else 0
 
@@ -298,9 +640,17 @@ def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check")
-    for name in ("repository", "version", "digest", "commit", "image"):
-        c.add_argument(f"--{name}", required=True)
-    return check(p.parse_args())
+    g = sub.add_parser("gate")
+    for sp in (c, g):
+        for name in ("repository", "version", "digest", "commit", "image"):
+            sp.add_argument(f"--{name}", required=True)
+    w = sub.add_parser("watch")
+    w.add_argument("--base", required=True)
+    w.add_argument("--head", required=True)
+    a = p.parse_args()
+    if a.cmd == "watch":
+        return watch(a)
+    return gate(a) if a.cmd == "gate" else check(a)
 
 
 if __name__ == "__main__":

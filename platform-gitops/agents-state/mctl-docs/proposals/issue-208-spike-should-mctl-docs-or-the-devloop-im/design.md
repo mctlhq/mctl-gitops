@@ -1,161 +1,98 @@
-# Design: issue-208-spike-should-mctl-docs-or-the-devloop-im
+# Design: issue-208-spike-should-mctl-docs-or-the-devloop-im (narrowed)
 
-## Current state
+Proposal only; no implementation approval. This is the operator-selected narrow follow-up of 2026-11-17 and
+supersedes the earlier experiment-first design (scratch repo, Actions jobs, PostgreSQL/Docker runs, five
+repeats). That design was never executed and none of its results is claimed. PR #211 research is reused as
+provenance; it is open and unmerged, with SQL examples and results `NOT_RUN`.
 
-mctl-docs is a VitePress 1.6 site (`package.json`: `vitepress ^1.6.0`). Pages live
-under `docs/` and the sidebar is in `docs/.vitepress/config.ts`. `bun run build`
-runs the tests, then `scripts/generate-llms-full.ts` (which regenerates
-`docs/public/llms-full.txt`), then `vitepress build docs`.
+## Current state (mctl-docs `main` 59cf0d2ef97ab86d0a5513c8f6e330a9606e8f80, source only)
 
-Relevant pages:
+- `docs/guides/databases.md`: front matter, then `# Database Provisioning`, `## Provision a Database`,
+  `## Configuration`, `## Supported Databases`. Describes `mctl_provision_database`, the `DB_HOST/DB_PORT/
+  DB_NAME/DB_USER/DB_PASSWORD` variables and that `DATABASE_URL` is not guaranteed. No migration content.
+- `docs/guides/scaffolding.md` headings: `# Scaffolding a service for mctl deploy`, `## Platform health
+  checks`, `## Container requirements`, `## Pick a template by language`, `## Node.js`, `## Python`,
+  `## Go`, `## Static (Vue / React build → nginx) {#static}`, `## When does the deploy fire?`,
+  `## Pre-merge docker build (recommended)`, `## CI auto-deploy job`, `## First-time onboard checklist`.
+  It has PR-only docker build guidance and warns not to put skipped PR-only jobs into deploy `needs:`. That
+  distinction can be reused as prose.
+- Earlier GitOps reads (chart `dbInitJob` is an optional PostSync hook that waits for a table; some services
+  migrate on start under an advisory lock) show the platform does not order tenant migrations. These are
+  desired-configuration observations, not proof of runtime behaviour, and the migration tool per service is
+  unknown.
 
-- `docs/guides/databases.md` ("Database Provisioning") documents
-  `mctl_provision_database`, the injected `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD`
-  variables, and that `DATABASE_URL` is not guaranteed. It does not mention schema
-  migrations, their ordering, or concurrency.
-- `docs/guides/scaffolding.md` has a "Pre-merge docker build (recommended)" section
-  (an opt-in PR-only CI job with a warning about `needs:`) and the "CI auto-deploy
-  job". This is the natural home and style template for an opt-in pre-merge
-  migration check.
-- A grep for "migrat" across `docs/` finds only unrelated hits (image migration in
-  `scaffolding.md`, the `MCTL_GITHUB_TOKEN` migration note, and the VitePress
-  upgrade FAQ entry in `docs/reference/faq.md`). No docs page covers this topic,
-  so there is no existing docs owner to reuse.
-- `context/decisions/README.md` says ADRs are for the docs site itself.
-  `context/plans/` holds internal working plans (`site-docs-alignment.md`). A spike
-  report about tenant guidance belongs in `context/plans/`, not in `decisions/`.
+## Proposed guide (not approved)
 
-Deployed state checked:
+Primary page: `docs/guides/databases.md`, new section (proposed heading `## Schema migrations and parallel
+PRs`), appended after existing sections so existing anchors are unchanged. Content, in order:
 
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-docs/values.yaml`: image tag `0.1.68`,
-  which matches `package.json` version `0.1.68`. The docs site itself has no
-  database.
-- `$MCTL_GITOPS_ROOT/helm-charts/base-service/templates/job-db-init.yaml`: an
-  optional `dbInitJob` that runs as an Argo CD `PostSync` hook on
-  `postgres:17-alpine`. It polls for a `waitTable` ("Wait for migrations to
-  finish") for up to 30 x 10 s, then runs `dbInitJob.sql`. It is disabled by
-  default (`helm-charts/base-service/values.yaml`: `dbInitJob.enabled: false`).
-  It assumes migrations are run by the app, not by the platform.
-- `grep dbInitJob services/*/*/values.yaml`: enabled for `labs/mctl-academy`,
-  `labs/mctl-telegram`, and `labs/mctl-telegram-preview`.
-- `services/admins/mctl-support/values.yaml`: "The service migrates its own
-  schema on start (advisory-locked, so two replicas starting together are safe);
-  no db-init job." An advisory lock serializes concurrent runs but does not
-  detect logically conflicting migrations.
-- `services/labs/pfeifenpatenschaft-backend/values.yaml`: "migrations go to
-  Postgres".
-- `vaultPath: teams/<tenant>/<svc>/database` appears in about 12 service values
-  files (admins/mctl-support, admins/umami, karabu/draw-with-friends,
-  labs/kuptsi-app, labs/mctl-academy, labs/mctl-alice, labs/mctl-loyalty,
-  labs/mctl-pairdesk, labs/mctl-rules, labs/mctl-telegram(-preview), and others),
-  so DB-backed tenant services exist. Which migration tool each uses is not
-  visible in gitops: could not observe, recorded under Open questions.
-- `gh issue view` on the Related issues: mctl-gitops#1044 "spike(gitops): evaluate
-  KYAML canonicalization for machine-generated manifests" (OPEN), mctl-agents#918
-  "spike: Which DevLoop finding classes should be promoted only after
-  deterministic validation..." (OPEN), mctl-gitops#2506 "spike(temporal): evaluate
-  ZITADEL vs Vault as Temporal workload JWT issuer" (OPEN). None of them
-  duplicates this question. #918 is adjacent: a deterministic migration-apply
-  check would be one candidate "deterministic validation" class.
-- The mctl MCP tools were not called for live status. The gitops checkout was
-  enough for this read, and nothing here asserts runtime behaviour.
-- The issue's Source URL (postgr.es/p/9Bm) was not fetched: could not observe.
+1. **Why Git-clean is not apply-clean.** Two PRs branch from one schema state; each is tested alone. Hazards:
+   duplicate or colliding versions; ordering differing between environments; two changes that each assume the
+   pre-merge schema (for example both add `NOT NULL` columns, or one renames what the other indexes); a merge
+   that applies without error but yields a schema neither author tested (last writer wins).
+2. **Unique versions and order.** Use collision-resistant version identifiers and one place that runs
+   migrations; advisory locks serialize concurrent runs but do not detect logical conflicts.
+3. **Expand/contract and old/new compatibility.** During a rollout old and new app versions overlap, so the
+   schema must serve both: add compatible structure first, switch the app, remove old structure in a later
+   change.
+4. **Two different verifications.** Deployment onto an empty database shows the migration set applies from
+   scratch. Upgrading the supported previous schema populated with synthetic data shows the real upgrade
+   path. The first does not prove the second.
+5. **Recovery.** Rolling back the application image does not roll back the database. Choose a coordinated
+   forward fix, or a schema/data rollback that was verified separately beforehand (backup and restore
+   support is not assumed here).
+6. **Role split.** The application (or tenant tooling) owns its migrations; the platform provisions the
+   database and credentials and does not run, order or check tenant migrations.
+7. **Opt-in merge-result check (idea, recommendation only).** A tenant may run, in its own CI on pull
+   requests, a job that evaluates the merge result rather than the branch alone: apply migrations on an empty
+   database and, separately, on the previous supported schema with synthetic data. Limits to state: the merge
+   result goes stale when the target branch moves, unless branches must be up to date or a merge queue is used;
+   it needs a deterministic ordering rule; it runs only if the tenant adds it. No snippet, SQL, runner or
+   reusable action is included; the idea is not measured or deployed.
+8. **Conflict versus legitimate merge.** Independent changes to different objects can merge legitimately. A
+   schema diff is not an oracle: reviewers must know the expected semantics, and any committed snapshot needs a
+   reviewed refresh procedure (a snapshot refreshed to match a failing result proves nothing).
+9. **Not measured.** Explicit list: coverage of conflict classes, latency, CI cost, false-positive rate, and
+   which tool each tenant uses. No savings or coverage claim.
 
-## Proposed solution
+Secondary: at most a short pointer in `docs/guides/scaffolding.md` (for example one sentence near
+`## Pre-merge docker build (recommended)`) linking to the databases section, reusing the PR-only wording as
+prose. No new section with a runnable workflow.
 
-This is a spike with a gated docs change. There are three parts, in order.
+Reference alignment: the canonical research report (PR #211's `context/spikes/migration-conflicts-208.md`, or
+wherever it lands if merged) is touched only to align links, not rewritten.
 
-1. **Duplicate map** (in `context/plans/migration-conflict-spike.md`). Classify
-   the three Related issues, the docs pages above, the chart's `dbInitJob`, and
-   the per-service migration patterns observed in gitops. Recorded result:
-   no existing owner covers "Git-clean but apply-time-conflicting migrations".
-   mctl-agents#918 is the closest adjacent owner for any agent-side check.
+### Allowlist (to be confirmed before implementation)
 
-2. **Bounded falsifying experiment** (outside the clone, in a throwaway public or
-   personal scratch repo with GitHub Actions, never on the shared CNPG cluster).
-   - Base: one table plus migration `0001`. Use a plain-SQL runner (numbered
-     `.sql` files applied in lexical order and recorded in a
-     `schema_migrations` table) so that tool behaviour does not confound the
-     result. Optionally repeat with one common tool, golang-migrate, as a second
-     data point.
-   - Scenarios, each as two branches that `git merge` cleanly:
-     (a) both add `0002_*.sql` with different names (duplicate version);
-     (b) A adds a `NOT NULL` column without a default and B inserts rows assuming
-         the old shape, or A renames a column that B indexes, so the result
-         depends on order;
-     (c) both apply without error but the merged schema differs from each
-         branch's tested schema (for example both `ALTER ... SET DEFAULT` on the
-         same column, so the last one wins).
-   - Baseline: per-branch CI that applies migrations to an empty `postgres:17`
-     service container. This is what a tenant gets today if they test at all.
-   - Candidate: a PR-only job that checks out the merge ref
-     (`refs/pull/N/merge`, which GitHub Actions does by default), applies all
-     migrations to an empty `postgres:17`, dumps the schema with
-     `pg_dump --schema-only`, and fails on (i) apply error, (ii) a duplicate
-     version prefix, or (iii) a schema dump diff against a committed
-     `schema.sql` snapshot. The snapshot check is what catches scenario (c).
-   - Measurements per scenario, 5 runs each: detected yes/no (success), job
-     wall-clock (latency), Actions minutes (cost), false positives and
-     negatives (reliability). Anything not measured is written as `unknown`.
-   - Known limit to record: the merge ref is computed against the base at PR
-     time. If B merges after A without a re-run, the check is stale unless the
-     repo requires branches to be up to date or uses a merge queue. Record this
-     as a finding, not a fix.
-
-3. **Gated docs change** (only if at least one scenario escapes the baseline and
-   is caught by the candidate):
-   - `docs/guides/databases.md`: new `## Schema migrations and parallel PRs`
-     section. It explains the three failure shapes and states plainly that the
-     platform does not run or order tenant migrations (the app does, on start or
-     via its own job, and `dbInitJob` only waits for a table). It recommends
-     (1) timestamp or unique version names, (2) running migrations from one
-     place under an advisory lock, (3) a committed schema snapshot, and
-     (4) "require branches to be up to date" or a merge queue. It links to the
-     scaffolding snippet.
-   - `docs/guides/scaffolding.md`: new `## Pre-merge migration check (optional)`
-     section right after "Pre-merge docker build (recommended)". It holds a
-     PR-only job with a `postgres:17` service container and the same `needs:`
-     caveat. The tool-specific apply command is a placeholder, since mctl does
-     not mandate a tool.
-   - No sidebar change: both pages are already in `docs/.vitepress/config.ts`.
-   - Regenerate `docs/public/llms-full.txt` via `bun run generate:llms`.
-
-4. **Recommendation and follow-ups.** Record exactly one recommendation, either
-   "Migration-conflict guidance and check idea (docs, opt-in tenant CI)" or
-   "no change". If evidence supports an agent-side check, draft one follow-up
-   issue for mctl-agents (linked to #918) that proposes the implementer run the
-   tenant's own migration check when it is present. It must not add authority.
-
-Why this shape: the docs repo can only publish guidance, the platform does not own
-tenant migrations (per the chart and service values), and the issue forbids
-implementation before the decision. Opt-in tenant CI keeps authority where it is.
+- `docs/guides/databases.md`
+- `docs/guides/scaffolding.md` (one short link or sentence, only if needed)
+- The existing canonical report, links only
+- `docs/public/llms-full.txt` only if it is actually tracked and regenerated by the installed procedure
+  (`bun run generate:llms`); otherwise untouched.
+- Not allowed: charts, tenant values, CI/workflows, scripts, and `.vitepress` config (navigation and sidebar
+  included). Links use existing pages and anchors only; a new page or path, if ever truly necessary, needs
+  separate owner approval and is not authorized by this proposal. The plan stays guidance-only.
 
 ## Alternatives
 
-- **Build a DevLoop implementer check now.** Dropped. It is out of scope for
-  mctl-docs, the issue forbids implementation before the decision, and it would
-  expand agent behaviour without evidence. It is kept as a follow-up draft.
-- **Platform-side check in `deploy-service` or the `dbInitJob` hook.** Dropped. It
-  runs after merge, at apply time, which is exactly when the failure already
-  happens. It would also need the platform to understand each tenant's migration
-  tool, which is a new capability for parity.
-- **Docs-only guidance with no experiment.** Dropped. The issue requires evidence
-  on current workload rather than vendor claims, and the snapshot-diff part of
-  the check is only worth recommending if it actually catches scenario (c).
+- **Run the PostgreSQL experiment first.** Dropped by the owner. Guidance can be written from known failure
+  modes and stated honestly as unmeasured.
+- **Ship a runnable CI snippet.** Dropped: no workflow, runner, SQL or action; the idea is prose only.
+- **Platform-side check in `deploy-service` or `dbInitJob`.** Dropped: runs at apply time, needs per-tool
+  knowledge, and is a new platform capability.
+- **DevLoop implementer check.** Left as an owner decision outside this proposal (adjacent to
+  mctl-agents#918).
 
 ## Platform impact
 
-- Migrations: none. No schema, chart, or values change.
-- Backward compatibility: purely additive Markdown sections. Existing anchors in
-  `databases.md` and `scaffolding.md` are unchanged.
-- Resources: the experiment uses GitHub Actions minutes in a scratch repo only.
-  The docs build cost is unchanged.
+- Additive Markdown. Existing anchors in both guides are preserved. No migrations, chart, values, CI, release
+  or deploy changes.
 - Risks and mitigations:
-  - Readers may believe mctl enforces the check. Mitigation: explicit
-    "opt-in, runs in your CI, mctl does not run it" wording, which is an
-    acceptance criterion.
-  - Stale merge-ref false negatives. Mitigation: document the
-    up-to-date-branch or merge-queue requirement next to the snippet.
-  - Snapshot-diff false positives from `pg_dump` formatting differences across
-    versions. Mitigation: pin `postgres:17` for both the dump and the snapshot,
-    and measure the false-positive rate in the experiment.
+  - Readers may think mctl enforces the check. Wording states it is optional, runs in the tenant's CI and
+    mctl does not run it.
+  - The guide could be read as measured. It lists unmeasured parameters and calls the check an idea.
+  - Link or anchor breakage. Confirm default heading anchors through the existing doc build before merging;
+    this proposal does not claim a link test was run.
+- Verification when implemented: content and link review, and the existing docs build (`bun run build`) from
+  already-installed dependencies. If the build cannot run in the environment, say so. No package install, no
+  database run.
