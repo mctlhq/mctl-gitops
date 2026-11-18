@@ -5,7 +5,7 @@ Pins the three required check names of ruleset 18465404 after S1:
   (check name = job id); `reserved-hosts` has NO job-level `if:`; `validate` is the
   aggregator of the parallel validate-N shards (gitops#2721): its `if` is exactly
   `always()` (a skipped required check passes), and its `needs` lists every
-  validate-N job in the file, so a shard added later cannot be left out of the
+  validate-N job in the file plus GATED_JOBS (zitadel-iac: the mctl-api config guard), so a shard added later cannot be left out of the
   gate. The `pull_request` trigger has no `paths`/`paths-ignore`.
   cloudflare-plan.yml: job `cloudflare-plan` exists, name == `cloudflare-plan`,
   `if: always()` (a verdict job that must always report), trigger has no paths filter.
@@ -17,6 +17,8 @@ try:
     import yaml
 except ImportError:
     print("UNKNOWN: PyYAML missing"); sys.exit(2)
+# Non-shard jobs the `validate` aggregator must also wait for.
+GATED_JOBS = ("zitadel-iac",)
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -70,6 +72,19 @@ def run(a):
             for sh in shards:
                 if sh not in needs:
                     f.append(("validate-manifests", "shard %s is not in validate's needs: it is not part of the required gate" % sh))
+            # Jobs that are not validate-N shards but are part of the gate:
+            # the mctl-api config guard lives in zitadel-iac (mctl-gitops#2766).
+            for extra in GATED_JOBS:
+                if extra not in needs:
+                    f.append(("validate-manifests", "%s is not in validate's needs: a red job would not block merges" % extra))
+                ej = vm["jobs"].get(extra)
+                if ej is None:
+                    f.append(("validate-manifests", "gated job %s missing" % extra))
+                elif "if" in ej or ej.get("continue-on-error"):
+                    f.append(("validate-manifests", "gated job %s has if/continue-on-error (a skipped job passes)" % extra))
+            body = " ".join(str(s.get("run", "")) for s in job.get("steps") or [])
+            if "length == %d " % len(needs) not in body:
+                f.append(("validate-manifests", "aggregator step does not assert length == %d (needs has %d jobs)" % (len(needs), len(needs))))
             for n in needs:
                 if n not in vm["jobs"]:
                     f.append(("validate-manifests", "validate needs %s, which is not a job" % n))

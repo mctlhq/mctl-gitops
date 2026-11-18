@@ -17,7 +17,8 @@ wf = yaml.safe_load(WF.read_text())
 job = wf["jobs"]["validate"]
 step = job["steps"][0]
 script = step["run"]
-shards = sorted(k for k in wf["jobs"] if k.startswith("validate-"))
+# every job the aggregator waits on: the validate-N shards plus gated jobs such as zitadel-iac
+shards = sorted(job["needs"])
 fails = []
 
 
@@ -38,6 +39,8 @@ def check(cond, msg):
 
 check(len(job["steps"]) == 1 and "NEEDS" in step.get("env", {}), "aggregator must be the one step reading NEEDS")
 check(len(shards) >= 2, "expected several validate-N shards")
+check(all(k in wf["jobs"] for k in shards), "every needs entry must be a real job")
+check(set(k for k in wf["jobs"] if k.startswith("validate-")) <= set(shards), "every validate-N shard must be in needs")
 check(run(ok()) == 0, "all shards success must be green")
 for bad in ("failure", "cancelled", "skipped"):
     for s in shards:

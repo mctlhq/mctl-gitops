@@ -59,7 +59,7 @@ at or above 4.155.0 can be written until a reviewed PR adds an allow record.
 | P2 | `gitops-bump.yaml` (any holder of `actions: write` on mctl-gitops). `bump` `:96`, `publish-direct` `:446`, `publish-pr` `:493` | yes | same | KNOWN-ENFORCED |
 | P3 | Human PR to `main` | yes | review plus `validate` (verify runs on the PR tree) | KNOWN-ENFORCED |
 | P4 | `claude/*` PR auto-merged on a bot approval | yes | `auto-merge.yml` `protected_re` (line 82) lists the gate files and the two bump workflows; `validate` | KNOWN-ENFORCED for the gate files. Whether `mctl-api.yaml` itself is in `protected_re` was not confirmed: it is not named in the pattern, so a `claude/*` PR that only changes the tag is held back by `validate` alone |
-| P4b | `release-bump/*` PR opened by the `mctl-gitops-pr` App and auto-merged (`auto-merge.yml:33-41`) | yes, a tag line | diff guard (tag/digest lines only, forward moves), `validate` runs `release-gate.py verify`, route limited to `ghcr.io/mctlhq/mctl-api` in `release-bump-routes.yaml` | KNOWN-ENFORCED; first live use not yet observed |
+| P4b | `release-bump/*` PR opened by the `mctl-gitops-pr` App and enqueued by `release-bump-enqueue.yml` (called from the two bump workflows on `main`; guards in `scripts/release-bump-enqueue-wait.sh`) | yes, a tag line | App author, `auto-merge.yml` `protected_re`, diff guard (tag/digest lines only, forward moves), approval on the exact head, `validate` runs `release-gate.py verify`, route limited to `ghcr.io/mctlhq/mctl-api` in `release-bump-routes.yaml` | KNOWN-ENFORCED; used live for 4.167.0 (#2780) and 4.168.0 (#2792) |
 | P5a | Argo `wft-deploy-service`, `wft-rollback-service`, `tpl-git-commit` as written | no: paths are `platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml` (`wft-deploy-service.yaml:399`, `wft-rollback-service.yaml:131`, `tpl-git-commit.yaml:342-345`); `release-gate-guard.sh outgoing` (`wft-deploy-service.yaml:457`) covers gated groups only | n/a | KNOWN-NOT-A-PATH for the template code |
 | P5b | Write deploy key `argo-workflows-bot-2026-10` (id 166128843) used outside the template code | yes: the ruleset 18465404 bypass entry (`DeployKey`, `actor_id: null`, `always`) lets it push any path to `main` with no PR and no check | none at push time; `release-gate-watch.yml` detects after the fact | **BLOCKING-UNKNOWN** until #2543 |
 | P6 | mctl-agents CWFT `commit-and-push` steps (deploy-key push to `main`) | the credential can push any path; template code scopes `git add` to `agents-state/**` | template guard only | **BLOCKING-UNKNOWN** with P5b (same credential class) |
@@ -164,7 +164,7 @@ tool the design describes.
 
 ## Release ledger mode (mctl-api#1022 S4)
 
-The hold carries a `ledger:` block (`mode: shadow` today). Each mode, and
+The hold carries a `ledger:` block (`mode: enforce` since 2026-11-18). Each mode, and
 what it changes:
 
 - **shadow**: the allow records decide, exactly as above. release-deploy's
@@ -194,6 +194,14 @@ what it changes:
      tag.
   7. `verify` accepts the held tag without a record.
 
+Releasing under enforce, in order: merge the release-please PR; when
+release-deploy's build finishes, an admin opens the request
+(`POST /api/v1/release/grants`, step 2 below); the owner approves it on the
+page within `wait_minutes`; `ledger-gate` then hands the digest to `bump`. A
+rollback to an older version needs its own decision for that version's
+digest. To fall back to allow records, set `mode: shadow` in a reviewed PR
+and add an allow record for the version being released.
+
 `ledger-gate` runs for every image, because `bump` needs it. A red
 `ledger-gate` on an image with no ledger hold is an infrastructure failure:
 checkout, `pip install`, or loading `release-gates.yaml`. It is not a
@@ -206,6 +214,32 @@ bump PR. Re-running the release-gate-watch run of the push is safe.
 `pr-identity` requires the event sender to be the bot as well as the PR
 author. A human push onto an open bump PR therefore fails `validate`. So
 does a human reopening it. Let release-deploy open a new PR instead.
+
+### A bump PR stuck in the merge queue (AWAITING_CHECKS)
+
+Symptom: the `release-bump/*` PR is approved and green, it shows in the merge
+queue, but no `validate`, `reserved-hosts` or `cloudflare-plan` run exists for
+its `gh-readonly-queue/main/pr-<N>-<sha>` commit, and `await-bump` in the
+release run keeps waiting. Cause: the entry was created with `GITHUB_TOKEN`.
+Events caused by `GITHUB_TOKEN` start no workflow run, and that includes the
+`merge_group` event of a queue entry it created. This is what happened to
+4.167.0 (#2780) and 4.168.0 (#2792) while `auto-merge.yml` enqueued bump PRs.
+
+Since the fix, `release-bump-enqueue.yml` enqueues with the `mctl-gitops-pr`
+App token, whose events do start workflows. If an entry stalls again (a run
+from before the fix, or a regression), the remedy is a human re-enqueue of the
+same head:
+
+```bash
+pr=<N>
+read -r id head <<<"$(gh pr view "$pr" --repo mctlhq/mctl-gitops --json id,headRefOid --jq '"\(.id) \(.headRefOid)"')"
+gh api graphql -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}' -f id="$id"
+gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+  -f id="$id" -f h="$head"
+```
+
+Check first that `head` is the commit the approval is on. The `merge_group`
+runs start at once; the release run's `await-bump` then sees the merge.
 
 ### After the fact: release-gate-watch reads the ledger (S4b, #2774)
 

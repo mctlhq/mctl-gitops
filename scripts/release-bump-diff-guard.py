@@ -12,7 +12,7 @@ tag (mctl-gitops#2652): only in a service values file, only directly under a
 changed `tag:` line of the same side and indentation, and a tag that had a
 digest must keep one, so a bump never silently falls back from a pinned image
 to its tag. Exit 1 refuses; exit 2 means the diff could
-not be read. Both are a refusal for the callers (publish-pr, auto-merge.yml):
+not be read. Both are a refusal for the callers (publish-pr, release-bump-enqueue-wait.sh):
 "could not read" is never "nothing to object to", and an empty diff is not a
 pass either.
 

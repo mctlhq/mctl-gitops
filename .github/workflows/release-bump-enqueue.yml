@@ -1,0 +1,83 @@
+name: Release Bump Enqueue
+
+# Puts an approved, green release-bump/* pull request into the merge queue.
+# Called by release-deploy.yaml and gitops-bump.yaml right after publish-pr
+# opens the PR; never triggered by a pull request event, so its code and the
+# guard scripts it runs always come from main.
+#
+# The enqueue uses the mctl-gitops-pr App token, never GITHUB_TOKEN. Events
+# caused by GITHUB_TOKEN do not start workflow runs, and that includes the
+# merge_group event of a queue entry GITHUB_TOKEN created: such an entry sat in
+# AWAITING_CHECKS with no required check running until a person re-enqueued it
+# (mctl-api 4.167.0 #2780, 4.168.0 #2792). An App installation token's events
+# do start workflows. tests/test_release_bump_enqueue.py holds that wiring.
+#
+# The App key is a secret of the `app-gitops-pr` environment, which deploys to
+# main only. The wait runs first with a read-only GITHUB_TOKEN; the App token is
+# minted only after scripts/release-bump-enqueue-wait.sh has judged the head,
+# and is used for the one enqueue mutation, pinned with expectedHeadOid.
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: "Number of the release-bump pull request publish-pr opened"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # The wait inside gives up after 45 minutes; await-bump in the caller is
+    # the red signal for a bump that does not merge.
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval and the required checks on the bump head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: bash scripts/release-bump-enqueue-wait.sh
+
+      - name: Generate the App token for the enqueue
+        id: token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # expectedHeadOid: the queue refuses the entry if the head is no longer
+      # the one the wait judged and the approval covers.
+      - name: Enqueue the judged head with the App token
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ inputs.pr }}
+          PR_ID: ${{ steps.ready.outputs.pr_id }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+          if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+                -f id="$PR_ID" -f h="$HEAD_SHA" 2>&1); then
+            echo "::error::enqueue of #${PR} was refused: ${out}"
+            exit 1
+          fi
+          echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"
