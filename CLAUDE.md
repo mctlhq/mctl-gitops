@@ -145,6 +145,9 @@ and for the one-shot egress proof see `docs/runbooks/redloop-egress-probe.md`.
 For the inert Glovo M1 staging package, its P1/P2 gates, kill switch and
 rollback, see `docs/runbooks/glovo-m1.md`.
 
+For the C2 cutover plan of the Glovo hosted service (flip order, ingress and
+edge, capacity, the owner's Vault steps), see `docs/runbooks/glovo-c2-cutover.md`.
+
 ## Terraform (k3s-preview cluster)
 
 See `infrastructure/k3s-preview/README.md` for full runbook.
