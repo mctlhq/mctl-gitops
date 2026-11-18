@@ -722,3 +722,27 @@ mctlGlovo:
   allowlist: false
   consent: false
   control: false
+  # mctl-api's side of the consent read (the consent routes, their cap and the
+  # reader identity). Independent of the switches above so it can be lit
+  # first. The cutover runbook (docs/runbooks, C2 cutover) holds the order.
+  apiConsent: false
+  # Fresh sign-in on the link routes (the link audience and the maximum login
+  # age, two optional variables of the service). Off: both stay unset and the
+  # link preview and upload routes refuse every request. Needs c2.
+  linkLogin: false
+  # The public route to the service: an Ingress object, a Traefik source in
+  # the server policy and the trusted-proxies variable. Needs c2, host,
+  # trustedProxies and the host's reservedPlatformHosts owner. Rollback: false.
+  ingress: false
+  host: glovo.mctl.ai
+  # CIDRs of the Traefik pods (the same set as mctl-api's TRUSTED_PROXY_CIDRS).
+  # Required while ingress is on: the service keys its per-IP link limits on
+  # the address behind these proxies.
+  trustedProxies: ""
+  # Longest age of the sign-in behind a link preview or upload (a Go duration,
+  # at most 15m). Read only while linkLogin is on.
+  linkMaxAuthAge: 5m
+  # The cohort size, read by BOTH the service and mctl-api's consent slots: one
+  # value so the two cannot drift. A whole number, 1..20. Raising it is an
+  # owner decision with its own reviewed PR, never a rider on another change.
+  capacity: 1

@@ -75,6 +75,7 @@ jobs:
             platform-gitops/bootstrap/templates/observability/tracing.yaml
             platform-gitops/bootstrap/templates/observability/obi-spike.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-consent.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-support-incident-producer.yaml
