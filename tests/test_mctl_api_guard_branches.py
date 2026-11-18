@@ -6,7 +6,8 @@ scripts with the shipped MIN against the REAL rendered bootstrap chart and the R
 docker (no network), and proves both branches the release path depends on:
 
   A  live images (4.167.0, 4.168.0: below MIN, no --check-config) with the CURRENT config are SKIPPED
-     safely: exit 0, the visible SKIPPED notice, and not a single docker call.
+     safely: exit 0, the visible SKIPPED notice, and not a single docker call. The pin direction follows
+     the REAL pinned tag: skipped below MIN, judged by the image (reject blocks, accept passes) at/above.
   B  a below-MIN tag with a service_subjects config is REFUSED by the legacy rule (and is never skipped).
   C  a candidate at/above MIN whose own --check-config rejects the config (the 4.166.0 incident shape)
      is BLOCKED, and the workflows run that check before the tag edit and before anything can push.
@@ -122,6 +123,14 @@ def run_pin(tree, mode):
         return r.returncode, r.stdout + r.stderr, log.read_text()
 
 
+def pinned_tag():
+    """The image.tag the shipped script reads from the rendered bootstrap chart (what the pin direction judges)."""
+    spec = importlib.util.spec_from_file_location("chk", ROOT / "scripts/check-mctl-api-oidc-config.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.load_values()["image"]["tag"]
+
+
 def read_min(check_text):
     import re
     return re.search(r'^MIN_CHECKER_VERSION = "(\d+\.\d+\.\d+)"', check_text, re.M).group(1)
@@ -160,9 +169,21 @@ def matrix(check_text=None, wrapper_text=None):
             rc, out, log = run_wrapper(live, "reject", tag)   # worst case: the image would reject, but it must not even be asked
             res[f"A bump {tag} (live, below MIN) with the current config: SKIPPED, no docker call"] = (
                 rc == 0 and "SKIPPED" in out and log.strip() == "", (rc, out[-160:], log))
-        rc, out, log = run_pin(live, "reject")
-        res["A pin direction: the real pinned tag with the real config: SKIPPED, no docker call"] = (
-            rc == 0 and "SKIPPED" in out and log.strip() == "", (rc, out[-160:], log))
+        # Pin direction (the validate gate) on the REAL pinned tag. Which branch applies depends on that
+        # tag: a release-bump PR that moves the pin to MIN or later must be judged by the image itself.
+        # Asserting a skip unconditionally turned every such bump red (mctl-api 4.169.0, gitops#2798).
+        pin = pinned_tag()
+        if tup(pin) < tup(mn):
+            rc, out, log = run_pin(live, "reject")
+            res[f"A pin direction: the real pinned tag {pin} (below MIN) with the real config: SKIPPED, no docker call"] = (
+                rc == 0 and "SKIPPED" in out and log.strip() == "", (rc, out[-160:], log))
+        else:
+            rc, out, log = run_pin(live, "reject")
+            res[f"A pin direction: the real pinned tag {pin} (at/above MIN) whose image rejects the config: BLOCKED"] = (
+                rc == 1 and "CONFIG REJECTED" in out and "run" in log.split() and "SKIPPED" not in out, (rc, out[-160:], log))
+            rc, out, log = run_pin(live, "ok")
+            res[f"A pin direction: the real pinned tag {pin} (at/above MIN) whose image accepts: allowed, --check-config ran"] = (
+                rc == 0 and "--check-config" in log and "SKIPPED" not in out, (rc, out[-160:], log))
         # B: below MIN + service_subjects
         bad = tree(fixture_text=fixture_with_service_subjects())
         for tag in below_all:
