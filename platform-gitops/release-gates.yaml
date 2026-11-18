@@ -62,14 +62,15 @@ version_holds:
     #            allow records are no longer read, gitops-bump.yaml cannot
     #            bump this image at all, and a pull request may change its tag
     #            only as bump_pr_author from a bump_pr_branch_prefix branch.
-    # Switch to enforce in its own PR, and only when (1) a live run has shown
-    # ledger=allow for an approved release and (2) release-gate-watch reads
-    # the ledger after each push (S4b): in enforce mode its offline diff no
-    # longer flags a held-tag change, so without (2) a direct deploy-key push
-    # (docs/runbooks/mctl-api-release-hold.md P5b/P6) would go unnoticed.
-    # mctl-api's approval page text changes with the switch.
+    # Enforced since 2026-11-18 (owner decision), after both prerequisites
+    # held: (1) a live run showed ledger=allow for an approved release
+    # (4.167.0, release-deploy run 44195491155, release-gate-watch run
+    # 44198826314) and (2) release-gate-watch reads the ledger after each
+    # push, in its own push-only job (S4b, #2774 and #2778). To fall back,
+    # set mode: shadow in a reviewed PR; the allow records below are then
+    # read again, so add one for the version being released.
     ledger:
-      mode: shadow
+      mode: enforce
       wait_minutes: 60
       bump_pr_author: mctl-gitops-pr[bot]
       bump_pr_branch_prefix: release-bump/

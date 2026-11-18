@@ -164,8 +164,16 @@ tool the design describes.
 
 ## Release ledger mode (mctl-api#1022 S4)
 
-The hold carries a `ledger:` block (`mode: shadow` today). Each mode, and
+The hold carries a `ledger:` block (`mode: enforce` since 2026-11-18). Each mode, and
 what it changes:
+
+Releasing under enforce, in order: merge the release-please PR; when
+release-deploy's build finishes, an admin opens the request
+(`POST /api/v1/release/grants`, step 2 below); the owner approves it on the
+page within `wait_minutes`; `ledger-gate` then hands the digest to `bump`. A
+rollback to an older version needs its own decision for that version's
+digest. To fall back to allow records, set `mode: shadow` in a reviewed PR
+and add an allow record for the version being released.
 
 - **shadow**: the allow records decide, exactly as above. release-deploy's
   `ledger-gate` job reads the release ledger for the image it built and puts
