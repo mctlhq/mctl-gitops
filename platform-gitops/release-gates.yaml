@@ -369,6 +369,14 @@ version_holds:
         grant: mctlhq/mctl-gitops#2787
         approved_by: mashkovd
         expires: 2026-12-01
+      # Owner GO in chat (2026-11-18) for 4.169.1: Google sign-in fix
+      # (mctl-api#1114, reads the Google userinfo under rawInformation.User) and
+      # the strict decide-link binding (mctl-api#1122). Covers only the 4.169.1
+      # tag of release PR mctlhq/mctl-api#1123.
+      - version: "4.169.1"
+        grant: mctlhq/mctl-gitops#PRNUM
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
