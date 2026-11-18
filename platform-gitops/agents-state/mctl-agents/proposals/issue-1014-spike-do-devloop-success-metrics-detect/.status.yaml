@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-11-18T16:49:12Z'
+status: review-stuck
+updated_at: '2026-11-18T17:21:06Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-00643983805ac5bc
@@ -52,8 +52,13 @@ ci_blockers:
 - PR validation / tests
 refusals: 2
 refusals_head: 5436dafa5fb7df5da677ec5bd949a4a84cc2bdc1
-notes: 'implementer declined to act: Only failing test is tests/test_merge_watch_final_read.py::test_a_merge_landing_in_the_window_gives_a_second_read_of_merged
-  (Temporal time-skipping workflow failure; 8340 others passed). This PR changes only
-  tests/test_context_eval.py, and the failing test passes when re-run locally (1 passed),
-  so it is a flake unrelated to the PR.'
-harness_failures: 2
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (51) for mctl-agents/issue-1014-spike-do-devloop-success-metrics-detect).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: Branch only touches
+  tests/test_context_eval.py; it passes (55 passed) and `uv run --locked mypy` is
+  clean (176 files). Full pytest locally could not be completed: tests/test_manifest.py
+  fails collection only because the mctl-gitops sibling checkout/MCTL_GITOPS_ROOT
+  is absent (CI checks it out), and the rest of the suite exceeded my 300-600s command
+  timeouts, so no failing test was identified. No fix was provable, nothing committed.'
+harness_failures: 3
