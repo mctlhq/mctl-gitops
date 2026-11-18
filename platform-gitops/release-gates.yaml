@@ -359,6 +359,15 @@ version_holds:
         grant: mctlhq/mctl-gitops#2776
         approved_by: mashkovd
         expires: 2026-12-01
+      # Owner GO in chat (2026-11-18) for 4.168.0: deploy approval page only
+      # (links for commits and preview host mctl-api#1109, wide card and
+      # correct target wording mctl-api#1115, release page says the ledger is
+      # enforced mctl-api#1117). No API or workflow behaviour changes. Covers
+      # only the 4.168.0 tag of release PR mctlhq/mctl-api#1113.
+      - version: "4.168.0"
+        grant: mctlhq/mctl-gitops#PENDING
+        approved_by: mashkovd
+        expires: 2026-12-01
 
 gates:
   - name: mctl-agents-workers
