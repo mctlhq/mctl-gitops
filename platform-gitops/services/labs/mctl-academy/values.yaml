@@ -5,8 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-academy
-  tag: "0.1.98"
-  digest: "sha256:41c0d38083817e0264e3fe71324f65cf2223030c3b7593d745608a5cfc7347ea"
+  tag: "0.1.99"
+  digest: "sha256:0e15e14193b3d77e97418d97794810da0ddb8c17f50212aac6560e16db47c08e"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
