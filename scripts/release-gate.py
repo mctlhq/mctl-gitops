@@ -88,14 +88,16 @@ def _gates(root: Path, rev: str | None = None) -> list[dict]:
 
 def problems(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
              today: datetime.date | None = None, image: str | None = None,
-             ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
+             ledger_digest: str | None = None, new_digest: str | None = None,
+             preflight: bool = False) -> list[str]:
     """Every reason to refuse. `files=None` is verify mode (whole tree)."""
     try:
         gates = _gates(root, rev)
         holds = _holds(_policy_doc(root, rev))
     except Exception as exc:  # noqa: BLE001 - unreadable gate is a refusal
         return [f"UNKNOWN: gate {GATE} unreadable: {type(exc).__name__}: {exc}"]
-    out: list[str] = hold_problems(root, holds, files, new_tag, today, image, ledger_digest, new_digest)
+    out: list[str] = hold_problems(root, holds, files, new_tag, today, image, ledger_digest, new_digest,
+                                   preflight)
     for g in gates:
         paths = g["paths"]
         touched = paths if files is None else [p for p in paths if p in files]
@@ -291,7 +293,8 @@ def _bootstrap_tag(root: Path, hold: dict) -> str:
 
 def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_tag: str | None,
                   today: datetime.date | None = None, image: str | None = None,
-                  ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
+                  ledger_digest: str | None = None, new_digest: str | None = None,
+                  preflight: bool = False) -> list[str]:
     """Refuse a held version unless an allow record names exactly that version.
 
     Bump mode (files given): a NEW write, judged on `new_tag`, only for a hold
@@ -336,6 +339,12 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
             continue
         if _enforced(h):
             if files is None:
+                continue
+            # Preflight runs before the build, so no digest exists yet and the
+            # ledger cannot be asked. It defers only this judgement: the bump
+            # step calls check without --preflight and refuses an unknown
+            # digest there. The version checks above still ran.
+            if preflight:
                 continue
             if not (isinstance(new_digest, str) and DIGEST.fullmatch(new_digest)):
                 out.append(f"{h['name']}: ledger enforced, but the digest being written is unknown ({new_digest!r})")
@@ -409,8 +418,10 @@ def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
 
 
 def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
-        image: str | None = None, ledger_digest: str | None = None, new_digest: str | None = None) -> int:
-    found = problems(root, files, new_tag, rev, image=image, ledger_digest=ledger_digest, new_digest=new_digest)
+        image: str | None = None, ledger_digest: str | None = None, new_digest: str | None = None,
+        preflight: bool = False) -> int:
+    found = problems(root, files, new_tag, rev, image=image, ledger_digest=ledger_digest, new_digest=new_digest,
+                     preflight=preflight)
     for line in found:
         print(f"::error::release gate: {line}", file=sys.stderr)
     if found:
@@ -941,6 +952,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--new-digest", default=None, help="digest of the image being written (ledger holds)")
     c.add_argument("--ledger-approved-digest", default=None,
                    help="digest release-deploy's ledger-gate job found an approved decision for")
+    c.add_argument("--preflight", action="store_true",
+                   help="before the build (release-preflight.py): an enforced ledger hold is judged at the bump")
     d = sub.add_parser("diff")
     d.add_argument("--base", required=True)
     d.add_argument("--head", required=True)
@@ -956,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
     if a.cmd == "check":
         return run(Path(a.root), a.files, a.new_tag, a.policy_rev, a.image,
-                   a.ledger_approved_digest or None, a.new_digest or None)
+                   a.ledger_approved_digest or None, a.new_digest or None, a.preflight)
     if a.cmd == "verify":
         return run(Path(a.root), None, None, a.policy_rev)
     if a.cmd == "diff":
