@@ -323,6 +323,108 @@ all of the following hold:
 For GO-1 (origin path) the Ingress stays disabled, so criterion 3 and the
 edge controls are not exercised; they matter for GO-2.
 
+## 11. GO-1b: repeat origin baseline with seeded coverage (PROPOSED)
+
+**Status: PROPOSED, not approved.** GO-1b needs its own operator GO and a
+confirmed window. Until then nothing in this section is authorised.
+
+**Why.** GO-1 (2026-11-18 02:00 UTC, #2769) reached only the linked pages,
+because the spider follows links. `/healthz` and `/static/` were never
+passively scanned. #2796 then hardened the response headers. GO-1b checks
+that hardening on every fixture path.
+
+| Field | Value |
+|---|---|
+| Scope | Origin only, through `kubectl port-forward`, exactly as GO-1. No Ingress, no edge, no Cloudflare change |
+| Scanner | OWASP ZAP **2.17.0**, `zap-baseline.py` (passive rules only, the same rule set as GO-1), same pinned digest as section 1 |
+| Coverage | Seed hook requests `/`, `/robots.txt`, `/healthz`, `/static/app.js` and a 404 path (`/does-not-exist`) before the spider runs |
+| Request budget | Same as GO-1: ZAP rate-limit rule at 4 req/s, verified afterwards from the origin access log against 5 req/s (section 3) |
+| Tester / contact | **PROPOSED:** the platform owner; operator Telegram |
+| Testing window | **PROPOSED: operator to set** start and end in UTC, at most 1 hour. A green `redloop-waf-verify` run on `main` within the previous 24 h is required |
+| Preconditions | #2796 merged and rolled out; image digest unchanged; `ingress.enabled: false`; RedLoop risk acceptance renewed for the #2796 configuration; the section 9 GO checks hold at window start |
+| Stop conditions | Section 5, plus the window end |
+| Reports | Private, as in GO-1 (`0700` directory); a sanitized summary only in public |
+
+**Expected result.** Only these residual findings:
+
+| ZAP rule | Why it remains |
+|---|---|
+| 10038 CSP not set | intentionally seeded (see `location = /`) |
+| 90004 COEP / COOP / CORP | not applicable to this fixture |
+| 10049 Storable and cacheable content | not applicable: public static content |
+
+Any other finding, or any of the five seed paths missing from the report, makes the result FAIL or INCONCLUSIVE rather than PASS.
+
+**Rehearsal (local only, never against RedLoop, 2026-11-18).** The pinned nginx image was run locally with the #2796 configuration, and the same baseline with the seed hook was run against it. It reached every seed path, peaked at 3 req/s, and reported exactly 10038, 90004 and 10049. The same run against the pre-#2796 configuration also reported 10020, 10021, 10036 and 10063.
+
+**GO-1b command** (the GO-1 script with the seed hook added; the tester's machine, during the window only):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+IMG=ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+SVC=svc/redloop-redloop-synthetic-staging-base-service
+DEP=deploy/redloop-redloop-synthetic-staging-base-service
+OUT="$HOME/.local/share/mctl-forensics/redloop-go1b-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p -m 0700 "$OUT"                # private: reports never leave this directory
+START=$(date -u +%FT%TZ)
+
+# Seed hook: request fixed paths before the spider, so that paths without an
+# inbound link are passively scanned too. The requests go through ZAP, so the
+# rate-limit rule below applies to them.
+cat >"$OUT/seed_hook.py" <<'HOOK'
+SEEDS = ["", "robots.txt", "healthz", "static/app.js", "does-not-exist"]
+
+def zap_started(zap, target):
+    base = target.rstrip("/") + "/"
+    for path in SEEDS:
+        zap.core.access_url(url=base + path, followredirects=False)
+HOOK
+
+kubectl -n redloop port-forward "$SVC" 18080:80 >"$OUT/port-forward.log" 2>&1 &
+PF=$!
+cleanup() { kill "$PF" 2>/dev/null || true; wait "$PF" 2>/dev/null || true; chmod -R go-rwx "$OUT"; }
+trap cleanup EXIT INT TERM             # the port-forward never outlives the script
+
+# Fail closed: no 200 from /healthz within 20 s, or the port-forward died -> no scan.
+ready=0
+for _ in $(seq 1 20); do
+  kill -0 "$PF" 2>/dev/null || break
+  if curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:18080/healthz; then ready=1; break; fi
+  sleep 1
+done
+[ "$ready" = 1 ] || { echo "ABORT: origin not ready; ZAP not started" >&2; exit 1; }
+
+# Enforced budget: ZAP's own rate limiter, one rule matching every host, 4 req/s.
+RL="-config network.ratelimit.rules.rule(0).description=redloop-budget"
+RL+=" -config network.ratelimit.rules.rule(0).enabled=true"
+RL+=" -config network.ratelimit.rules.rule(0).matchStr=.*"
+RL+=" -config network.ratelimit.rules.rule(0).regex=true"
+RL+=" -config network.ratelimit.rules.rule(0).reqsPerSec=4"
+RL+=" -config network.ratelimit.rules.rule(0).groupBy=rule"
+
+set +e
+docker run --rm -v "$OUT:/zap/wrk" "$IMG" \
+  zap-baseline.py -t http://host.docker.internal:18080/ -m 1 -T 10 -I \
+    --hook=/zap/wrk/seed_hook.py \
+    -r report.html -J report.json \
+    -z "-config spider.thread=1 -config connection.timeoutInSecs=10 $RL" \
+  >"$OUT/zap.log" 2>&1
+ZAP_RC=$?
+set -e
+
+# Independent check of the budget, from the origin's own access log. kube-probe
+# lines are excluded; everything else (scanner and blackbox probe) is counted,
+# so the check can only over-count.
+kubectl -n redloop logs "$DEP" --since-time="$START" | grep -v 'kube-probe/' >"$OUT/origin-access.log" || true
+MAX=$(awk '{ if (match($0, /\[[^]]+\]/)) print substr($0, RSTART+1, 20) }' "$OUT/origin-access.log" \
+      | sort | uniq -c | sort -rn | awk 'NR==1 { print $1 } END { if (NR==0) print 0 }')
+echo "zap_rc=$ZAP_RC origin_requests=$(wc -l <"$OUT/origin-access.log") max_req_per_sec=$MAX" | tee "$OUT/budget.txt"
+[ "$MAX" -le 5 ] || { echo "BUDGET EXCEEDED: stop condition, report to the operator" >&2; exit 3; }
+exit "$ZAP_RC"
+```
+
 ## Approval
 
 The operator's approval was given in writing in the operator session on
