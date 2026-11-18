@@ -1,10 +1,11 @@
 # RedLoop Gate 4: Rules of Engagement
 
-**Status: decisions recorded, approval signature PENDING.** No DAST, no
-scan, and no public exposure of `staging-redloop.mctl.ai` is authorised until
-every field marked **PROPOSED** below is confirmed and an operator has signed
-the approval block at the end, in a reviewed PR. Fields marked **DECIDED**
-record operator decisions of 2026-11-18; they authorise nothing on their own.
+**Status: APPROVED for GO-1 only (origin path, 2026-11-18 02:00-03:00 UTC).**
+The approval is recorded in the block at the end. It covers the origin-only
+ZAP baseline in section 1 and nothing else: no public Ingress, no edge path,
+no active scan and no WAF bypass. GO-1 still needs its own explicit
+execution GO, and the GO checks in section 9 must hold at the start of the
+window. Fields marked **DECIDED** record operator decisions of 2026-11-18.
 
 The first DAST phase (GO-1) uses the **origin path only** (section 4): no
 public Ingress, no DNS change and no Cloudflare change. The edge path is a
@@ -20,13 +21,13 @@ which is a separate gate.
 |---|---|
 | Authorising operator | Platform owner. Identity is recorded by the approval on the approval PR, not here |
 | Authorisation reference | The approval PR that fills in this table (link added at signature) |
-| Tester / scanner operator | **PROPOSED:** the platform owner runs the scanner personally. A third-party tester needs a new approval |
-| Operator contact during the window | **PROPOSED:** operator Telegram (the same chat the RedLoop alerts reach) |
-| Testing window | **PROPOSED:** one window of at most 2 hours, start and end in UTC, set by the operator when signing. Must start within 24 h of a green `redloop-waf-verify` run on `main` |
+| Tester / scanner operator | **CONFIRMED:** the platform owner runs the scanner personally. A third-party tester needs a new approval |
+| Operator contact during the window | **CONFIRMED:** operator Telegram (the same chat the RedLoop alerts reach) |
+| Testing window | **CONFIRMED:** **2026-11-18 02:00 to 03:00 UTC**, one window. A green `redloop-waf-verify` run on `main` within the previous 24 h is required (run 44206456843, 2026-11-18 00:55 UTC). If the window is missed, a new one needs a new operator decision |
 | Scanner source IP(s) | **Not applicable to GO-1:** the origin path runs over `kubectl port-forward` from the tester's machine. Required only for the edge path (GO-2) |
-| Scanner and version | **PROPOSED:** OWASP ZAP **2.17.0**, baseline scan (`zap-baseline.py`, spider plus passive rules, no active attacks), image `ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af` (multi-arch index, resolved 2026-11-18) |
+| Scanner and version | **CONFIRMED:** OWASP ZAP **2.17.0**, baseline scan (`zap-baseline.py`, spider plus passive rules, no active attacks), image `ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af` (multi-arch index, resolved 2026-11-18) |
 
-**PROPOSED GO-1 command** (origin path; the tester's machine, during the window only):
+**GO-1 command** (origin path; the tester's machine, during the window only):
 
 ```bash
 #!/usr/bin/env bash
@@ -292,7 +293,7 @@ and this exception only if the edge itself is the thing under test.
 Gate 4 (public Ingress on, DAST allowed in a window) may be proposed when
 all of the following hold:
 
-1. This RoE is approved: every TBD or PROPOSED field in sections 1, 6 and 8 is decided and
+1. This RoE is approved: every TBD field in sections 1, 6 and 8 is decided and
    signed off in a reviewed PR.
 2. Monitoring is live. The VMProbe and the RedLoop alerts are merged and
    synced, `probe_success` reads 1, and the route to the operator Telegram
@@ -311,24 +312,29 @@ all of the following hold:
 
 | # | Criterion | State | Evidence |
 |---|---|---|---|
-| 1 | RoE approved | **open**: section 1 PROPOSED fields to confirm, signature pending | this PR |
+| 1 | RoE approved | **met for GO-1**: section 1 confirmed, approval recorded below | this PR |
 | 2 | Monitoring live, route verified | **met**: VMProbe and `redloop-alerts` live, `probe_success` 1 (and 1 for the past 24 h), three rules evaluating; one synthetic `RedLoop*` alert delivered to the operator Telegram and resolved | PR evidence comment |
 | 3 | Rate limit renders with the Ingress | **met (render)**: `helm template` with `ingress.enabled=true` renders the Ingress and the `redloop-staging-ratelimit` Middleware, and the Ingress references it; with the default values neither renders | PR evidence comment |
 | 4 | Egress probe passed | **met (steady state)**: run 2 PASS with node evidence; run 1 FAIL stays on record. A residual pod-startup risk is tracked privately and accepted only for this workload, until 2026-12-18 at the latest, subject to operator signature | #2769 |
 | 5 | Kill switch proven, fast path decided | **met**: Gate 3 drill; fast path decided (section 6) | run 43953107922 |
 | 6 | Scale to 0 drilled or accepted | **met (accepted as untested)** | section 6 |
-| 7 | `redloop-waf-verify` green within 24 h | **at window time**; re-run before the window | workflow run on `main` |
+| 7 | `redloop-waf-verify` green within 24 h | **met**: rule present, inert, contract matches; valid for a window starting before 2026-11-19 00:55 UTC | run 44206456843 |
 
 For GO-1 (origin path) the Ingress stays disabled, so criterion 3 and the
 edge controls are not exercised; they matter for GO-2.
 
 ## Approval
 
-**Signature pending. Do not fill in without the operator's explicit approval.**
+The operator's approval was given in writing in the operator session on
+2026-11-18 ("RedLoop Gate 4 — Final Operator Authorization"). Claude Code
+entered it here on that instruction. It is not a cryptographic signature, and
+the agent did not approve anything on its own behalf.
 
 | | |
 |---|---|
-| Approved by | **PENDING** |
-| Date (UTC) | **PENDING** |
-| Approval PR | **PENDING** |
-| Scope approved | **PENDING** (GO-1 origin path only, as proposed) |
+| Approved by | The platform owner (operator), by written instruction in the operator session |
+| Date (UTC) | 2026-11-18 |
+| Approval PR | #2784 |
+| Scope approved | GO-1 only: OWASP ZAP 2.17.0 baseline (pinned digest), origin path through `kubectl port-forward`, window 2026-11-18 02:00-03:00 UTC, tester the platform owner, contact operator Telegram, budget enforced at 4 req/s and checked against 5 req/s |
+| Not approved | GO-2 (public Ingress, edge path), active or full scans, WAF bypass or scanner exception, production pentest |
+| Related | The residual pod-startup risk for this workload only is accepted conditionally until 2026-12-18 at the latest. That record is held privately |
