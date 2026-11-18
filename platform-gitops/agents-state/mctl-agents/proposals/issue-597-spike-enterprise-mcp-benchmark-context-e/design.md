@@ -54,11 +54,33 @@ The pure functions are tested in `tests/test_capability_bench.py`.
 - **`grep mcp.mctl.ai|code_mode` over `platform-gitops/`:** there are no `services/*/values.yaml` hits. The only hits are prior proposals: `.github` issue-195 and issue-292, and the earlier draft of this proposal. The Cloudflare Portal is not a gitops-managed service, so this run could **not observe** its current `code_mode` / `minimize_tools` state. That is recorded under Open questions and not assumed.
 - **`services/` tenants:** `admins`, `karabu`, `labs`, `namax66`, `redloop`. No tenant or service was invented.
 
+## Review resolution — enforceable research-only gates
+
+| Finding | Proposal amendment | Verification requirement |
+| --- | --- | --- |
+| P1 implementer authorization | This is *only* a proposed research design. No Tier-2, target code/docs PR, fixture writing or real benchmark is authorized. | Explicit separate owner GO bound to future target scope, after independent re-review |
+| P1 unsafe eager fallback | Automatic fallback is prohibited for errors and unknowns; policy/authn/tenant/catalog/approval problems fail closed. | Any future non-security recovery requires typed allowlist, same sealed eligible set, same identity and full trace; negative tests |
+| P2 insufficient comparable tasks | TC1 roadmap, TC2 platform triage, TC3 agent ops: all mctl-api and measured in both required arms; TC4 Telegram cross-upstream is separate applicability test. | No runtime provider registration just to make TC4 measurable |
+| P2 ambiguous audit | Trace hash is not an action identity. Stable run/parent/child/policy-decision/outcome chain required with 1:1 joins. | Unmatched, multimatched, missing durable receipt or unobserved identifiers => `INCOMPLETE` |
+| P2 oracle grants permissions | Eligibility from the sealed profile/policy snapshot, not expected capabilities. | Independent eligible-set snapshot/digest and excluded-set negative proof |
+| P2 adoption regression | No correctness or security regressions tolerated; exploratory n=5 is not enough for strong adoption claims. | Confirmatory sample/power criteria and 100% observed governance before ADOPT; otherwise DEFER |
+
+**Never signal Temporal `approve` for research-only completion**: it launches
+Tier-2. Existing `.status.yaml` must remain `proposed`, and all actual
+measurements remain `NOT_RUN` until a separate operator GO.
+
+
 ## Proposed solution
 
-This is a decision spike. The implementer builds offline tooling plus the document skeleton. The operator then runs an approved, bounded experiment and records the decision. No runtime path changes.
+This is the **research-only proposal** for a later decision-quality benchmark.
+The current deliverable is the revised GitOps plan. The offline tooling,
+task fixtures and canonical document changes below describe a candidate
+implementation **not authorized by this research-only GO**. An explicitly
+approved follow-on tooling scope would be necessary before any implementer
+or mctl-agents PR. A distinct operator-approved experiment would then be
+necessary for runs. No runtime-path changes are proposed.
 
-### 1. Task set v1 (`tools/bench_tasks/*.yaml`)
+### 1. Candidate task set v1 (`tools/bench_tasks/*.yaml`; NOT CREATED)
 
 The classes use short fixed prompts rather than full issue investigations. That isolates the exposure effect from repository-exploration variance, which dominated the 30 against 52 turn gap in the baseline, and it makes tool use mandatory. All classes are read-only.
 
@@ -74,11 +96,25 @@ TC1 to TC3 give the three comparable classes that both required arms can run. TC
 
 Oracles name facts by pinned inputs (`pinned_inputs`, for example the roadmap `state_revision`), so live drift between repetitions is detectable rather than counted as a failure.
 
-### 2. `tools/capability_bench.py` extensions (pure core, thin I/O)
+### 2. Candidate offline record/aggregation contract — NOT AUTHORIZED TO IMPLEMENT
 
 - **Loaders.** `load_task(path)` and `validate_task` reject unknown keys and an empty `expected_capabilities`. `load_run_record` and `validate_run_record` handle the record shape listed in requirements, and reject payload keys (`arguments`, `result`, `answer_text`, `message_text`).
-- **`tool_calls[]`.** Each entry is `{name, capability_id?, kind: search|describe|invoke|direct, arguments_hash, is_retry}`. A retry is the same `(name, arguments_hash)` repeated after an error.
-- **`invocation_traces[]`.** Each entry is a parsed `CAPABILITY_INVOCATION` record (discovery) or `POLICY_DECISION` record (eager).
+- **`tool_calls[]` (future schema).** Each entry requires `run_id`,
+  `parent_execution_id`, unique `child_call_id`, `ordinal`, `name`,
+  `capability_id?`, `kind: search|describe|invoke|direct`,
+  `arguments_hash`, `actor_id`, `tenant_id`, `eligible_set_digest`,
+  `policy_decision_id`, `policy_outcome`, `invocation_outcome`,
+  `durable_trace_id`, `is_retry` and `retry_of_call_id?`.
+  Repetition of the same arguments hash is **not** evidence of a retry,
+  and `expected_capabilities` does not authorize any tool. Sensitive
+  argument payloads never enter persisted captures.
+- **`invocation_traces[]`.** Parse existing `CAPABILITY_INVOCATION`
+  (discovery) and `POLICY_DECISION` (eager) as **candidate** records.
+  Require exact unique join on `child_call_id` and
+  `policy_decision_id`, plus actor, tenant, arguments digest and
+  outcome. Today's logs have **not** been shown to expose the full chain;
+  the missing correlation remains `UNOBSERVED` until verified. In
+  particular, a matching digest alone cannot make `audit_complete=true`.
 - **`cell_metrics(records, task)`:**
   - n;
   - mean and median of `first_turn_cache_creation_tokens`, separately from the totals produced by the existing `_totals_for_transcript`;
@@ -87,23 +123,34 @@ Oracles name facts by pinned inputs (`pinned_inputs`, for example the roadmap `s
   - retries;
   - p50 and p95 of `wall_clock_ms` and `duration_api_ms`, with p95 only when n >= 5;
   - success rate, where a run succeeds when every `expected_capabilities` entry was invoked within `argument_constraints` and every `answer_facts` entry was found;
-  - `permission_preserved`;
-  - `audit_complete`: every invoke has a matching trace with a non-`absent` policy result and an execution context id.
+  - `permission_preserved`: compare visibility and invocations exclusively
+    against the independently pinned, sealed policy-eligible capability
+    set; if the set or its digest is missing the cell is `UNVERIFIABLE`.
+    `expected_capabilities` scores task accuracy only;
+  - `audit_complete`: each allowed **and denied** child call must join
+    uniquely through run/parent/child IDs to an action-time policy decision
+    and durable outcome/trace under the same actor/tenant; missing fields,
+    absent policy, ambiguous matches and trace-only hashes fail the gate.
 - **`aggregate RUNS_DIR --tasks DIR [--not-measurable MODE=REASON ...] [--schema-bytes FILE]`.** Renders the per-task x per-mode markdown tables, using `NOT_RUN` for empty cells and `not measurable: ...` for declared modes. It adds a "Structural vs end-to-end" table: the baseline 61,213 / 23,392 first-turn delta next to the measured first-turn and total deltas, with a verdict line on whether the first-turn reduction translated into end-to-end savings.
 - **Compatibility.** `compare` / `compare_report` / `render_markdown_table` are unchanged.
 
-### 3. Capture recipe (operator-side; no `orchestrator/` change)
+### 3. Future capture recipe (operator-only, requires experiment GO)
 
 The recipe goes in the document's "How to reproduce" section:
 
 - Wrap `UsageRecorder.observe`, as the document already does.
-- Record each `AssistantMessage` `tool_use` block as a `tool_calls` entry, hashing the arguments locally.
-- Grep stdout for `POLICY_DECISION` and `CAPABILITY_INVOCATION` lines.
+- Record each `AssistantMessage` `tool_use` block as a *candidate*
+  child call and hash its arguments locally; minting a local call id
+  does not prove it is the authoritative server's call id.
+- Inspect `POLICY_DECISION` and `CAPABILITY_INVOCATION` log lines,
+  but **do not** infer completeness from a grep. Unless a verifiable
+  one-to-one join with authoritative policy/decision/outcome records is
+  available, `audit_complete` must be `INCOMPLETE`.
 - Score the final answer locally against `answer_facts`, then persist only `oracle_facts_found` and a digest.
 
 A small `tools/capability_bench.py record` subcommand can convert a raw local capture into a validated record and drop payloads before writing. This is an optional nicety with the same validation.
 
-### 4. Document update, in place (`docs/benchmarks/capability-discovery.md`)
+### 4. Future document update (separate owner GO; canonical path unchanged)
 
 New sections:
 
@@ -133,12 +180,18 @@ New sections:
 7. **Adjunct (non-comparable): #1096.** Its own vocabulary, kept outside the four-arm tables.
 8. **Decision.** The pre-registered rule and `PENDING`.
 
-### 5. Pre-registered decision rule
+### 5. Preliminary decision rule (NOT a current adoption verdict)
 
 - **`ADOPT_MCTL_NATIVE`** if all of the following hold:
   - on at least 2 of TC1 to TC3, discovery's median total cost (calculated from the tokens the CLI reported) is at most eager's;
-  - its success rate is no more than 1 run in 5 below eager's;
-  - `permission_preserved` and `audit_complete` are both 100%.
+  - **no observed correctness or task-success regression** versus
+    eager on any comparable class; any observed regression => `DEFER`;
+  - `permission_preserved` and `audit_complete` are independently
+    proven 100% across all tested classes and all negative cases;
+  - the required `n>=5` is a **pilot instrumentation floor**, not
+    a sufficient basis for adoption: require a pre-registered confirmatory
+    sample-size/power plan and uncertainty bounds accepted by the owner.
+    Absent that evidence, verdict remains `DEFER`.
 - **`ADOPT_PORTAL_MODE`** only if a Portal arm was measured, beats both required arms on the same criteria, and passes the per-operation correlation gate (M8).
 - **`HYBRID`** only with written, non-overlapping responsibilities (for example, Portal for the outer access boundary and mctl-native for discovery) and each part passing its own gate.
 - **`DEFER`** otherwise, including when required cells are `NOT_RUN` or `below-minimum-n`.
@@ -149,9 +202,38 @@ Rollout guardrails to restate with any adopt decision:
 - a single-agent canary;
 - `audit_complete` = 100% on the canary;
 - no Portal Code Mode stacked on upstream Code Mode;
-- a documented revert to `eager`.
+- a **manual, separately authorized rollback** to an explicitly approved
+  eager profile if needed; **never automatic fallback** on gateway errors.
+  `DENY`, `REQUIRE_APPROVAL`, identity/tenant mismatch, catalog drift,
+  unknown error, policy outage or timeout fail closed. Any explicitly
+  reviewed typed non-security recovery must preserve the *same* sealed
+  eligible capability set, principal, decision and audit receipts.
 
 The natural follow-up is mctlhq/.github#165 (adaptive-tool-exposure), which this item blocks. For mctl-native, a provider-registration issue extending `_CAPABILITY_ENDPOINTS` to `tg.mctl.ai` is the other follow-up.
+
+### Authorization, correlation and negative-test design
+
+The permitted tool set for each candidate run must be derived from the
+versioned execution profile, sealed capability catalogue, tenant and
+action-time policy, and represented by an independent
+`eligible_set_digest`. An oracle's expected tools are solely a
+correctness target. The capture schema must join
+`run_id -> parent_execution_id -> child_call_id -> policy_decision_id
+-> invocation_outcome -> durable_trace_id` with exact actor, tenant,
+arguments digest and policy outcome. A new ID is required for a repeated
+call with identical arguments; `retry_of_call_id` identifies real retries.
+No join based on `arguments_hash` alone is acceptable. Existing eager
+and gateway logs are **sources to verify**, not evidence that this join
+already passes. Missing join fields -> `INCOMPLETE`, and cannot be ADOPT.
+
+For every potential fallback or repair, test `DENY`, `REQUIRE_APPROVAL`,
+missing identity, foreign tenant, catalogue mismatch, absent checkpoint,
+timeout and unknown errors. All of these must fail closed with no
+fallback-to-eager. An explicitly approved non-security recovery is
+allowed only if it preserves the exact eligible set and all checks.
+Negative-case fixture uses no real production mutation or private data.
+All actual negative-case outcomes remain `NOT_RUN`.
+
 
 ## Alternatives
 
@@ -164,7 +246,11 @@ The natural follow-up is mctlhq/.github#165 (adaptive-tool-exposure), which this
 
 - **Runtime and migrations.** None. No change to `orchestrator/`, profiles, `ISSUE_INVESTIGATOR_CAPABILITY_MODE` defaults, Portal configuration or deployed services.
 - **Backward compatibility.** `compare` output is unchanged and the new subcommands are additive. The existing `tests/test_capability_bench.py` must still pass.
-- **Cost.** The implementer work costs no extra model spend. The operator runs are about 4 classes x 2 required modes x 5 repetitions plus NEG probes, roughly 45 short runs, bounded by the plan's USD cap.
+- **Cost.** No tooling or benchmark runs are authorized in this
+  research-only phase. The separately approved operator experiment
+  would require at least 4 classes x 2 modes x 5 repetitions plus
+  NEG probes (roughly 40 or more task runs), with a hard USD cap.
+  Cost remains an estimate until a measured pilot is permitted.
 - **Risks and mitigations:**
   - **Private data leak.** Payload keys are rejected by the validator, answers are scored locally, and only hashes, ids and counts are stored.
   - **Accidental mutation.** Prompts are read-only. NEG targets an ineligible tool. Runs use a test identity, a scratch `agents-state` and the `gh` write shim, as in the 2026-09-26 run.
