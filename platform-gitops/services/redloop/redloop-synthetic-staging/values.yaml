@@ -133,10 +133,21 @@ configMaps:
           listen 8080;
           server_name staging-redloop.mctl.ai;
 
+          # Response hardening for every location, including the 404 catch-all
+          # ("always"). nginx inherits add_header from the server block only into
+          # locations that define none of their own, so no location below may add a
+          # header, or it silently drops all of these.
+          # CSP and HSTS stay intentionally absent: they are the fixture's seeded
+          # findings for scanner detection (see location = /). Triage of the Gate 4
+          # GO-1 baseline: mctl-gitops#2769.
+          server_tokens off;
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header X-Frame-Options "DENY" always;
+          add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+
           # Synthetic landing page for passive crawling
           location = / {
               default_type text/html;
-              add_header X-Content-Type-Options "nosniff";
               # Note: Intentionally omit CSP and HSTS to verify scanner detection
               return 200 '<!DOCTYPE html><html><head><title>MCTL RedLoop Staging</title></head><body><h1>Synthetic Security Audit Fixture</h1><p>Dedicated staging target for Phase P2 audit verification.</p></body></html>\n';
           }
