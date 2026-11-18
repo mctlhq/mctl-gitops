@@ -29,30 +29,73 @@ which is a separate gate.
 **PROPOSED GO-1 command** (origin path; the tester's machine, during the window only):
 
 ```bash
-set -u
-OUT="$PWD/zap-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$OUT" && chmod 0777 "$OUT"   # the image runs as uid 1000 (zap)
-kubectl -n redloop port-forward svc/redloop-redloop-synthetic-staging-base-service 18080:80 &
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+IMG=ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+SVC=svc/redloop-redloop-synthetic-staging-base-service
+DEP=deploy/redloop-redloop-synthetic-staging-base-service
+OUT="$HOME/.local/share/mctl-forensics/redloop-go1-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p -m 0700 "$OUT"                # private: reports never leave this directory
+START=$(date -u +%FT%TZ)
+
+kubectl -n redloop port-forward "$SVC" 18080:80 >"$OUT/port-forward.log" 2>&1 &
 PF=$!
-trap 'kill "$PF" 2>/dev/null' EXIT     # the port-forward never outlives the scan
-for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 1; done
-docker run --rm --network host -v "$OUT:/zap/wrk" \
-  ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
-  zap-baseline.py -t http://127.0.0.1:18080/ -m 1 -T 10 -I \
+cleanup() { kill "$PF" 2>/dev/null || true; wait "$PF" 2>/dev/null || true; chmod -R go-rwx "$OUT"; }
+trap cleanup EXIT INT TERM             # the port-forward never outlives the script
+
+# Fail closed: no 200 from /healthz within 20 s, or the port-forward died -> no scan.
+ready=0
+for _ in $(seq 1 20); do
+  kill -0 "$PF" 2>/dev/null || break
+  if curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:18080/healthz; then ready=1; break; fi
+  sleep 1
+done
+[ "$ready" = 1 ] || { echo "ABORT: origin not ready; ZAP not started" >&2; exit 1; }
+
+# Enforced budget: ZAP's own rate limiter, one rule matching every host, 4 req/s.
+RL="-config network.ratelimit.rules.rule(0).description=redloop-budget"
+RL+=" -config network.ratelimit.rules.rule(0).enabled=true"
+RL+=" -config network.ratelimit.rules.rule(0).matchStr=.*"
+RL+=" -config network.ratelimit.rules.rule(0).regex=true"
+RL+=" -config network.ratelimit.rules.rule(0).reqsPerSec=4"
+RL+=" -config network.ratelimit.rules.rule(0).groupBy=rule"
+
+set +e
+docker run --rm -v "$OUT:/zap/wrk" "$IMG" \
+  zap-baseline.py -t http://host.docker.internal:18080/ -m 1 -T 10 -I \
     -r report.html -J report.json \
-    -z "-config spider.thread=1 -config connection.timeoutInSecs=10"
+    -z "-config spider.thread=1 -config connection.timeoutInSecs=10 $RL" \
+  >"$OUT/zap.log" 2>&1
+ZAP_RC=$?
+set -e
+
+# Independent check of the budget, from the origin's own access log. kube-probe
+# lines are excluded; everything else (scanner and blackbox probe) is counted,
+# so the check can only over-count.
+kubectl -n redloop logs "$DEP" --since-time="$START" | grep -v 'kube-probe/' >"$OUT/origin-access.log" || true
+MAX=$(awk '{ if (match($0, /\[[^]]+\]/)) print substr($0, RSTART+1, 20) }' "$OUT/origin-access.log" \
+      | sort | uniq -c | sort -rn | awk 'NR==1 { print $1 } END { if (NR==0) print 0 }')
+echo "zap_rc=$ZAP_RC origin_requests=$(wc -l <"$OUT/origin-access.log") max_req_per_sec=$MAX" | tee "$OUT/budget.txt"
+[ "$MAX" -le 5 ] || { echo "BUDGET EXCEEDED: stop condition, report to the operator" >&2; exit 3; }
+exit "$ZAP_RC"
 ```
 
-The port-forward listens on the tester's loopback only, so nothing is
-exposed beyond that machine. `--network host` lets the container reach that
-loopback directly on Linux. On Docker Desktop (macOS, Windows) host
-networking must be enabled in its settings; without it, replace
-`--network host` with nothing and the target with
-`http://host.docker.internal:18080/`. `-m 1` caps the spider at one minute
-and `-T 10` caps the whole run at ten. `-I` stops warnings from failing the
-exit code, so judge the outcome from the report, not the exit status.
-Flags were checked against `zap-baseline.py -h` in the pinned image
-(offline, `--network none`).
+How the pieces were checked, offline and never against RedLoop (2026-11-18):
+
+- **Flags** exist in `zap-baseline.py -h` of the pinned image (`--network none`).
+- **Rate limit.** Tested locally against a throwaway nginx serving 300 links.
+  - Without the rule, the spider peaked at **303 req/s**.
+  - With the rule above (both `.*` regex and an exact host), the peak was **4 req/s** over about 67 s.
+  - So the rule is what holds the 5 req/s budget in section 3. One spider thread alone does not.
+- **Reaching the port-forward.** It listens on the tester's loopback only, so nothing is exposed beyond that machine.
+  - On the tester's machine (Docker Desktop on macOS), `host.docker.internal` reaches that loopback (HTTP 200).
+  - `--network host` does not (connection refused). On Linux, use `--network host` with target `http://127.0.0.1:18080/` instead, and make `$OUT` writable for uid 1000.
+- **Private output.** A `0700` output directory is writable by the container on Docker Desktop. Files end up owned by the tester and are stripped of group and other access on exit.
+- **Exit status.**
+  - `-m 1` caps the spider at one minute, `-T 10` the whole run at ten.
+  - `-I` stops warnings from failing the exit code, so judge the outcome from the report.
+  - Exit `1` is a readiness abort, `3` is a budget breach, and anything else is ZAP's own status.
 One spider thread against a fixture of four paths stays far below the
 5 req/s budget in section 3. The baseline scan sends no attack payloads.
 An active (full) scan is a separate approval.
@@ -90,14 +133,15 @@ its own:**
 
 | Limit | Value | Enforced by |
 |---|---|---|
-| Scanner request rate | at most **5 req/s** sustained, single thread or equivalent | the tester (scanner config) |
+| Scanner request rate | at most **5 req/s** sustained, single thread or equivalent | ZAP's rate-limit rule at 4 req/s in the GO-1 command (section 1), verified afterwards from the origin access log |
 | Backstop per client | 10 req/s average, burst 20, **per Traefik replica** (3 today, HPA up to 10), answered with 429; keyed on `CF-Connecting-IP`, which an in-cluster client reaching Traefik directly can forge (Cloudflare overwrites it on proxied requests) | Traefik Middleware `redloop-staging-ratelimit` (renders only with the Ingress) |
 | Concurrency | at most 2 connections | the tester |
 
 The Traefik limit is a backstop, not the budget. A scanner that gets 429s
 is above the RoE and must be slowed down, not retried harder. On the origin
 path (port-forward) Traefik is not in the way, so the tester's own
-configuration is the only limit. Keep to 5 req/s there too: the pod has a
+configuration is the only limit, which is why the GO-1 command enforces it
+in ZAP and checks it independently. Keep to 5 req/s there too: the pod has a
 CPU request of 25m and a limit of 100m.
 
 ## 4. Test paths
