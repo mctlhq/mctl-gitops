@@ -237,8 +237,10 @@ extraObjects:
     apiVersion: traefik.io/v1alpha1
     kind: Middleware
     metadata:
+      # No namespace: the chart confines extraObjects to the release namespace
+      # (Argo CD deploys this release into redloop), and an explicit one fails
+      # the render wherever the release namespace differs, such as CI.
       name: redloop-staging-ratelimit
-      namespace: redloop
     spec:
       rateLimit:
         average: 10
