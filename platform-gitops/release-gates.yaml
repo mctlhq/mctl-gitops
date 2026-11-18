@@ -374,7 +374,7 @@ version_holds:
       # the strict decide-link binding (mctl-api#1122). Covers only the 4.169.1
       # tag of release PR mctlhq/mctl-api#1123.
       - version: "4.169.1"
-        grant: mctlhq/mctl-gitops#PRNUM
+        grant: mctlhq/mctl-gitops#2807
         approved_by: mashkovd
         expires: 2026-12-01
 
