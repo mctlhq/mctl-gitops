@@ -29,8 +29,7 @@ Assistant management UI (server-rendered, no JS):
   kill-switch or fork-promotion field. Everything in it is a saved setting.
 - Reply policy lives in `policy.Evaluate` (`internal/agent/policy/policy.go`).
   Source-derived notes (line references from the earlier source review; the
-  exact excerpts are not in this gitops checkout and must be re-confirmed, see
-  "Source confirmation needed"):
+  hold-reason facts are verified, see "Verified source facts (hold reasons)"):
   - mode `off` -> deny; an unrecognized mode -> deny (`:445-451`);
   - `IntentDenylist` match -> deny, which approval cannot release (`:517`);
   - `AutopilotPaused` -> deny `autopilot_paused` (`:503`);
@@ -104,14 +103,25 @@ design, and none of them proves per-account behaviour.
   affect the design. The kill switch is env configuration the web template does
   not see, which is why the page states it as "not verified here".
 
-### Source confirmation needed
+### Verified source facts (hold reasons)
 
-The exact text of `policy.OwnerHoldReasons`, the full list of approval
-categories (including protected-field handling) and the line references above
-come from earlier source review. They are not present in this gitops checkout.
-The orchestrator should supply the exact excerpts of `policy.go` (the
-`RequireApproval` branches and `OwnerHoldReasons`) before implementation. No
-constant name beyond those already cited in this proposal is to be assumed.
+The orchestrator read `policy.go` on mctl-telegram `main` (read-only GitHub
+connector, 2026-11-18); this proposal makes no claim of its own checkout access
+or live observation. The line references above remain from earlier review.
+
+- The static illustrative label list is the six existing exported constants
+  `ReasonObserveMode` (observe only), `ReasonTurnBudget`,
+  `ReasonIntentNotAllowed`, `ReasonRateLimit`, `ReasonWorkingHours` and
+  `ReasonScheduleUnreadable`. The list is nonexhaustive.
+- `OwnerHoldReasons` takes a string (stored reasons joined by "; "), not
+  variadic constants.
+- The protected-field reason is dynamic: it uses the UNEXPORTED
+  `protectedFieldReasonPrefix` / `protectedFieldReasonSuffix` and the actual
+  field key. `Settings` supplies no per-action field key, so the page lists no
+  protected-field label; that condition is context-dependent and not resolved
+  here. No key, constant or fake action is invented, and no extra data is read.
+- No new backend API or import change follows from this. Re-reading the latest
+  source before implementation is a drift check only.
 
 ## Proposed solution
 
@@ -147,11 +157,12 @@ does no extra I/O. The helper only maps saved settings to text. It never calls
 Field names deliberately avoid "now", "effective" and "allowed". Nothing in the
 view type or the rendered labels claims a verified effective permission.
 
-Hold-condition text comes from `policy.OwnerHoldReasons(policy.Reason…)`, so
-the page and the Telegram approval notices use the same words and cannot drift.
-Only approval categories are passed in, and only categories that have wording in
-the supplied source (see "Source confirmation needed"). Denial reasons are
-never listed under approval. The list is illustrative: it is introduced as
+Hold-condition text comes from calling `policy.OwnerHoldReasons(<constant>)`
+once per constant (it takes a string), so the page and the Telegram approval
+notices use the same words and cannot drift. Only the six static labels in
+"Verified source facts (hold reasons)" are passed in; the dynamic
+protected-field reason is not listed. Denial reasons are never listed under
+approval. The list is illustrative: it is introduced as
 "Conditions that can hold a reply (illustrative, not a current decision)". It is
 not an exhaustive current decision and does not declare that every hold is
 active.

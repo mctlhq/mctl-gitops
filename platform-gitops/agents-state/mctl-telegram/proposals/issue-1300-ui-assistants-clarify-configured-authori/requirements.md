@@ -164,15 +164,20 @@ Configured authority (known configured state, shown with conditions):
 Hold condition labels:
 
 - THE SYSTEM SHALL take hold-condition wording from `policy.OwnerHoldReasons`,
-  using the same words as the Telegram approval notices, for each approval
-  category that exists in the supplied policy source. The categories to review
-  against source are: observe mode (observe only), turn budget, intent not on
-  the allowlist, rate limit, working hours, unreadable working-hours schedule,
-  and protected-field handling. The proposal does not name a constant for a
-  category unless the supplied source names it.
-- IF a category has no `policy.OwnerHoldReasons` wording in source THEN THE
-  SYSTEM SHALL omit it from the page rather than invent text, and the
-  implementer SHALL ask for a decision.
+  using the same words as the Telegram approval notices. The static
+  illustrative, nonexhaustive label list is the six existing exported
+  constants `ReasonObserveMode` (observe only), `ReasonTurnBudget`,
+  `ReasonIntentNotAllowed`, `ReasonRateLimit`, `ReasonWorkingHours` and
+  `ReasonScheduleUnreadable`. `OwnerHoldReasons` takes one string (stored
+  reasons joined by "; "), not variadic constants, so each constant is passed
+  as its own call.
+- THE SYSTEM SHALL NOT list a protected-field hold as a static label. That
+  reason is dynamic: it is built from unexported prefix and suffix constants
+  and the actual field key, and `Settings` supplies no per-action field key.
+  Protected-field holds are context-dependent and are not resolved here; the
+  proposal invents no key, constant or fake action and reads no extra data.
+- IF a category has no source-supported static wording THEN THE SYSTEM SHALL
+  omit it from the page rather than invent text.
 - THE SYSTEM SHALL pass only approval categories to the label list. Denial
   categories (paused, install changed, kill switch, never intent, mode off) are
   never listed as hold conditions.
@@ -237,11 +242,12 @@ Preservation:
   proposal states them as "not verified here" or "unknown" rather than adding
   a field. Showing them as real values would need a separate decision, because
   it needs a new backend read.
-- Hold condition categories: the list above comes from design review notes on
-  `policy.go`. The exact `policy.OwnerHoldReasons` wording and the complete
-  approval category list (including protected-field handling) are not available
-  in this gitops checkout. Before implementation, the orchestrator or owner
-  should supply the exact excerpts so the label list can be confirmed.
+- Hold condition categories: the six static labels above were verified by the
+  orchestrator against `policy.go` on mctl-telegram `main` (read-only GitHub
+  connector, 2026-11-18); they were not read from a checkout here. The list is
+  illustrative and nonexhaustive, and protected-field holds are
+  context-dependent and not resolved here. Re-reading the latest source before
+  implementation is a drift check, not a new investigation.
 - Precedence: when several states apply, one primary label is shown (see
   "Display label"), and the raw saved rows still show every flag. If reviewers
   prefer listing every applicable state instead, only the template changes.

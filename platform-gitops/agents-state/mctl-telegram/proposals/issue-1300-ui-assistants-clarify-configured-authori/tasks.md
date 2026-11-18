@@ -9,12 +9,18 @@ File allowlist: `internal/web/manage_assistant.go`,
 other file, a new backend field, API, policy, setting or grant, or a new
 dependency seems necessary.
 
-- [ ] 0. Obtain the exact `policy.go` excerpts (`RequireApproval` branches and
-  `policy.OwnerHoldReasons`) from the orchestrator, because they are not in the
-  gitops checkout. Confirm the approval category list, including
-  protected-field handling. Do not invent a constant name — DoD: the hold
-  condition list in the helper matches the supplied source; categories without
-  `OwnerHoldReasons` wording are omitted and flagged.
+- [ ] 0. Drift check (not a new investigation): re-read the latest `policy.go`
+  and confirm the verified facts in design.md "Verified source facts (hold
+  reasons)" still hold. The static illustrative, nonexhaustive label list is
+  the six exported `ReasonObserveMode`, `ReasonTurnBudget`,
+  `ReasonIntentNotAllowed`, `ReasonRateLimit`, `ReasonWorkingHours` and
+  `ReasonScheduleUnreadable`; `OwnerHoldReasons` takes a string. The
+  protected-field reason is dynamic (unexported prefix/suffix plus the actual
+  field key, which `Settings` does not supply) and is context-dependent, not
+  resolved here. Invent no key, constant or fake action and read no extra
+  data — DoD: the helper lists only those six labels; anything without
+  source-supported static wording is omitted; no new backend API or import
+  change.
 - [ ] 1. Write the rendering tests first (T1-T10 below) against the current
   template, and confirm that T1 (regression) and the matrix cases fail on
   current main — DoD: `go test ./internal/web -run 'ManageAssistant|AssistantAuthority|Assistants'`
@@ -98,9 +104,11 @@ once" or "never appears" checks are not used.
 - [ ] T4. Hold conditions: the list is introduced as illustrative and does not
   claim the holds are active or exhaustive. In observe, the conditions contain
   `policy.OwnerHoldReasons(policy.ReasonObserveMode)[0]`. In guarded they do not
-  contain it, and they contain the wording for each approval category confirmed
-  in task 0 (turn budget, not-on-list, rate limit, working hours, hours
-  unreadable, and protected-field handling if the source has wording for it).
+  contain it, and they contain the `OwnerHoldReasons` wording for the other
+  five static labels (turn budget, not-on-list, rate limit, working hours,
+  hours unreadable). The six-label list is illustrative and nonexhaustive.
+  No protected-field label is asserted: that reason is dynamic and
+  context-dependent, not resolved here.
   Negative guard: no denial reason (`ReasonAutopilotPaused`,
   `ReasonInstallChanged`, kill switch, never intent) appears under
   `assistant-approval`. The row makes no statement about approval-queue
@@ -139,13 +147,20 @@ once" or "never appears" checks are not used.
   that the "Not listening" text says configured intake and does not claim that
   nothing can be sent, and that no mixed case lists a saved auto intent in the
   `assistant-auto` row except guarded non-fork.
-- [ ] T11. Restore-bug mutation check (temporary, never committed): commit
-  first, then with Edit temporarily (a) restore the old unconditional "Replies
-  on its own" row printing AutoIntents and (b) change the helper so observe
-  mode lists AutoIntents in the `assistant-auto` row. Confirm T1, T2, T3 and T10
-  each fail on both mutations, then `git restore` the file and confirm a clean
-  `git status`. This shows the tests catch the rendering regression and the
-  logic regression, not only the absence of one old phrase.
+- [ ] T11. Restore-bug mutation check (temporary, never committed). Commit the
+  good tests first. Run each mutation in isolation, applied with Edit:
+  (a) template-only: restore the old unconditional auto-intent row (printing
+  AutoIntents) in the template. The scoped rendering regression T1 must fail
+  on it. T2 (pure helper) is not expected to fail on a template-only edit.
+  (b) helper-only: change the helper so observe mode lists AutoIntents. The
+  relevant observe helper/matrix assertion in T2 must fail, plus the scoped
+  rendering assertion in T1 or T10 only where it asserts that behaviour.
+  T3 (paused/off/unrecognized) is not expected to fail on an observe-only
+  mutation.
+  For each mutation: confirm the failure is the intended assertion, not a
+  setup, call-count or compile artifact; then `git restore` the file, confirm a
+  clean `git status`, and confirm the tests are green again before the next
+  one. No claim is made that every named test fails on every mutation.
 
 ## Rollback
 
