@@ -453,9 +453,10 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
         issuer           = "https://auth.mctl.ai"
         audiences        = ["api-client-id"]
         customers_org_id = "customers-org-id"
+        service_subjects = { "consent-reader-user" = "mctl-api-project" }
       },
     ]
-    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id only (mctl-api refuses to boot when service_subjects is combined with customers_org_id)."
+    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id, plus the C2 consent reader as a service subject pinned to the project audience."
   }
 }
 

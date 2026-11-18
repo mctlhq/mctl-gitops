@@ -149,6 +149,15 @@ def fixture_with_service_subjects():
     return json.dumps(fx)
 
 
+def fixture_without_service_subjects():
+    """The config as it was before the consent reader became a service subject: what a
+    below-MIN (flagless) image can still be judged against by the skip branch."""
+    fx = json.loads((ROOT / FIXTURE_REL).read_text())
+    for p in fx["MCTL_OIDC_PROVIDERS"]:
+        p.pop("service_subjects", None)
+    return json.dumps(fx)
+
+
 def matrix(check_text=None, wrapper_text=None):
     """case name -> (ok, detail). Everything executes the (possibly mutated) scripts."""
     res = {}
@@ -164,18 +173,26 @@ def matrix(check_text=None, wrapper_text=None):
             return make_tree(base / f"t{n[0]}", check_text, wrapper_text, **kw)
 
         live = tree()
-        # A: live images, current config
+        # A: live images, a config without service_subjects. The REAL fixture carries
+        # service_subjects since the consent reader was listed (mctl-api 4.169.0 allows it
+        # next to customers_org_id), so a flagless image is refused for it by the legacy
+        # rule (case B below, and the real-fixture case right here); the skip branch is
+        # proven on the stripped copy.
+        clean = tree(fixture_text=fixture_without_service_subjects())
         for tag in FLAGLESS_LIVE:
-            rc, out, log = run_wrapper(live, "reject", tag)   # worst case: the image would reject, but it must not even be asked
+            rc, out, log = run_wrapper(clean, "reject", tag)   # worst case: the image would reject, but it must not even be asked
             res[f"A bump {tag} (live, below MIN) with the current config: SKIPPED, no docker call"] = (
                 rc == 0 and "SKIPPED" in out and log.strip() == "", (rc, out[-160:], log))
+            rc, out, log = run_wrapper(live, "ok", tag)
+            res[f"A bump {tag} (live, below MIN) with the REAL config (service_subjects): REFUSED by the legacy rule, no docker call"] = (
+                rc == 1 and "LEGACY RULE" in out and "SKIPPED" not in out and log.strip() == "", (rc, out[-160:], log))
         # Pin direction (the validate gate) on the REAL pinned tag. Which branch applies depends on that
         # tag: a release-bump PR that moves the pin to MIN or later must be judged by the image itself.
         # Asserting a skip unconditionally turned every such bump red (mctl-api 4.169.0, gitops#2798).
         pin = pinned_tag()
         if tup(pin) < tup(mn):
-            rc, out, log = run_pin(live, "reject")
-            res[f"A pin direction: the real pinned tag {pin} (below MIN) with the real config: SKIPPED, no docker call"] = (
+            rc, out, log = run_pin(clean, "reject")
+            res[f"A pin direction: the real pinned tag {pin} (below MIN) with a config without service_subjects: SKIPPED, no docker call"] = (
                 rc == 0 and "SKIPPED" in out and log.strip() == "", (rc, out[-160:], log))
         else:
             rc, out, log = run_pin(live, "reject")

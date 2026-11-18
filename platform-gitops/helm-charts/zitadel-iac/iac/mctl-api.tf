@@ -340,12 +340,23 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         issuer           = "https://auth.mctl.ai"
         audiences        = [zitadel_application_api.mctl_api.client_id]
         customers_org_id = zitadel_org.customers.id
-        # No service_subjects here: mctl-api refuses to boot when an entry
-        # combines service_subjects with customers_org_id (4.165.0,
-        # internal/auth/federation_config.go). The C2 consent reader needs a
-        # different shape (a service identity on its own provider entry, or
-        # mctl-api allowing the combination); until that is decided this entry
-        # stays exactly as it was before gitops#2737.
+        # The C2 consent reader is a ZITADEL machine user (JWT profile): its
+        # token carries the project id in aud, never this entry's client id.
+        # service_subjects (docs/federation.md) makes that one exact subject
+        # a `kind: service` identity, pinned to the project id as the only
+        # audience it may present. The entry stays human. Next to
+        # customers_org_id this needs mctl-api 4.169.0 or later (9aa297e;
+        # 4.165.0 to 4.168.0 refuse to boot on the combination, which is what
+        # crash-looped the 4.166.0 rollout, gitops#2737). The subject is
+        # never a customer and keeps no groups; every other subject of the
+        # entry keeps the customers enforcement. A subject listed here must
+        # not also be a subject_audiences key (mctl-api refuses to boot).
+        # scripts/check-mctl-api-oidc-config.py runs the pinned image's own
+        # --check-config on this rendering. The orchestrator DevLoop machine
+        # user is not listed here; see mctl-api docs/orchestrator-devloop.md.
+        service_subjects = {
+          (zitadel_machine_user.c2_consent_reader.id) = zitadel_project.mctl_api.id
+        }
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).
