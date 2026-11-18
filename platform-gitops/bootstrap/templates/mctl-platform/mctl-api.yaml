@@ -477,7 +477,9 @@ spec:
             # ROLLOUT_MARKER in the PR that flips this.
             # Rollback: set the apiConsent switch back to false.
             GLOVO_CONSENT_ENABLED: "true"
-            GLOVO_C2_CAPACITY: {{ int .Values.mctlGlovo.capacity | quote }}
+            # Quoted: the release gate parses this block as YAML, and an
+            # unquoted inline directive is not a scalar there.
+            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
             {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).

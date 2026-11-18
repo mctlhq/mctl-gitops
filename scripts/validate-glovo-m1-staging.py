@@ -151,7 +151,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         # consent routes and the shared cohort size, behind apiConsent.
         '            {{- if .Values.mctlGlovo.apiConsent }}',
         '            GLOVO_CONSENT_ENABLED: "true"',
-        '            GLOVO_C2_CAPACITY: {{ int .Values.mctlGlovo.capacity | quote }}',
+        '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
         '            - mctl-api-glovo-consent',
     }),
     # The host stays reserved with no owner: since 2026-11-15 it is served
