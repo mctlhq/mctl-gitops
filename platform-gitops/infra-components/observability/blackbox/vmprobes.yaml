@@ -263,5 +263,3 @@ spec:
     staticConfig:
       targets:
         - http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz
-        # GO-2 window only: the edge path, removed again with the Ingress.
-        - https://staging-redloop.mctl.ai/healthz
