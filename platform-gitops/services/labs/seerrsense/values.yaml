@@ -5,8 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/seerrsense
-  tag: "1.14.3"
-  digest: "sha256:80f850fa708be12e3babda61835f33e4cc517e9f849a517a9d17a1c0d944e1eb"
+  tag: "1.14.4"
+  digest: "sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
