@@ -88,7 +88,9 @@ envFrom: []
 dbSecret: null
 
 ingress:
-  enabled: false
+  # GO-2 only (RoE section 12): on for one approved exposure window, then off
+  # again by reverting this change. Merging this deploys a public host.
+  enabled: true
   hosts:
     - staging-redloop.mctl.ai
   annotations:
