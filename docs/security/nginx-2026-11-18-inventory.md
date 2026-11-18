@@ -70,11 +70,15 @@ configuration, not from a reading of each advisory's code.
 Re-evaluate this table when any NGINX configuration, module set, listener or
 image changes. Run
 `scripts/check-nginx-effective-config.py -- kubectl exec POD -- nginx -T` for the
-changed workload: it fails on every gated feature above and exits 2 (UNVERIFIED)
-when the command fails, reports no "test is successful", or the dump is empty or
-truncated (unbalanced braces, no `events` or `http` block). Do not pipe into it:
-a pipe hides the producer's exit status. CI runs only its `--selftest`; the
-detector itself is run by an operator against a workload.
+changed workload. It parses the configuration the way nginx does (quotes, `#`
+comments only at the start of a token, `${var}` braces) and fails on every gated
+feature above. Exit 0 is clean, 1 is a finding, 2 is UNVERIFIED: the command
+failed, printed no "test is successful", or the dump is empty, truncated, or has
+no `events`, `http`, `listen` or `include` chunk. File or stdin input can never
+prove a dump is complete, so without `--assume-complete` it reports 1 or 2 and
+never 0. Do not pipe into it: a pipe hides the producer's exit status. CI runs
+only its `--selftest`; the detector itself is run by an operator against a
+workload. Tenant workloads are shown as `tenant-a` and `tenant-b` in the CSV.
 
 ## Images that were not verified (39 of 103)
 
