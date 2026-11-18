@@ -562,10 +562,10 @@ jobs:
           git push
 
   # PR route: the mctl-gitops-pr App opens a release-bump/* pull request. It is
-  # not a ruleset bypass actor, so it cannot write main; auto-merge.yml merges
-  # the PR after the review and the required checks (including `validate`, which
-  # runs the release gate on the PR). The key is a secret of the main-only
-  # `app-gitops-pr` environment.
+  # not a ruleset bypass actor, so it cannot write main; enqueue-bump puts the
+  # PR in the merge queue after the review and the required checks (including
+  # `validate`, which runs the release gate on the PR). The key is a secret of
+  # the main-only `app-gitops-pr` environment.
   publish-pr:
     needs: bump
     concurrency:
@@ -653,7 +653,7 @@ jobs:
             "Opened by gitops-bump.yaml: ${RUN_URL}" \
             "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \
             "" \
-            "The only change is an image tag. auto-merge.yml merges this PR after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
+            "The only change is an image tag. release-bump-enqueue.yml puts this PR in the merge queue after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
           if [[ -n "${create_pr:-}" ]]; then
             pr_url=$(gh pr create --repo "$REPO" --base main --head "$branch" \
               --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body")
@@ -703,6 +703,22 @@ jobs:
               echo "::warning::cannot order ${NEW_TAG} against #${n} (${other_tag}); closing nothing"
             fi
           done <<< "$others"
+
+  # Enqueue the bump once it is approved and green on its exact head. This is
+  # not done from auto-merge.yml: a queue entry created with GITHUB_TOKEN starts
+  # no merge_group run and stalls (#2780, #2792), and the App token that does
+  # start them may not reach code a pull request controls. The called workflow
+  # runs from main in the `app-gitops-pr` environment; see its header.
+  enqueue-bump:
+    needs: publish-pr
+    if: needs.publish-pr.result == 'success'
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    uses: ./.github/workflows/release-bump-enqueue.yml
+    with:
+      pr: ${{ needs.publish-pr.outputs.pr }}
 
   # A stuck bump must be a red release run, not a silent open PR. The wait lives
   # in its own job with no environment, no secret and read-only access, and

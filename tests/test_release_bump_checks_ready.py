@@ -1,18 +1,16 @@
-"""release-bump readiness excludes auto-merge's own check run and nothing else.
+"""release-bump readiness excludes the named own check run and nothing else.
 
 Plain script: `python3 tests/test_release_bump_checks_ready.py`.
 
-auto-merge.yml's release-bump step is itself a pending check run on the PR it
-waits for (mctl-gitops#2739, #2748). Two layers are tested, each with mutants
-that must turn a case red:
-  * scripts/release-bump-checks-ready.py on check-run lists;
-  * the real workflow step, run with a fake gh, so the wiring (own name,
-    unreadable reads, enqueue with expectedHeadOid) is covered too.
+When auto-merge.yml enqueued release-bump PRs, its step was itself a pending
+check run on the PR it waited for (mctl-gitops#2739, #2748), hence --own-check.
+The enqueue now runs from release-bump-enqueue.yml, whose wait script passes an
+empty --own-check; that wiring, and the step that calls this script, are tested
+in tests/test_release_bump_enqueue.py. Here: the script on check-run lists, with
+mutants that must turn a case red.
 """
 import json
-import os
 import pathlib
-import stat
 import subprocess
 import sys
 import tempfile
@@ -21,7 +19,6 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/release-bump-checks-ready.py"
-WF = ROOT / ".github/workflows/auto-merge.yml"
 REQ = "cloudflare-plan,reserved-hosts,validate"
 OWN = "auto-merge"
 HEAD = "a" * 40
@@ -58,6 +55,9 @@ def script_cases(script=SCRIPT):
     c.append(("a: only own check pending -> ready", v(green() + [own()]), 0))
     c.append(("a: own check queued -> ready", v(green() + [own("queued")]), 0))
     c.append(("a: no own check at all -> ready", v(green()), 0))
+    # An empty own name (release-bump-enqueue-wait.sh) excludes nothing.
+    c.append(("a: empty own name, all green -> ready", v(green(), own_name=""), 0))
+    c.append(("b: empty own name keeps a pending auto-merge run", v(green() + [own()], own_name=""), 10))
     c.append(("a: skipped and neutral are green", v(green() + [run_for("x", conclusion="skipped"), run_for("y", conclusion="neutral")]), 0))
     c.append(("a: a re-run supersedes an old failure", v(green() + [run_for("t", conclusion="failure"), run_for("t")]), 0))
     # (b) fail closed
@@ -83,77 +83,8 @@ def script_cases(script=SCRIPT):
     return c
 
 
-def step_script():
-    doc = yaml.safe_load(WF.read_text())
-    for step in doc["jobs"]["auto-merge"]["steps"]:
-        if step.get("name", "").startswith("Enqueue release-bump PR"):
-            return step["run"], step["env"]
-    raise AssertionError("enqueue step not found")
-
-
-def run_step(runs, *, total=None, runs_ok=True, head=HEAD, review_commit=None, script=None, enqueue_ok=True):
-    """Run the real step with a fake gh. Returns (rc, enqueue calls, output)."""
-    body, env_decl = step_script()
-    body = script or body
-    with tempfile.TemporaryDirectory() as d:
-        d = pathlib.Path(d)
-        (d / "runs").write_text("\n".join(json.dumps(r) for r in runs))
-        (d / "total").write_text(str(len(runs) if total is None else total))
-        gh = d / "bin" / "gh"
-        gh.parent.mkdir()
-        gh.write_text(
-            "#!/bin/sh\n"
-            'case "$*" in\n'
-            f'  *"pr view"*) if [ -f "{d}/enqueue" ]; then echo "{head} MERGED PRID"; else echo "{head} OPEN PRID"; fi ;;\n'
-            f'  *enqueuePullRequest*) echo "$*" >> "{d}/enqueue"; {"echo ok" if enqueue_ok else "echo refused; exit 1"} ;;\n'
-            f'  *isInMergeQueue*) echo false ;;\n'
-            f'  *"per_page=1 "*) cat "{d}/total" ;;\n'
-            f'  *check-runs*) {"cat " + str(d / "runs") if runs_ok else "exit 1"} ;;\n'
-            '  *) exit 1 ;;\n'
-            "esac\n")
-        gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
-        # A wait verdict must not stall the test or depend on wall-clock time (a
-        # slow runner once expired a 1 s deadline mid-run): the deadline stays
-        # far away and the third sleep kills the step instead.
-        sleep = d / "bin" / "sleep"
-        sleep.write_text(f'#!/bin/sh\necho x >> "{d}/sleeps"\n[ "$(wc -l < "{d}/sleeps")" -ge 3 ] && kill -9 $PPID\nexit 0\n')
-        sleep.chmod(sleep.stat().st_mode | stat.S_IEXEC)
-        body = body.replace("SECONDS + 2700", "SECONDS + 100000")
-        env = {"PATH": f"{gh.parent}:{os.environ['PATH']}", "GH_TOKEN": "x", "REPO": "o/r", "PR": "7",
-               "HEAD_SHA": HEAD, "REVIEW_COMMIT": review_commit or HEAD,
-               "OWN_CHECK": env_decl["OWN_CHECK"], "REQUIRED_CHECKS": env_decl["REQUIRED_CHECKS"]}
-        r = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True, cwd=ROOT, timeout=60)
-        calls = (d / "enqueue").read_text() if (d / "enqueue").exists() else ""
-        return r.returncode, calls, r.stdout + r.stderr
-
-
-def step_cases(script=None):
-    def enq(rc_calls_out):
-        rc, calls, _ = rc_calls_out
-        return rc == 0 and "expectedHeadOid" in calls and f"h={HEAD}" in calls
-    def noenq(rc_calls_out):
-        rc, calls, _ = rc_calls_out
-        return rc != 0 and calls == ""
-    s = lambda *a, **k: run_step(*a, script=script, **k)
-    c = []
-    c.append(("step a: only own check pending enqueues the exact head", enq(s(green() + [own()])), True))
-    c.append(("step b: another pending check does not enqueue", noenq(s(green() + [run_for("trivy2", "in_progress", None)])), True))
-    c.append(("step b: another cancelled check does not enqueue", noenq(s(green() + [run_for("trivy2", conclusion="cancelled")])), True))
-    c.append(("step b: missing required check does not enqueue", noenq(s([r for r in green() if r["name"] != "validate"] + [own()])), True))
-    c.append(("step b: unreadable check list does not enqueue", noenq(s(green(), runs_ok=False)), True))
-    c.append(("step b: truncated check list does not enqueue", noenq(s(green(), total=len(green()) + 5)), True))
-    c.append(("step c: a similarly named pending check does not enqueue", noenq(s(green() + [run_for("auto-merge-lint", "in_progress", None)])), True))
-    for label, extra in (("failed", run_for("trivy2", conclusion="failure")), ("unknown", run_for("z", conclusion=None))):
-        rc, calls, out = s(green() + [extra])
-        c.append((f"step b: a {label} check stops at once with a not-mergeable error", rc != 0 and calls == "" and "is not mergeable" in out, True))
-    c.append(("step: refused enqueue fails the job", s(green() + [own()], enqueue_ok=False)[0] != 0, True))
-    rc, calls, _ = s(green() + [own()], review_commit="b" * 40)
-    c.append(("step: approval on another head does not enqueue", rc == 0 and calls == "", True))
-    return c
-
-
 def main():
-    bad = [(n, g, w) for n, g, w in script_cases() + step_cases() if g != w]
+    bad = [(n, g, w) for n, g, w in script_cases() if g != w]
     assert not bad, f"wrong verdicts: {bad}"
     # MUTANTS of the script: each must turn at least one case red.
     src = SCRIPT.read_text()
@@ -176,26 +107,6 @@ def main():
             red = [n for n, g, w in script_cases(script=m) if g != w]
             assert red, f"script mutant survives: {name}"
             print(f"mutant killed: {name} ({len(red)} red)")
-    # MUTANTS of the workflow step.
-    base, _ = step_script()
-    wmut = {
-        "own check name not passed": ('--own-check "$OWN_CHECK"', '--own-check "nothing"'),
-        "unreadable check list ignored": ('echo "::error::could not read the check runs of ${HEAD_SHA}; not merging."\n      exit 1', "exit 0"),
-        "not-ready verdict is ignored": ('*) echo "::error::#${PR} is not mergeable: ${verdict}"; exit 1 ;;', '*) rc=0 ;;'),
-        "not-ready verdict enqueues": ("      0)\n        if ! out=$(gh api graphql", "      0|10|11|12)\n        if ! out=$(gh api graphql"),
-        "enqueue without head pin": ('-f h="$HEAD_SHA"', '-f h=""'),
-        "review on another head accepted": ('if [ "$REVIEW_COMMIT" != "$HEAD_SHA" ]; then', 'if false; then'),
-    }
-    for name, (old, new) in wmut.items():
-        assert base.count(old) == 1, f"mutant anchor {name}: {base.count(old)}"
-        red = [n for n, g, w in step_cases(script=base.replace(old, new)) if g != w]
-        assert red, f"step mutant survives: {name}"
-        print(f"mutant killed: {name} ({len(red)} red)")
-    # The step's own-check name is the job's real check name (name, else id).
-    job = yaml.safe_load(WF.read_text())["jobs"]["auto-merge"]
-    assert step_script()[1]["OWN_CHECK"] == job.get("name", "auto-merge"), "OWN_CHECK != the job's check name"
-    # Required checks match the ruleset's documented list.
-    assert step_script()[1]["REQUIRED_CHECKS"] == REQ
     # Drift guard: the names are the job ids that tests/test_required_check_job_ids.py
     # pins as the required checks of ruleset main-protection (check name == job id,
     # no `name:`), so a renamed or dropped job fails here as well as there.
