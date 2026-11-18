@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-18T15:25:49Z'
+updated_at: '2026-11-18T15:50:54Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-00643983805ac5bc
@@ -58,3 +58,4 @@ notes: 'implementer declined to act: The PR only changes tests/test_context_eval
   not touch. The log shows a mctl-api merge-gate identity store degradation warning,
   so it looks like a flake or environment issue rather than a defect from this change.
   I could not reproduce it locally because the test run hit the command time limit.'
+harness_failures: 1
