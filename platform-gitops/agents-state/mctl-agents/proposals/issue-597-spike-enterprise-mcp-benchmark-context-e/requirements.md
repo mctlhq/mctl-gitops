@@ -1,59 +1,134 @@
-# Spike: benchmark context-efficient MCP tool exposure on real workloads that invoke tools
+# Benchmark context-efficient MCP tool exposure on real mcp.mctl.ai workloads (decision spike)
 
 ## Context
 
-Issue mctlhq/mctl-agents#597 asks for a benchmark good enough to base a decision on. It compares the ways an mctl agent can be shown MCP tools: the current eager exposure, the mctl-native `CapabilityGateway` (#242, ADR 017), and, where they can be tested safely, the Cloudflare Portal context optimisation (`minimize_tools`) and `search_and_execute` / Code Mode. The only evidence today is `docs/benchmarks/capability-discovery.md`. It covers one run per mode, on one issue, and neither run invoked an mctl tool. It shows a structural first-turn reduction (61,213 to 23,392 tokens, -62%), but end to end the discovery run cost more ($6.10 against $5.24, 52 turns against 30). #517 therefore leaves end-to-end benefit unproven.
+mctlhq/mctl-agents#242 added the mctl-native `CapabilityGateway` (`orchestrator/capability_gateway.py`). With it, a run sees three gateway tools (`capability_search`, `capability_describe`, `capability_invoke`) instead of every `mcp__mctl__*` schema.
 
-The 2026-11-18 research extension adds three things. The first is a capability/availability matrix that separates Claude Code interactive Code Mode, Anthropic Programmatic Tool Calling, the Cloudflare Portal and the mctl-native gateway. The second is an optional adjunct experiment that is not comparable with the four arms. The third is a hard audit-correlation gate: the parked Portal result (mctlhq/.github#63, M8 FAIL) stays a hard stop. The spike must not change production exposure. Measured runs happen only under a separately approved, bounded experiment plan, and any cell that was not run says `NOT_RUN`. The spike ends with exactly one recommendation for Enterprise MCP: `ADOPT_MCTL_NATIVE`, `ADOPT_PORTAL_MODE`, `HYBRID` or `DEFER`.
+The only recorded measurement is `docs/benchmarks/capability-discovery.md` (2026-09-26):
+
+- one run per mode;
+- a structural first-turn drop from 61,213 to 23,392 tokens (-62%);
+- no end-to-end saving: 30 against 52 turns, $5.24 against $6.10;
+- neither run invoked an mctl tool.
+
+#517 therefore leaves end-to-end cost effectiveness unproven. Issue #597 asks for a decision-quality benchmark, and it is the `tool-exposure-benchmark` work item of the `enterprise-mcp` epic (mctlhq/.github#35). The benchmark covers representative tasks that must actually invoke MCP tools, repeated at least 5 times per (task x mode). It compares four modes on context, cost, success, latency, permission preservation and audit completeness:
+
+1. eager/explicit exposure;
+2. mctl-native discovery;
+3. Cloudflare `minimize_tools`;
+4. Cloudflare `search_and_execute` (Code Mode).
+
+It ends in exactly one recommendation: `ADOPT_MCTL_NATIVE`, `ADOPT_PORTAL_MODE`, `HYBRID` or `DEFER`.
+
+The 2026-11-18 research extension adds three things:
+
+- an availability/capability matrix that separates the different "code mode" mechanisms: Cloudflare Portal `search_and_execute`, Claude Code interactive Code Mode, and Anthropic API Programmatic Tool Calling;
+- a non-comparable adjunct slot for the companion experiment, mctlhq/mctl-agents#1096;
+- a per-operation correlation and enforcement gate.
+
+The research must neither reopen nor mutate the Cloudflare portal, which mctlhq/.github#63 PARKed on an M8 audit-correlation failure. It must not run live probes without a separately approved experiment plan.
+
+This proposal delivers the parts an implementer can build safely and offline:
+
+- versioned task oracles;
+- run-record capture and aggregation tooling in `tools/capability_bench.py`;
+- a pre-registered decision rule;
+- the bounded experiment plan and matrices, written into the existing benchmark document.
+
+Every unmeasured cell says `NOT_RUN`. The measured runs and the posted decision are operator steps, gated on approval of that plan.
 
 ## User stories
 
-- AS the Enterprise MCP roadmap owner I WANT a repeated, oracle-scored comparison of the exposure modes on tasks that actually call MCP tools SO THAT the choice of exposure path rests on end-to-end cost and success, not on first-turn prompt size.
-- AS a platform operator I WANT the benchmark harness to run offline from captured transcripts, with a bounded experiment plan I approve before any live run SO THAT the spike cannot spend money or touch production without my sign-off.
-- AS a security/governance owner I WANT permission preservation and audit/trace completeness checked for every invoked consequential capability SO THAT a cheaper mode cannot win while weakening policy or auditability.
-- AS a reviewer I WANT modes that cannot be measured recorded as `not measurable`, with the concrete limitation, SO THAT no mode is stood in for by a different mechanism.
+- AS an Enterprise MCP decision owner I WANT end-to-end cost, success, permission and audit results per exposure mode, on tasks that really call MCP tools, SO THAT the exposure decision does not rest on first-turn prompt size alone.
+- AS a platform operator I WANT a pinned, bounded, pre-approved experiment plan with a USD cap SO THAT the measured runs are reproducible and cannot mutate production portal or runtime configuration.
+- AS a security/governance owner (mctlhq/.github#181, #151) I WANT permission preservation and per-operation audit correlation verified from recorded traces, not assumed, SO THAT no mode is adopted that weakens mctl policy checkpoints or identity.
+- AS a reviewer of the companion Code Mode research (#1096) I WANT the different "code mode" mechanisms kept apart in an availability matrix SO THAT an interactive-CLI-only feature is never counted as an in-cluster benchmark arm.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the spike is delivered THE SYSTEM SHALL update `docs/benchmarks/capability-discovery.md` in place. It SHALL NOT add a competing benchmark artifact, and it SHALL keep the 2026-09-26 n=1 section as the recorded baseline.
-- WHEN the benchmark task set is defined THE SYSTEM SHALL list at least three task classes. In each, the agent must invoke at least one MCP capability, and each class SHALL have a machine-checkable success oracle: the expected capability ids, the required argument constraints and the expected answer facts.
-- WHEN `tools/capability_bench.py` aggregates runs THE SYSTEM SHALL accept N transcripts per `(task, mode)` cell and report n per cell. It SHALL report the following for each cell:
-  - initial tool-schema/context tokens, kept separate from total input, output, cache-read and cache-creation tokens;
-  - model turns;
-  - discovery, describe and invoke call counts;
-  - retries;
-  - wall-clock and `duration_api_ms` (each with its semantics documented);
-  - p50/p95 latency when n >= 5;
-  - oracle success rate.
-- WHEN a cell has fewer than 5 repetitions THE SYSTEM SHALL print the actual n and the documented constraint that justifies it, and it SHALL omit p95 for that cell.
-- WHEN a mode cannot be enabled in an isolated, reversible way THE SYSTEM SHALL record every cell of that mode as `not measurable`, with the product or provider limitation and evidence. It SHALL NOT emulate that mode with another mechanism.
-- WHEN a cell was designed but not executed THE SYSTEM SHALL render it as `NOT_RUN`, never as zero or blank.
-- WHEN a run invokes a capability outside the task's eligible set, or a capability excluded from the sealed `CapabilitySet` becomes visible or callable, THE SYSTEM SHALL mark the run `permission_preserved=false` and report it in the permission-preservation row.
-- WHEN a consequential capability is invoked THE SYSTEM SHALL check that a policy checkpoint result, the actor/tenant correlation and a durable trace record exist for that exact invocation. A missing link marks the run's audit completeness `incomplete`.
-- WHILE capturing benchmark telemetry THE SYSTEM SHALL store only hashes, counts and capability ids. It SHALL NOT store tool arguments, tool results or private message bodies, matching the `InvocationRecord` hash-only rule in `orchestrator/capability.py`.
-- WHILE the spike is in progress THE SYSTEM SHALL leave the following unchanged:
-  - the production default `ISSUE_INVESTIGATOR_CAPABILITY_MODE=eager`;
-  - the Portal `code_mode: off` configuration;
-  - every MCP server's business logic.
-- IF the Cloudflare `search_and_execute` arm cannot show that one execute call maps to N upstream calls with a per-call actor, policy result and trace link (the #63 M8 criterion) THEN THE SYSTEM SHALL record the arm as failing the governance gate, and it SHALL NOT recommend `ADOPT_PORTAL_MODE` for it.
-- WHEN the report is finalised THE SYSTEM SHALL state the structural first-turn delta against the existing -62% baseline, and SHALL say explicitly whether that delta translated into end-to-end savings.
-- WHEN the report is finalised THE SYSTEM SHALL end with exactly one of `ADOPT_MCTL_NATIVE`, `ADOPT_PORTAL_MODE`, `HYBRID` or `DEFER`, together with the production rollout guardrails and the exact follow-up issue(s). The recommendation SHALL be posted on #597 and linked from mctlhq/.github#35.
-- WHEN the research-extension matrix is produced THE SYSTEM SHALL tabulate interactive Claude Code CLI, Agent SDK / `claude -p` headless, Cloudflare Portal, the mctl-native gateway and Anthropic Programmatic Tool Calling. The columns SHALL be: environment, tool surface, identity/policy check, sandbox, audit, rollback, limitations and evidence. Facts that were not verified SHALL read `UNKNOWN`.
-- IF the optional Claude Code Code Mode adjunct is reported THEN THE SYSTEM SHALL report it in a separate, non-comparable section with its own recommendation (`CLI_ONLY_PILOT` / `FURTHER_RESEARCH` / `DEFER` / `REJECT`). It SHALL NOT count as a benchmark arm.
+**Task oracles**
+
+- WHEN the benchmark task set is defined THE SYSTEM SHALL contain at least three read-only task classes that must invoke MCP capabilities. Each class is stored as a versioned oracle fixture (`tools/bench_tasks/*.yaml`) with these fields: `prompt`, `expected_capabilities`, `argument_constraints`, `answer_facts`, `consequential` and `pinned_inputs`.
+- IF a task oracle fixture has unknown keys, an empty `expected_capabilities`, or a prompt that names a non-read-only capability outside a negative probe THEN THE SYSTEM SHALL reject it at load time.
+
+**Run records**
+
+- WHEN a benchmark run record is loaded THE SYSTEM SHALL validate that it carries these fields:
+  - `run_id`, `mode`, `task_id`, `task_set_version`;
+  - `model`, `profile_version`, `catalog_digest`;
+  - `result_messages`, `tool_calls`, `invocation_traces`;
+  - `first_turn_cache_creation_tokens`, `wall_clock_ms`;
+  - `final_answer_digest`, `oracle_facts_found`.
+- IF a run record contains a payload-bearing key (`arguments`, `result`, `answer_text`, `message_text`) THEN THE SYSTEM SHALL reject the record. Only hashes, ids, counts and durations are persisted, so no private message body enters benchmark telemetry.
+
+**Per-cell metrics**
+
+- WHEN records for one (task, mode) cell are aggregated THE SYSTEM SHALL report:
+  - n;
+  - initial (first-turn) context tokens separately from total input, output, cache-read and cache-creation tokens;
+  - turns;
+  - discovery, describe, invoke and retry call counts;
+  - the oracle success rate;
+  - `permission_preserved`;
+  - `audit_complete`;
+  - provider caveats.
+- WHILE a cell has fewer than 5 records THE SYSTEM SHALL report n and p50 latency, omit p95, and mark the cell `below-minimum-n`.
+- IF a cell has no records THEN THE SYSTEM SHALL render `NOT_RUN`. IF a mode is declared not measurable THEN THE SYSTEM SHALL render `not measurable: <reason>`. Neither case SHALL ever render as zero.
+
+**Permission and audit checks**
+
+- IF any recorded tool call or invocation trace names a capability outside the task's `expected_capabilities` united with the run's eligible set, or a negative probe's excluded capability becomes visible or invokable, THEN THE SYSTEM SHALL set `permission_preserved=false` for that cell.
+- IF any invoked capability lacks a matching audit record THEN THE SYSTEM SHALL set `audit_complete=false`. The matching record is:
+  - in eager mode, a `POLICY_DECISION` line from `orchestrator/policy_checkpoint.py` `emit()`;
+  - in discovery mode, a `CAPABILITY_INVOCATION` line from `orchestrator/capability_gateway.py` `_emit_trace`.
+
+  The matching record SHALL carry a non-`absent` policy result and the run's execution context id.
+
+**Compatibility and comparison**
+
+- WHEN `tools/capability_bench.py compare` is invoked with two transcripts THE SYSTEM SHALL produce the same output as today (backward compatible).
+- WHEN the aggregate report is rendered THE SYSTEM SHALL show the structural first-turn delta against the recorded 61,213 / 23,392 baseline next to the measured end-to-end delta, and state explicitly whether the first-turn delta translated into end-to-end savings.
+
+**Benchmark document**
+
+- WHEN the benchmark document is updated THE SYSTEM SHALL update `docs/benchmarks/capability-discovery.md` in place. The 2026-09-26 run is kept as "Baseline (n=1)", and no competing benchmark artifact is created.
+- WHEN the document is updated THE SYSTEM SHALL include a mode availability matrix. Rows: eager, mctl-native discovery, Portal `minimize_tools`, Portal `search_and_execute`, Claude Code interactive Code Mode, Agent SDK / `claude -p` headless, and Anthropic API Programmatic Tool Calling. Columns: environment, tool surface, identity/policy check, sandbox, audit, rollback, limitations and evidence. Unverified facts are marked `UNKNOWN`.
+- WHILE mctlhq/.github#63 remains PARK on its M8 failure THE SYSTEM SHALL treat Portal `search_and_execute` as hard-gated: not measurable unless per-operation trace correlation is demonstrated in an isolated test portal. The #63 bytes-on-wire proxy SHALL NOT be described as model-token savings.
+- WHEN the document is updated THE SYSTEM SHALL contain a separate "Adjunct (non-comparable)" section for the #1096 interactive Claude Code experiment. That section uses its own vocabulary (`CLI_ONLY_PILOT` / `FURTHER_RESEARCH` / `DEFER` / `REJECT`), and its results SHALL NOT enter the four-arm comparison tables.
+
+**Decision**
+
+- WHEN the document is updated THE SYSTEM SHALL contain a pre-registered decision rule and a Decision section reading `PENDING: requires measured cells` until the operator records exactly one of `ADOPT_MCTL_NATIVE` / `ADOPT_PORTAL_MODE` / `HYBRID` / `DEFER`. The recorded decision states rollout guardrails and the follow-up issue(s).
+
+**Safety boundaries**
+
+- WHILE this spike is in progress THE SYSTEM SHALL leave these unchanged:
+  - `ISSUE_INVESTIGATOR_CAPABILITY_MODE`, which defaults to `eager`;
+  - the profile catalog;
+  - `orchestrator/` runtime code;
+  - the Cloudflare portal configuration (`code_mode: off`);
+  - every deployed service.
+- IF an experiment plan has not been approved by an operator THEN THE SYSTEM SHALL NOT execute measured model runs or live probes, and every results cell SHALL read `NOT_RUN`.
 
 ## Out of scope
 
-- Production enablement of Cloudflare Code Mode, `minimize_tools`, or capability discovery as the default mode.
-- Any change to Portal configuration, feature flags or MCP server business logic. This includes adding `tg.mctl.ai` as a gateway provider endpoint in `orchestrator/resolver.py`.
-- Replacing policy checkpoints or identity with discovery, or treating discovery as authorization.
-- Running live benchmark executions as part of the implementer's PR. Live runs are an operator step under an approved plan.
-- Implementing Claude Code Code Mode support in the SDK or runtime, and reopening #63.
-- Claiming cost savings from first-turn reduction alone.
+- Production enablement of Cloudflare Code Mode, `minimize_tools`, Claude Code Code Mode, or mctl-native discovery as a default.
+- Registering `tg.mctl.ai` (or any non-mctl-api upstream) as a gateway provider in `orchestrator/resolver.py` `_CAPABILITY_ENDPOINTS`.
+- Changing MCP server business logic, policy checkpoints or identity.
+- Emulating an unmeasurable mode with a different mechanism, for example a local JS executor.
+- Implementing the #1096 interactive experiment itself.
+- Executing the measured runs or posting the decision. These are operator steps (tasks 6-7) after plan approval, not implementer work.
+- Claiming cost savings from first-turn prompt reduction alone.
 
 ## Open questions
 
-- **Cross-upstream and Telegram tasks under mctl-native discovery.** `orchestrator/resolver.py:135` `_CAPABILITY_ENDPOINTS` knows only `mctl-api-mcp`. The gateway therefore cannot reach `tg.mctl.ai` today, and adding it is a runtime change. Working assumption: the Telegram and cross-upstream classes are measured where possible: eager runs through a test-only `mcp_servers` entry, and Portal modes through the Portal. Gateway cells for those classes are `not measurable (provider not registered)`. A third task class that is mctl-api-only, with two distinct tool families, keeps the three-class minimum comparable across both required arms.
-- **Who runs the measured repetitions, and the budget cap.** At about $5-6 per investigator run, 3 tasks x 2 modes x 5 repetitions costs roughly $150-$180. The proposal assumes an operator-approved plan with an explicit USD cap, and uses lightweight task prompts rather than full issue investigations to cut cost.
-- **Testable Cloudflare modes.** Whether the current Portal exposes `minimize_tools` and an isolated `search_and_execute` test portal could not be observed from this run, because `mcp.mctl.ai` is not a gitops-managed service. The experiment plan must establish this, and record `not measurable` if neither can be isolated.
-- **Read-only pilot data for Telegram.** Which tenant or identity holds read-only Telegram pilot data is not stated. The experiment plan must name it, or the class is `NOT_RUN`.
-- **Scope of the implementer's PR.** The research extension forbids code-writing agents and PRs for the Claude Code companion research. This proposal assumes that forbids runtime and SDK changes only. Offline benchmark tooling in `tools/` and the documentation update are taken to be the deliverables the original #597 asks for. The reviewer should confirm this.
+- Is the Cloudflare MCP Portal (`mcp.mctl.ai`) able to expose `minimize_tools` and `search_and_execute` on an isolated test portal without touching the production portal? Its configuration is not in `platform-gitops/services/`, so this run could not observe it. Until evidence exists, both Portal arms default to `not measurable` with the reason recorded.
+- TC3, the Telegram / cross-upstream class, cannot run under mctl-native discovery today, because the gateway only knows `mctl-api-mcp` (`orchestrator/resolver.py:135`). Two options:
+  - accept `not measurable` for that cell;
+  - define a third mctl-api-only class so that both required arms have three comparable classes.
+
+  This proposal does both: TC1 to TC3 for the comparison, plus TC4 as a cross-upstream cell that may be `not measurable` under discovery.
+- Which read-only Telegram pilot fixture, identity and tenant are approved for TC4? The issue says "read-only pilot data" without naming it. The experiment plan leaves it as an operator-filled pin.
+- Which model and USD cap should the plan use? The 2026-09-26 run used `claude-opus-5` at $8 per full investigation. Short task prompts should cost far less, but the cap is an operator decision.
+- Does mctl-api record server-side audit entries for read-only MCP calls in eager mode? If it does not, `audit_complete` relies on the client-side `POLICY_DECISION` lines and, when `MCTL_DECISION_RECORDS=on`, on the decision-attempt records. The plan should state which source counts.
+- The `enterprise-mcp` epic currently has lifecycle `paused`. Whether the operator runs the experiment while the epic is paused is a priority call (the issue says P2 / BACKLOG). It does not block the offline tooling.
