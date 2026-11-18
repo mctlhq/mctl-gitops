@@ -1506,6 +1506,14 @@ jobs:
       - name: release config preflight blocks a bump the new image would crash on
         run: python3 tests/test_release_config_preflight.py
 
+      # Both branches at the SHIPPED MIN_CHECKER_VERSION and the real rendered
+      # config: live flagless images are skipped safely, a below-MIN tag with
+      # service_subjects is refused, a candidate that rejects the config or
+      # lacks the flag is blocked before the bump, unreadable states are errors.
+      # Each case is re-run against mutants of the scripts (must turn red).
+      - name: mctl-api guard branches at the shipped MIN_CHECKER_VERSION
+        run: python3 tests/test_mctl_api_guard_branches.py
+
       # Customers rollout phase 3: every Actions v2 execution is
       # instance-wide and lives behind a toggle in customers_executions.tf
       # (its tests prove the toggles). One declared anywhere else would apply

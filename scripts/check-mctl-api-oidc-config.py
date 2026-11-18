@@ -29,7 +29,8 @@ changed Secret wiring.
 
 The ONE skip is the documented transition: a pinned tag older than
 MIN_CHECKER_VERSION (the first mctl-api release containing --check-config,
-mctlhq/mctl-api#1108) is skipped with a visible ::warning. The decision comes
+mctlhq/mctl-api#1108) is skipped with a visible ::warning, after one static
+legacy rule: such a tag is refused if the rendered config has service_subjects. The decision comes
 only from the version string, never from probing, so "could not run" is never
 "skipped". Raise nothing, lower nothing, without the release: once the pin is
 at or above MIN_CHECKER_VERSION the check is unconditional.
@@ -65,8 +66,12 @@ IMAGE_REPO = "ghcr.io/mctlhq/mctl-api"
 # flag could be in is below it. Too low only fails closed (a pin or candidate
 # in between, without the flag, gets no ok line and is refused); it can never
 # skip a release that has the flag. tests/test_release_config_preflight.py pins
-# that MIN stays above 4.166.0. Set it to the real first release when it exists.
-MIN_CHECKER_VERSION = "4.167.0"
+# that MIN stays above 4.167.0. RULE: MIN = the exact version of the regenerated
+# mctl-api release PR that carries --check-config, re-read at GO time. A MIN at or
+# below a deployed flagless build (4.167.0) makes validate red repo-wide (fail-closed
+# deadlock): do not merge this before the release version is settled; if that
+# version is burned, raise MIN here BEFORE merging.
+MIN_CHECKER_VERSION = "4.169.0"
 
 OK_LINE = "mctl-api check-config: ok"
 RUN_TIMEOUT = 90
@@ -199,14 +204,41 @@ def check_image(image, env, docker="docker"):
         raise Refuse(f"{image} exited 0 without the line {OK_LINE!r}: it does not implement --check-config, so nothing was validated")
 
 
+def legacy_rule(fixture_path, tag, min_version):
+    """Static rule for tags below MIN_CHECKER_VERSION: refuse any
+    MCTL_OIDC_PROVIDERS entry that carries service_subjects. An unreadable or
+    malformed fixture is a refusal, never a pass: unknown is not ok. Delete this
+    (and its tests) once MIN_CHECKER_VERSION is two releases old."""
+    try:
+        providers = json.loads(Path(fixture_path).read_text())["MCTL_OIDC_PROVIDERS"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise Refuse(f"LEGACY RULE: cannot read MCTL_OIDC_PROVIDERS from the fixture ({type(e).__name__}); "
+                     f"mctl-api {tag} is below {min_version} and cannot validate it itself, so nothing was checked")
+    if not isinstance(providers, list) or not all(isinstance(p, dict) for p in providers):
+        raise Refuse(f"LEGACY RULE: MCTL_OIDC_PROVIDERS in the fixture is not a list of objects; nothing was checked for mctl-api {tag}")
+    for p in providers:
+        if "service_subjects" in p:
+            raise Refuse(f"LEGACY RULE: provider {p.get('name')!r} has service_subjects, and mctl-api {tag} is below "
+                         f"{min_version} (releases from 4.165.0 refuse it next to customers_org_id and crash-loop at start; "
+                         f"older ones are unproven). Roll the config back first, or move the pin to {min_version} or later")
+
+
 def guard(values, fixture_path, tag_override=None, min_version=MIN_CHECKER_VERSION, docker="docker"):
     tag = tag_override or (values.get("image") or {}).get("tag")
     if (values.get("image") or {}).get("repository") != IMAGE_REPO:
         raise Refuse(f"image.repository is not {IMAGE_REPO}")
     if semver(tag, "image.tag") < semver(min_version, "MIN_CHECKER_VERSION"):
+        # The image cannot run --check-config, but one rule is known statically:
+        # every release from 4.165.0 refuses service_subjects next to
+        # customers_org_id (the 4.166.0 incident), and older ones are unproven.
+        # So a tag below MIN may never be paired with a config that has
+        # service_subjects. Without this, the skip lets an old pin (or a
+        # rollback bump) meet the very config that crash-loops it.
+        legacy_rule(fixture_path, tag, min_version)
         print(f"::warning title=mctl-api config guard SKIPPED::pinned mctl-api {tag} predates "
               f"--check-config (first in {min_version}). The rendered MCTL_OIDC_PROVIDERS was NOT run through "
-              f"mctl-api's validator. This skip ends when the pin reaches {min_version}.")
+              f"mctl-api's validator; only the static legacy rule (no service_subjects below {min_version}) "
+              f"was applied and passed. This skip ends when the pin reaches {min_version}.")
         return "skipped"
     fixture = json.loads(fixture_path.read_text())
     env = build_env(values, fixture)
@@ -291,6 +323,19 @@ def selftest():
         if "run" in log.read_text():
             print("FAIL a skip must not run docker")
             failures.append("skip ran docker")
+
+        bad = d / "bad.json"
+        bad.write_text(json.dumps({"MCTL_OIDC_PROVIDERS": [{"name": "zitadel", "customers_org_id": "3", "service_subjects": {"1": "2"}}]}))
+        junk = d / "junk.json"
+        junk.write_text("{not json")
+        below = lambda fx, tag="4.166.0": (lambda: guard(copy.deepcopy(base), fx, tag_override=tag, min_version="4.167.0", docker=dk))
+        os.environ["FAKE_MODE"] = "ok"
+        expect("below MIN + service_subjects: refused by the legacy rule", below(bad), "LEGACY RULE")
+        expect("below MIN (3.0.0) + service_subjects: refused", below(bad, "3.0.0"), "LEGACY RULE")
+        expect("below MIN + unreadable fixture: refused, not skipped", below(junk), "LEGACY RULE")
+        expect("below MIN + missing fixture: refused, not skipped", below(d / "absent.json"), "LEGACY RULE")
+        expect("at MIN + service_subjects: reaches the image (legacy rule does not apply)",
+               below(bad, "4.167.0"), "ok")
 
         expect("Secret wiring changed (oidcProvidersSecret)",
                g("ok", values=mut(lambda v: v.update(oidcProvidersSecret="other"))), "oidcProvidersSecret")

@@ -171,6 +171,68 @@ def behaviour(script):
     return res
 
 
+LEGACY_BAD = {"MCTL_OIDC_PROVIDERS": [{"name": "zitadel", "customers_org_id": "1", "service_subjects": {"2": "3"}}]}
+LEGACY_LIVE = {"MCTL_OIDC_PROVIDERS": [{"name": "zitadel", "customers_org_id": "1"}]}
+
+
+def legacy_outcomes(script_path):
+    """Calls guard() of the given copy of the script below MIN with fixtures. No docker, no helm:
+    below MIN the guard decides before either is needed."""
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("chk_legacy", script_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    vals = lambda tag: {"image": {"repository": IMAGE, "tag": tag}}
+    out = {}
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        for name, body in (("bad", json.dumps(LEGACY_BAD)), ("live", json.dumps(LEGACY_LIVE)), ("junk", "{nope")):
+            (d / f"{name}.json").write_text(body)
+
+        def call(fx, tag):
+            try:
+                return mod.guard(vals(tag), d / fx, min_version="4.167.0")
+            except mod.Refuse as e:
+                return "refused:" + str(e)
+        out["4.166.0 + service_subjects"] = call("bad.json", "4.166.0")
+        out["4.165.0 + service_subjects"] = call("bad.json", "4.165.0")
+        out["4.166.0 + live config"] = call("live.json", "4.166.0")
+        out["4.166.0 + junk fixture"] = call("junk.json", "4.166.0")
+        out["4.166.0 + absent fixture"] = call("absent.json", "4.166.0")
+    return out
+
+
+def legacy_green(o):
+    return "LEGACY RULE" in o["4.166.0 + service_subjects"] \
+        and "LEGACY RULE" in o["4.165.0 + service_subjects"] \
+        and o["4.166.0 + live config"] == "skipped" \
+        and "LEGACY RULE" in o["4.166.0 + junk fixture"] and "LEGACY RULE" in o["4.166.0 + absent fixture"]
+
+
+def legacy_checks():
+    o = legacy_outcomes(CHECK)
+    check("LEGACY: tag below MIN + service_subjects refused; live config still skipped; unreadable fixture refused", legacy_green(o), o)
+    src = CHECK.read_text()
+    call = "legacy_rule(fixture_path, tag, min_version)\n        print("
+    mutants = {
+        "legacy rule call removed (plain skip)": src.replace(call, "print(", 1),
+        "legacy rule ignores service_subjects": src.replace('if "service_subjects" in p:', "if False:", 1),
+        "legacy rule treats an unreadable fixture as clean": src.replace("except (OSError, ValueError, KeyError, TypeError) as e:", "except ZeroDivisionError as e:", 1),
+    }
+    for mname, text in mutants.items():
+        assert text != src, f"mutation did not apply: {mname}"
+        with tempfile.TemporaryDirectory() as d:
+            mp = pathlib.Path(d) / "chk.py"
+            mp.write_text(text)
+            try:
+                mo = legacy_outcomes(mp)
+                red = not legacy_green(mo)
+            except Exception as e:  # a mutant that crashes the detector is also a red
+                red = True
+        check(f"mutant red: {mname}", red, "mutant passed every case")
+
+
 def main():
     vm_text = (WF / VM).read_text()
     problems = guard_wiring(vm_text)
@@ -238,6 +300,10 @@ def main():
             mres = behaviour(sd / PREFLIGHT)
         check(f"mutant red: {mname}", not all(ok for ok, _ in mres.values()), "mutant passed every case")
 
+
+    # Legacy rule (below-MIN skip must not pair an old image with service_subjects).
+    legacy_checks()
+
     # Placeholder cannot sit at or below a release known to lack the flag.
     m = re.search(r'^MIN_CHECKER_VERSION = "(\d+\.\d+\.\d+)"', CHECK.read_text(), re.M)
     if not m:
@@ -245,8 +311,8 @@ def main():
         return 2
     ns = {"MIN_CHECKER_VERSION": m.group(1)}
     tup = lambda s: tuple(int(x) for x in s.split("."))
-    check("MIN_CHECKER_VERSION is above 4.166.0, the last release known to lack --check-config",
-          tup(ns["MIN_CHECKER_VERSION"]) > tup("4.166.0"), ns["MIN_CHECKER_VERSION"])
+    check("MIN_CHECKER_VERSION is above 4.168.0, the last RELEASED mctl-api known to lack --check-config (no cmd/api/check_config.go at the tags 4.167.0 and 4.168.0)",
+          tup(ns["MIN_CHECKER_VERSION"]) > tup("4.168.0"), ns["MIN_CHECKER_VERSION"])
     print("\n%s" % ("FAILED:\n  " + "\n  ".join(failures) if failures else "all ok"))
     return 1 if failures else 0
 
