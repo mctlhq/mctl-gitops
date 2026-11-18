@@ -32,8 +32,13 @@ Portal modifications, actual model runs or merge are authorized.
   correctness regression plus independent 100% permission/audit gates.
   Five runs per cell are exploratory and require a separately reviewed
   confirmatory plan before adoption.
-- [ ] R7. Independent reviewer confirms all P1/P2 fixes and that this
-  revised proposal does not authorize implementation.
+- [x] R7a. Amend this proposal for the three PR #2803 review findings:
+  (1) sanitized-only recursive usage projection, (2) mode-sensitive NEG
+  exposure vs invocation authorization, (3) conjunctive/alternative oracle
+  groups for TC1–TC3. These are specifications, not executable code.
+- [ ] R7b. Independent reviewer on the **new HEAD** confirms the fixes,
+  including complete nested-field and NEG-mode tests as future criteria,
+  and verifies no implementation was authorized.
 
 ## Candidate future tooling/doc slice — new owner GO required
 
@@ -41,21 +46,36 @@ These are **not tasks for the currently parked implementer**.
 
 - [ ] F1. If the owner separately authorizes offline tooling, add
   `tools/bench_tasks/{tc1-roadmap,tc2-triage,tc3-agent-ops,
-  tc4-cross-upstream,neg-consequential}.yaml` with pinned oracle
-  inputs; no production data and no real consequence-capable action.
-- [ ] F2. If separately authorized, define validated run-record schemas
-  and pure `aggregate` in `tools/capability_bench.py` without changing
-  `compare`. Persist hashes, opaque IDs, metrics only, never payloads.
-  Every child needs a stable call ID, parent ID, decision ID, actor/tenant,
-  arguments digest and outcome or an explicit `INCOMPLETE`.
-  Never infer a retry from repeated argument hashes.
+  tc4-cross-upstream,neg-consequential}.yaml` with pinned oracle inputs:
+  `required_all` and `required_any_of` (nested nonempty alternatives),
+  `excluded_capabilities`, `argument_constraints`, `answer_facts`,
+  `consequential`, `pinned_inputs`. Validate TC1 and TC3 either-path
+  correctness, TC2 two-tool conjunction, and NEG with empty positive
+  obligations. No production data and no real consequence-capable action.
+- [ ] F2. If separately authorized, define `usage_summaries[]` as a
+  **numeric allowlisted projection**, never raw `result_messages` or SDK
+  `ResultMessage` objects. Project in RAM, recursively validate the
+  entire record (including nested maps/arrays, tool traces and usage),
+  then persist atomically only if every field is safe. Injected nested
+  `result`, `content`, `text` or `message_text` must refuse the write.
+  Implement pure `aggregate` in `tools/capability_bench.py` without
+  changing legacy `compare` read-side behavior. Preserve cumulative
+  token delta math and separate sanitized first-turn counters.
+  Every child needs stable call/parent/decision IDs, actor/tenant,
+  argument digest and outcome, or explicit `INCOMPLETE`.
+  Never infer a retry from identical hashes.
 - [ ] F3. If separately authorized, update only the existing
   `docs/benchmarks/capability-discovery.md` with a versioned task set,
   original baseline, unexecuted results, mode matrix, #63 M8 FAIL,
   #1096 adjunct and bounded experiment plan. No competing benchmark.
-- [ ] F4. Run pure offline tests that reject unknown fields, private
-  payload keys, unauthorized capabilities, missing/multimatched audit IDs
-  and the false-green fallback. Confirm `NOT_RUN` stays `NOT_RUN`.
+- [ ] F4. Run pure offline tests for (a) nested raw SDK text/result/payload
+  rejection with zero persisted bytes, even inside arrays or model-usage
+  maps, and stable `compare` output; (b) one-of TC1/TC3 and all-of TC2
+  invocation/answer-fact scoring, malformed any-of groups, NEG with no
+  positive requirement; (c) eager visible-but-DENIED/no execution vs
+  discovery filtered-not-visible/no execution, with separate exposure
+  metrics; (d) missing/multimatched audit IDs, independently eligible
+  sets, and fail-closed recovery. Confirm `NOT_RUN` stays `NOT_RUN`.
 
 ## Candidate experiment and decision — a *second* distinct GO
 
@@ -72,6 +92,13 @@ These are **not tasks for the currently parked implementer**.
 ## Current review acceptance
 
 - [ ] Every measured result and negative probe is `NOT_RUN`.
+- [ ] Every proposed persisted usage summary has a strict recursive
+  allowlist and no raw SDK result; injections of nested text fail with
+  no record write.
+- [ ] TC1/TC3 alternative-capability success and TC2 conjunctive
+  success have explicit deterministic oracles, independently of policy.
+- [ ] Eager NEG policy-DENY without execution is not confused with
+  the broader advertised schema; discovery checks filtered exposure.
 - [ ] The sealed eligibility set is independent of task oracle expectations.
 - [ ] Eager/discovery audit joins require unique child and decision IDs and
   deny ambiguous, missing or absent-policy records.
