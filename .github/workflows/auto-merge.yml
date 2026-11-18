@@ -31,19 +31,14 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
-      (startsWith(github.event.pull_request.head.ref, 'claude/') || startsWith(github.event.pull_request.head.ref, 'portal-allowlist/') || startsWith(github.event.pull_request.head.ref, 'release-bump/'))
-    # The release-bump route waits for the required checks (see the last step).
-    timeout-minutes: 50
+      (startsWith(github.event.pull_request.head.ref, 'claude/') || startsWith(github.event.pull_request.head.ref, 'portal-allowlist/'))
+    # release-bump/* PRs are not merged from here. A merge-queue entry created
+    # with GITHUB_TOKEN starts no merge_group run, so such a bump stalled in
+    # AWAITING_CHECKS (#2780, #2792); the enqueue-bump job of the release
+    # workflows, on main, enqueues them with the App token instead and
+    # applies the guards that used to live here. The protected_re below is also
+    # read by scripts/release-bump-enqueue-wait.sh, so it stays one list.
     steps:
-      # release-bump/* only: the trusted guard script comes from the default
-      # branch, never from the PR (a pull_request_review run would otherwise
-      # check out the merge commit).
-      - name: Check out the guard scripts from the default branch
-        if: startsWith(github.event.pull_request.head.ref, 'release-bump/')
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
       # A bot approval is enough to merge an ordinary `claude/*` PR, but not
       # one that decides which agent exists or what it may do
       # (mctl-agents#470), nor one that flips a proposal's approval state
@@ -80,7 +75,7 @@ jobs:
           fi
           # tests/test_auto_merge_protected_paths.py reads this assignment, so
           # keep it a single line of the form protected_re='...'.
-          protected_re='^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$|^scripts/release-gate\.py$|^scripts/release-bump-(diff-guard|route|checks-ready)\.py$|^scripts/release-bump-apply\.sh$|^platform-gitops/release-gates\.yaml$|^platform-gitops/release-bump-routes\.yaml$|^platform-gitops/argo-workflows/scripts/release-gate-guard\.sh$|^platform-gitops/argo-workflows/cluster-templates/(tpl-git-commit|tpl-validate-tenant|wft-add-custom-domain|wft-deploy-service|wft-promote-deployment|wft-provision-database|wft-remove-custom-domain|wft-rollback-revision|wft-rollback-service)\.yaml$|^\.github/workflows/(auto-merge\.yml|gitops-bump\.yaml|release-deploy\.yaml|release-gate-watch\.yml|validate-manifests\.yml)$|^tests/test_(release_gate|release_bump|auto_merge_protected_paths|release_deploy_bump|gitops_bump_inputs|wft_deploy_service_autoscaling_values)[a-z_]*\.py$'
+          protected_re='^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$|^scripts/release-gate\.py$|^scripts/release-ledger-shadow\.py$|^scripts/release-bump-(diff-guard|route|checks-ready)\.py$|^scripts/release-bump-(apply|enqueue-wait)\.sh$|^platform-gitops/release-gates\.yaml$|^platform-gitops/release-bump-routes\.yaml$|^platform-gitops/argo-workflows/scripts/release-gate-guard\.sh$|^platform-gitops/argo-workflows/cluster-templates/(tpl-git-commit|tpl-validate-tenant|wft-add-custom-domain|wft-deploy-service|wft-promote-deployment|wft-provision-database|wft-remove-custom-domain|wft-rollback-revision|wft-rollback-service)\.yaml$|^\.github/workflows/(auto-merge\.yml|gitops-bump\.yaml|release-deploy\.yaml|release-gate-watch\.yml|validate-manifests\.yml)$|^tests/test_(release_gate|release_ledger|release_bump|auto_merge_protected_paths|release_deploy_bump|gitops_bump_inputs|wft_deploy_service_autoscaling_values)[a-z_]*\.py$'
           # grep exits 1 for "no match" (an empty set) and 2 or more for an
           # error such as an invalid pattern. Only 1 may read as empty.
           rc=0
@@ -103,27 +98,6 @@ jobs:
               protected=$(printf '%s\n%s\n' "$protected" "$portal_widening" | grep -v '^$' || true)
             fi
           fi
-          # release-bump/* PRs (release-deploy.yaml / gitops-bump.yaml, PR
-          # route of mctlhq/mctl-gitops#2543) merge only when the App opened
-          # them from this repository AND every changed line moves an image
-          # tag and nothing else. Fail closed: a diff that cannot be read in
-          # full, or one that the guard does not accept, is a human merge.
-          if [[ "$HEAD_REF" =~ ^release-bump/ ]]; then
-            bump_problem=""
-            if [ "$PR_AUTHOR" != "mctl-gitops-pr[bot]" ]; then
-              bump_problem="author is ${PR_AUTHOR}, not the release-bump App"
-            elif [ "$HEAD_REPO" != "$REPO" ]; then
-              bump_problem="head is not in ${REPO}"
-            elif ! gh api -H "Accept: application/vnd.github.diff" \
-                  "repos/${REPO}/compare/main...${head_sha}" > "$RUNNER_TEMP/pr.diff"; then
-              bump_problem="the diff of ${head_sha} could not be read"
-            elif ! python3 scripts/release-bump-diff-guard.py < "$RUNNER_TEMP/pr.diff"; then
-              bump_problem="the diff is not a pure image tag move"
-            fi
-            if [ -n "$bump_problem" ]; then
-              protected=$(printf '%s\nrelease-bump: %s\n' "$protected" "$bump_problem" | grep -v '^$' || true)
-            fi
-          fi
           if [ -n "$protected" ]; then
             echo "::notice::#${PR} touches paths that need a human merge; leaving it open:"
             printf '%s\n' "$protected"
@@ -137,10 +111,8 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       - name: Merge PR
-        if: steps.guard.outputs.merge == 'true' && !startsWith(github.event.pull_request.head.ref, 'release-bump/')
+        if: steps.guard.outputs.merge == 'true'
         run: |
           gh pr merge "$PR" \
             --merge --delete-branch \
@@ -151,91 +123,3 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
-      # release-bump/*: the review usually lands before the required checks
-      # finish, and the repository does not allow GitHub auto-merge, so wait here
-      # until every check run of the reviewed head other than THIS job's own has
-      # completed green, then enqueue exactly that head in the merge queue
-      # (enqueuePullRequest; `gh pr merge` is auto-merge and refused here).
-      # This job is itself a check run on the head and stays pending until it
-      # exits, so a wait for mergeStateStatus CLEAN never ended (#2739, #2748).
-      # scripts/release-bump-checks-ready.py excludes only the exact own check
-      # name; a failed, cancelled, missing or unreadable check is never ready.
-      # The review must be on the head the guard judged, a moved head, a
-      # failure or a timeout leaves the PR open; a push re-runs the review and
-      # this workflow.
-      - name: Enqueue release-bump PR once the other checks pass
-        if: steps.guard.outputs.merge == 'true' && startsWith(github.event.pull_request.head.ref, 'release-bump/')
-        run: |
-          set -euo pipefail
-          if [ "$REVIEW_COMMIT" != "$HEAD_SHA" ]; then
-            echo "::notice::the approval is on ${REVIEW_COMMIT}, not on ${HEAD_SHA}; the current head gets its own review."
-            exit 0
-          fi
-          deadline=$((SECONDS + 2700))
-          enqueued=0
-          while :; do
-            if ! view=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,state,id --jq '"\(.headRefOid) \(.state) \(.id)"'); then
-              echo "::error::could not read #${PR}; not merging."
-              exit 1
-            fi
-            read -r cur state pid <<<"$view"
-            if [ "$cur" != "$HEAD_SHA" ]; then
-              echo "::notice::#${PR} head moved from ${HEAD_SHA} to ${cur}; the new head gets its own review."
-              exit 0
-            fi
-            case "$state" in
-              MERGED) echo "::notice::#${PR} merged"; exit 0 ;;
-              OPEN) ;;
-              *) echo "::error::#${PR} is ${state}; not merging."; exit 1 ;;
-            esac
-            if [ "$enqueued" = 1 ]; then
-              if ! inq=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){isInMergeQueue}}}' \
-                    -f o="${REPO%%/*}" -f r="${REPO##*/}" -F n="$PR" --jq .data.repository.pullRequest.isInMergeQueue); then
-                echo "::error::could not read the merge queue state of #${PR}."
-                exit 1
-              fi
-              if [ "$inq" != true ]; then
-                echo "::error::#${PR} left the merge queue without merging."
-                exit 1
-              fi
-            else
-              if ! total=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=1" --jq .total_count) \
-                 || ! runs=$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-                      --jq '.check_runs[] | {id, name, status, conclusion}'); then
-                echo "::error::could not read the check runs of ${HEAD_SHA}; not merging."
-                exit 1
-              fi
-              rc=0
-              verdict=$(python3 scripts/release-bump-checks-ready.py --own-check "$OWN_CHECK" \
-                --expect "$total" --required "$REQUIRED_CHECKS" <<<"$runs") || rc=$?
-              case "$rc" in
-                0)
-                  if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
-                        -f id="$pid" -f h="$HEAD_SHA" 2>&1); then
-                    echo "::error::enqueue of #${PR} was refused: ${out}"
-                    exit 1
-                  fi
-                  echo "::notice::#${PR} enqueued at ${HEAD_SHA}"
-                  enqueued=1 ;;
-                10) echo "waiting: ${verdict}" ;;
-                *) echo "::error::#${PR} is not mergeable: ${verdict}"; exit 1 ;;
-              esac
-            fi
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::#${PR} did not merge within 45 minutes; not merging."
-              exit 1
-            fi
-            sleep 30
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
-          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
-          # This job's own check run: the name of the job, and an exact match.
-          OWN_CHECK: auto-merge
-          # The required status checks of ruleset main-protection (id 18465404).
-          # Keep in step with the ruleset; tests/test_release_bump_checks_ready.py
-          # pins these to the job ids tests/test_required_check_job_ids.py guards.
-          REQUIRED_CHECKS: cloudflare-plan,reserved-hosts,validate

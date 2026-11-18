@@ -138,6 +138,10 @@ reviewed content digest, see `docs/runbooks/proposal-approval-content-digest.md`
 For which control-plane failure paths (etcd, apiserver, admission) are
 monitored and which are gaps, see `docs/runbooks/control-plane-failure-paths.md`.
 
+For RedLoop Gate 4 (Rules of Engagement, stop conditions, kill-switch order,
+the DAST edge-exception proposal) see `docs/runbooks/redloop-gate4-roe.md`,
+and for the one-shot egress proof see `docs/runbooks/redloop-egress-probe.md`.
+
 For the inert Glovo M1 staging package, its P1/P2 gates, kill switch and
 rollback, see `docs/runbooks/glovo-m1.md`.
 

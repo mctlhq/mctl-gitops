@@ -88,14 +88,16 @@ def _gates(root: Path, rev: str | None = None) -> list[dict]:
 
 def problems(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
              today: datetime.date | None = None, image: str | None = None,
-             ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
+             ledger_digest: str | None = None, new_digest: str | None = None,
+             preflight: bool = False) -> list[str]:
     """Every reason to refuse. `files=None` is verify mode (whole tree)."""
     try:
         gates = _gates(root, rev)
         holds = _holds(_policy_doc(root, rev))
     except Exception as exc:  # noqa: BLE001 - unreadable gate is a refusal
         return [f"UNKNOWN: gate {GATE} unreadable: {type(exc).__name__}: {exc}"]
-    out: list[str] = hold_problems(root, holds, files, new_tag, today, image, ledger_digest, new_digest)
+    out: list[str] = hold_problems(root, holds, files, new_tag, today, image, ledger_digest, new_digest,
+                                   preflight)
     for g in gates:
         paths = g["paths"]
         touched = paths if files is None else [p for p in paths if p in files]
@@ -291,7 +293,8 @@ def _bootstrap_tag(root: Path, hold: dict) -> str:
 
 def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_tag: str | None,
                   today: datetime.date | None = None, image: str | None = None,
-                  ledger_digest: str | None = None, new_digest: str | None = None) -> list[str]:
+                  ledger_digest: str | None = None, new_digest: str | None = None,
+                  preflight: bool = False) -> list[str]:
     """Refuse a held version unless an allow record names exactly that version.
 
     Bump mode (files given): a NEW write, judged on `new_tag`, only for a hold
@@ -312,9 +315,10 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
     held image) and by the pull-request identity check (`pr-identity`).
     Direct pushes with another bypassing deploy key (runbook
     mctl-api-release-hold.md, P5b/P6) are not judged by either, and in
-    enforce mode the offline `diff` no longer flags them either: a ledger
-    read in release-gate-watch after each push (S4b) must land before any
-    hold is switched to enforce.
+    enforce mode the offline `diff` no longer flags them either. They are
+    caught after the push by release-gate-watch's ledger step (S4b,
+    `ledger_changes` + release-ledger-shadow.py watch), which asks the
+    ledger whether the written digest was approved.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
     out: list[str] = []
@@ -335,6 +339,12 @@ def hold_problems(root: Path, holds: list[dict], files: list[str] | None, new_ta
             continue
         if _enforced(h):
             if files is None:
+                continue
+            # Preflight runs before the build, so no digest exists yet and the
+            # ledger cannot be asked. It defers only this judgement: the bump
+            # step calls check without --preflight and refuses an unknown
+            # digest there. The version checks above still ran.
+            if preflight:
                 continue
             if not (isinstance(new_digest, str) and DIGEST.fullmatch(new_digest)):
                 out.append(f"{h['name']}: ledger enforced, but the digest being written is unknown ({new_digest!r})")
@@ -408,8 +418,10 @@ def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
 
 
 def run(root: Path, files: list[str] | None, new_tag: str | None, rev: str | None = None,
-        image: str | None = None, ledger_digest: str | None = None, new_digest: str | None = None) -> int:
-    found = problems(root, files, new_tag, rev, image=image, ledger_digest=ledger_digest, new_digest=new_digest)
+        image: str | None = None, ledger_digest: str | None = None, new_digest: str | None = None,
+        preflight: bool = False) -> int:
+    found = problems(root, files, new_tag, rev, image=image, ledger_digest=ledger_digest, new_digest=new_digest,
+                     preflight=preflight)
     for line in found:
         print(f"::error::release gate: {line}", file=sys.stderr)
     if found:
@@ -727,6 +739,69 @@ def pr_identity_problems(repo: Path, base: str, head: str, author: str, branch: 
     return out
 
 
+def _held_image(repo: Path, rev: str, hold: dict) -> tuple[str, str | None]:
+    """(image.tag, image.digest or None) of the hold's file at `rev`; any doubt raises.
+
+    A file without a digest key yields None (the bootstrap file pins none
+    today); a digest key that is present but not a string is an error.
+    """
+    raw = _blob(repo, rev, hold["file"])
+    if raw is None:
+        raise ValueError(f"{hold['file']} absent at {rev[:12]}")
+    with tempfile.TemporaryDirectory() as t:
+        (Path(t) / hold["file"]).parent.mkdir(parents=True)
+        (Path(t) / hold["file"]).write_bytes(raw)
+        tag = _bootstrap_tag(Path(t), hold)
+        digest = block_values((Path(t) / hold["file"]).read_text())["image"].get("digest")
+    if digest is not None and not isinstance(digest, str):
+        raise ValueError(f"image.digest is not a string: {digest!r}")
+    return tag, digest or None
+
+
+def ledger_changes(repo: Path, base: str, head: str) -> tuple[list[dict], list[tuple[str | None, str]]]:
+    """Held-image writes a push made, for the S4b ledger read in release-gate-watch.
+
+    For every hold with a `ledger:` block in the policy at `base` (the trusted
+    side, as in `diff`): when the push changed the file's image.tag or
+    image.digest to a version at or above held_from, one change
+    {mode, hold, repository, version, digest, old_version}. `digest` is None
+    when the file pins none. A tag or digest that did not move is the
+    deployed state, not a write, and yields nothing.
+
+    Unknowns are (mode, why); mode None means the policy itself could not be
+    read, so no hold's mode is known. A read that fails is never "no change".
+    """
+    try:
+        raw = _blob(repo, base, GATE)
+        if raw is None:
+            return [], [(None, f"{GATE} absent at {base[:12]}")]
+        holds = _holds(_parse(raw))
+    except Exception as exc:  # noqa: BLE001
+        return [], [(None, f"policy unreadable at {base[:12]}: {type(exc).__name__}: {exc}")]
+    changes: list[dict] = []
+    unk: list[tuple[str | None, str]] = []
+    for h in holds:
+        led = h.get("ledger")
+        if not led:
+            continue
+        try:
+            old = _held_image(repo, base, h)
+            new = _held_image(repo, head, h)
+        except Exception as exc:  # noqa: BLE001
+            unk.append((led["mode"], f"{h['name']}: {h['file']} image unreadable: {type(exc).__name__}: {exc}"))
+            continue
+        if new == old:
+            continue
+        v = _semver(new[0])
+        if v is None:
+            unk.append((led["mode"], f"{h['name']}: pushed tag {new[0]!r} is not X.Y.Z"))
+            continue
+        if v >= _semver(h["held_from"]):  # type: ignore[operator]  # below it the hold does not apply
+            changes.append({"mode": led["mode"], "hold": h["name"], "repository": h["repository"],
+                            "version": new[0], "digest": new[1], "old_version": old[0]})
+    return changes, unk
+
+
 def ledger_holds(root: Path) -> list[str]:
     """`<mode> <repository> <version>` per ledger hold (for operators and the S4b watch step)."""
     out = []
@@ -877,6 +952,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--new-digest", default=None, help="digest of the image being written (ledger holds)")
     c.add_argument("--ledger-approved-digest", default=None,
                    help="digest release-deploy's ledger-gate job found an approved decision for")
+    c.add_argument("--preflight", action="store_true",
+                   help="before the build (release-preflight.py): an enforced ledger hold is judged at the bump")
     d = sub.add_parser("diff")
     d.add_argument("--base", required=True)
     d.add_argument("--head", required=True)
@@ -892,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
         return selftest()
     if a.cmd == "check":
         return run(Path(a.root), a.files, a.new_tag, a.policy_rev, a.image,
-                   a.ledger_approved_digest or None, a.new_digest or None)
+                   a.ledger_approved_digest or None, a.new_digest or None, a.preflight)
     if a.cmd == "verify":
         return run(Path(a.root), None, None, a.policy_rev)
     if a.cmd == "diff":

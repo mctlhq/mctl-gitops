@@ -241,10 +241,11 @@ spec:
 # NetworkPolicy admits the monitoring namespace, so blackbox-exporter can reach
 # the pod. Port 80 is service.port; the pod listens on 8080.
 #
-# When the ingress is enabled, add https://staging-redloop.mctl.ai/healthz as a
-# second target in the same PR. The alerts match on the job, so both targets
-# are covered, and the `instance` label tells the edge path from the in-cluster
-# path.
+# Keep this the only target, even while the ingress is enabled for GO-2 (RoE
+# section 12). An edge target would fail while the certificate is issued and
+# again during the revert, and RedLoopStagingDown fires per instance after 2m,
+# so it would trip a stop condition on every activation and rollback. The GO-2
+# script watches the edge /healthz itself during the window.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMProbe
 metadata:

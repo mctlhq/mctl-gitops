@@ -5,11 +5,13 @@
       | release-bump-checks-ready.py --own-check auto-merge --expect <total_count> \
             --required cloudflare-plan,reserved-hosts,validate
 
-auto-merge.yml waits for the PR to be mergeable, but the job that waits is
-itself a check run on the PR head, pending until it exits. A wait on "every
-check finished" therefore never ends (mctlhq/mctl-gitops#2739, #2748). The one
-check run that may be ignored is that job's own, matched by its exact name:
-not a prefix, not a case-insensitive match, so "auto-merge-lint" still counts.
+When auto-merge.yml did the wait, the job that waited was itself a check run on
+the PR head, pending until it exited, so a wait on "every check finished" never
+ended (mctlhq/mctl-gitops#2739, #2748). The one check run that may be ignored is
+the waiting job's own, matched by its exact name: not a prefix, not a
+case-insensitive match, so "auto-merge-lint" still counts. The current caller,
+release-bump-enqueue-wait.sh, runs outside the PR head and passes an empty
+name, which matches no run.
 
 Reads concatenated JSON objects (one per check run) on stdin. Exit codes:
   0   ready: every other check run completed with success, neutral or skipped,

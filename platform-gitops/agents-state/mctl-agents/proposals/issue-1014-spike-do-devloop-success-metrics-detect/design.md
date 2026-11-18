@@ -1,133 +1,102 @@
-# Design: issue-1014-spike-do-devloop-success-metrics-detect
+# Design: issue-1014-spike-do-devloop-success-metrics-detect (narrowed)
 
-## Current state
+Proposal only; no implementation approval. This is the operator-selected narrow follow-up of 2026-11-17.
+It supersedes the earlier broad experiment (offline harness, M1-M8/A0, perturbation controls, status corpus),
+which was never executed. The PR #1082 research is reused as provenance only; it is open and unmerged.
 
-What counts as "success" today, by source:
+## Current state (repository source, mctl-agents `main` 4d7efd3555eafbb4af969687e029c5b5b9863b14)
 
-- **Bench pass-rate (model swaps).** `tools/hetzner_inference_spike.py` produced the #791 records
-  (`docs/spikes/791/...`, report `docs/spikes/791-hetzner-inference.md`), and #825
-  (`docs/spikes/825-qwen38-effort-rebench.md`) reuses that shape. Each cell carries an oracle verdict
-  `pass`/`fail` plus `turns`, `tool_calls`, input and output tokens, `wall_clock_s`, `outcome`,
-  `failure_class` and stop reason. #796 records (`docs/spikes/796/results/*/records.jsonl`) have the same
-  fields plus `classifier_interruptions` and a truncated `final.summary` with a sha256. The verdicts read
-  oracle passes per cell. #791 line 72 notes that raw transcripts were not recorded, so answers "cannot be
-  re-scored". In those tables Sonnet and Qwen investigation cells both `pass` with very different token
-  and turn counts. That is an existing real example of equal pass-rate and different secondary metrics.
-- **Mechanical eval.** `tools/model_smoke.py --eval` reports accuracy on two fixed workloads. Its own
-  docstring says it is no evidence for judgement tasks.
-- **Lifecycle outcome.** mctl-gitops `agents-state/<service>/proposals/<slug>/.status.yaml`, written by
-  `orchestrator/proposal_state.py` and the DevLoop activities. For mctl-agents (180 proposals): 113
-  `merged`, 11 `rejected`, 10 `needs-triage`, 28 `accepted`, 16 `proposed`, 2 `implemented`. The
-  `completion.authoritative` block (`orchestrator/implementation_completion.py`, ADR 021) carries
-  `outcome`, `stop_reason` (53 `gates_passed`, 6 `no_commits`) and
-  `verification.required_passed/required_total`.
-- **Retrieval quality.** `orchestrator/context_eval.py` (ADR 015) scores what the model was shown,
-  explicitly not what it did. ADR 019 requires `evidence.kind: context-eval` only for
-  context-strategy promotion.
-- **Usage and cost.** `orchestrator/usage_ledger.py` `UsageRecorder` sends per-turn token deltas to
-  mctl-api, which aggregates them per DevLoop stage.
-- **Traces.** `orchestrator/tracing.py` `AgentRunObserver`. Spike #854
-  (`docs/spikes/854-agent-observability-gaps.md`) lists what is missing: G1 eval results on the trace,
-  G2 run outcome attributes, G3 agent RED metrics (#871 to #873 filed), and G4 to G7 (deferred).
-- **Finding validity.** Spike #918 (`docs/spikes/918-finding-oracle-classes.md`,
-  `tools/spike_918_finding_oracles.py`) classifies which review findings have a deterministic oracle.
-  Its offline-harness, `origin: real|control` and `unknown`-is-not-zero conventions are reused here.
-- **Release gates.** mctl-gitops `release-gates.yaml` guards image-tag grouping and version holds only.
-  It checks no quality metric.
+Not deployed or live state.
 
-Deployed state checked:
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-exec/values.yaml`: image tag `1.117.0`,
-  `otel.enabled: true`, `MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow`, `MCTL_TRACE_ARGO_PARAM: "true"`.
-  DevLoop traces are exported, and other workflow types are not.
-- `$MCTL_GITOPS_ROOT/agents-state/mctl-agents/proposals/*/.status.yaml` (180 files, grep counts above):
-  `execution.version` is `''` in all 108 records that carry an `execution` block, so no outcome is
-  attributable to an agent or model version from this source. `review_attempts`, `ci_blockers` and
-  `ci_infra_retries` appear in 1 file. No field records a revert or a follow-up fix of a merged PR.
-- `$MCTL_GITOPS_ROOT/release-gates.yaml`, `release-bindings.yaml`: image and version gates only.
-- `mctl_get_usage_summary` (group_by outcome): **refused**, HTTP 403 `agent_scope_denied`. Live per-stage
-  cost and latency were not observed. That is not the same as absent.
-- Article URL via WebFetch: **HTTP 403**. Its seven modes were not observed.
-- mctlhq/.github#313 and mctl-agents#848 bodies: not observed (no GitHub read in this run). #848 is
-  referenced in `docs/spikes/670-decision-context.md` line 159 as timing the owner on high-risk approvals.
+- Baseline: `tests/fixtures/context_eval/baseline.json`. Verified in the full file: a TOP-LEVEL key `_header`
+  containing `evaluator_name: "issue-investigator-context-eval"`, `evaluator_version: "1.0.0"`,
+  `metrics_contract_version: "adr-015/1"`, written by `_regenerate`. All other
+  top-level keys are case ids (for example `01-all-fresh-labelled`), each mapping strategy name
+  (for example `deterministic-fixed-order`) to a metrics object. Metrics include scalars
+  (`f1`, `stale_rate`, `context_bytes`, ...), a list `missing_expected`, and a nested list of objects
+  `coverage_by_kind` (`bytes`, `candidates`, `included`, `kind`). A record without metrics is stored as
+  `{"verdict": ...}`.
+- Constants in `orchestrator/context_eval.py`: `EVALUATOR_NAME`, `EVALUATOR_VERSION`,
+  `METRICS_CONTRACT_VERSION`. They already populate `_header` and are the existing identity contract. They
+  are not the strategy or catalog content hashes.
+- Comparison today, `tests/test_context_eval.py::test_baseline_matches`:
 
-## Proposed solution
+  ```python
+  for case_id, by_strategy in records.items():
+      for strategy, record in by_strategy.items():
+          actual = record.metrics.to_dict()
+          expected = baseline[case_id][strategy]
+          for metric, expected_value in expected.items():
+              if actual.get(metric) != expected_value:
+                  failures.append(...)
+  ```
 
-A docs and offline-harness spike in the style of #918. It changes no runtime behaviour.
+  Exact `!=`, including nested values; no tolerance. Loops follow actual records and baseline metrics, so:
+  extra actual metrics, baseline-only cases or strategies and metrics deleted from the baseline are not
+  reported; a case missing from the baseline is a bare `KeyError`; `actual.get` conflates `None` and absent;
+  `_header` is never read.
+- `test_baseline_drift_is_detected_and_named` re-implements the same expected-only loop on a mutated copy
+  (sets `02-stale-source` `stale_rate` to `999.0` and expects one named failure). It therefore tests a copy
+  of the logic, not the shared path.
+- Existing neighbours: `test_fixture_harness_ignores_context_env_vars`,
+  `test_every_case_runs_under_both_strategies`, `test_harness_uses_the_real_run_pipeline`. Other tests in the
+  module use `pytest.approx` or exact checks for their own purposes; that is separate.
+- Existing update procedure (module docstring; documentation only, not run in this task):
+  `uv run python -m tests.test_context_eval --regenerate [case_id ...]`, a `# pragma: no cover` maintenance
+  entry point `_regenerate` behind `if __name__ == "__main__":`. It rewrites `_header`, regenerates the named
+  (or all) cases and preserves untouched cases. The docstring says only for deliberate changes, never to turn
+  a red run green; it is never a fixture or CI step.
+- Open PRs: a sweep of 23 open mctl-agents PRs found no file touching `context_eval` or
+  `fixtures/context_eval`. Bounded observation, not a guarantee.
 
-1. **Duplicate map** (`docs/spikes/1014-regression-metrics.md`, section 1). For #918, #854 (and #871 to
-   #873), #848, .github#313, ADR 015/019/021 and #60, record read/not-observed and which mode each
-   already owns. Every follow-up is attached to one of these owners.
+## Proposed change (not approved)
 
-2. **MCTL breakage-mode taxonomy** (section 2), each mode with its existing signal or `missing`:
+Smallest sufficient, test-local; no runtime `context_eval` change, no new identity fields.
 
-   | id | mode | existing signal (producer) | state |
-   |---|---|---|---|
-   | M1 | cost inflation at equal outcome | bench `usage`; `usage_ledger.UsageRecorder` | emitted (bench, ledger) |
-   | M2 | latency / turn inflation | bench `wall_clock_s`, `turns`; `attempt.started_at/finished_at` | emitted, not compared |
-   | M3 | tool churn / tool errors | bench `tool_calls`; trace `execute_tool` spans | emitted, no metric (G3) |
-   | M4 | silent scope narrowing (fewer tasks done, `no_commits`) | `completion.stop_reason`, `verification.required_*` | partial |
-   | M5 | review/CI loop inflation | `review_attempts`, `ci_blockers` (.status.yaml) | 1 of 180 records |
-   | M6 | post-merge regression (revert, follow-up fix) | none | missing |
-   | M7 | guardrail pressure (policy denials, classifier interrupts, 429s) | `mctl.policy.decision` events; #796 `classifier_interruptions` | partial (G4 deferred) |
-   | M8 | unscored answer-quality drift (output truncated, not re-scorable) | #796 `final.sha256` only | missing |
-   | A0 | attribution: which agent/model version produced the outcome | `.status.yaml execution.version` (empty); mctl-api agent executions | broken in gitops |
+1. **One shared comparison function** in `tests/test_context_eval.py` (name proposed:
+   `_baseline_differences(baseline, records) -> list[str]`). Both `test_baseline_matches` and the drift
+   tests call it, so regressions exercise the real path rather than a second copy.
+   - Header: `baseline.get("_header")` must exist and its three fields must equal `ce.EVALUATOR_NAME`,
+     `ce.EVALUATOR_VERSION`, `ce.METRICS_CONTRACT_VERSION`. Otherwise emit named differences such as
+     `_header/evaluator_version: baseline='0.9' current='1.0.0'` or `_header: missing`.
+   - Membership: let `baseline_cases = {k for k in baseline if k != "_header"}`. Report case ids present on
+     only one side; for shared cases report strategies on only one side; for shared strategies report metric
+     names on only one side. Use sentinel membership (`key in mapping`), not `.get`, so explicit `None`
+     differs from absent.
+   - Values: for metrics present on both sides keep exact `!=` (no tolerance, nested values included). A
+     record without metrics is compared through its `{"verdict": ...}` form as `_regenerate` stores it.
+   - Output: sorted, named paths `case/strategy/metric` with side.
+2. **Do not rewrite or read the baseline for repair.** No auto-regeneration; failure messages point to the
+   existing deliberate procedure.
+3. **Update-procedure note** (short, in the module docstring of `tests/test_context_eval.py`): regeneration only for deliberate changes, with a written reason; the diff of
+   `baseline.json` including `_header` is reviewed by the owner; a changed `evaluator_version` or
+   `metrics_contract_version` is a reviewed bump of the constants plus a regenerated baseline, never
+   a silent upgrade; the existing baseline is **not** regenerated to get a green run.
 
-   The section ends with the open mapping to the article's seven modes, marked not observed.
+### Allowlist for the later implementation
 
-3. **Offline harness** `tools/spike_1014_regression_metrics.py` (stdlib plus `yaml`, already a
-   dependency):
-   - Inputs, all committed: the #791, #796 and #825 `records.jsonl` and snapshot files, plus a
-     `docs/spikes/1014/status-corpus.yaml` extract of the mctl-agents `.status.yaml` fields listed above.
-     The extract is copied by the implementer from mctl-gitops, contains no secrets, and every record is
-     checked with `orchestrator.redaction.contains_credential` before it is committed.
-   - Real comparison: for each bench pair at equal pass-rate (for example Sonnet vs Qwen on #791
-     investigation), report per arm pass-rate, success, tokens, turns, wall clock, tool calls and error
-     counts, with `unknown` where a field is absent.
-   - Perturbation controls: for each mode M1 to M8, apply a deterministic transform to a copy of real
-     baseline records (for example tokens x1.5, +3 turns, +2 failed tool calls, `no_commits` on 1 in 5,
-     +1 review round, truncated final) that keeps the oracle `pass` unchanged where the mode is
-     pass-preserving. Mark the result `origin: control`.
-   - Detection rule: a mode is `DETECTED_BY_PASS_RATE` if pass-rate moves by at least one cell,
-     `DETECTED_ONLY_BY_SECONDARY` if pass-rate does not move but a listed secondary metric crosses its
-     provisional threshold, `UNDETECTED` if neither moves, and `UNKNOWN` if the inputs are missing
-     (M6 today).
-   - Lifecycle side: from the status corpus, compute what an outcome-rate metric (merged / terminal) can
-     and cannot localize. That includes the A0 count of records with an empty version, and the
-     coverage of M4 and M5 fields.
-   - Output `docs/spikes/1014/results.json`, with a `--results` flag and a deterministic sort. Each run
-     is costed (0 USD, no model) and timed.
+Exact minimal allowlist: `tests/test_context_eval.py` only (shared test-local helper, tests, and the update
+procedure in the module docstring).
 
-4. **Recommendation and follow-ups** (section 4). One decision token, owner to confirm. The likely
-   follow-up candidates, filed only if the evidence proves them:
-   (a) populate `execution.version` (A0), owner: proposal-state writer and DevLoop activities;
-   (b) add secondary metrics to the #791/#825 bench report template;
-   (c) add a post-merge revert or follow-up signal, folded into #871 (G1 `pr.outcome`) and not a new
-   producer;
-   (d) persist review and CI round counts for every proposal, owner: shepherd.
+- Not allowed: `orchestrator/**`, `baseline.json`, other fixtures, CI, workflows, and any other path. A
+  separate helper module or a runbook is not authorized; it needs a separate scope decision.
 
-Why this way: it falsifies the question on real MCTL records without spending model budget and without
-touching authority paths. It follows the accepted #918 and #854 spike conventions. Every follow-up stays
-under an existing owner.
+Drift preflight: re-read the latest source (`baseline.json`, the test module, the constants) before
+implementing. If it differs from this document, report it before coding. No new schema is needed.
 
 ## Alternatives
 
-- **Live A/B DevLoop run on two models.** It gives the strongest evidence, but costs about $3 or more
-  per investigator run, needs rollout of a candidate binding, and widens authority during a spike.
-  Dropped. Recommend it as a follow-up only if the offline result is inconclusive.
-- **Adopt the article's seven modes verbatim.** That is not possible (source not observed), and it would
-  rest on vendor claims that the issue rules out.
-- **Implement the G3 RED metrics now and observe.** That duplicates #873 and is implementation before
-  the decision, which the issue's non-goals forbid.
+- **Add numeric tolerances.** Dropped: the current comparator is exact and the owner said not to change it.
+- **New second comparator or harness.** Dropped: duplicates the existing check; the owner ruled out new
+  harnesses.
+- **Add new identity fields to the baseline.** Dropped: the three existing fields and constants suffice.
+- **Auto-refresh the baseline after a mismatch.** Dropped: greenwashing.
+- **The earlier broad regression-metrics experiment.** Superseded by this narrowing, not performed.
 
 ## Platform impact
 
-- No migrations. No runtime, gitops, CWFT or policy change. New files only under `docs/spikes/1014*` and
-  `tools/spike_1014_regression_metrics.py`, plus one test.
-- Resource impact: none at runtime. The harness runs in under a second locally.
-- Risks:
-  - Controls prove only that a metric can see an injected change, not a production rate. Mitigation:
-    real and control metrics are reported separately, with the #918-style caveat.
-  - Copying status data could leak something sensitive. Mitigation: field allowlist plus a
-    `contains_credential` screen and a test asserting it.
-  - Thresholds may be read as gates. Mitigation: a non-authorization statement as in ADR 015 and #854,
-    and the test also asserts nothing in `orchestrator/` imports the tool.
+- No runtime, GitOps, CWFT, policy or deployment change. Tests and an update note only.
+- Risk: the stricter check may expose existing silent drift (extra metrics, header mismatch) on the first
+  run. That would be a finding to review, not something to fix by editing the baseline in the same change
+  without the owner's reasoned approval.
+- Not claimed: no measured result, no detection rate, no live telemetry. Tokens are not monetary cost.

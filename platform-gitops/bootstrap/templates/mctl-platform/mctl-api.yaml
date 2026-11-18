@@ -50,7 +50,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.166.0"
+            tag: "4.169.0"
 
           ingress:
             enabled: true
@@ -583,6 +583,17 @@ spec:
           # that one does need the keys: mctl-api refuses to start in those
           # modes without them. Rollback: delete this line.
           oauthZitadelSecret: mctl-api-oidc-zitadel
+
+          # DEVLOOP_DECIDE_CLIENT_ID / DEVLOOP_DECIDE_CLIENT_SECRET for the
+          # DevLoop decide page (mctlhq/mctl-api#964): the confidential
+          # `mctl-api-decide` client that zitadel-iac already writes into the
+          # same Secret (helm-charts/zitadel-iac/iac/mctl-api.tf). With them
+          # set, /devloop/decide/{workflow_id} serves instead of answering
+          # 503: the owner opens the link an MCP client hands out, signs in
+          # fresh with a second factor, and approves or rejects the bound
+          # grant. Optional refs: a Secret without the keys leaves the page
+          # off. Rollback: delete this line.
+          devLoopDecideSecret: mctl-api-oidc-zitadel
 
           # Client id and secret of the approval page (mctlhq/mctl-api#1007):
           # the confidential ZITADEL client that zitadel-iac writes into the

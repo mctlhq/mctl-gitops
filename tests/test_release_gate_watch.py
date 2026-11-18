@@ -3,6 +3,7 @@
 The Verify step is extracted from the workflow and run the way GitHub runs it,
 under bash -e, against a converged tree and against deliberate mutations of it.
 """
+import copy
 import os
 import pathlib
 import shutil
@@ -91,6 +92,40 @@ check("mutant caught: a bare call loses the state under bash -e", "state=violate
 rc, out = run(lower_one, script=VERIFY.replace("state=violated", "state=clean"))
 check("mutant caught: the violation state is what the alert keys on", "state=violated" not in out, out)
 
+# The ledger step (mctlhq/mctl-api#1022 S4b), run under bash -e with a stub in
+# place of release-ledger-shadow.py: each exit code must land in its own state.
+LEDGER_STEPS = doc["jobs"]["ledger"]["steps"]
+LEDGER = [s for s in LEDGER_STEPS if s.get("id") == "ledger"][0]["run"]
+
+
+def ledger_run(code, script=LEDGER):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        (tmp / "scripts").mkdir()
+        (tmp / "scripts/release-ledger-shadow.py").write_text(f"import sys\nsys.exit({code})\n")
+        out = tmp / "gh_output"
+        out.touch()
+        (tmp / "step.sh").write_text(script)
+        r = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(tmp / "step.sh")], cwd=tmp,
+                           capture_output=True, text=True,
+                           env={**os.environ, "GITHUB_OUTPUT": str(out), "BEFORE": "a" * 40, "SHA": "b" * 40})
+        return r.returncode, out.read_text()
+
+
+rc, out = ledger_run(0)
+check("ledger: approved or shadow passes with no state", rc == 0 and "state=" not in out, f"{rc} {out}")
+rc, out = ledger_run(6)
+check("ledger: an unapproved enforced write is a violation", rc == 6 and "state=violated" in out, f"{rc} {out}")
+rc, out = ledger_run(7)
+check("ledger: an unreadable ledger is unknown, never clean",
+      rc == 7 and "state=unknown" in out and "violated" not in out, f"{rc} {out}")
+rc, out = ledger_run(1)
+check("ledger: a crash goes red but is no violation", rc == 1 and "state=" not in out, f"{rc} {out}")
+LFORM = "|| rc=$?"
+assert LEDGER.count(LFORM) == 1
+rc, out = ledger_run(6, LEDGER.replace(LFORM, "\nrc=$?"))
+check("mutant caught: a bare ledger call loses the state under bash -e", "state=violated" not in out, out)
+
 on = doc.get(True) or doc.get("on")
 check("runs on every push to main", on["push"]["branches"] == ["main"])
 check("runs daily, independent of pushes", bool(on["schedule"]))
@@ -100,6 +135,55 @@ other = by_name["Notify Telegram - the check itself failed"]["if"]
 check("the violation alert needs the violated state", "== 'violated'" in viol and "failure()" in viol)
 check("the other alert excludes it", "!= 'violated'" in other and "failure()" in other)
 check("a pull request never alerts", "!= 'pull_request'" in viol and "!= 'pull_request'" in other)
+lby = {s.get("name", ""): s for s in LEDGER_STEPS}
+lviol = lby["Notify Telegram - ledger violated"]["if"]
+lother = lby["Notify Telegram - ledger check could not run"]["if"]
+check("a ledger violation alerts as a violation",
+      "failure()" in lviol and "steps.ledger.outputs.state == 'violated'" in lviol, lviol)
+check("the ledger could-not-run alert excludes a violation, so unknown lands there",
+      "failure()" in lother and "steps.ledger.outputs.state != 'violated'" in lother, lother)
+check("the ledger step has no if of its own: it is the job's first judgement",
+      "if" not in [s for s in LEDGER_STEPS if s.get("id") == "ledger"][0], "")
+check("verify no longer carries the ledger step", not [s for s in STEPS if s.get("id") == "ledger"])
+
+
+def isolation(d):
+    """OIDC isolation (P3 of #2774): only the push-only ledger job may mint a token."""
+    jobs = d["jobs"]
+    top = d.get("permissions") or {}
+    led = jobs.get("ledger", {})
+    return [
+        ("the workflow grants no id-token at the top", "id-token" not in top),
+        ("the ledger job runs only on a push", led.get("if", "").strip() == "github.event_name == 'push'"),
+        ("the ledger job may mint the reader token and reads contents only",
+         led.get("permissions") == {"contents": "read", "id-token": "write"}),
+        ("no other job may mint a token",
+         all("id-token" not in (j.get("permissions") or {}) for n, j in jobs.items() if n != "ledger")),
+        ("every job other than ledger declares no write-all/read-all shorthand",
+         all(isinstance(j.get("permissions", {}), dict) for j in jobs.values())),
+    ]
+
+
+for name, ok in isolation(doc):
+    check(name, ok)
+
+
+def mutate(fn):
+    d = copy.deepcopy(doc)
+    fn(d)
+    return d
+
+
+ISO_MUTANTS = {
+    "id-token back on verify": lambda d: d["jobs"]["verify"].setdefault("permissions", {}).update(
+        {"contents": "read", "id-token": "write"}),
+    "ledger job loses its push-only if": lambda d: d["jobs"]["ledger"].pop("if"),
+    "ledger job runs on any event": lambda d: d["jobs"]["ledger"].update({"if": "always()"}),
+    "id-token at the workflow level": lambda d: d.setdefault("permissions", {}).update({"id-token": "write"}),
+    "verify inherits write-all": lambda d: d["jobs"]["verify"].update({"permissions": "write-all"}),
+}
+for name, fn in ISO_MUTANTS.items():
+    check(f"mutant caught: {name}", not all(ok for _, ok in isolation(mutate(fn))))
 
 conc = doc["concurrency"]["group"]
 check("a push gets its own concurrency group per commit",

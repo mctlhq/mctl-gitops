@@ -121,6 +121,13 @@ def cases(script):
     out.append(("enforce: unknown written digest refuses", bump(script, t, "--ledger-approved-digest", D1), REFUSED))
     out.append(("enforce: malformed digests refuse",
                 bump(script, t, "--new-digest", "sha256:x", "--ledger-approved-digest", "sha256:x"), REFUSED))
+    # Preflight (release-preflight.py) runs before the build: no digest yet.
+    out.append(("enforce: preflight passes without a digest", bump(script, t, "--preflight"), 0))
+    out.append(("enforce: without --preflight an unknown digest still refuses", bump(script, t), REFUSED))
+    code, _ = run(script, t, "check", "--preflight", "--files", API, "--new-tag", "4.200")
+    out.append(("enforce: preflight still refuses a malformed tag", code, REFUSED))
+    t2 = tree(policy("shadow"))
+    out.append(("shadow: preflight does not skip the allow records", bump(script, t2, "--preflight"), REFUSED))
     t = tree(policy("enforce", allow=[rec()]))
     out.append(("enforce: an allow record alone no longer passes", bump(script, t, "--new-digest", D1), REFUSED))
     t = tree(policy("enforce"), api=NEW_API)
@@ -194,6 +201,9 @@ MUTANTS = {
     "pusher not checked": ('            elif pusher != led["bump_pr_author"]:', "            elif False:"),
     "policy read from head": ('        raw = _blob(repo, base, GATE)\n        if raw is None:\n            return [f"{GATE} absent at {base}"]',
                               '        raw = _blob(repo, head, GATE)\n        if raw is None:\n            return [f"{GATE} absent at {base}"]'),
+    "preflight skips more than the enforced digest": ("    for h in holds:\n        if files is not None",
+                                                      "    for h in holds:\n        if preflight:\n            continue\n        if files is not None"),
+    "preflight flag ignored": ("            if preflight:\n                continue\n", ""),
     "diff judges enforced tag by records": ("            if new_t != old_tag and not _enforced(hold):",
                                             "            if new_t != old_tag:"),
 }
@@ -208,6 +218,10 @@ def wiring() -> list[tuple[str, bool, bool]]:
          and '"--ledger-approved-digest", os.environ.get("LEDGER_APPROVED_DIGEST", "")' in rd
          and "IMAGE_DIGEST: ${{ needs.build.outputs.digest }}" in rd
          and "LEDGER_APPROVED_DIGEST: ${{ needs.ledger-gate.outputs.approved_digest }}" in rd, True),
+        ("wiring: only release-preflight.py passes --preflight; no bump step does",
+         '"--preflight"' in (ROOT / "scripts/release-preflight.py").read_text()
+         and "--preflight" not in rd
+         and "--preflight" not in (ROOT / ".github/workflows/gitops-bump.yaml").read_text(), True),
         ("wiring: validate passes the event sender as the pusher",
          "PUSHER: ${{ github.event.sender.login }}" in vm and '--pusher "$PUSHER"' in vm, True),
     ]

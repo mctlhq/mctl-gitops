@@ -35,6 +35,11 @@ OLD_TAG = 'tag: "4.154.0"'
 REAL_API = LIVE_API.replace(_m.group(1), OLD_TAG)  # baseline file
 REAL_POLICY = copy.deepcopy(LIVE_POLICY)  # baseline policy
 REAL_POLICY["version_holds"][0]["allow"] = []
+# This file covers the allow-record path, which only ledger mode shadow reads.
+# The live hold is enforced (mctl-api#1022), so the baseline pins shadow;
+# enforce has its own cases in tests/test_release_gate_ledger_hold.py.
+if "ledger" in REAL_POLICY["version_holds"][0]:
+    REAL_POLICY["version_holds"][0]["ledger"]["mode"] = "shadow"
 _WORK = pathlib.Path(tempfile.mkdtemp(prefix="hold-test-"))
 atexit.register(shutil.rmtree, _WORK, ignore_errors=True)  # every tree lives under _WORK
 _N = itertools.count()
