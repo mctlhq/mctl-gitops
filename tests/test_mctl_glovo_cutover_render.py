@@ -92,12 +92,12 @@ if v:
     check("mctl-api-glovo-consent" not in v.get("envFromOptionalSecrets", []), "default mctl-api reads the consent Secret")
 check("mctl-api-glovo-consent" not in helm(API_SECRETS).stdout, "default render has the consent ExternalSecret")
 
-# 2. every existing switch on, new ones off: no new surface, capacity 10
+# 2. every existing switch on, new ones off: no new surface, capacity 1
 r = helm(SVC, *BASE)
 check(r.returncode == 0, f"all-existing-switches render failed: {r.stderr[-200:]}")
 ds = docs(r)
 env = server_env(ds)
-check(env.get("GLOVO_C2_CAPACITY") == "10", f"default capacity is {env.get('GLOVO_C2_CAPACITY')!r}, want '10'")
+check(env.get("GLOVO_C2_CAPACITY") == "1", f"default capacity is {env.get('GLOVO_C2_CAPACITY')!r}, want '1'")
 check(not [k for k in env if k.startswith("GLOVO_LINK")], f"link variables set with the switches off: {[k for k in env if k.startswith('GLOVO_LINK')]}")
 check("Ingress" not in {d["kind"] for d in ds}, "an Ingress renders with the ingress switch off")
 srv = [d for d in ds if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "allow-server"][0]
@@ -157,7 +157,7 @@ check(v is not None, f"apiConsent render failed: {r.stderr[-200:]}")
 if v:
     env = v["env"]
     check(env.get("GLOVO_CONSENT_ENABLED") == "true", "consent not enabled on mctl-api")
-    check(env.get("GLOVO_C2_CAPACITY") == "10", "mctl-api capacity differs from the default 10")
+    check(env.get("GLOVO_C2_CAPACITY") == "1", "mctl-api capacity differs from the default 1")
     check("GLOVO_CONSENT_SERVICE_SUBJECT" not in env and "GLOVO_CONSENT_SERVICE_PROVIDER" not in env,
           "a reader identity is a literal in the public repo")
     check("mctl-api-glovo-consent" in v["envFromOptionalSecrets"], "the consent Secret is not read by mctl-api")

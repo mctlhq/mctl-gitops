@@ -745,4 +745,4 @@ mctlGlovo:
   # The cohort size, read by BOTH the service and mctl-api's consent slots: one
   # value so the two cannot drift. A whole number, 1..20. Raising it is an
   # owner decision with its own reviewed PR, never a rider on another change.
-  capacity: 10
+  capacity: 1

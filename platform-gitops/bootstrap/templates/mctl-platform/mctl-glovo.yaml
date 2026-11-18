@@ -26,7 +26,7 @@ a reviewed PR:
   linkLogin  fresh sign-in on the link routes (two optional variables).
   ingress    the public route: an Ingress object, the Traefik source in the
              server policy and the trusted-proxies variable.
-  capacity   a value, not a switch: the cohort size (default 10).
+  capacity   a value, not a switch: the cohort size (default 1, owner decision 18.11: owner-only first stage).
   apiConsent mctl-api's side of the consent read (rendered in mctl-api.yaml and
              mctl-api-secrets.yaml, not here).
 Rollback of any switch: set it back to false.
