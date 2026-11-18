@@ -56,21 +56,14 @@ BOOTSTRAP = ROOT / "platform-gitops/bootstrap"  # renders templates/mctl-platfor
 FIXTURE = ROOT / "platform-gitops/helm-charts/zitadel-iac/iac/tests/fixtures/mctl-api-config-check.json"
 IMAGE_REPO = "ghcr.io/mctlhq/mctl-api"
 
-# First mctl-api release with `--check-config` (mctlhq/mctl-api#1108). Set to
-# the real tag when that release exists; until the pin reaches it the check is
-# skipped, loudly. A value above the true first release only delays enforcement;
-# one below it makes every pin in between fail closed (no ok line).
-#
-# 4.167.0 is a PLACEHOLDER that is safe by construction: 4.166.0 is the last
-# release known to lack the flag (mctl-api#1108 is unmerged), so no release the
-# flag could be in is below it. Too low only fails closed (a pin or candidate
-# in between, without the flag, gets no ok line and is refused); it can never
-# skip a release that has the flag. tests/test_release_config_preflight.py pins
-# that MIN stays above 4.167.0. RULE: MIN = the exact version of the regenerated
-# mctl-api release PR that carries --check-config, re-read at GO time. A MIN at or
-# below a deployed flagless build (4.167.0) makes validate red repo-wide (fail-closed
-# deadlock): do not merge this before the release version is settled; if that
-# version is burned, raise MIN here BEFORE merging.
+# First mctl-api release with `--check-config` (mctlhq/mctl-api#1108, released
+# in 4.169.0 together with #1111 and #1110). Until the pin reaches it the check
+# is skipped, loudly, after the static legacy rule. 4.167.0 and 4.168.0 shipped
+# without the flag (no cmd/api/check_config.go at either tag), so MIN must stay
+# above 4.168.0: tests/test_mctl_api_guard_branches.py pins that and runs both
+# branches at this value. A MIN at or below a deployed flagless build makes
+# validate red repo-wide (fail-closed deadlock). If 4.169.0 were ever burned by a
+# release without the flag, raise MIN here before relying on it.
 MIN_CHECKER_VERSION = "4.169.0"
 
 OK_LINE = "mctl-api check-config: ok"
