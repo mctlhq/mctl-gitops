@@ -23,6 +23,12 @@ a reviewed PR:
              cohort gate is decided.
   consent    mctl-api's consent read, with the ZITADEL token refresher.
   control    the kill switch endpoint mctl-api calls.
+  linkLogin  fresh sign-in on the link routes (two optional variables).
+  ingress    the public route: an Ingress object, the Traefik source in the
+             server policy and the trusted-proxies variable.
+  capacity   a value, not a switch: the cohort size (default 10).
+  apiConsent mctl-api's side of the consent read (rendered in mctl-api.yaml and
+             mctl-api-secrets.yaml, not here).
 Rollback of any switch: set it back to false.
 
 Ordering inside one sync: Namespace (-2); ServiceAccounts, NetworkPolicies and
@@ -50,6 +56,21 @@ and must exist first.
 {{- if and $v.c2 (not $v.deploy) }}{{ fail "the c2 switch requires the deploy switch" }}{{ end }}
 {{- if and (or $v.allowlist $v.consent $v.control) (not $v.c2) }}{{ fail "the allowlist, consent and control switches require the c2 switch" }}{{ end }}
 {{- if and $v.c2 (not $v.allowlist) (not $v.consent) }}{{ fail "the c2 switch needs an access gate: allowlist or consent (the service refuses to start without one)" }}{{ end }}
+{{- if and $v.linkLogin (not $v.c2) }}{{ fail "the linkLogin switch requires the c2 switch" }}{{ end }}
+{{- if and $v.ingress (not $v.c2) }}{{ fail "the ingress switch requires the c2 switch" }}{{ end }}
+{{- $capacity := int $v.capacity }}
+{{- if or (lt $capacity 1) (gt $capacity 20) (ne (toString $v.capacity) (toString $capacity)) }}{{ fail "the capacity value must be a whole number from 1 to 20 (the service refuses anything else at boot)" }}{{ end }}
+{{- if $v.linkLogin }}
+{{- if not (regexMatch "^[1-9][0-9]*[sm]$" (toString $v.linkMaxAuthAge)) }}{{ fail "the linkMaxAuthAge value must be a whole number of seconds or minutes, like 300s or 5m" }}{{ end }}
+{{- $ageSecs := int (trimSuffix "m" (trimSuffix "s" (toString $v.linkMaxAuthAge))) }}
+{{- if hasSuffix "m" (toString $v.linkMaxAuthAge) }}{{ $ageSecs = mul $ageSecs 60 }}{{ end }}
+{{- if gt $ageSecs 900 }}{{ fail "the linkMaxAuthAge value must be at most 15m (the service refuses a longer age at boot)" }}{{ end }}
+{{- end }}
+{{- if $v.ingress }}
+{{- if not $v.host }}{{ fail "the ingress switch needs the host value" }}{{ end }}
+{{- if not $v.trustedProxies }}{{ fail "the ingress switch needs the trustedProxies value (the Traefik pod CIDRs): without them per-IP link limits key on the proxy address" }}{{ end }}
+{{- if not (has $ns (default (list) (index (default (dict) .Values.reservedPlatformHosts) $v.host))) }}{{ fail "the ingress switch needs the host's owner in reservedPlatformHosts to include this namespace: admission refuses the Ingress otherwise" }}{{ end }}
+{{- end }}
 {{- $dbPrivate := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" }}
 apiVersion: v1
 kind: Namespace
@@ -167,15 +188,14 @@ spec:
       app.kubernetes.io/name: {{ $app }}
       app.kubernetes.io/component: server
   policyTypes:
-    {{- if $v.control }}
+    {{- if or $v.control $v.ingress }}
     - Ingress
     {{- end }}
     - Egress
-  {{- if $v.control }}
+  {{- if or $v.control $v.ingress }}
   ingress:
-    # The kill switch flip, called by mctl-api only. No Ingress object exists:
-    # the service is cluster-internal until the traffic cutover, which is a
-    # separate change (it adds the Traefik source here).
+    {{- if $v.control }}
+    # The kill switch flip, called by mctl-api only.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -185,6 +205,17 @@ spec:
               app.kubernetes.io/name: mctl-api
       ports:
         - {protocol: TCP, port: 8080}
+    {{- end }}
+    {{- if $v.ingress }}
+    # The public route (the ingress switch): Traefik only. The Ingress object
+    # below lists the paths; the kill switch path is never among them.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
   {{- end }}
   egress:
     {{- if $v.c2 }}
@@ -594,15 +625,24 @@ spec:
             - {name: LISTEN_ADDR, value: ":8080"}
             {{- if $v.c2 }}
             - {name: GLOVO_C2_ENABLED, value: "true"}
-            - {name: GLOVO_C2_CAPACITY, value: "10"}
+            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}
             - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}
             - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}
             # The sidecar forwarder below, loopback only (http://host:port is
             # the only shape the client accepts).
             - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}
-            # TODO(cutover): the trusted-proxies variable is the Traefik pod
-            # source CIDR and is set with the Ingress, which does not exist
-            # yet. Unset, per-IP link limits key on the connecting address.
+            {{- if $v.ingress }}
+            # The Traefik pod source CIDRs, set with the Ingress. Unset, per-IP
+            # link limits key on the connecting address (the proxy's).
+            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}
+            {{- end }}
+            {{- if $v.linkLogin }}
+            # The audience and the maximum age of the fresh sign-in token on
+            # /link/preview and /link/upload. Unset (the switch off), both
+            # routes answer 503. The audience must differ from the MCP one.
+            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}
+            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}
+            {{- end }}
             {{- end }}
             {{- if $v.consent }}
             - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}
@@ -786,4 +826,36 @@ spec:
     app.kubernetes.io/component: server
   ports:
     - {name: http, port: 8080, targetPort: http, protocol: TCP}
+{{- if $v.ingress }}
+---
+# The public route (the ingress switch). Explicit paths only: never the kill
+# switch path, never the health paths. The host's reservedPlatformHosts owner
+# must list this namespace, or admission refuses the object. The old route to
+# the same host stays until the edge (Cloudflare) is pointed here: this object
+# alone moves no traffic. Rollback: ingress false, then the edge back.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ $v.host | quote }}
+      http:
+        paths:
+          {{- range $p := list "/mcp" "/link" "/.well-known/oauth-protected-resource" }}
+          - path: {{ $p }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $app }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}
 {{- end }}

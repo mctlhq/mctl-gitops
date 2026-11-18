@@ -1036,6 +1036,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_mctl_glovo_consent_render.py
 
+      # mctl-gitops#2777: the cutover wiring (capacity, link login, ingress,
+      # mctl-api consent) is dark by default and exact when lit. Red when a
+      # default flips, a guard is dropped or a path is exposed.
+      - name: Unit-test the C2 cutover render
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_mctl_glovo_cutover_render.py
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the

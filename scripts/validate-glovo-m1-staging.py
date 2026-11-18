@@ -147,11 +147,20 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '              - /glovo',
         '            GLOVO_BASKET_UI_ENABLED: "true"',
         '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): mctl-api's
+        # consent routes and the shared cohort size, behind apiConsent.
+        '            {{- if .Values.mctlGlovo.apiConsent }}',
+        '            GLOVO_CONSENT_ENABLED: "true"',
+        '            GLOVO_C2_CAPACITY: {{ int .Values.mctlGlovo.capacity | quote }}',
+        '            - mctl-api-glovo-consent',
     }),
     # The host stays reserved with no owner: since 2026-11-15 it is served
     # outside the cluster, and mctl-api no longer routes it.
     "platform-gitops/bootstrap/values.yaml": frozenset({
         '  glovo.mctl.ai: []',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the public host
+        # of the route (an owner decision) behind the ingress switch.
+        '  host: glovo.mctl.ai',
         # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
         "mctlGlovo:",
     }),
@@ -161,6 +170,16 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '        key: platform/mctl-api/glovo-runtime-database',
         '    name: mctl-api-glovo-runtime-db',
         '  name: mctl-api-glovo-runtime-db',
+    }),
+    # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the consent
+    # reader identity of mctl-api, behind apiConsent.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-consent.yaml": frozenset({
+        '{{- if .Values.mctlGlovo.apiConsent }}',
+        '  name: mctl-api-glovo-consent',
+        '    name: mctl-api-glovo-consent',
+        '        GLOVO_CONSENT_SERVICE_PROVIDER: "{{ `{{ .service_provider }}` }}"',
+        '        GLOVO_CONSENT_SERVICE_SUBJECT: "{{ `{{ .service_subject }}` }}"',
+        '        key: platform/mctl-api/glovo-consent',
     }),
     # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
     "platform-gitops/argo-workflows/config/image-names.txt": frozenset({
@@ -207,7 +226,10 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '        GLOVO_C2_CONTROL_AUDIENCE: "{{ `{{ .audience }}` }}"',
         '          command: ["glovo-migrate"]',
         '            - {name: GLOVO_C2_ENABLED, value: "true"}',
-        '            - {name: GLOVO_C2_CAPACITY, value: "10"}',
+        '            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}',
+        '            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}',
+        '            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}',
+        '            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}',
         '            - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}',
         "            - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}",
         '            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}',
