@@ -103,6 +103,19 @@ def statements(text):
                 cur.append(ch)
             i += 1
             continue
+        if ch == "\\" and i + 1 < n:
+            # Outside quotes nginx also takes the next character literally,
+            # including whitespace, ';', '{', '#' and quotes.
+            if not in_tok:
+                if not toks:
+                    start = line
+                in_tok = True
+            nxt = text[i + 1]
+            cur.append(nxt if nxt in "\"'\\" else ch + nxt)
+            if nxt == "\n":
+                line += 1
+            i += 2
+            continue
         if ch in " \t\r\n":
             end_token()
         elif ch == "#" and not in_tok:
@@ -262,11 +275,13 @@ def selftest():
     ok = True
     py = sys.executable
 
+    fails = []
+
     def expect(name, got, want):
         nonlocal ok
         if got != want:
             ok = False
-            print("SELFTEST FAIL: %s: rc %s, want %s" % (name, got, want), file=sys.stderr)
+            fails.append("SELFTEST FAIL: %s: rc %s, want %s" % (name, got, want))
 
     quiet = open("/dev/null", "w")
     real_out, real_err = sys.stdout, sys.stderr
@@ -294,9 +309,21 @@ def selftest():
         expect("truncated-no-terminator", f(CLEAN + "server_name"), 2)
         expect("open-quote", f(CLEAN + 'add_header X "abc;'), 2)
         expect("comment-mentions-gated", f(CLEAN + "# listen 8443 ssl http2;"), 0)
+        expect("escaped-semicolon-stays-in-token", f(CLEAN.replace("listen 8080;", "listen 8080; add_header X a\\;b;")), 0)
         expect("hash-inside-token-not-comment", f(CLEAN.replace("listen 8080;", "listen 8080; error_page 404 /a#b;")), 0)
         expect("http2-off-is-clean", f(CLEAN.replace("  listen 8080;", "  http2 off;\n  listen 8080;")), 0)
-        expect("non-utf8-replaced", f(CLEAN.encode().decode("utf-8", "replace") + "�"), 2)
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dump.conf")
+            for name, body, want in (
+                ("non-utf8-in-comment", CLEAN.encode() + b"# \xff\xfe bytes\n", 0),
+                ("non-utf8-with-finding", with_listen("listen 8443 ssl;").encode() + b"# \xff\n", 1),
+            ):
+                with open(path, "wb") as fh:
+                    fh.write(body)
+                expect(name, main([path, "--assume-complete"]), want)
+            expect("missing-file", main([os.path.join(d, "nope")]), 2)
         mutations = {
             "listen-http2": "listen 8443 http2;",
             "listen-quic": "listen 8443 quic reuseport;",
@@ -320,6 +347,9 @@ def selftest():
             "after-hash-in-rewrite": "rewrite ^/a#b /c; listen 8443 quic;",
             "after-brace-in-quotes": 'add_header X "a{b"; resolver 1.1.1.1;',
             "variable-brace": "set $x ${y}; resolver 1.1.1.1;",
+            "backslash-semicolon-then-hash": "add_header X a\\;#; listen 8443 ssl;",
+            "backslash-space-then-quote": 'add_header X a\\ "b; listen 8443 ssl;',
+            "backslash-brace": "add_header X a\\{; resolver 1.1.1.1;",
             "crlf": "listen 8443 ssl;",
         }
         for name, line in mutations.items():
@@ -338,11 +368,13 @@ def selftest():
         expect("long-whitespace-linear", f(big), 0)
     finally:
         sys.stdout, sys.stderr = real_out, real_err
+    for line in fails:
+        print(line, file=sys.stderr)
     print("selftest: %s" % ("ok" if ok else "FAILED"))
     return 0 if ok else 1
 
 
-def main(argv):
+def _main(argv):
     if "--selftest" in argv:
         return selftest()
     if "-h" in argv or "--help" in argv:
@@ -359,9 +391,13 @@ def main(argv):
     return run(data.decode("utf-8", "replace"), assume)
 
 
-if __name__ == "__main__":
+def main(argv):
     try:
-        sys.exit(main(sys.argv[1:]))
+        return _main(argv)
     except Exception as e:  # never let a crash read as "found" (1) or "clean" (0)
         print("UNVERIFIED: %s: %s" % (type(e).__name__, e), file=sys.stderr)
-        sys.exit(2)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

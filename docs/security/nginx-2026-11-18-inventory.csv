@@ -6,7 +6,7 @@ admins,admins-mctl-agents-worker-base-service-prepull,container,hold,ghcr.io/mct
 admins,admins-mctl-agents-worker-base-service-prepull,container,hold,ghcr.io/mctlhq/mctl-agents@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a,ABSENT-VERIFIED,
 admins,admins-mctl-agents-worker-base-service-prepull-verify,container,verify,ghcr.io/mctlhq/mctl-workflow-tools@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b,UNVERIFIED-not-probed,
 admins,admins-mctl-agents-worker-exec-base-service,container,base-service,ghcr.io/mctlhq/mctl-agents@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a,ABSENT-VERIFIED,
-admins,admins-mctl-agents-worker-implement-base-service-678d986c6j798z,container,base-service,ghcr.io/mctlhq/mctl-agents@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a,ABSENT-VERIFIED,
+admins,admins-mctl-agents-worker-implement-base-service,container,base-service,ghcr.io/mctlhq/mctl-agents@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a,ABSENT-VERIFIED,
 admins,admins-mctl-design-base-service,container,base-service,ghcr.io/mctlhq/mctl-design@sha256:f0e6fe55349c35706384b4f2923a89f0c3d9ca7e52e8edf4657170ca3e6d0169,NGINX-VERIFIED,1.31.7
 admins,admins-mctl-docs-base-service,container,base-service,ghcr.io/mctlhq/mctl-docs@sha256:467984a7b2765193d2ae5cfffbe33ac8b9f1e05472ed73debf69b6994576c6c5,NGINX-VERIFIED,1.31.7
 admins,admins-mctl-support-base-service,container,base-service,ghcr.io/mctlhq/mctl-support@sha256:d2dbab5467df56ccb1ac03bc9f595b71290e9cd5a87ca838bcdaf8fdbbe02116,ABSENT-VERIFIED,
