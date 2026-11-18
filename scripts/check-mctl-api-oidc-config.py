@@ -311,11 +311,23 @@ def selftest():
         expect("tag unparsable", g("ok", tag="latest"), "is not MAJOR.MINOR.PATCH")
         expect("tag with v prefix", g("ok", tag="v4.167.0"), "is not MAJOR.MINOR.PATCH")
 
+        # The real fixture lists the consent reader under service_subjects, so the skip
+        # branch is proven on a copy without it, and the real one must be refused.
+        stripped = json.loads(FIXTURE.read_text())
+        for p_ in stripped["MCTL_OIDC_PROVIDERS"]:
+            p_.pop("service_subjects", None)
+        clean = d / "clean.json"
+        clean.write_text(json.dumps(stripped))
+        os.environ["FAKE_MODE"] = "ok"
         log.write_text("")
-        expect("tag below the first release is skipped (documented transition)", g("ok", tag="4.166.0", minv="4.167.0"), "skipped")
+        expect("tag below the first release is skipped (documented transition)",
+               lambda: guard(copy.deepcopy(base), clean, tag_override="4.166.0", min_version="4.167.0", docker=dk), "skipped")
         if "run" in log.read_text():
             print("FAIL a skip must not run docker")
             failures.append("skip ran docker")
+
+        expect("tag below the first release with the REAL fixture (service_subjects): refused by the legacy rule",
+               lambda: guard(copy.deepcopy(base), FIXTURE, tag_override="4.166.0", min_version="4.167.0", docker=dk), "LEGACY RULE")
 
         bad = d / "bad.json"
         bad.write_text(json.dumps({"MCTL_OIDC_PROVIDERS": [{"name": "zitadel", "customers_org_id": "3", "service_subjects": {"1": "2"}}]}))

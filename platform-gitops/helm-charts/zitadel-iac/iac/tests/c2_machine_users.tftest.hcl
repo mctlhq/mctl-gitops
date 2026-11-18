@@ -93,17 +93,21 @@ run "mctl_api_accepts_the_consent_reader_audience_for_that_subject_only" {
     values = { id = "mctl-api-project" }
   }
 
-  # mctl-api refuses to boot when an entry combines service_subjects with
-  # customers_org_id, and the zitadel entry carries customers_org_id: the
-  # entry must not gain service_subjects (or subject_audiences) here. This
-  # took the mctl-api 4.166.0 rollout down once (2026-11-17).
   assert {
-    condition     = !contains(keys(nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0]), "service_subjects")
-    error_message = "The zitadel entry carries customers_org_id, so it must not carry service_subjects (mctl-api refuses to boot)."
+    condition     = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0].service_subjects == { "consent-reader-user" = "mctl-api-project" }
+    error_message = "The consent reader's subject must be a service subject pinned to the MCTL API project audience, and no other subject listed."
   }
+  # mctl-api refuses to boot when a service subject is also a
+  # subject_audiences key, so the entry must not carry that key at all.
   assert {
     condition     = !contains(keys(nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0]), "subject_audiences")
-    error_message = "The zitadel entry must not carry subject_audiences."
+    error_message = "The entry must not carry subject_audiences alongside service_subjects (mctl-api refuses to boot)."
+  }
+  # The entry keeps its customers_org_id: the reader is a per-subject
+  # exception inside it, not a replacement of the customers enforcement.
+  assert {
+    condition     = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0].customers_org_id != ""
+    error_message = "The zitadel entry must keep customers_org_id next to service_subjects."
   }
 }
 

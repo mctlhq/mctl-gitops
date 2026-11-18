@@ -2,9 +2,10 @@
 # with tests/fixtures/mctl-api-config-check.json, which CI then feeds to the
 # deployed mctl-api image's own validator (`--check-config`,
 # scripts/check-mctl-api-oidc-config.py). gitops#2737 put service_subjects on
-# the entry that has customers_org_id; mctl-api refused to boot and the
-# 4.166.0 rollout crash-looped (2026-11-17), because nothing ran the rendered
-# JSON through that validator.
+# the entry that has customers_org_id while mctl-api still refused that
+# combination; the 4.166.0 rollout crash-looped (2026-11-17), because nothing
+# ran the rendered JSON through that validator. mctl-api 4.169.0 allows the
+# combination (9aa297e), and this check is what proves the pinned image does.
 #
 # This file is the link between the two: the rendering and the fixture cannot
 # differ, so the validator always sees what this root would write. Change the
@@ -62,6 +63,16 @@ run "rendered_mctl_api_config_equals_the_fixture_the_validator_checks" {
   override_resource {
     target = zitadel_org_idp_google.customers
     values = { id = "100000000000000004" }
+  }
+  # The consent reader is listed under service_subjects, pinned to the MCTL
+  # API project (mctl-api 4.169.0 allows that next to customers_org_id).
+  override_resource {
+    target = zitadel_machine_user.c2_consent_reader
+    values = { id = "100000000000000005" }
+  }
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "100000000000000006" }
   }
 
   assert {

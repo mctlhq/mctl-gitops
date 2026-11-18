@@ -158,8 +158,10 @@ def behaviour(script):
     rc, out, _ = run_pre(script, "no_flag")
     res["image at/above MIN without the flag: blocked (a placeholder cannot hide it)"] = (rc == 1, (rc, out[-200:]))
     rc, out, log = run_pre(script, "newer_rule", tag="4.166.0")
-    res["candidate below MIN: skipped with a visible warning, docker not run"] = (
-        rc == 0 and "SKIPPED" in out and "run" not in log.split(), (rc, out[-200:]))
+    # The real config lists the consent reader under service_subjects, which a flagless
+    # image cannot parse: refused by the legacy rule, never skipped, docker not run.
+    res["candidate below MIN with the real config (service_subjects): refused by the legacy rule, docker not run"] = (
+        rc == 1 and "LEGACY RULE" in out and "SKIPPED" not in out and "run" not in log.split(), (rc, out[-200:]))
     rc, out, log = run_pre(script, "newer_rule", image="ghcr.io/mctlhq/mctl-agents")
     res["other image: not applicable, docker not run"] = (rc == 0 and not log.strip(), (rc, out[-200:]))
     rc, out, _ = run_pre(script, "ok", with_docker=False)
