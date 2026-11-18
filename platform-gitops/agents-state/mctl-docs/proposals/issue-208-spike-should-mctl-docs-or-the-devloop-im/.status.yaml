@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-11-18T14:57:27Z'
+status: implemented
+updated_at: '2026-11-18T14:59:38Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-89dfd32585387ce4
-  trace_id: b25eb0e8d04796b53fc28b806332176f
-  agent: issue-investigator
+  context_id: ex-7fd04aac0b173a5a
+  trace_id: ccf98c3bf0ff4c35ae73938f6bf36e1d
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,8 +19,31 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'dmitrii.mashkov'
+  approved_by: dmitrii.mashkov
   approved_at: '2026-11-18T14:57:27Z'
-  content_digest: 'sha256:b53720a9aafe0ef3eaddd74ae7ecfbf463a4e7d6d0f9e95419753ef87ca547cd'
-  digest_binding: 'reviewed'
-  approval_ref: 'aar_0ae2ff0313f24179a3b2b78d8977d063'
+  content_digest: sha256:b53720a9aafe0ef3eaddd74ae7ecfbf463a4e7d6d0f9e95419753ef87ca547cd
+  digest_binding: reviewed
+  approval_ref: aar_0ae2ff0313f24179a3b2b78d8977d063
+attempt:
+  id: 92444f474b4bbcf10a4dc53b97a2ef1488daa8dc2955d4f0620ba864dc2a877f
+  started_at: '2026-11-18T14:59:10Z'
+  expires_at: '2026-11-18T17:09:10Z'
+  finished_at: '2026-11-18T14:59:38Z'
+pr: https://github.com/mctlhq/mctl-docs/pull/224
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-557d6975
+  authoritative:
+    completion_id: ic-dca98b233eda63a9
+    content_hash: sha256:dca98b233eda63a9629f6fe6cb0ff980da22ac297793c70c3cd5ccff028a800f
+    proposal_digest: sha256:b53720a9aafe0ef3eaddd74ae7ecfbf463a4e7d6d0f9e95419753ef87ca547cd
+    attempt_id: 92444f474b4bbcf10a4dc53b97a2ef1488daa8dc2955d4f0620ba864dc2a877f
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: b6ea4b36898f949667605bc40182ee4d0c1aa240
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
