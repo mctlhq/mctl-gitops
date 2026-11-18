@@ -80,6 +80,8 @@ locals {
     zone_read                     = "c8fed203ed3043cba015a93ad1616f1f"
     zone_settings_read            = "517b21aee92c4d89936c976ba6e4be55"
     zone_settings_write           = "3030687196b94b638145a3953da2b699"
+    zone_transform_rules_read     = "211a4c0feb3e43b3a2d41f1443a433e7"
+    zone_transform_rules_write    = "0ac90a90249747bca6b047d97f0803e9"
     zone_waf_read                 = "dbc512b354774852af2b5a5f4ba3d470"
     zone_waf_write                = "fb6778dc191143babbfaa57993f1d275"
   }
@@ -97,6 +99,11 @@ locals {
     local.pg.zone_settings_write,
     local.pg.zone_waf_write,
   ]
+
+  # noindex.tf (gitops#2791) is the only zone root that manages a
+  # http_response_headers_transform ruleset, so only the mctl.ai apply token
+  # carries Transform Rules write. mctl.me and mctl.ru keep the shared list.
+  zone_apply_groups_mctl_ai = concat(local.zone_apply_groups, [local.pg.zone_transform_rules_write])
 
   # One entry per token. Names are not unique on Cloudflare (the dashboard's
   # R2 "Create API token" names every token "R2 Account Token"), so entries are
@@ -137,6 +144,7 @@ locals {
           local.pg.workers_routes_read,
           local.pg.zone_read,
           local.pg.zone_settings_read,
+          local.pg.zone_transform_rules_read,
           local.pg.zone_waf_read,
         ]
         resources = {
@@ -179,7 +187,7 @@ locals {
     # CF_APPLY_TOKEN_MCTL_AI / _MCTL_ME / _MCTL_RU: apply of ../zones/*.
     {
       name     = "mctl-gitops-apply-mctl-ai (cloudflare-iac #1111)"
-      policies = [{ permission_groups = local.zone_apply_groups, resources = { (local.zone.mctl_ai) = "*" } }]
+      policies = [{ permission_groups = local.zone_apply_groups_mctl_ai, resources = { (local.zone.mctl_ai) = "*" } }]
     },
     {
       name     = "mctl-gitops-apply-mctl-me (cloudflare-iac #1111)"
