@@ -5,8 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-docs
-  tag: "0.1.70"
-  digest: "sha256:27e9f940dbd77625f4c7101b985ddddaacf5934c896bf3444a6c477d7de31ae5"
+  tag: "0.1.71"
+  digest: "sha256:467984a7b2765193d2ae5cfffbe33ac8b9f1e05472ed73debf69b6994576c6c5"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
