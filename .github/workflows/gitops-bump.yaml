@@ -653,7 +653,7 @@ jobs:
             "Opened by gitops-bump.yaml: ${RUN_URL}" \
             "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \
             "" \
-            "The only change is an image tag. release-bump-enqueue.yml puts this PR in the merge queue after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
+            "The only change is an image tag. The enqueue-bump job of this workflow puts this PR in the merge queue after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
           if [[ -n "${create_pr:-}" ]]; then
             pr_url=$(gh pr create --repo "$REPO" --base main --head "$branch" \
               --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body")
@@ -704,21 +704,74 @@ jobs:
             fi
           done <<< "$others"
 
-  # Enqueue the bump once it is approved and green on its exact head. This is
-  # not done from auto-merge.yml: a queue entry created with GITHUB_TOKEN starts
-  # no merge_group run and stalls (#2780, #2792), and the App token that does
-  # start them may not reach code a pull request controls. The called workflow
-  # runs from main in the `app-gitops-pr` environment; see its header.
+  # Enqueue the bump once it is approved and green on its exact head, with the
+  # mctl-gitops-pr App token, never GITHUB_TOKEN: events caused by GITHUB_TOKEN
+  # start no workflow run, merge_group included, so such a queue entry sits in
+  # AWAITING_CHECKS (#2780, #2792; Refs #2793). Not from auto-merge.yml, whose
+  # code a pull request controls. A plain job here, not a reusable workflow: the
+  # `app-gitops-pr` environment secret arrived empty in a workflow_call job
+  # (#2798), while this shape is what publish-pr already uses. The wait runs
+  # first with the read-only GITHUB_TOKEN (scripts/release-bump-enqueue-wait.sh
+  # holds the guards); the App token is minted only after ready=true and used for
+  # the one enqueue, pinned with expectedHeadOid. Outside any concurrency group.
+  # release-deploy.yaml and gitops-bump.yaml carry the same job;
+  # tests/test_release_bump_enqueue.py keeps them identical.
   enqueue-bump:
     needs: publish-pr
     if: needs.publish-pr.result == 'success'
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # The wait gives up after 45 minutes; await-bump is the red signal for a
+    # bump that does not merge.
+    timeout-minutes: 50
     permissions:
       contents: read
       pull-requests: read
       checks: read
-    uses: ./.github/workflows/release-bump-enqueue.yml
-    with:
-      pr: ${{ needs.publish-pr.outputs.pr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval and the required checks on the bump head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.publish-pr.outputs.pr }}
+        run: bash scripts/release-bump-enqueue-wait.sh
+
+      - name: Generate the App token for the enqueue
+        id: token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # expectedHeadOid: the queue refuses the entry if the head is no longer
+      # the one the wait judged and the approval covers.
+      - name: Enqueue the judged head with the App token
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.publish-pr.outputs.pr }}
+          PR_ID: ${{ steps.ready.outputs.pr_id }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+          if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+                -f id="$PR_ID" -f h="$HEAD_SHA" 2>&1); then
+            echo "::error::enqueue of #${PR} was refused: ${out}"
+            exit 1
+          fi
+          echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"
 
   # A stuck bump must be a red release run, not a silent open PR. The wait lives
   # in its own job with no environment, no secret and read-only access, and
