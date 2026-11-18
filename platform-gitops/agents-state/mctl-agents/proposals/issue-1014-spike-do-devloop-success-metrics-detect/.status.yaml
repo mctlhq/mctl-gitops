@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-18T15:03:17Z'
+updated_at: '2026-11-18T15:25:49Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-00643983805ac5bc
@@ -47,3 +47,14 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+ci_blockers_head: 5436dafa5fb7df5da677ec5bd949a4a84cc2bdc1
+ci_blockers:
+- PR validation / tests
+refusals: 1
+refusals_head: 5436dafa5fb7df5da677ec5bd949a4a84cc2bdc1
+notes: 'implementer declined to act: The PR only changes tests/test_context_eval.py.
+  The sole failure is tests/test_merge_watch_final_read.py::test_a_merge_landing_in_the_window_gives_a_second_read_of_merged
+  (a Temporal time-skipping workflow test; 8340 others passed), which this diff does
+  not touch. The log shows a mctl-api merge-gate identity store degradation warning,
+  so it looks like a flake or environment issue rather than a defect from this change.
+  I could not reproduce it locally because the test run hit the command time limit.'
