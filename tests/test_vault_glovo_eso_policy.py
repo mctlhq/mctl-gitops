@@ -11,7 +11,10 @@
   argo-workflow-sa, which platform actors can run as) carries
   the same deny, so its platform/* grant cannot read, overwrite or delete the prefix;
 - vault-policy-glovo-db-creds-read.hcl (platform-db store glovo-db-creds) grants
-  only read on the database-* keys and read,list on their metadata.
+  only read on the database-* keys and read,list on their metadata;
+- vault-policy-eso-mctl-api-control.hcl (mctl-api namespace store
+  mctl-api-control-vault, role eso-mctl-api-control) grants read on the ONE key
+  control-caller and read,list on its metadata, exactly, with no wildcard.
 
 Self-tests run first and prove each check red on a deliberate mutation.
 Run: python3 tests/test_vault_glovo_eso_policy.py
@@ -32,6 +35,9 @@ ESO_FILE = "vault-policy-eso-mctl-glovo.hcl"
 CLUSTER_FILE = "vault-policy-external-secrets-read.hcl"
 ARGO_FILE = "vault-policy-argo-workflow-teams-rw.hcl"
 DB_FILE = "vault-policy-glovo-db-creds-read.hcl"
+CTL_FILE = "vault-policy-eso-mctl-api-control.hcl"
+CTL_PATH = "secret/data/platform/mctl-glovo/control-caller"
+CTL_META = "secret/metadata/platform/mctl-glovo/control-caller"
 DB_PREFIX = "secret/data/platform/mctl-glovo/database-"
 DB_META = "secret/metadata/platform/mctl-glovo/database-"
 
@@ -88,6 +94,29 @@ def db_problems(rules):
     return out
 
 
+def control_problems(rules):
+    """Exactly the one key: no wildcard (a glob would also admit control-caller-x
+    and, with a trailing slash form, the whole prefix), no other capability."""
+    out = []
+    want = {CTL_PATH: ["read"], CTL_META: ["list", "read"]}
+    got = {}
+    for pat, caps in rules:
+        got.setdefault(pat, []).extend(caps)
+    for pat, caps in got.items():
+        if pat not in want:
+            out.append(f"path {pat!r} is not the control-caller key")
+        elif sorted(set(caps)) != want[pat]:
+            out.append(f"path {pat!r} has capabilities {sorted(set(caps))}, want {want[pat]}")
+    for pat in want:
+        if pat not in got:
+            out.append(f"missing rule for {pat!r}")
+    for other in ("signing-key", "database-runtime", "control-caller-other", "x"):
+        caps = V.effective_caps(rules, PREFIX + other)
+        if caps:
+            out.append(f"{PREFIX + other} resolves to {sorted(caps)}, want no access")
+    return out
+
+
 def selftest():
     good_eso = [(PREFIX + "*", ["read"]), (META + "*", ["read", "list"])]
     assert not eso_problems(good_eso)
@@ -113,6 +142,16 @@ def selftest():
     assert db_problems(good_db + [("secret/data/platform/mctl-glovo/*", ["read"])])
     assert db_problems([(DB_PREFIX + "*", ["read", "update"]), (DB_META + "*", ["read", "list"])])
     assert db_problems(good_db[:1])
+    good_ctl = [(CTL_PATH, ["read"]), (CTL_META, ["read", "list"])]
+    assert not control_problems(good_ctl)
+    # the prefix wildcard (eso-mctl-glovo's shape) is too wide for mctl-api
+    assert control_problems([(PREFIX + "*", ["read"]), (META + "*", ["read", "list"])])
+    # a glob that also admits control-caller-x, signing-key
+    assert control_problems([(CTL_PATH + "*", ["read"]), (CTL_META, ["read", "list"])])
+    assert control_problems(good_ctl + [(PREFIX + "signing-key", ["read"])])
+    assert control_problems([(CTL_PATH, ["read", "update"]), (CTL_META, ["read", "list"])])
+    assert control_problems(good_ctl[:1])
+    assert control_problems(good_ctl + [("secret/data/platform/*", ["read"])])
     print("selftests: ok")
 
 
@@ -126,10 +165,12 @@ def main():
     problems += [f"{ARGO_FILE}: {p}" for p in cluster_problems(argo)]
     db = V.canonical_rules(V.parse(D / DB_FILE))
     problems += [f"{DB_FILE}: {p}" for p in db_problems(db)]
+    ctl = V.canonical_rules(V.parse(D / CTL_FILE))
+    problems += [f"{CTL_FILE}: {p}" for p in control_problems(ctl)]
     if problems:
         print("\n".join("FAIL " + p for p in problems), file=sys.stderr)
         return 1
-    print("ok: glovo ESO policy, db-creds policy, cluster-store and argo-workflow deny")
+    print("ok: glovo ESO policy, db-creds policy, mctl-api control policy, cluster-store and argo-workflow deny")
     return 0
 
 

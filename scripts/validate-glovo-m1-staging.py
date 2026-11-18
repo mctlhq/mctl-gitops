@@ -147,6 +147,11 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '              - /glovo',
         '            GLOVO_BASKET_UI_ENABLED: "true"',
         '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # C2 kill switch caller (mctlhq/mctl-glovo#11): the dark env of the
+        # control-caller credential wiring, gated by apiC2Control.
+        '            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"',
+        '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"',
+        '            GLOVO_C2_KILLSWITCH_ENABLED: "true"',
         # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): mctl-api's
         # consent routes and the shared cohort size, behind apiConsent.
         '            {{- if .Values.mctlGlovo.apiConsent }}',
@@ -156,13 +161,20 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     }),
     # The host stays reserved with no owner: since 2026-11-15 it is served
     # outside the cluster, and mctl-api no longer routes it.
+    # C2 kill switch caller: the refresher image repository (the tag is a
+    # separate line and never matches).
     "platform-gitops/bootstrap/values.yaml": frozenset({
         '  glovo.mctl.ai: []',
+        '    repository: ghcr.io/mctlhq/mctl-glovo',
         # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the public host
         # of the route (an owner decision) behind the ingress switch.
         '  host: glovo.mctl.ai',
         # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
         "mctlGlovo:",
+    }),
+    # C2 kill switch caller: the ExternalSecret of the control-caller key.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml": frozenset({
+        '        key: platform/mctl-glovo/control-caller',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
@@ -255,6 +267,14 @@ ALLOWED_PATHS: frozenset[str] = frozenset({
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
 })
 
+
+# Files whose ALLOWED_LINES entries belong to the mctl-api control-caller
+# wiring (the C2 kill switch client), so the self-test can prove each of them.
+C2_API_CONTROL_FILES: tuple[str, ...] = (
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+    "platform-gitops/bootstrap/values.yaml",
+)
 
 # Files whose ALLOWED_LINES entries belong to the C2 cluster service, so the
 # self-test can prove each of them (mctlhq/mctl-glovo#11). Part 1: the
@@ -644,6 +664,41 @@ def selftest() -> int:
     ):
         add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
 
+    # The control-caller entries, proven on the real ALLOWED_LINES one file at
+    # a time and both ways (listed line passes in its own file only; an
+    # unlisted sibling, a whitespace change and the same line elsewhere refuse).
+    unlisted_api_files: list[str] = []
+    for rel in C2_API_CONTROL_FILES:
+        listed = sorted(x for x in ALLOWED_LINES.get(rel, frozenset()) if LEAK.search(x))
+        if not listed:
+            unlisted_api_files.append(rel)
+            continue
+        for one in listed:
+            add(f"api control entries: {rel}: {one.strip()[:40]}: a listed line passes", 0,
+                put(rel, f"x: 1\n{one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: an unlisted sibling refuses", REFUSED,
+                put(rel, f"{one}\n  glovo_unlisted_sibling: 1\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: changed whitespace refuses", REFUSED,
+                put(rel, f" {one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: the same line in another file refuses", REFUSED,
+                put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
+
+    # The exact lines the wiring needs are pinned, so dropping one (or the
+    # whole entry) fails here and not only on the real tree.
+    api_pins = (
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_KILLSWITCH_ENABLED: "true"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+         '        key: platform/mctl-glovo/control-caller'),
+    )
+    missing_pins = [(f, ln) for f, ln in api_pins if ln not in ALLOWED_LINES.get(f, frozenset())]
+    for f, ln in missing_pins:
+        print(f"FAIL api control pin: {f}: {ln.strip()} is not in ALLOWED_LINES", file=sys.stderr)
+    failed = len(unlisted_api_files) + len(missing_pins)
+    for rel in unlisted_api_files:
+        print(f"FAIL api control entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
     # The C2 cluster service entries (mctlhq/mctl-glovo#11), proven on the real
     # ALLOWED_LINES, one file at a time and both ways: the listed line passes
     # in its own file only, and an unlisted sibling, a whitespace change and
@@ -662,7 +717,7 @@ def selftest() -> int:
         add(f"c2 entries: {rel}: the same line in another file refuses", REFUSED,
             put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
 
-    failed = len(unlisted_c2_files)
+    failed += len(unlisted_c2_files)
     for rel in unlisted_c2_files:
         print(f"FAIL c2 entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
     pinned = ALLOWED_PATHS == {svc}

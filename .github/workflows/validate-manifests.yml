@@ -1382,6 +1382,13 @@ jobs:
           done
           python3 tests/test_obi_spike_attribution_e2e.py
 
+      - name: Unit-test the mctl-api control-caller render (C2 kill switch client)
+        # Dark by default: nothing renders until apiC2Control.enabled; the
+        # inconsistent switch combinations must fail the render.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_api_c2_control_render.py
+
   reserved-hosts:
     timeout-minutes: 15
     runs-on: ubuntu-latest
