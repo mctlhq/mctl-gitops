@@ -117,6 +117,12 @@ def rewrite(block, tag, digest):
     return "\n".join(lines)
 
 
+def brief(err):
+    """First line of a git error with any remote URL (it may carry credentials) removed."""
+    line = (err.strip().splitlines() or [""])[0]
+    return re.sub(r"\S+://\S+|\S+@\S+:\S+", "<remote>", line)[:160]
+
+
 def git(*args):
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
@@ -136,7 +142,7 @@ def history(path, tag, repository, limit):
     """
     r = git("log", "-n", str(limit), "--format=%H", "--", path)
     if r.returncode != 0:
-        raise Unreadable(f"cannot read the history of {path}: {r.stderr.strip()[:200]}")
+        raise Unreadable(f"cannot read the history of {path}: {brief(r.stderr)}")
     shas = r.stdout.split()
     if not shas:
         raise Unreadable(f"no history for {path}: a shallow clone cannot answer which digest a tag had")
@@ -146,7 +152,7 @@ def history(path, tag, repository, limit):
     for sha in shas:
         t = git("ls-tree", sha, "--", path)
         if t.returncode != 0:
-            raise Unreadable(f"cannot read {path} at {sha[:10]}: {t.stderr.strip()[:200]}")
+            raise Unreadable(f"cannot read {path} at {sha[:10]}: {brief(t.stderr)}")
         if not t.stdout.strip():
             continue  # the file is absent at this commit
         meta, _, _name = t.stdout.partition("\t")
@@ -167,13 +173,13 @@ def history(path, tag, repository, limit):
         if missing:
             f = git("fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", *missing)
             if f.returncode != 0:
-                raise Unreadable(f"cannot fetch {len(missing)} historical blobs of {path}: {f.stderr.strip()[:200]}")
+                raise Unreadable(f"cannot fetch {len(missing)} historical blobs of {path}: {brief(f.stderr)}")
     seen = set()
     tags_of = {}
     for sha, oid in oids.items():
         show = git("cat-file", "blob", oid)
         if show.returncode != 0:
-            raise Unreadable(f"cannot read blob {oid[:10]} of {path} at {sha[:10]}: {show.stderr.strip()[:200]}")
+            raise Unreadable(f"cannot read blob {oid[:10]} of {path} at {sha[:10]}: {brief(show.stderr)}")
         try:
             b = read_block(show.stdout, f"{path}@{sha[:10]}")
         except Unreadable:
