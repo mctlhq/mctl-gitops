@@ -35,9 +35,15 @@ resource "cloudflare_workers_route" "landing_form_api" {
 #                                  as the origin does for every other path)
 #   glovo.mctl.ai/mcp*          -> no script      (stays on the tunnel origin)
 #   glovo.mctl.ai/.well-known/* -> no script      (stays on the tunnel origin)
-# The origin serves only /, /mcp and /.well-known/*, so nothing else is lost.
+#   glovo.mctl.ai/link*         -> no script      (the C2 link routes: /link,
+#                                  /link/code, /link/preview, /link/upload,
+#                                  /link/unlink; same origin as /mcp)
+# The origin serves only /, /mcp, /link* and /.well-known/*, so nothing else
+# is lost. The /link* route exists in git only: nothing is applied until the
+# owner dispatches the Cloudflare Apply (gitops#2732), and the origin answers
+# 404 on /link while the service is not deployed with C2 on.
 # scripts/validate-cloudflare-glovo-routes.py pins this set. Rollback: remove
-# the three added resources; the origin serves the same page as a fallback.
+# the added resources; the origin serves the same page as a fallback.
 resource "cloudflare_workers_route" "glovo_landing" {
   zone_id = local.zone_id
   pattern = "glovo.mctl.ai/"
@@ -58,4 +64,9 @@ resource "cloudflare_workers_route" "glovo_origin_mcp" {
 resource "cloudflare_workers_route" "glovo_origin_well_known" {
   zone_id = local.zone_id
   pattern = "glovo.mctl.ai/.well-known/*"
+}
+
+resource "cloudflare_workers_route" "glovo_origin_link" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/link*"
 }
