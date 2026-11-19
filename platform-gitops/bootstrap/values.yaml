@@ -749,7 +749,7 @@ obiSpike:
 # each one). All false: only the namespace and its NetworkPolicies
 # render. Each flip is its own reviewed PR; rollback is flipping it back.
 mctlGlovo:
-  deploy: false
+  deploy: true
   c2: false
   allowlist: false
   consent: false
