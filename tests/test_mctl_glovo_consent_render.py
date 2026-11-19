@@ -189,8 +189,10 @@ def store_problems(text):
 
 
 def dark_problems(text):
-    """The default render must stay Namespace, ServiceAccounts and NetworkPolicies."""
-    r = render(text, switches=[])
+    """With every switch off the render must stay Namespace, ServiceAccounts and NetworkPolicies.
+    The switches are set explicitly: values.yaml carries the LIVE state (deploy is on
+    once the cutover starts), and this proves what "all off" renders, not what is live."""
+    r = render(text, switches=["--set", "mctlGlovo.deploy=false"])
     if r.returncode:
         return [f"dark render failed: {r.stderr[-200:]}"]
     kinds = {d["kind"] for d in yaml.safe_load_all(r.stdout) if d}
