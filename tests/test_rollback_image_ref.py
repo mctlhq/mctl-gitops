@@ -174,6 +174,14 @@ def cases(script_text):
     case("history as long as the limit is unseen, refused", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)],
          ["--tag", "1.1.0", "--history-limit", "3"], 8)
 
+    # --- a pair written by the old tag-only rollback (7.22.1 next to the digest of 7.23.0) ---
+    poisoned = [values("7.23.0", D2), values("7.22.1", D2), values("7.24.0", D3)]
+    case("old sed rollback left tag next to a newer digest: not trusted", poisoned, ["--tag", "7.22.1"], 8)
+    case("... the digest's original tag is refused too (shared digest, fail closed)", poisoned, ["--tag", "7.23.0"], 8)
+    case("... explicit digest is the operator's call", poisoned, ["--tag", "7.22.1", "--digest", D1], 8)
+    case("... explicit digest that history knows is accepted", poisoned, ["--tag", "7.22.1", "--digest", D2], 0, values("7.22.1", D2))
+    case("two tags, two digests: unaffected", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)], ["--tag", "1.1.0"], 0, values("1.1.0", D2))
+
     # --- a blobless clone whose remote goes away: could not observe is not absent ---
     d4 = repo([values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D2)])
     git(d4, "config", "uploadpack.allowFilter", "true")
@@ -242,12 +250,12 @@ MUTATIONS = {
     "no refusal for a pinned file without a digest": ('    elif cur["digest"]:\n        why', '    elif False:\n        why'),
     "history conflict with --digest allowed": ('if pinned_known and digest not in pinned_known:', 'if False:'),
     "two digests in history allowed": ('if len(pinned_known) > 1 and digest not in pinned_known:', 'if False:'),
-    "repository ignored in history": ('b["repository"] == repository and b["tag"] == tag', 'b["tag"] == tag'),
+    "repository ignored in history": ('if b["repository"] != repository:', 'if False:'),
     "blob fetch and blob read both ignored": ([
         ('            if f.returncode != 0:\n                raise Unreadable(f"cannot fetch', '            if False:\n                raise Unreadable(f"cannot fetch'),
         ('        if show.returncode != 0:\n            raise Unreadable(f"cannot read blob', '        if False:\n            raise Unreadable(f"cannot read blob')], None),
     "history limit hit tolerated": ('if len(shas) >= limit:', 'if False:'),
-    "history digest ignored": ('    elif pinned_known:\n        target, source = pinned_known[0], "history"', '    elif False:\n        target, source = None, "history"'),
+    "history digest ignored": ('    elif pinned_known:\n        shared =', '    elif False:\n        shared ='),
     "several blocks tolerated": ('if len(found) != 1:', 'if len(found) < 1:'),
     "digest line not validated": ('if not dm:', 'if False:'),
     "duplicate digest tolerated": ('if len(digests) > 1:', 'if False:'),

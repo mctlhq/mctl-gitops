@@ -19,6 +19,8 @@ What it does, for the one `repository:` / `tag:` block of the file:
   * no --digest: the digest the tag had in the file's history (same
     repository only) is restored with it. A tag bound to two different digests
     is refused unless --digest names one of them.
+  * a digest that history also shows under another tag is not trusted (the old
+    tag-only rollback wrote exactly that pair): refused unless --digest is given.
   * any history that cannot be fully observed (log, tree, blob fetch, a log
     as long as the limit) is a refusal, never a shorter history.
   * the file pins a digest now and none can be found for the target: refused.
@@ -157,14 +159,17 @@ def history(path, tag, repository, limit):
     need = sorted(set(oids.values()))
     for k in range(0, len(need), FETCH_CHUNK):
         chunk = need[k:k + FETCH_CHUNK]
+        # No lazy fetch here: this only asks which blobs are absent locally.
         have = subprocess.run(["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
-                              input="\n".join(chunk) + "\n", capture_output=True, text=True)
+                              input="\n".join(chunk) + "\n", capture_output=True, text=True,
+                              env={**os.environ, "GIT_NO_LAZY_FETCH": "1"})
         missing = [c for c in chunk if f"{c} blob" not in have.stdout.split("\n")]
         if missing:
             f = git("fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", *missing)
             if f.returncode != 0:
                 raise Unreadable(f"cannot fetch {len(missing)} historical blobs of {path}: {f.stderr.strip()[:200]}")
     seen = set()
+    tags_of = {}
     for sha, oid in oids.items():
         show = git("cat-file", "blob", oid)
         if show.returncode != 0:
@@ -173,9 +178,13 @@ def history(path, tag, repository, limit):
             b = read_block(show.stdout, f"{path}@{sha[:10]}")
         except Unreadable:
             continue  # an older shape of the file; it cannot tell us anything
-        if b["repository"] == repository and b["tag"] == tag:
+        if b["repository"] != repository:
+            continue
+        if b["digest"]:
+            tags_of.setdefault(b["digest"], set()).add(b["tag"])
+        if b["tag"] == tag:
             seen.add(b["digest"])
-    return seen
+    return seen, tags_of
 
 
 def main(argv=None):
@@ -209,9 +218,9 @@ def main(argv=None):
     source = "none"
     target = None
     try:
-        known = history(path, a.tag, cur["repository"], a.history_limit)
+        known, tags_of = history(path, a.tag, cur["repository"], a.history_limit)
     except Unreadable as e:
-        known = None
+        known, tags_of = None, {}
         hist_err = str(e)
     pinned_known = sorted(d for d in (known or set()) if d)
     if len(pinned_known) > 1 and digest not in pinned_known:
@@ -226,6 +235,12 @@ def main(argv=None):
                     "had in history; refusing a tag and digest that disagree")
         target, source = digest, "argument"
     elif pinned_known:
+        shared = sorted(tags_of.get(pinned_known[0], set()) - {a.tag})
+        if shared:
+            fail(8, f"{path}: digest {pinned_known[0]} was also bound to tag(s) {', '.join(shared)} in history; "
+                    "a tag-only rollback by the old workflow can leave a newer image under an older tag, so the "
+                    "pair is not trusted. Pass target_digest after checking which image tag "
+                    f"{a.tag} was released as.")
         target, source = pinned_known[0], "history"
     elif cur["digest"]:
         why = ("its history shows the tag without a digest" if known else
