@@ -47,10 +47,7 @@ INDENT_RE = re.compile(r"[ \t]*")
 
 
 def fail(code, msg):
-    # Image digests are public identifiers; show 12 hex chars of each, enough to
-    # tell them apart in a log without echoing a full 64-char hash.
-    shown = re.sub(r"sha256:([0-9a-f]{12})[0-9a-f]{52}", r"sha256:\1...", msg)
-    print(f"ERROR: {shown}", file=sys.stderr)
+    print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
