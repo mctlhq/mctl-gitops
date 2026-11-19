@@ -39,14 +39,14 @@ approval, never implied by a merge).
 | F6 | The public host is served by a Cloudflare tunnel to the mini (`glovo-home`). Worker routes: `glovo.mctl.ai/` and `glovo.mctl.ai/*` go to the `glovo-landing` Worker; `glovo.mctl.ai/mcp*` and `glovo.mctl.ai/.well-known/*` have no script (tunnel origin). There is NO route for `/link*`: with the current routes `/link` is answered by the landing Worker, not by an origin. | [V] | `infrastructure/cloudflare/zones/mctl-ai/workers.tf`, `scripts/validate-cloudflare-glovo-routes.py` |
 | F7 | Where the tunnel's public-hostname and origin mapping is defined (which origin answers `/mcp`) is not in this repository. | [U] | not found by grep over `infrastructure/` |
 | F8 | The service reads capacity from `GLOVO_C2_CAPACITY` (1..20, more is a boot error); mctl-api reads the same variable as the consent slot cap (unset, 0 or malformed means closed: no new consent). The template hard-coded `10`. | [V] | mctl-glovo `cmd/mctl-glovo/c2.go`, mctl-api `cmd/api/glovo_consent.go`, `docs/glovo-link-consent.md` (main, aa9b3cc3 and the 2026-11-18 mctl-api main) |
-| F9 | The service's optional link-login variables `GLOVO_LINK_RESOURCE` and `GLOVO_LINK_MAX_AUTH_AGE` exist only in the open PR mctl-glovo#56 (head c1179519), not on main. Unset means the link preview and upload routes answer 503. A set-but-wrong value stops the boot. | [V] | mctl-glovo PR 56 `cmd/mctl-glovo/c2.go` |
-| F10 | `/link` page, `/link/code`, `/link/preview`, `/link/upload` and `/mcp` plus the RFC 9728 metadata are what the service mounts when C2 is on; the kill switch endpoint is `PUT /internal/v1/control/kill-switch`, mounted only with the control configuration. Health paths `/livez`, `/readyz`. | [V] | `internal/linkflow/linkflow.go`, `cmd/mctl-glovo/control.go`, `cmd/mctl-glovo/mcp.go` (main) |
+| F9 | The service's optional link-login variables `GLOVO_LINK_RESOURCE` and `GLOVO_LINK_MAX_AUTH_AGE` were added by mctl-glovo#56 (merged 2026-11-18, in release 0.2.0). Unset means the link preview and upload routes answer 503. A set-but-wrong value stops the boot. | [V] | mctl-glovo PR 56 `cmd/mctl-glovo/c2.go` |
+| F10 | `/link` page, `/link/code`, `/link/preview`, `/link/upload`, `/link/unlink` (since mctl-glovo#64) and `/mcp` plus the RFC 9728 metadata are what the service mounts when C2 is on; the kill switch endpoint is `PUT /internal/v1/control/kill-switch`, mounted only with the control configuration; the same configuration also mounts `POST /internal/v1/control/unlink` and `/erase` (mctl-glovo#64, no mctl-api caller yet). Health paths `/livez`, `/readyz`. | [V] | `internal/linkflow/linkflow.go`, `cmd/mctl-glovo/control.go`, `cmd/mctl-glovo/mcp.go` (main) |
 | F11 | mctl-api reads, for the consent side: `GLOVO_CONSENT_ENABLED`, `GLOVO_CONSENT_SERVICE_PROVIDER`, `GLOVO_CONSENT_SERVICE_SUBJECT`, `GLOVO_CONSENT_DB_URL` (else `AUDIT_DB_URL`), `GLOVO_C2_CAPACITY`. The reader provider must be a federated provider entry of KIND SERVICE in `MCTL_OIDC_PROVIDERS` and the subject must be in that entry's `service_subjects`. | [V] | mctl-api `cmd/api/glovo_consent.go`, `cmd/api/check_config.go` |
-| F12 | BLOCKER: the only `MCTL_OIDC_PROVIDERS` entry (`zitadel`) carries `customers_org_id`, and mctl-api refuses to boot when an entry combines `service_subjects` with `customers_org_id`. The comment in zitadel-iac says the consent reader needs "a service identity on its own provider entry, or mctl-api allowing the combination; until that is decided this entry stays as it was". Nothing on main provides a service-kind entry, so `GLOVO_CONSENT_SERVICE_PROVIDER` has nothing valid to name. | [V] | `platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf` (lines about `service_subjects`) |
+| F12 | RESOLVED 2026-11-19 (was a blocker). The `zitadel` entry of `MCTL_OIDC_PROVIDERS` carries `customers_org_id` AND, since mctl-api 4.169.0 (9aa297e, 4.165.0 to 4.168.0 refuse to boot on the combination), may list `service_subjects` for exact subjects: the consent reader machine user is a `kind: service` identity pinned to the mctl_api project id, never a customer, no groups. `service_subjects` for it is on main (gitops#2817, 1bea2d2a1). Not yet shown: the pinned image's own `--check-config` on the rendered config for the current pin (it runs in CI on amd64 via `scripts/check-mctl-api-oidc-config.py`; it cannot run on an arm64 laptop). | [V] source on main, [U] live | `platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf`, gitops#2817, mctl-api 9aa297e |
 | F13 | The consent read route is confined to the one configured service identity; the service reads it with a ZITADEL machine-user token written by its `token-refresher` sidecar (the `consent` switch). | [V] | mctl-api `docs/glovo-link-consent.md`; `mctl-glovo.yaml` (consent block) |
 | F14 | mctl-gitops#2742 (control-caller token wiring for the kill switch) is a draft, dark. It needs the mctl-api chart pin to carry the `extraContainers` / `extraVolumes` / `extraVolumeMounts` slots (`chartSlots`), a released refresher tag and command, and a Vault role that reads one key. | [V] | PR 2742 diff |
 | F15 | The mctl-api config guard (`--check-config` in the image) cannot be run offline; consent settings are cross-checked by it at release time. | [U] | `scripts/check-mctl-api-oidc-config.py` needs the image |
-| F16 | Prerequisites outside gitops that gate the flip order: mctl-api A2 (fresh-login token with `auth_time` and a link audience) not started; mctl-glovo B2 (`glovo-link` loopback login) not started; #56 open; mctl-api#1116 (masked identity) draft; consent text version mismatch (mctl-api `c2-link-v1` vs mctl-glovo `c2-link-v2`) with no mctl-api PR found. | [V] as of 2026-11-18 | mctl-glovo#42 comments, PR 56, mctl-api PR 1116, `internal/glovoconsent/consent.go` |
+| F16 | Prerequisites outside gitops that gate the flip order, state 2026-11-19: mctl-api A2 (fresh-login, link audience) MERGED (#1129) and released in 4.170.0; mctl-api#1116 (masked identity) and the consent text `c2-link-v2` (#1126) released in 4.170.0; the consent page for every client kind (#1133) released in 4.170.1, LIVE 2026-11-19; mctl-glovo B2 `glovo-link` (#63) and `-unlink` (#64) merged, 0.2.0 released (tag d95db5096, contains `glovo-link`), 0.3.0 release PR open. All `mctlGlovo` switches stay false, the template pin is still `0.1.0`. Still open outside gitops: no live run of link or unlink, the fixed client id for `glovo-link` is not named, `GLOVO_LINK_RESOURCE` is not set anywhere. | [V] on GitHub as of 2026-11-19 | mctl-api #1116, #1126, #1129, #1133, releases 4.170.0 and 4.170.1; mctl-glovo #56, #63, #64, release 0.2.0 |
 | F17 | Live versions of mctl-api and the service, ArgoCD sync, Vault contents and roles, CNPG state, tailnet ACL, the mini's allowlist. | [U] | not read |
 
 ## 3. Wiring that this plan assumes (the dark wiring PR)
@@ -195,13 +195,17 @@ tool blocking, linking the account and recording the consent in the UI
 
 ## 8. Gaps found while writing this plan
 
-1. F12: no service-kind provider entry for the consent reader; the consent
-   switch cannot be lit until zitadel-iac or mctl-api resolves it.
+1. F12: resolved (see the F12 row): the consent reader is a `service_subjects`
+   entry on the existing provider entry. The `apiConsent` step still needs the
+   Vault fields and the config guard on the exact pinned image.
 2. F6: no `/link*` edge route; the tunnel definition is outside this
    repository (F7).
-3. F16: the code prerequisites for linking (A2, B2, version match, release)
-   are not done; `linkLogin` and step 9 cannot start before them.
-4. The image pinned in the template, `0.1.0`, predates the read-only default.
+3. F16: the code prerequisites for linking (A2, B2, version match, releases)
+   are merged and released; what blocks `linkLogin` and step 9 now is the
+   live proof of unlink, the unnamed `glovo-link` client id and the owner-only
+   items (Vault, edge route).
+4. The image pinned in the template, `0.1.0`, predates the read-only default;
+   0.2.0 is released but not pinned (a bump needs its own GO).
 5. Observability: the service emits only logs (no metrics, no sender); a
    named observer is needed for the window [V per the unmerged runbook, [U]].
 6. TLS: the wiring renders an Ingress with no `tls` block and no cert-manager
