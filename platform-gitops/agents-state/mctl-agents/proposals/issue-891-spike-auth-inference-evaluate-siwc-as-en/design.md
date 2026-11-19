@@ -2,6 +2,13 @@
 
 ## Current state
 
+### Already-operational Codex/MCTL Bridge (new comparison baseline)
+
+- [`mctl-claude-remote/docs/chatgpt-orchestrator-bridge.md`](https://github.com/mctlhq/mctl-claude-remote/blob/main/docs/chatgpt-orchestrator-bridge.md) documents Gate 1 passed on 2026-11-03: Codex daemon app-server control socket, `thread/resume`, `turn/start`, `turn/completed` and cross-client history. Validate *current* revision/release when running the spike; a historic proof is not a present runtime measurement.
+- [`plugin/mctl-bridge/README.md`](https://github.com/mctlhq/mctl-claude-remote/blob/main/plugin/mctl-bridge/README.md) describes a working Valkey bridge, `src/appserver.ts`, `src/waker.ts` and `mctl-codex say`, with claims, correlation, fencing, audit and recovery. Reuse this baseline rather than prototyping a second orchestrator.
+- Existing Codex app-server with its normal authenticated thread (baseline A) is **not** the same as launching a scratch Codex server with an externally acquired SIWC token (original experiment E). Keep these separate in the report.
+- A successful fresh SIWC Responses call cannot target/wake this particular existing standard ChatGPT web conversation. Verify any claimed exception using supported, dated product documentation; do not test scraping or session-cookie approaches.
+
 ### `cli/mctl` (mctlhq/mctl-gitops), read from the checkout at `/workdir/mctl-gitops/cli/mctl`
 
 - Module `github.com/mctlhq/mctl-gitops/cli/mctl` (Go 1.26.9, cobra, `golang.org/x/oauth2`, `coreos/go-oidc/v3`). Commands are registered in `cmd/root.go`: `deploy`, `delete`, `config`, `auth`, `repo`, `status`, `logs`, `version`.
@@ -36,9 +43,26 @@
   - Responses calls use bearer, `store: false`, `stream: true`.
   - It does not state scope names, the model-discovery endpoint, revocation, or the rules on another user's activity, proxying, pooling or background automation. Those are open questions.
 
+## Decision-first comparison (new mandatory gate 0)
+
+Before writing the proposed Go experiment, collect a bounded baseline matrix:
+
+| Path | Status and purpose | Auth/context | Key question |
+|---|---|---|---|
+| A. Existing Codex app-server + MCTL Bridge | Operational baseline, local operator-controlled orchestration | Existing authorized Codex thread and harness | Which requested MCTL jobs does it *not* satisfy? |
+| B. SIWC + direct Responses in the existing `mctl` CLI | Candidate, not yet approved | User-local SIWC grant; client-managed context and tools | Does simple structured RPC or genuine per-user BYOS offset an extra OAuth/token/Responses surface? |
+| C. API-key Responses | Pricing/terms baseline; live billable call optional, not required | Standard API key and usage billing | Is a normal API key simpler/safer for shared or hosted MCTL? |
+| D. Fresh Codex process with externally owned SIWC token | Optional compatibility subtest only | Distinct from A; no reading `~/.codex/auth.json` | Is documented, secret-safe handoff even supported? |
+
+Use the same bounded read-only reviewer fixture (seeded findings), structured output, a proposed disallowed tool (must be refused), and two-turn history where paths permit. Record the exact model/effort **actually available**, account/host eligibility, success, latency, token/usage signals, RSS, observed failures and process/maintenance delta; noncomparable paths are explicitly marked. Pin fixture and source revisions; provide reproducible commands with redacted output. No independent quota or access to existing ChatGPT web-chat history may be inferred from SIWC.
+
+**Gate 0 decision order:** (1) date-stamped OpenAI policy/eligibility and quota terms; (2) prove a concrete gap in path A *or* distinct value to normal end-users for BYOS; (3) choose the minimal feasible proof. If policy blocks an option, or no end-user/bridge advantage survives scrutiny, skip unnecessary runtime experiments and record `UNMEASURED` rather than fabricate results. If a candidate survives, run the original fake-auth fixtures and narrowly scoped local/manual opt-in proof. No new daemon, subscription review worker or shared hosted deployment in this spike.
+
+Final report includes both the pre-existing issue-level verdict (exactly one of its five tokens) and a **subsidiary** `bridge_incremental_value: YES | NO | UNPROVEN` with evidence. A bridge `NO` does not automatically reject CLI BYOS. A `YES` still requires source-backed policy and owner acceptance. Explicitly record `EXISTING_CHAT_WAKE_UNSUPPORTED` absent a supported mechanism for external wake of an arbitrary standard ChatGPT Chat High web conversation.
+
 ## Proposed solution
 
-The deliverable is a spike: evidence, an isolated experiment, a fake-auth CI fixture and one recommendation. Nothing ships to `cli/mctl` or to the workers in this change.
+The deliverable is a decision-first spike: baseline/policy evidence and one recommendation are mandatory; the isolated Go experiment and fake-auth CI fixture are **conditional on passing Gate 0**. If Gate 0 yields a defensible NO-GO/DEFER, document which prototype tasks were intentionally skipped and why. Nothing ships to `cli/mctl` or to the workers in this change.
 
 ### 1. Experiment: `experiments/siwc-cli-891/` (Go module, mirrors `cli/mctl`)
 
@@ -83,6 +107,7 @@ It triggers on `pull_request` for paths `experiments/siwc-cli-891/**` and on `wo
 ### 5. Report: `docs/spikes/891-siwc-byos.md`
 
 Sections:
+0. Gate 0: operational Codex bridge baseline, policy/quota matrix, comparable fixtures, and `bridge_incremental_value` (plus explicit existing-web-chat wake status).
 1. Current-state map (above, refreshed at the implementation SHA).
 2. End-user journey with a step count. The expected count is 4 steps from a logged-in CLI: run `auth openai login`, press "Continue with ChatGPT", run `models`, run the operation. The spike measures it.
 3. Policy matrix (10 shapes).
