@@ -167,9 +167,9 @@ def cases(script_text):
     case("history of another repository is not used", [other("main", D1), values("2.0.0", D2)], ["--tag", "main"], 8)
     case("same-repository entry wins over another repository's",
          [other("main", D1), values("main", D3), values("2.0.0", D2)], ["--tag", "main"], 0, values("main", D3))
-    retag = [values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D3)]
-    case("retag: explicit digest equal to one of the two is allowed", retag, ["--tag", "1.0.0", "--digest", D3], 0, values("1.0.0", D3),
-         guard=False)  # the digest stays, the tag moves: not a bump shape
+    D4 = "sha256:" + "4" * 64
+    retag = [values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D4)]
+    case("retag: explicit digest equal to one of the two is allowed", retag, ["--tag", "1.0.0", "--digest", D3], 0, values("1.0.0", D3))
     case("retag: explicit digest equal to neither is refused", retag, ["--tag", "1.0.0", "--digest", D2], 8)
     case("history as long as the limit is unseen, refused", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)],
          ["--tag", "1.1.0", "--history-limit", "3"], 8)
@@ -178,7 +178,7 @@ def cases(script_text):
     poisoned = [values("7.23.0", D2), values("7.22.1", D2), values("7.24.0", D3)]
     case("old sed rollback left tag next to a newer digest: not trusted", poisoned, ["--tag", "7.22.1"], 8)
     case("... the digest's original tag is refused too (shared digest, fail closed)", poisoned, ["--tag", "7.23.0"], 8)
-    case("... explicit digest is the operator's call", poisoned, ["--tag", "7.22.1", "--digest", D1], 8)
+    case("... the real digest of the tag, passed explicitly, gets past the leftover", poisoned, ["--tag", "7.22.1", "--digest", D1], 0, values("7.22.1", D1), guard=False)
     case("... explicit digest that history knows is accepted", poisoned, ["--tag", "7.22.1", "--digest", D2], 0, values("7.22.1", D2))
     case("two tags, two digests: unaffected", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)], ["--tag", "1.1.0"], 0, values("1.1.0", D2))
 
@@ -248,12 +248,15 @@ def cases(script_text):
 MUTATIONS = {
     "rewrite ignores the digest": ('    if digest:\n        line = f\'{ind}digest: "{digest}"\'', '    if False:\n        line = f\'{ind}digest: "{digest}"\''),
     "no refusal for a pinned file without a digest": ('    elif cur["digest"]:\n        why', '    elif False:\n        why'),
-    "history conflict with --digest allowed": ('if pinned_known and digest not in pinned_known:', 'if False:'),
+    "history conflict with --digest allowed": ('if trusted and digest not in trusted:', 'if False:'),
+    "leftover digest vetoes the explicit one": ('trusted = [d for d in pinned_known if not (tags_of.get(d, set()) - {a.tag})]', 'trusted = list(pinned_known)'),
     "two digests in history allowed": ('if len(pinned_known) > 1 and digest not in pinned_known:', 'if False:'),
     "repository ignored in history": ('if b["repository"] != repository:', 'if False:'),
     "blob fetch and blob read both ignored": ([
         ('            if f.returncode != 0:\n                raise Unreadable(f"cannot fetch', '            if False:\n                raise Unreadable(f"cannot fetch'),
         ('        if show.returncode != 0:\n            raise Unreadable(f"cannot read blob', '        if False:\n            raise Unreadable(f"cannot read blob')], None),
+    "shared digest trusted": ('        if shared:\n            fail(8', '        if False:\n            fail(8'),
+    "unverifiable explicit digest accepted": ('if digest and known is None:', 'if False:'),
     "history limit hit tolerated": ('if len(shas) >= limit:', 'if False:'),
     "history digest ignored": ('    elif pinned_known:\n        shared =', '    elif False:\n        shared ='),
     "several blocks tolerated": ('if len(found) != 1:', 'if len(found) < 1:'),

@@ -230,8 +230,11 @@ def main(argv=None):
         fail(8, f"{path}: --digest {digest} cannot be checked against history ({hist_err}); "
                 "refusing to write a digest that was not verified")
     if digest:
-        if pinned_known and digest not in pinned_known:
-            fail(8, f"{path}: --digest {digest} does not match {pinned_known[0]}, the digest tag {a.tag} "
+        # A digest history also shows under another tag is the old tag-only
+        # rollback's leftover: it must not veto the operator's checked digest.
+        trusted = [d for d in pinned_known if not (tags_of.get(d, set()) - {a.tag})]
+        if trusted and digest not in trusted:
+            fail(8, f"{path}: --digest {digest} does not match {trusted[0]}, the digest tag {a.tag} "
                     "had in history; refusing a tag and digest that disagree")
         target, source = digest, "argument"
     elif pinned_known:
