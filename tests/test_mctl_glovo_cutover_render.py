@@ -79,8 +79,10 @@ def fails(show, *args, why, extra_values=None):
     check(r.returncode != 0 and why in r.stderr, f"expected a render failure containing {why!r}, got rc={r.returncode} {r.stderr[-160:]!r}")
 
 
-# 1. dark by default
-r = helm(SVC)
+# 1. dark with every switch off. The switch is set explicitly: values.yaml carries
+# the LIVE state (deploy turns on at the start of the cutover), and this proves what
+# "all off" renders, not what is live.
+r = helm(SVC, "--set", "mctlGlovo.deploy=false")
 check(r.returncode == 0, f"default render failed: {r.stderr[-200:]}")
 kinds = {d["kind"] for d in docs(r)}
 check(kinds <= {"Namespace", "ServiceAccount", "NetworkPolicy"}, f"default render has extra kinds {kinds}")
