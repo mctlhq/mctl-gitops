@@ -4,8 +4,14 @@ metadata:
   name: rollback-service
   annotations:
     workflows.argoproj.io/description: |
-      Roll back a service to a previous image tag by patching image.tag in the
+      Roll back a service to a previous image tag by restoring image.tag in the
       GitOps values.yaml and committing. ArgoCD picks up the change and redeploys.
+      A values file that pins image.digest moves tag and digest together
+      (scripts/rollback-image-ref.py): the base-service chart renders
+      repository:tag@digest, so the digest, not the tag, decides what runs. The
+      digest comes from the optional target_digest, else from the digest the
+      tag had in the file's history; when the file pins a digest and none can
+      be found, the rollback is refused instead of reporting success.
 spec:
   entrypoint: rollback-pipeline
   serviceAccountName: argo-workflow-sa
@@ -53,6 +59,11 @@ spec:
       - name: team_name
       - name: component_name
       - name: target_tag
+      # Optional sha256:<64 hex> of the image target_tag was released as.
+      # Empty: taken from the values file's history. Needed only for a tag
+      # that history cannot resolve.
+      - name: target_digest
+        value: ""
 
   templates:
     - name: rollback-pipeline
@@ -62,6 +73,8 @@ spec:
             template: patch-values
 
     - name: patch-values
+      # The digest lookup reads the values file's history; bound the step.
+      activeDeadlineSeconds: 900
       inputs:
         parameters:
           - name: team_name
@@ -70,6 +83,8 @@ spec:
             value: "{{workflow.parameters.component_name}}"
           - name: target_tag
             value: "{{workflow.parameters.target_tag}}"
+          - name: target_digest
+            value: "{{workflow.parameters.target_digest}}"
       script:
         image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
@@ -87,6 +102,8 @@ spec:
             value: "{{inputs.parameters.component_name}}"
           - name: PARAM_TARGET_TAG
             value: "{{inputs.parameters.target_tag}}"
+          - name: PARAM_TARGET_DIGEST
+            value: "{{inputs.parameters.target_digest}}"
         source: |
           set -euo pipefail
 
@@ -127,6 +144,7 @@ spec:
           TEAM="$PARAM_TEAM_NAME"
           COMPONENT="$PARAM_COMPONENT_NAME"
           TAG="$PARAM_TARGET_TAG"
+          DIGEST="$PARAM_TARGET_DIGEST"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
@@ -149,7 +167,23 @@ spec:
               ;;
           esac
 
-          git clone --depth=1 "${REPO}" /tmp/mctl-gitops
+          # `target_digest` is held to the digest grammar here as well as in
+          # rollback-image-ref.py; it is bound as env, never interpolated.
+          case "$DIGEST" in
+            "" ) ;;
+            sha256:* )
+              case "${DIGEST#sha256:}" in
+                *[!0-9a-f]* ) echo "❌ target_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2; exit 1 ;;
+              esac
+              [ "${#DIGEST}" -eq 71 ] || { echo "❌ target_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2; exit 1; }
+              ;;
+            * ) echo "❌ target_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2; exit 1 ;;
+          esac
+
+          # Full commit history without file contents (blobless): the script
+          # looks up which digest the target tag had in this values file's
+          # history, and a --depth=1 clone cannot answer that.
+          git clone --filter=blob:none --single-branch --no-tags "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
           if [ ! -f "${VALUES}" ]; then
@@ -165,10 +199,16 @@ spec:
           # script: every non-zero exit stops here.
           sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
 
-          # Patch image.tag using sed. Safe because the guard above
-          # already rejected anything outside the OCI tag grammar — the
-          # sed program cannot be escaped by a value that has no `|`.
-          sed -i "s|^\( *tag: *\).*|\1\"${TAG}\"|" "${VALUES}"
+          # Restore tag and digest in one edit (this used to be a `sed` on
+          # the tag line alone, which left a pinned digest, and so the new
+          # image, in place). It exits 8 when the file pins a digest and none
+          # is known for the target tag, and 9 when the file cannot be edited
+          # safely: either stops the workflow before anything is committed.
+          if [ -n "$DIGEST" ]; then
+            python3 scripts/rollback-image-ref.py --values "${VALUES}" --tag "${TAG}" --digest "${DIGEST}"
+          else
+            python3 scripts/rollback-image-ref.py --values "${VALUES}" --tag "${TAG}"
+          fi
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-rollback"
@@ -177,7 +217,7 @@ spec:
           git commit -m "chore: rollback ${TEAM}/${COMPONENT} to ${TAG}"
           sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
           git push
-          echo "Rolled back ${TEAM}/${COMPONENT} to tag ${TAG}"
+          echo "Rolled back ${TEAM}/${COMPONENT} to tag ${TAG}${DIGEST:+ (digest ${DIGEST})}"
       volumes:
         - name: deploy-key
           secret:
