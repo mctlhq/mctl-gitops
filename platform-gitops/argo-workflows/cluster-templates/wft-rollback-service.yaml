@@ -73,6 +73,8 @@ spec:
             template: patch-values
 
     - name: patch-values
+      # The digest lookup reads the values file's history; bound the step.
+      activeDeadlineSeconds: 900
       inputs:
         parameters:
           - name: team_name

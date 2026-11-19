@@ -160,7 +160,45 @@ def cases(script_text):
     rc, after, _ = run(script_text, d3, "--tag", "1.0.0")
     check("no history, not pinned: tag alone moves", (rc, after), (0, values("1.0.0")), fails)
     rc, after, _ = run(script_text, d2, "--tag", "1.0.0", "--digest", D1)
-    check("no history, explicit digest", (rc, after), (0, values("1.0.0", D1)), fails)
+    check("no history, explicit digest cannot be verified: refused", (rc, after), (8, values("1.1.0", D2)), fails)
+
+    # --- history that is not what it seems ---
+    other = lambda tag, digest=None: values(tag, digest).replace(IMG, "ghcr.io/mctlhq/old")
+    case("history of another repository is not used", [other("main", D1), values("2.0.0", D2)], ["--tag", "main"], 8)
+    case("same-repository entry wins over another repository's",
+         [other("main", D1), values("main", D3), values("2.0.0", D2)], ["--tag", "main"], 0, values("main", D3))
+    retag = [values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D3)]
+    case("retag: explicit digest equal to one of the two is allowed", retag, ["--tag", "1.0.0", "--digest", D3], 0, values("1.0.0", D3),
+         guard=False)  # the digest stays, the tag moves: not a bump shape
+    case("retag: explicit digest equal to neither is refused", retag, ["--tag", "1.0.0", "--digest", D2], 8)
+    case("history as long as the limit is unseen, refused", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)],
+         ["--tag", "1.1.0", "--history-limit", "3"], 8)
+
+    # --- a blobless clone whose remote goes away: could not observe is not absent ---
+    d4 = repo([values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D2)])
+    git(d4, "config", "uploadpack.allowFilter", "true")
+    git(d4, "config", "uploadpack.allowAnySHA1InWant", "true")
+    lazy = pathlib.Path(tempfile.mkdtemp()) / "lazy"
+    cl = subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy)],
+                        env=ENV, capture_output=True, text=True)
+    if cl.returncode != 0:
+        fails.append("blobless clone setup failed: " + cl.stderr[:200])
+    else:
+        git(lazy, "checkout", "-q", "HEAD")
+        ok_rc, ok_text, _ = run(script_text, lazy, "--tag", "1.0.0", "--digest", D3)
+        check("blobless clone, remote up: blobs fetched, retag resolved", ok_rc, 0, fails)
+        git(lazy, "checkout", "-q", "--", SVC)
+        lazy2 = pathlib.Path(tempfile.mkdtemp()) / "lazy"
+        subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy2)],
+                       env=ENV, capture_output=True, text=True)
+        git(lazy2, "checkout", "-q", "HEAD")
+        git(lazy2, "remote", "set-url", "origin", "file:///nonexistent/gone")
+        before = (lazy2 / SVC).read_text()
+        rc, after, out = run(script_text, lazy2, "--tag", "1.0.0")
+        check("blobless clone, remote gone: refused, not a guess from the blobs at hand", rc, 8, fails)
+        check("blobless clone, remote gone: file untouched", after, before, fails)
+        rc, after, out = run(script_text, lazy2, "--tag", "1.0.0", "--digest", D1)
+        check("blobless clone, remote gone: explicit digest is not waved through", rc, 8, fails)
 
     # --- argument and path validation: exit 2 ---
     base = [values("1.0.0", D1), values("1.1.0", D2)]
@@ -196,11 +234,19 @@ def cases(script_text):
 # branch of history(); the "no history" message needs a commit that misses the file.)
 # The `digests[0] != i + 2` check is shadowed by the sha256 line check that
 # follows it; both refuse with exit 9.
+# Not listed: the `git ls-tree` failure branch (needs a corrupt object store to
+# trigger); the blob fetch and blob read refusals are two layers of one guard, so
+# they are mutated together.
 MUTATIONS = {
     "rewrite ignores the digest": ('    if digest:\n        line = f\'{ind}digest: "{digest}"\'', '    if False:\n        line = f\'{ind}digest: "{digest}"\''),
     "no refusal for a pinned file without a digest": ('    elif cur["digest"]:\n        why', '    elif False:\n        why'),
-    "history conflict with --digest allowed": ('if pinned_known and pinned_known[0] != digest:', 'if False:'),
-    "two digests in history allowed": ('if len(pinned_known) > 1:', 'if False:'),
+    "history conflict with --digest allowed": ('if pinned_known and digest not in pinned_known:', 'if False:'),
+    "two digests in history allowed": ('if len(pinned_known) > 1 and digest not in pinned_known:', 'if False:'),
+    "repository ignored in history": ('b["repository"] == repository and b["tag"] == tag', 'b["tag"] == tag'),
+    "blob fetch and blob read both ignored": ([
+        ('            if f.returncode != 0:\n                raise Unreadable(f"cannot fetch', '            if False:\n                raise Unreadable(f"cannot fetch'),
+        ('        if show.returncode != 0:\n            raise Unreadable(f"cannot read blob', '        if False:\n            raise Unreadable(f"cannot read blob')], None),
+    "history limit hit tolerated": ('if len(shas) >= limit:', 'if False:'),
     "history digest ignored": ('    elif pinned_known:\n        target, source = pinned_known[0], "history"', '    elif False:\n        target, source = None, "history"'),
     "several blocks tolerated": ('if len(found) != 1:', 'if len(found) < 1:'),
     "digest line not validated": ('if not dm:', 'if False:'),
@@ -234,6 +280,7 @@ def template_checks():
         fails.append("a --depth=1 clone cannot answer which digest a tag had")
     if "--filter=blob:none" not in code:
         fails.append("the clone no longer carries history for the digest lookup")
+    check("the patch step has a deadline", step.get("activeDeadlineSeconds"), 900, fails)
     check("digest checked before use", "target_digest must be sha256" in src, True, fails)
     return fails
 
@@ -250,12 +297,17 @@ def main():
     else:
         print("ok: all cases pass on the real script")
     for name, (a, b) in MUTATIONS.items():
-        if SCRIPT.count(a) != 1:
-            print(f"MUTATION NOT APPLICABLE ({SCRIPT.count(a)} matches): {name}")
-            status = 1
+        pairs = a if isinstance(a, list) else [(a, b)]
+        mutated, bad = SCRIPT, False
+        for x, y in pairs:
+            if mutated.count(x) != 1:
+                print(f"MUTATION NOT APPLICABLE ({mutated.count(x)} matches): {name}")
+                status, bad = 1, True
+                break
+            mutated = mutated.replace(x, y)
+        if bad:
             continue
-        red = cases(SCRIPT.replace(a, b))
-        if not red:
+        if not cases(mutated):
             print(f"MUTATION SURVIVED: {name}")
             status = 1
     if status == 0:

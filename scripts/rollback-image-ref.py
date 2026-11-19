@@ -14,9 +14,13 @@ workflow still reports success.
 
 What it does, for the one `repository:` / `tag:` block of the file:
   * --digest given: that digest is used, unless the file's own history shows
-    the tag bound to a different digest (a mismatch is refused).
-  * no --digest: the digest the tag had in the file's history is restored with
-    it. A tag bound to two different digests in history is refused.
+    the tag bound to other digests only (a mismatch is refused). With no
+    history for the tag it is taken on trust, and the output says so.
+  * no --digest: the digest the tag had in the file's history (same
+    repository only) is restored with it. A tag bound to two different digests
+    is refused unless --digest names one of them.
+  * any history that cannot be fully observed (log, tree, blob fetch, a log
+    as long as the limit) is a refusal, never a shorter history.
   * the file pins a digest now and none can be found for the target: refused.
     Moving the tag under the old digest would be a silent no-op.
   * the file pins no digest now and none is known: the tag alone moves, as it
@@ -90,7 +94,8 @@ def read_block(text, label):
         if not dm:
             raise Unreadable(f"{label}: the digest line is not a sha256:<64 hex> value")
         digest = dm.group("d")
-    return {"lines": lines, "tag_at": i + 1, "indent": ind, "quote": m.group("q"),
+    rm = re.search(r"repository:\s*(\S+)\s*$", lines[i])
+    return {"repository": rm.group(1).strip("\"'"), "lines": lines, "tag_at": i + 1, "indent": ind, "quote": m.group("q"),
             "tag": m.group("tag"), "digest": digest, "digest_at": (i + 2) if digests else None}
 
 
@@ -114,11 +119,18 @@ def git(*args):
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
-def history(path, tag, limit):
-    """Digests the tag was bound to in the file's history: a set, None for a tag-only entry.
+HISTORY_LIMIT = 2000
+FETCH_CHUNK = 100
 
-    Raises Unreadable when history cannot be read. An empty history of a file
-    that exists is an unreadable one, not "the tag was never used".
+
+def history(path, tag, repository, limit):
+    """Digests the tag was bound to, for this repository, in the file's history.
+
+    Returns a set (None member = a tag-only entry). Raises Unreadable on ANY
+    failure to observe: an unreadable log, a tree or blob that cannot be read
+    or fetched, a log as long as the limit (the tail would be unseen). A
+    commit where the file is absent is told apart from a failed read by
+    `git ls-tree`: rc 0 and empty output is absence, anything else is an error.
     """
     r = git("log", "-n", str(limit), "--format=%H", "--", path)
     if r.returncode != 0:
@@ -126,16 +138,42 @@ def history(path, tag, limit):
     shas = r.stdout.split()
     if not shas:
         raise Unreadable(f"no history for {path}: a shallow clone cannot answer which digest a tag had")
-    seen = set()
+    if len(shas) >= limit:
+        raise Unreadable(f"history of {path} is {len(shas)} commits, the limit: the older part is unseen")
+    oids = {}
     for sha in shas:
-        show = git("show", f"{sha}:{path}")
+        t = git("ls-tree", sha, "--", path)
+        if t.returncode != 0:
+            raise Unreadable(f"cannot read {path} at {sha[:10]}: {t.stderr.strip()[:200]}")
+        if not t.stdout.strip():
+            continue  # the file is absent at this commit
+        meta, _, _name = t.stdout.partition("\t")
+        parts = meta.split()
+        if len(parts) != 3 or parts[1] != "blob":
+            raise Unreadable(f"{path} at {sha[:10]} is not a regular file")
+        oids[sha] = parts[2]
+    # A blobless clone holds trees only: fetch the blobs explicitly, in batches,
+    # and treat any failure as unreadable rather than as a missing commit.
+    need = sorted(set(oids.values()))
+    for k in range(0, len(need), FETCH_CHUNK):
+        chunk = need[k:k + FETCH_CHUNK]
+        have = subprocess.run(["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+                              input="\n".join(chunk) + "\n", capture_output=True, text=True)
+        missing = [c for c in chunk if f"{c} blob" not in have.stdout.split("\n")]
+        if missing:
+            f = git("fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", *missing)
+            if f.returncode != 0:
+                raise Unreadable(f"cannot fetch {len(missing)} historical blobs of {path}: {f.stderr.strip()[:200]}")
+    seen = set()
+    for sha, oid in oids.items():
+        show = git("cat-file", "blob", oid)
         if show.returncode != 0:
-            continue  # the file did not exist at this commit
+            raise Unreadable(f"cannot read blob {oid[:10]} of {path} at {sha[:10]}: {show.stderr.strip()[:200]}")
         try:
             b = read_block(show.stdout, f"{path}@{sha[:10]}")
         except Unreadable:
             continue  # an older shape of the file; it cannot tell us anything
-        if b["tag"] == tag:
+        if b["repository"] == repository and b["tag"] == tag:
             seen.add(b["digest"])
     return seen
 
@@ -145,7 +183,7 @@ def main(argv=None):
     ap.add_argument("--values", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--digest", default="")
-    ap.add_argument("--history-limit", type=int, default=5000)
+    ap.add_argument("--history-limit", type=int, default=HISTORY_LIMIT)
     a = ap.parse_args(argv)
 
     digest = a.digest.strip()
@@ -171,16 +209,19 @@ def main(argv=None):
     source = "none"
     target = None
     try:
-        known = history(path, a.tag, a.history_limit)
+        known = history(path, a.tag, cur["repository"], a.history_limit)
     except Unreadable as e:
         known = None
         hist_err = str(e)
     pinned_known = sorted(d for d in (known or set()) if d)
-    if len(pinned_known) > 1:
+    if len(pinned_known) > 1 and digest not in pinned_known:
         fail(8, f"{path}: tag {a.tag} was bound to more than one digest in history "
-                f"({', '.join(pinned_known)}); pass --digest only after resolving which one is right")
+                f"({', '.join(pinned_known)}); pass target_digest equal to the one that is right")
+    if digest and known is None:
+        fail(8, f"{path}: --digest {digest} cannot be checked against history ({hist_err}); "
+                "refusing to write a digest that was not verified")
     if digest:
-        if pinned_known and pinned_known[0] != digest:
+        if pinned_known and digest not in pinned_known:
             fail(8, f"{path}: --digest {digest} does not match {pinned_known[0]}, the digest tag {a.tag} "
                     "had in history; refusing a tag and digest that disagree")
         target, source = digest, "argument"
@@ -211,8 +252,9 @@ def main(argv=None):
     with open(tmp, "w") as fp:
         fp.write(new)
     os.replace(tmp, path)
+    note = " NOT checked against history or registry" if source == "argument" and not pinned_known else ""
     print(f"{path}: tag {cur['tag']} -> {a.tag}; digest "
-          f"{cur['digest'] or 'none'} -> {target or 'none'} (source: {source})")
+          f"{cur['digest'] or 'none'} -> {target or 'none'} (source: {source}{note})")
     return 0
 
 
