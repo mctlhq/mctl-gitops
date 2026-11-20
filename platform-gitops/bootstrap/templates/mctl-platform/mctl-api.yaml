@@ -89,7 +89,7 @@ spec:
             # its client id and secret come from mctl-api-oidc-zitadel
             # (mctl-gitops#2730) and the decider list from mctl-api-secrets,
             # both read only at container start.
-            ROLLOUT_MARKER: "2026-11-20-link-consent-routes"
+            ROLLOUT_MARKER: "2026-11-20-link-consent-routes-off"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
