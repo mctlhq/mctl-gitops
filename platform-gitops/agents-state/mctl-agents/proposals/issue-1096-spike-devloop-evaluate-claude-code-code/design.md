@@ -88,15 +88,27 @@ Deployed state checked:
 - Code Mode docs (code.claude.com/docs/en/code-mode) were not fetched in this
   run. Every Code Mode claim is from the issue body, see Open questions.
 
+## Independent review corrections / unresolved gates
+
+| Finding | Corrected plan | Evidence to obtain before any separately approved execution |
+| --- | --- | --- |
+| P1 research-only scope | The GitOps proposal triplet is the current output. Candidate docs, fixtures, tests and PR below are **not authorized**; Temporal approve would start Tier 2. | Explicit separate owner GO for docs implementation, reviewed digest, independent gate |
+| P2 secret fixture contradiction | All committed fixtures must contain only neutral labels and hashes. The adversarial credential-shaped test input, if ever approved, is generated solely in memory and never written; output must be independently scanned. | Negative-redaction test output and absence of secret-shaped data in durable records |
+| P2 per-child governance | Existing `_PolicyCheckpointHook` and `decision_records` are configured in **headless SDK**, not proven for interactive Code Mode. A CLI REPL transcript or local hook is not a substitute for action-time server-enforced policy. | Per-child actor/tenant + exact arguments digest + stable call id + decision id + outcome; proof of fail-closed enforcement; bypass tests |
+| P3 evidence threshold | Recommendation `FURTHER_RESEARCH` is provisional, not a measured performance verdict. All experimental cells `NOT_RUN`; 5 repetitions are exploratory, not robust p95/safety evidence. | Eligible account/model, vendor doc re-fetch, security review, explicit spend cap; no execution beforehand |
+
+**Hard stop:** The interactive CLI/SDK boundary is unproven. Do not infer that the SDK's `PreToolUse` hooks protect Code Mode child calls. Only synthetic, offline and read-only benchmark tasks are eligible for a *future* bounded pilot; access to live MCTL tools is out of scope until the server-side action-time enforcement and audit chain are demonstrated independently.
+
+
 ## Proposed solution
 
-The deliverable is documentation only and follows the existing spike layout.
-Nothing under `orchestrator/`, `agents/` or `tools/` changes, and neither do
-`pyproject.toml`, `uv.lock` or the `Dockerfile`. One offline structural test
-is the only non-doc file, matching the `tests/test_spike_757_attention.py`
-precedent (item 5).
+The current research deliverable is this revised GitOps proposal and its evidence map.
+The following report, fixture and test layout is a **candidate for a separate,
+later owner-authorized documentation slice**. Do not signal approval on this
+research-only DevLoop: the signal is a Tier-2 implementation authorization,
+not a way to acknowledge the research. No target-repo changes are approved.
 
-### Deliverable files
+### Candidate follow-on files — NOT AUTHORIZED by this research intake
 
 1. `docs/spikes/1096-claude-code-code-mode.md`: the report, with
    `STATUS: PENDING_EVIDENCE` and `Refs mctlhq/mctl-agents#1096`. Sections:
@@ -185,15 +197,41 @@ precedent (item 5).
    `source` and `evidence_class` (`OFFICIAL` / `VENDOR_CLAIM` / `OBSERVED` /
    `UNKNOWN`) per cell, so the markdown table can be checked against it.
 
-5. `tests/test_spike_1096_protocol.py`: an offline test, stdlib + `yaml`
-   only. It checks that the three YAML files parse and that every
+5. **Candidate optional check, requires separate implementation GO:**
+   `tests/test_spike_1096_protocol.py` would be an offline test, stdlib +
+   `yaml` only. It checks that the three YAML files parse and that every
    `result`/`status` cell is `NOT_RUN`. It also checks that every
    negative-matrix row has an `expected` and an `oracle`, that `reps >= 5`
    for each task and mode, that both modes share identical `pins`, and that
    no file matches `orchestrator.redaction.contains_credential`.
 
-The PR uses `Refs mctlhq/mctl-agents#1096` (spike rule) and leaves the issue
-open for the owner's verdict.
+Only if a new, separate docs-only implementation is explicitly authorized,
+its eventual target-repository PR would use `Refs mctlhq/mctl-agents#1096`
+(spike rule), and leave the issue open for the owner's verdict. The current
+GitOps amendment PR changes this proposal only; it is **not** that future PR.
+
+### Credential-canary and telemetry-safe test design
+
+The negative-case catalogue may include a **synthetic secret-like input** as a
+named scenario, but checked-in YAML/fixtures contain only a neutral marker
+(e.g. `CANARY_REF`) and its documented purpose, never a realistic credential.
+If the scenario is separately approved, a local test runner generates an
+ephemeral canary in RAM and asserts the persisted transcript, decision records,
+trace excerpts and benchmark result are canary-free. The static
+`contains_credential` check and the dynamic non-disclosure check are
+separate oracles; neither makes a claim of PASS before execution.
+
+### Correlation and non-substitution
+
+Require `parent_script_id` and unique `child_call_id` with ordinal,
+`actor_id`, `tenant_id`, canonical arguments digest, action-time
+`policy_decision_id`, outcome and durable trace/receipt id. Identical
+argument hashes may represent distinct calls; correlation by hash alone fails.
+A missing field or mismatched/duplicate join is `INCOMPLETE`/DENY.
+An interactive CLI client's permissions are not the MCTL SDK hooks.
+A server-side control that the interactive session cannot bypass must be
+independently verified before any MCTL-connected Code Mode pilot.
+
 
 ## Alternatives
 
@@ -213,7 +251,7 @@ open for the owner's verdict.
 
 - Migrations: none. Backward compatibility: unaffected. No runtime, profile,
   dependency or gitops change.
-- Resource impact: none at merge. A future approved run costs about 30 model
+- Resource impact: none in research; any future merge requires a separate authorization. A future approved run costs about 30 model
   sessions on an operator account. The amount stays UNKNOWN until pinned.
 - Risk: the report could be read as authorization to experiment or to adopt
   Code Mode in CI. Mitigation: `STATUS: PENDING_EVIDENCE`, all result cells
