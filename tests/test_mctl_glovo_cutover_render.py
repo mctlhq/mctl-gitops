@@ -91,13 +91,13 @@ r = helm(SVC, "--set", "mctlGlovo.deploy=false")
 check(r.returncode == 0, f"default render failed: {r.stderr[-200:]}")
 kinds = {d["kind"] for d in docs(r)}
 check(kinds <= {"Namespace", "ServiceAccount", "NetworkPolicy"}, f"default render has extra kinds {kinds}")
-v, r = api_values()
+v, r = api_values("--set", "mctlGlovo.apiConsent=false")
 check(v is not None, f"default mctl-api render failed: {r.stderr[-200:]}")
 if v:
     check(not any(k.startswith("GLOVO_CONSENT") or k == "GLOVO_C2_CAPACITY" for k in v["env"]),
           "default mctl-api env carries consent or capacity variables")
     check("mctl-api-glovo-consent" not in v.get("envFromOptionalSecrets", []), "default mctl-api reads the consent Secret")
-check("mctl-api-glovo-consent" not in helm(API_SECRETS).stdout, "default render has the consent ExternalSecret")
+check("mctl-api-glovo-consent" not in helm(API_SECRETS, "--set", "mctlGlovo.apiConsent=false").stdout, "default render has the consent ExternalSecret")
 
 # 2. every existing switch on, new ones off: no new surface, capacity 1
 r = helm(SVC, *BASE)
