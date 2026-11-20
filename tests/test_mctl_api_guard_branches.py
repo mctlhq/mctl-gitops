@@ -58,8 +58,18 @@ echo "$*" >> "$FAKE_LOG"
 case "$1" in
   image) [ "$FAKE_MODE" = pull_fail ] && exit 1; exit 0 ;;
   pull) exit 1 ;;
-  rm) exit 0 ;;
+  rm|network) exit 0 ;;
+  exec) exit 0 ;;
+  logs) echo "boot log line"; exit 0 ;;
+  inspect) echo true; exit 0 ;;
   run)
+    case "$*" in
+      *" -d "*) exit 0 ;;
+      *curlimages*) if [ "$FAKE_READYZ" = store_failed ]; then
+                      printf '{"status":"not ready","checks":{"stores":"init_failed"},"failed_stores":["glovo link consent"]}\n503'
+                    else printf '{"status":"ready","checks":{"stores":"ok"}}\n200'; fi; exit 0 ;;
+      *postgres:*) exit 0 ;;
+    esac
     case "$FAKE_MODE" in
       ok) echo "mctl-api check-config: ok"; exit 0 ;;
       reject) echo "invalid configuration: may not combine service_subjects with customers_org_id" >&2; exit 1 ;;
@@ -269,9 +279,10 @@ def mutants():
     out["image exit 0 without the ok line accepted"] = (sub(chk, "if not lines or lines[-1].strip() != OK_LINE:", "if False:", "okline"), None)
     out["non-zero exit of the image ignored"] = (sub(chk, "if res.returncode != 0:\n        out =", "if False:\n        out =", "rc"), None)
     out["missing docker treated as a skip"] = (
-        sub(chk, '        raise Refuse(f"RUNNER PROBLEM, not a config rejection: {docker} not found, cannot run {image}")', "        return", "docker"), None)
+        sub(sub(chk, '        raise Refuse(f"RUNNER PROBLEM, not a config rejection: {docker} not found, cannot run {image}")', "        return", "docker"),
+            '        raise Refuse(f"RUNNER PROBLEM, not a config rejection: {docker} not found, cannot boot {image}")', "        return", "docker2"), None)
     out["wrapper never runs the check (always ok)"] = (None, sub(wrp, "    rc = subprocess.run(cmd).returncode\n", "    rc = 0\n", "never"))
-    out["wrapper ignores the candidate tag"] = (None, sub(wrp, 'cmd = [sys.executable, str(CHECK), "--image-tag", tag]', "cmd = [sys.executable, str(CHECK)]", "tag"))
+    out["wrapper ignores the candidate tag"] = (None, sub(wrp, '"--image-tag", tag, "--readyz"]', '"--readyz"]', "tag"))
     return out
 
 

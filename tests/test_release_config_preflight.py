@@ -110,8 +110,18 @@ STUB = r"""#!/bin/sh
 echo "$*" >> "$FAKE_LOG"
 case "$1" in
   image) exit 0 ;;
-  rm) exit 0 ;;
+  rm|network) exit 0 ;;
+  exec) exit 0 ;;
+  logs) echo "boot log line"; exit 0 ;;
+  inspect) echo true; exit 0 ;;
   run)
+    case "$*" in
+      *" -d "*) exit 0 ;;
+      *curlimages*) if [ "$FAKE_READYZ" = store_failed ]; then
+                      printf '{"status":"not ready","checks":{"stores":"init_failed"},"failed_stores":["glovo link consent"]}\n503'
+                    else printf '{"status":"ready","checks":{"stores":"ok"}}\n200'; fi; exit 0 ;;
+      *postgres:*) exit 0 ;;
+    esac
     case "$FAKE_MODE" in
       ok) echo "mctl-api check-config: ok"; exit 0 ;;
       newer_rule) echo "invalid configuration: service_subjects with customers_org_id" >&2; exit 1 ;;
@@ -155,6 +165,8 @@ def behaviour(script):
     res["new image rejects the current config: bump blocked"] = (rc == 1, (rc, out[-200:]))
     rc, out, log = run_pre(script, "ok")
     res["new image accepts: bump allowed, image actually run"] = (rc == 0 and "--check-config" in log, (rc, out[-200:]))
+    rc, out, _ = run_pre(script, "ok", extra_env={"FAKE_READYZ": "store_failed"})
+    res["new image accepts the config but a store fails init: bump blocked"] = (rc == 1 and "glovo link consent" in out, (rc, out[-300:]))
     rc, out, _ = run_pre(script, "no_flag")
     res["image at/above MIN without the flag: blocked (a placeholder cannot hide it)"] = (rc == 1, (rc, out[-200:]))
     rc, out, log = run_pre(script, "newer_rule", tag="4.166.0")
@@ -290,7 +302,8 @@ def main():
     mutants = {
         "wrapper never runs the check (always ok)": src.replace("rc = subprocess.run(cmd).returncode", "rc = 0"),
         "wrapper skips mctl-api (treats it as not applicable)": src.replace("if name != IMAGE:", "if True:"),
-        "wrapper ignores the candidate tag": src.replace('"--image-tag", tag]', '"--image-tag", "4.0.0"]'),
+        "wrapper ignores the candidate tag": src.replace('"--image-tag", tag, "--readyz"]', '"--image-tag", "4.0.0", "--readyz"]'),
+        "wrapper drops the readyz stage": src.replace('"--image-tag", tag, "--readyz"]', '"--image-tag", tag]'),
     }
     for mname, text in mutants.items():
         assert text != src, f"mutation did not apply: {mname}"

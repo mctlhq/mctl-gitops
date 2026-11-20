@@ -17,6 +17,11 @@ tag, a changed Secret wiring all exit 1. The only skip is the documented
 transition (candidate tag older than MIN_CHECKER_VERSION, decided from the
 version string alone, with a visible warning).
 
+It also passes --readyz: the candidate is booted on a throwaway Postgres and
+/readyz must report stores ok, because --check-config opens no store and a
+store-init failure shipped in the image or lit by the config passed it
+(mctl-gitops#2827 / #2830). A candidate that never answers is a failure.
+
 Usage: release-config-preflight.py [--min-version X.Y.Z]   (flag: local proofs only)
 """
 import argparse
@@ -40,7 +45,7 @@ def main():
     if name != IMAGE:
         print(f"release config preflight: not applicable to {name}")
         return 0
-    cmd = [sys.executable, str(CHECK), "--image-tag", tag]
+    cmd = [sys.executable, str(CHECK), "--image-tag", tag, "--readyz"]
     if a.min_version:
         cmd += ["--min-version", a.min_version]
     rc = subprocess.run(cmd).returncode

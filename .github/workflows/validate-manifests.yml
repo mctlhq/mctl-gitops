@@ -1525,12 +1525,17 @@ jobs:
       # first release with the flag (MIN_CHECKER_VERSION in the script), with a
       # visible warning. --selftest first: a detector never seen to fire is not
       # known to work.
+      # --readyz adds stage 2 (gitops#2830): --check-config opens no store, so a
+      # store-init failure (mctl-api#1136, found on the first apiConsent flip,
+      # gitops#2827) passed it. The image is booted with the same rendered env on
+      # a throwaway Postgres on an internal network and /readyz must report
+      # stores ok; no answer in time is a failure, never a pass.
       - name: mctl-api accepts the rendered OIDC configuration (deployed image's own validator)
         run: |
           set -euo pipefail
           python3 -m pip install --quiet pyyaml
           scripts/check-mctl-api-oidc-config.py --selftest
-          scripts/check-mctl-api-oidc-config.py
+          scripts/check-mctl-api-oidc-config.py --readyz
 
       # The same check for the NEW image on the release path (bump job of
       # release-deploy.yaml and gitops-bump.yaml): wiring, the 4.166.0 shape
