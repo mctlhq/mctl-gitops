@@ -104,6 +104,7 @@ def run_wrapper(tree, mode, tag, image=IMAGE, with_docker=True, with_helm=True):
         (d / "bin").mkdir()
         if with_helm:
             (d / "bin/helm").symlink_to(shutil.which("helm"))
+            (d / "bin/openssl").symlink_to(shutil.which("openssl"))
         if with_docker:
             (d / "bin/docker").write_text(STUB)
             (d / "bin/docker").chmod(0o755)
@@ -124,6 +125,7 @@ def run_pin(tree, mode):
         d = pathlib.Path(d)
         (d / "bin").mkdir()
         (d / "bin/helm").symlink_to(shutil.which("helm"))
+        (d / "bin/openssl").symlink_to(shutil.which("openssl"))
         (d / "bin/docker").write_text(STUB)
         (d / "bin/docker").chmod(0o755)
         log = d / "docker.log"

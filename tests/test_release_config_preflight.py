@@ -141,6 +141,7 @@ def run_pre(script, mode, tag="4.168.0", image=IMAGE, min_version="4.167.0", wit
         if helm is None:
             raise RuntimeError("helm missing")
         (bindir / "helm").symlink_to(helm)
+        (bindir / "openssl").symlink_to(shutil.which("openssl"))
         if with_docker:
             (bindir / "docker").write_text(STUB)
             (bindir / "docker").chmod(0o755)

@@ -73,6 +73,19 @@ RUN_TIMEOUT = 90
 # /readyz. Images are pinned by tag; the stage needs a Linux docker daemon.
 PG_IMAGE = "postgres:16-alpine"
 PROBE_IMAGE = "curlimages/curl:8.11.1"
+# Values that live in Secrets (Vault) and that boot, unlike --check-config,
+# insists on. Placeholders stand in; each is added only when the rendered env
+# lacks the key, and none touches a store.
+BOOT_PLACEHOLDERS = {
+    "ADMIN_PRINCIPALS": "prn_00000000000000000000000000",
+}
+# The Glovo basket store's schema is applied by a separate migrator (the
+# mctl-glovo migration Job), not by mctl-api: against an empty throwaway
+# database it refuses to open ("was ApplySchema run?"), and its flags require
+# one another. Every GLOVO_* key is therefore dropped, except the consent
+# routes (GLOVO_CONSENT_*, GLOVO_C2_*), which use mctl-api's own tables and are
+# exactly what this stage exists to exercise. The stage says what it dropped.
+KEEP_GLOVO_PREFIXES = ("GLOVO_CONSENT", "GLOVO_C2")
 READYZ_DEADLINE = 120  # seconds until /readyz must have answered
 PULL_ATTEMPTS = 3
 
@@ -243,6 +256,19 @@ def parse_readyz(code, body):
     return "fail", f"checks.stores is {stores!r}, not 'ok' (store init not observable is not ok)"
 
 
+def throwaway_signing_keys():
+    """OAUTH_JWT_SIGNING_KEYS the image demands at boot when the chart selects
+    EdDSA; the real one is a Vault Secret. A fresh Ed25519 key per run, never
+    committed and never leaving the throwaway container."""
+    if shutil.which("openssl") is None:
+        raise Refuse("RUNNER PROBLEM: openssl not found, cannot make the throwaway signing key; /readyz was NOT observed")
+    res = run(["openssl", "genpkey", "-algorithm", "ed25519"])
+    if res.returncode != 0 or "BEGIN PRIVATE KEY" not in res.stdout:
+        raise Refuse("RUNNER PROBLEM: openssl could not generate an Ed25519 key; /readyz was NOT observed")
+    return json.dumps({"active": "readyz-throwaway",
+                       "keys": [{"kid": "readyz-throwaway", "alg": "EdDSA", "private_key_pem": res.stdout}]}, separators=(",", ":"))
+
+
 def check_stores(image, env, docker="docker", deadline=READYZ_DEADLINE):
     """Stage 2: the config check never opens a store, so a boot-time store-init
     failure (mctl-api#1136: a cancelled init context failed the consent store
@@ -282,6 +308,15 @@ def check_stores(image, env, docker="docker", deadline=READYZ_DEADLINE):
                 raise Refuse(f"{k} names a database {name!r} the stage cannot create safely")
             dbnames.add(name)
             renv[k] = f"postgres://postgres:{pw}@{pg}:5432/{name}?sslmode=disable"
+    for k, v in BOOT_PLACEHOLDERS.items():
+        renv.setdefault(k, v)
+    if "OAUTH_JWT_SIGNING_KEYS" not in renv:
+        renv["OAUTH_JWT_SIGNING_KEYS"] = throwaway_signing_keys()
+    dropped = sorted(k for k in renv if k.startswith("GLOVO_") and not k.startswith(KEEP_GLOVO_PREFIXES))
+    for k in dropped:
+        del renv[k]
+    if dropped:
+        print(f"readyz stage: dropped {dropped}: the Glovo basket store is migrated elsewhere and is NOT exercised here", file=sys.stderr)
     renv["ALLOW_INSECURE_DB"] = "true"  # EnforceTLS would demand TLS from the throwaway
     try:
         with tempfile.TemporaryDirectory() as d:
@@ -547,6 +582,31 @@ def selftest():
                lambda: check_stores("img:1", {"ALLOW_INSECURE_DB": "true"}, dk, 2), "sets it only for its own")
         expect("readyz: rendered env has no AUDIT_DB_URL (stores would be unconfigured)",
                lambda: check_stores("img:1", {}, dk, 2), "AUDIT_DB_URL is missing")
+        # What the stage hands the image: capture the env file the stub saw.
+        def seen_env():
+            os.environ["FAKE_READYZ"] = "ok"
+            os.environ["FAKE_MODE"] = "ok"
+            envs = {}
+            orig = tempfile.TemporaryDirectory
+            check_stores("img:1", {**build_env(copy.deepcopy(base), json.loads(FIXTURE.read_text())), "GLOVO_ENABLED": "true", "GLOVO_CONSENT_ENABLED": "true", "GLOVO_C2_CAPACITY": "1"}, dk, 3)
+            return envs
+        seen_env()
+        calls = log.read_text()
+        for needle, what in (("--internal", "internal network"), ("--read-only", "read-only root")):
+            if needle not in calls:
+                print(f"FAIL readyz stage lost {what}")
+                failures.append(what)
+        def pe(code, body):
+            v = parse_readyz(code, body)[0]
+            if v != "ok":
+                raise Refuse(v)  # expect() reads a refusal as the verdict text
+            return "ok"
+        expect("parse: ok", lambda: pe("200", '{"checks":{"stores":"ok"}}'), "ok")
+        expect("parse: connection refused is retry, never ok", lambda: pe("000", ""), "retry")
+        expect("parse: unexpected status is retry", lambda: pe("404", '{"checks":{"stores":"ok"}}'), "retry")
+        expect("parse: body without checks is retry", lambda: pe("200", "{}"), "retry")
+        expect("parse: stores missing is fail", lambda: pe("200", '{"checks":{}}'), "fail")
+        expect("parse: failed_stores wins over stores ok", lambda: pe("503", '{"checks":{"stores":"ok"},"failed_stores":["a"]}'), "fail")
         expect("readyz: docker missing", lambda: check_stores("x:1", {}, docker="/nonexistent/docker"), "not found")
         os.environ["FAKE_READYZ"] = "ok"
         os.environ["FAKE_MODE"] = "ok"
