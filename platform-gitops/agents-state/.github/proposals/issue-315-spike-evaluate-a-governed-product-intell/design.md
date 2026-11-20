@@ -173,6 +173,26 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - Stale claims: evidence pins and `unknown (not observed)` for every unread source.
 
 
+## Source-level review findings (2026-11-20; no live analytics access)
+
+**P1 — acquisition report conflates onboarding with real usage.** `mctl-telegram/internal/db/acquisition.go::AcquisitionReport` selects sign-ups by `users.created_at >= since` but both of its per-user activity subqueries scan all `audit_logs` rows except `pa:%`. They do not require `status='ok'`, exclude `connect:%`/web/bridge/internal events, or constrain event timestamps to 24h/D7 after signup. `mctl-telegram/docs/runbook.md` confirms `connect:oidc_callback`, `connect:phone_submitted` and `connect:success` are written to the same audit table. `internal/db/public_stats.go::publicToolFilter` independently requires `status='ok'` and excludes `connect%`, `local_bridge%`, `POST %`, `pa:%`. The report's `tool_call_users` and `active_2plus_days` cannot serve as validated activation/retention metrics: signup events alone can count as calls; success and timing are not established. **Do not infer the historical #1072 20/32 is wrong**: it was a different 2026-11-01 read-only observation whose query needs separate provenance. No production database queried in this review.
+
+**P2 — reachability is not certain.** `internal/broadcast/policy.go::Evaluate` excludes `blocked` and `cannot_initiate`, but admits `unknown` if other eligibility predicates pass. Preview eligibility is therefore authorization to *attempt* delivery, not an assertion Telegram can deliver. Add distinct counts for `known_reachable`, `unknown_attemptable`, `blocked/cannot_initiate` and omit the latter two from a proposed "confirmed reachable" sample unless separately approved.
+
+**P2 — the existing login-bot receiver cannot collect free-text research responses.** `internal/bot/update.go::Message.UnmarshalJSON` decodes text locally only to detect `/start`, then drops it; `CallbackQuery` does not decode the callback `data` payload. `internal/bot/receiver.go` routes metadata-only, through a kind registry. No existing login-bot survey intake has been proven. A voluntary first-party HTTPS form would avoid widening bot-message ingestion; its auth/consent, CSRF/abuse bounds, collection, retention, deletion and access control still need separate review and GO. Do not reuse the Personal Assistant webhook or treat replies to broadcast messages as collected evidence.
+
+**P2 — metric contract / denominator drift.** The existing `get_acquisition_report` is a broad signup-source report (window 1–90 days), not first *successful permitted* MCP call within 24h. Before any experiment, define `eligible signup`, `completed observation window`, `qualifying event`, `event timestamp`, `operator/synthetic exclusion`, `unknown audit coverage`, `days active` and UTC day boundary. Compute deterministic, independently checked aggregates; never ask the Scout to repair the data by inference.
+
+**Scope note:** #315 now also names Glovo, Personal Assistant and Alice in a four-surface InsightLoop scorecard. This proposal's Telegram research slice is one case and makes no claim that other products are instrumented or approved for live research. The broader comparison remains under #315 and each product's existing authority.
+
+### Minimal acceptance for a future TG read-only metric packet (not an implemented query)
+
+- **Primary metric:** distinct eligible new users with >=1 successful, user-initiated permitted MCP-tool call in `[signup_at, signup_at+24h)` divided by eligible new users whose full 24h observation elapsed before the snapshot, excluding operator/canary/synthetic and unobservable/incomplete cases with counts reported separately.
+- **Secondary:** same eligible cohort with a qualifying call on a *later UTC calendar day* within a completely observed 7-day horizon; report audit retention limits, late data and any alternative D7 definition.
+- **Guardrails:** connection success/errors, user-visible refused/failed calls, bot blocks/complaints/unsubscribes, incidents, source coverage. No raw IDs, message text, uncontrolled cohorts or cross-tenant joins in the Scout packet.
+- **Invariants for synthetic test vectors:** `connect:success` alone != activated; a refused/error `get_messages` != activated; `local_bridge` keepalive != activated; `pa:...` != user-invoked activation; `get_messages status=ok within 24h` is a candidate qualifying call; a first valid call after 24h is not primary activation; 23h-old signups at snapshot are right-censored, not failures; no source evidence is `UNKNOWN`, not zero; no repeat visits may be inferred from two connect events on different dates.
+
+
 ## Bounded pilot design option (2026-11-20): consented Telegram-user research
 
 **Status: proposed research design only.** This option enriches the existing activation case; it does not change the #315 verdict, trigger/approval contract or any live subsystem.
