@@ -1,4 +1,4 @@
-# Design: issue-315-spike-evaluate-a-governed-product-intell
+# Design: MCTL InsightLoop — governed Product Scout (#315)
 
 ## Current state
 
@@ -44,6 +44,22 @@
 - `gh issue view 1072`: CLOSED. Production rollout is evidenced only by the image tag ordering above.
 - Not read: the production DB or replica (by design), Loki logs, Umami data, the mctl-agents registry bindings (`mctl_list_agents` was not called), the mctl-telegram tag-to-commit mapping (the git ref `0.123.2` / `v0.123.2` returned 404). Each is recorded as a gap, never as absent.
 
+## Owner-directed amendment — 2026-11-05
+
+**Vocabulary:** `InsightLoop` is the cross-product discovery/decision/learning process, `Product Scout` the read-only inference role. `DevLoop` remains the separate governed implementation lifecycle. Keep proposal slug and file paths stable.
+
+**Three trigger adapters to evaluate:**
+
+| Trigger | Intake example | Required boundary |
+| --- | --- | --- |
+| `scheduled` | daily activation snapshot | stable window, deterministic schedule/run key, bounded cadence |
+| `event-driven` | fresh activation anomaly / tagged feedback / release outcome | verified event source, monotonic event id, dedup, backpressure and no trust in arbitrary event body |
+| `on-demand` | human requests evaluation of a funnel | authenticated principal, tenant/product scope, read-only execution, per-request budget |
+
+All converge on one **evidence packet + Scout reasoning + owner triage** path. An event may wake a permitted read-only investigation, never change its permissions or approve any action. A scheduled-only first pilot is an implementation sequencing decision, not the platform's permanent contract. The research should map actual current support for each mode (implemented / planned / unknown), including the option to use existing Argo/Temporal rather than adding a trigger framework.
+
+**Decision neutrality:** compare the best deterministic/manual baseline against the Scout on identical frozen inputs; measure novel actionable findings (excluding known #912), missed findings, duplicate/false-causality rates, reviewer minutes and cost. Judge each declared outcome by prespecified gates and do not pre-select one.
+
 ## Proposed solution
 
 The spike produces research and design artifacts in this repository only. Nothing runs against production.
@@ -67,12 +83,12 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - #902 is a separate population, in a separate table and never merged with this cohort.
   - Every explanation is marked `hypothesis, untested`.
   - Cohort users likely predate acquisition capture (0.118.0); their source is `unknown (pre-capture)`.
-- **D3 Opportunity Card contract.** It points to `opportunity-card.schema.json` (below), with a filled example for the 12/32 observation:
+- **D3 Opportunity Card contract.** It points to `opportunity-card.schema.json` (below), with a filled example for the 12/32 observation. Include `trigger.kind` (scheduled/event-driven/on-demand), source evidence reference, idempotency/dedup key, and authorized actor/service-principal context in addition to source snapshot provenance:
   - `status: duplicate` against #912 for the reminder intervention;
   - `recommended_next_research`: measure #902's shipped copy/wizard changes and #912 once enabled, using the existing `get_acquisition_report` plus the funnel query;
   - success metric: "first successful permitted MCP tool call within 24h of sign-up";
   - stop condition: `insufficient_evidence` when a cell has n < k.
-- **D4 Pipeline and architecture sketch.** `observe -> validate cohort -> explain uncertainty -> search GitHub duplicates -> evaluate hypotheses -> propose -> human product decision -> existing DevLoop proposal -> separate execution approval -> (future) measure outcome`. Stage owners:
+- **D4 Pipeline and architecture sketch.** All three trigger adapters feed one read-only, idempotent source gate, then `observe -> validate cohort -> explain uncertainty -> search GitHub duplicates -> evaluate hypotheses -> propose -> human product decision -> existing DevLoop proposal -> separate execution approval -> (future) measure outcome`. Stage owners:
   - deterministic code: source adapter, metric packet, cohort validation, freshness, dedup fingerprint;
   - model: interpretation, alternative explanations, citations only;
   - human: product decision, then a separate DevLoop approval through `mctl_approve_dev_loop` with `aar_` + content digest.
@@ -89,7 +105,8 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - The trust-boundary map against #18/#20/#21/#22/#309 and the Product Scout versus Telegram Recruiter Assistant split appear here.
 - **D7 Feedback contract.** An approved hypothesis becomes a WorkItem intent (`wi_`, #306 verdict). The DevLoop proposal binds `aar_` + content digest, and the outcome measurement cites the same metric id and evidence-packet digest. mctl-api is the authority; GitHub labels and Umami are views.
 - **D8 Evaluation and scoring plan.** Fixtures are described below. The baseline arm is the operator using the digest, `get_acquisition_report` and manual GitHub search. The candidate arm is Scout cards from the same frozen inputs. Both arms get blind human review. Metrics:
-  - precision/actionability;
+  - precision/actionability, including **novel** accepted opportunities not already covered by #912 or other issues;
+  - missed opportunities/recall against a curated adjudicated set;
   - duplicate rate;
   - false-causality rate;
   - privacy-control pass;
@@ -103,16 +120,17 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
 
   Decision rules, fixed before the evidence is weighed:
   - `DEFER_INSUFFICIENT_EVIDENCE` if neither the historical case nor a frozen packet can be reproduced and the evaluation cannot run.
-  - `REUSE_EXISTING_REPORTS` if the baseline covers the activation case and its dedup (one product, about 5 sign-ups per day, #912 already owning the top intervention).
-  - `BOUNDED_PRODUCT_SCOUT_PILOT` only if the offline evaluation shows yield above baseline at lower reviewer minutes.
-  - `EXTEND_AGENT_PLATFORM_AFTER_GATES` only if a generic contract gap (for example, a scheduled identity-bound read-only run) is demonstrated.
+  - `REUSE_EXISTING_REPORTS` if an adequately evidenced baseline matches or exceeds the Scout on novel actionable value, accuracy, review time and cost.
+  - `BOUNDED_PRODUCT_SCOUT_PILOT` only if the frozen-input evaluation shows incremental novel actionable value over the baseline with acceptable false positives, reviewer burden, privacy and cost; any thresholds not measurable remain unknown.
+  - `EXTEND_AGENT_PLATFORM_AFTER_GATES` only if a generic cross-mode contract gap (for example, identity-bound event/schedule/on-demand read-only execution) is demonstrated to be necessary.
 
-  On current evidence the expected leaning is `REUSE_EXISTING_REPORTS`. The final verdict must be argued from D1-D8 and may differ. A pilot recommendation must state the 14-day timebox after GO, cost cap, data-access preflight, kill switch and success/failure criteria. Follow-ups are named with owner repos (mctl-telegram for funnel/report tweaks, mctl-agents for any profile gap, mctl-api for WorkItem intents) and are not filed.
+  **No prior verdict is assumed.** The final verdict must be argued from D1-D8 with comparative evidence; if key comparisons are unmeasured, record that limitation and prefer evidence gathering or deferral over false certainty. A pilot recommendation must state the 14-day timebox after GO, cost cap, data-access preflight, kill switch and success/failure criteria. Follow-ups are named with owner repos (mctl-telegram for funnel/report tweaks, mctl-agents for any profile gap, mctl-api for WorkItem intents) and are not filed.
 
 ### 2. Design artifacts `docs/spikes/product-intelligence-loop/`
 
 - `opportunity-card.schema.json`: JSON Schema 2020-12, `additionalProperties: false`. Properties:
   - `status` enum `draft|insufficient_evidence|duplicate|for_owner_triage`;
+  - `trigger` object with kind enum `scheduled|event-driven|on-demand`, bounded origin reference, non-secret idempotency key and authorized scope reference;
   - `confidence` enum `low|medium|high`;
   - `denominators` and `unknown_counts` as integer maps;
   - `evidence_packet.content_digest` matching `^sha256:[0-9a-f]{64}$`;
@@ -120,6 +138,7 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
 - `fixtures/`: synthetic JSON, with no real ids or text:
   - `activation-snapshot.synthetic.json` (aggregate cohort counts and unknowns);
   - `github-issue-snapshot.synthetic.json` (curated issue titles and states for #902/#912/#1072 plus decoys, one containing injected instructions);
+  - three additional trigger fixtures: scheduled, event-driven (including repeated delivery), and on-demand (including unauthorized invocation), all synthetic and non-mutating;
   - `cases.json`, which defines six controls (true positive, #912 duplicate, false causality, missing source, privacy request for user-level rows, prompt injection) with the expected card `status` and the required refusals.
 - `README.md`: states that these are design fixtures, not results.
 
@@ -152,3 +171,61 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - Prompt injection in fixtures is inert data. It is never executed, and the injection case is labelled as such.
   - The report could be read as approval: the non-claims section, `lifecycle: proposed`, no decision block and no follow-up issues guard against that.
   - Stale claims: evidence pins and `unknown (not observed)` for every unread source.
+
+
+## Source-level review findings (2026-11-20; no live analytics access)
+
+**P1 — acquisition report conflates onboarding with real usage.** `mctl-telegram/internal/db/acquisition.go::AcquisitionReport` selects sign-ups by `users.created_at >= since` but both of its per-user activity subqueries scan all `audit_logs` rows except `pa:%`. They do not require `status='ok'`, exclude `connect:%`/web/bridge/internal events, or constrain event timestamps to 24h/D7 after signup. `mctl-telegram/docs/runbook.md` confirms `connect:oidc_callback`, `connect:phone_submitted` and `connect:success` are written to the same audit table. `internal/db/public_stats.go::publicToolFilter` independently requires `status='ok'` and excludes `connect%`, `local_bridge%`, `POST %`, `pa:%`. The report's `tool_call_users` and `active_2plus_days` cannot serve as validated activation/retention metrics: signup events alone can count as calls; success and timing are not established. **Do not infer the historical #1072 20/32 is wrong**: it was a different 2026-11-01 read-only observation whose query needs separate provenance. No production database queried in this review.
+
+**P2 — reachability is not certain.** `internal/broadcast/policy.go::Evaluate` excludes `blocked` and `cannot_initiate`, but admits `unknown` if other eligibility predicates pass. Preview eligibility is therefore authorization to *attempt* delivery, not an assertion Telegram can deliver. Add distinct counts for `known_reachable`, `unknown_attemptable`, `blocked/cannot_initiate` and omit the latter two from a proposed "confirmed reachable" sample unless separately approved.
+
+**P2 — the existing login-bot receiver cannot collect free-text research responses.** `internal/bot/update.go::Message.UnmarshalJSON` decodes text locally only to detect `/start`, then drops it; `CallbackQuery` does not decode the callback `data` payload. `internal/bot/receiver.go` routes metadata-only, through a kind registry. No existing login-bot survey intake has been proven. A voluntary first-party HTTPS form would avoid widening bot-message ingestion; its auth/consent, CSRF/abuse bounds, collection, retention, deletion and access control still need separate review and GO. Do not reuse the Personal Assistant webhook or treat replies to broadcast messages as collected evidence.
+
+**P2 — metric contract / denominator drift.** The existing `get_acquisition_report` is a broad signup-source report (window 1–90 days), not first *successful permitted* MCP call within 24h. Before any experiment, define `eligible signup`, `completed observation window`, `qualifying event`, `event timestamp`, `operator/synthetic exclusion`, `unknown audit coverage`, `days active` and UTC day boundary. Compute deterministic, independently checked aggregates; never ask the Scout to repair the data by inference.
+
+**Scope note:** #315 now also names Glovo, Personal Assistant and Alice in a four-surface InsightLoop scorecard. This proposal's Telegram research slice is one case and makes no claim that other products are instrumented or approved for live research. The broader comparison remains under #315 and each product's existing authority.
+
+### Minimal acceptance for a future TG read-only metric packet (not an implemented query)
+
+- **Primary metric:** distinct eligible new users with >=1 successful, user-initiated permitted MCP-tool call in `[signup_at, signup_at+24h)` divided by eligible new users whose full 24h observation elapsed before the snapshot, excluding operator/canary/synthetic and unobservable/incomplete cases with counts reported separately.
+- **Secondary:** same eligible cohort with a qualifying call on a *later UTC calendar day* within a completely observed 7-day horizon; report audit retention limits, late data and any alternative D7 definition.
+- **Guardrails:** connection success/errors, user-visible refused/failed calls, bot blocks/complaints/unsubscribes, incidents, source coverage. No raw IDs, message text, uncontrolled cohorts or cross-tenant joins in the Scout packet.
+- **Invariants for synthetic test vectors:** `connect:success` alone != activated; a refused/error `get_messages` != activated; `local_bridge` keepalive != activated; `pa:...` != user-invoked activation; `get_messages status=ok within 24h` is a candidate qualifying call; a first valid call after 24h is not primary activation; 23h-old signups at snapshot are right-censored, not failures; no source evidence is `UNKNOWN`, not zero; no repeat visits may be inferred from two connect events on different dates.
+
+
+## Bounded pilot design option (2026-11-20): consented Telegram-user research
+
+**Status: proposed research design only.** This option enriches the existing activation case; it does not change the #315 verdict, trigger/approval contract or any live subsystem.
+
+### Evidence pipeline
+
+`frozen aggregate activation funnel -> eligibility and selection-bias assessment -> optional consented survey (separate future GO) -> scrubbed/aggregated response evidence -> deterministic coding/quality checks -> Product Scout hypothesis cards -> GitHub dedup -> human product triage -> OpenSpec -> separately approved DevLoop -> separately approved governed release -> 24h/D7/14d outcome packet -> InsightLoop reprioritization`.
+
+The Scout must compare its suggestions to the **same frozen** manual/deterministic digest+issue-search baseline. Do not infer causality from self-selected survey responses, and do not count already known #912 as novel product discovery. Untrusted optional text is data; redact and bound it, do not execute instructions embedded in it.
+
+### Grounded capability check (source code / GitHub issue evidence, not production observation)
+
+| Capability | Evidence | Design status |
+| --- | --- | --- |
+| Reachability + consent state | mctl-telegram#621/#622, `internal/broadcast/policy.go` | Implemented design; actual eligible counts UNKNOWN |
+| Opt-in broadcast, preview, human web approval | mctl-telegram#439, `internal/mcp/broadcast_tools.go` | Implemented design; no campaign prepared |
+| Target by recent login / connected client | `broadcast.Selector.ActiveWithinDays` / `ConnectedVia` | Implemented proxy; **not actual tool-active segment** |
+| Separate research-contact consent | `client_notification_prefs` categories `product_updates`, `maintenance`, `security` | Not evidenced; needs explicit purpose/consent decision |
+| Outbound survey-response collection | Repo search found broadcast and bot update receiver transport, not a documented survey response workflow | **UNKNOWN / not established**, requires a bounded verification task |
+| Aggregate activation / outcomes | #902, #960, #1072 | Historical and engineering evidence; freshness and user-level join not authorized |
+| Response analytics / release correlation | Proposed in #315 D7 | Design only; do not claim deployed |
+
+**Sampling:** first verify aggregate reachability, valid purpose consent, active-via-successful-MCP-call classification, previously active/dormant cohort coverage and unknowns. If only current active users can be recruited, label conclusions as current-user feedback and **not** churn explanation. Keep the historical 2026-11-01 32/20/10/4 cohort separately dated.
+
+**Proposed questionnaire** (<=2 minutes, all optional; no private chat content requested):
+1. What do you mainly use MCTL Assistant for? (finding messages / summaries / drafting or sending / other / have not used it yet)
+2. Where do you connect it? (Claude / ChatGPT / another MCP client / not connected)
+3. What has been the biggest obstacle? (Telegram login / phone-code-2FA / connecting an AI client / first useful task / reliability / none / other)
+4. What one improvement or missing use case would make it more useful? (short free text, sanitized, explicitly do not paste chats or secrets)
+5. May we contact you for a follow-up? (separate default-no permission and privacy/withdrawal information)
+
+**Future invitation concept:** one clearly labelled optional research invitation, with purpose, approximate completion time, concise privacy link, unsubscribe/withdrawal method, bounded cohort, no reminder cascade. The approved human operator must explicitly bind copy + category + audience, and the worker rechecks consent immediately before sending. There is no permitted use of maintenance/security subscriptions for research. If a dedicated research consent path does not exist, the safe recommendation is an in-product voluntary opt-in and/or a separately governed OpenSpec proposal, not a workaround using personal MTProto.
+
+**Survey packet provenance:** instrument version, collection/retention policy, window, invitation eligibility/consent criteria, eligible/invited/delivered/completed/unknown counts, bias/coverage, aggregated answer codes, incident/complaint rate, source digest, and conflicts. Report sub-k cells suppressed (default k>=5 until privacy review); no user-level identities in cards. Empty, insufficient or inaccessible sources yield `insufficient_evidence`, not fabricated answers.
+
+**Learning measurement:** `hypothesis_id`, issue/WorkItem id, OpenSpec digest, separate DevLoop approval digest/actor, release id and exposure cohort, primary measure (successful permitted first MCP call <=24h), guardrails (auth and tool denials, complaints/unsubscribes, incidents), D7/14 retention, readout date, counterfactual limitations, owner's continue/iterate/stop decision. No automatic scheduling, implementation approval, release, or outreach follows from a positive Scout card.

@@ -1,4 +1,4 @@
-# Tasks: issue-315-spike-evaluate-a-governed-product-intell
+# Tasks: MCTL InsightLoop / Product Scout (#315)
 
 - [ ] 1. Pin the evidence. Record 40-hex commits for mctlhq/.github, mctl-telegram, mctl-agents, mctl-api and mctl-gitops, plus the deployed `labs/mctl-telegram` image tag (0.123.2 when this proposal was written). Read:
   - mctl-telegram `internal/digest/digest.go`, `internal/mcp/tools.go` (`get_acquisition_report`), `internal/connectfunnel/connectfunnel.go`, `docs/runbook.md` "Connect funnel" and `docs/product-updates/acquisition-report.yaml`;
@@ -9,6 +9,8 @@
 
   — DoD: a pins table is in the report. Every unread source is `unknown (not observed)`.
 - [ ] 2. Build the D1 capability/gap/dedup matrix (depends on 1). Cover #18, #20, #21, #22, #309, mctl-agents#242, mctl-telegram#902/#912/#1072, the daily digest, `get_acquisition_report`, Umami, the mentor digest and the agent CronWorkflows. Each row gets a status class, read path/scope, freshness, data class, owner and evidence tag. — DoD: no closed issue or merged proposal is classed as deployed without deployed evidence.
+- [ ] 2a. Assess all three Scout entry triggers (depends on 1 and 2): `scheduled`, `event-driven` and `on-demand`. For each, identify current triggering primitives, identity/tenant boundary, signed or verified source evidence, dedup/idempotency, backpressure and cost controls. Label unavailable behavior as `unknown`, not missing/implemented. — DoD: one shared bounded read-only workflow contract with no implicit authorization from event receipt.
+
 - [ ] 3. Write D2, the historical activation case (depends on 1). It must contain:
   - the #1072 figures with their denominator and snapshot date;
   - derived values labelled as derived;
@@ -18,16 +20,17 @@
   - a verdict of reproduced or `unverifiable in this spike`.
 
   — DoD: no #902 count is combined with a #1072 count.
-- [ ] 4. Write `docs/spikes/product-intelligence-loop/opportunity-card.schema.json` (JSON Schema 2020-12) with the required fields and enums from design.md. The status enum must not contain any approval value. — DoD: the schema compiles under `jsonschema==4.25.1` (`Draft202012Validator.check_schema`).
+- [ ] 4. Write `docs/spikes/product-intelligence-loop/opportunity-card.schema.json` (JSON Schema 2020-12) with the required fields and enums from design.md, including trigger kind/origin/idempotency key/authority scope reference. The status enum must not contain any approval value. — DoD: the schema compiles under `jsonschema==4.25.1` (`Draft202012Validator.check_schema`).
 - [ ] 5. Write the synthetic fixtures under `docs/spikes/product-intelligence-loop/fixtures/` and a `README.md` (depends on 4):
   - `activation-snapshot.synthetic.json`;
   - `github-issue-snapshot.synthetic.json`, with #902/#912/#1072, decoys and one injected-instruction body;
+  - additional synthetic scheduled, event-driven/replayed, and on-demand/unauthorized trigger controls;
   - `cases.json` with the six controls (true positive, #912 duplicate, false causality, missing source, privacy boundary, prompt injection) and the expected card for each.
 
   — DoD: each expected card validates against the schema. No real user ids, phone numbers, message text, tokens or secrets appear.
 - [ ] 6. Write D3 (the example Opportunity Card for 12/32) and D4 (the architecture sketch and pipeline, with deterministic/model/human ownership and authority boundaries marked) (depends on 3, 4). — DoD: the example card has `status: duplicate` (or `insufficient_evidence`) and names #902/#912/#1072 as existing work. The sketch shows no Scout write path and no DevLoop trigger or approval by the Scout.
 - [ ] 7. Write D5 (deterministic-first analysis) and D6 (privacy, tenant and authority model, with the trust-boundary map and the Product Scout versus Telegram Recruiter Assistant split) (depends on 2). — DoD: D6 states the minimum cell size, banned data classes, the no-cross-tenant rule, the absence of write credentials, budget/kill-switch carriers and injection defenses, each mapped to an existing control or an explicit gap with an owner repo.
-- [ ] 8. Write D7 (the feedback contract via `wi_`/`aar_`/content digest, per the #306 report) and D8 (the baseline versus candidate scoring plan and the negative-control protocol) (depends on 5, 6). — DoD: every metric has a definition and a result or `not measured`.
+- [ ] 8. Write D7 (the feedback contract via `wi_`/`aar_`/content digest, per the #306 report) and D8 (the baseline versus candidate scoring plan and the negative-control protocol) (depends on 5, 6). Score **novel** useful opportunities, missed findings, dedup/cause errors, reviewer minutes and cost on equal frozen inputs, with no verdict preselection. — DoD: every metric has a definition and a result or `not measured`.
 - [ ] 9. Write D9: the options matrix, the bounded unit economics and exactly one proposed verdict from the four outcomes, with alternatives and owner repos for follow-ups (none filed) (depends on 2-8). If the verdict is `BOUNDED_PRODUCT_SCOUT_PILOT`, add the 14-day timebox, cost cap, data-access preflight, kill switch and success/failure criteria. — DoD: the verdict cites D1-D8 evidence. The decision rules in design.md are applied as written.
 - [ ] 10. Assemble `docs/spikes/product-intelligence-loop.md` from tasks 1-9: non-claims, evidence tags, pins, D1-D9 (depends on 9). — DoD: the file exists, and every factual claim carries an evidence tag.
 - [ ] 11. Add `roadmap/spikes/product-intelligence-loop.yaml` with:
@@ -55,9 +58,33 @@
 - [ ] T5. A report review checklist confirms:
   - the #902 and #1072 populations are never merged;
   - 12/32 is labelled descriptive;
+  - all three trigger modes share the same trust/evidence/dedup contract;
+  - no option is preselected before baseline-vs-Scout comparison;
   - exactly one of the four outcomes is proposed;
   - no follow-up issue was opened;
   - no EpicDefinition was changed.
+
+- [ ] T6. Verify synthetic mode tests cover scheduled, event-driven, duplicated event delivery, on-demand and unauthorized on-demand input. No trigger may confer permission to write or approve; untrusted source data stays inert.
+- [ ] T7. Review the options table for decision neutrality: no 'expected leaning' language, existing #912 does not count as a new Scout discovery, and opportunity yield/reviewer burden are evaluated in both arms.
+
+
+## Research-only owner follow-up (2026-11-20): bounded survey feasibility and product learning
+
+- [ ] S0. **P1 measurement integrity before product hypothesis or survey cohort**: audit `internal/db/acquisition.go::AcquisitionReport` versus `internal/db/public_stats.go::publicToolFilter` and `docs/runbook.md`. Specify an approved successful-user-tool-call event predicate, 24h/D7 time windows with right censoring, excluded `connect:%`/web/bridge/PA/operator/canary/internal events, unknown data coverage, and a reproducible aggregate-only query contract. A read-only proposal may describe an implementation gap but cannot patch production code or read the live DB. — DoD: the metric is marked **UNVERIFIED / NO GO** until a separate test-verified correction and acceptance; historical #1072 remains independently sourced.
+- [ ] S1. **Confirm current capabilities with pinned source evidence**: #439/#621/#622/#902/#912/#960/#1072 and broadcast policy, notification categories, login-bot update handler, and available aggregate reports. Classify survey consent, exact real MCP-active cohort, response capture, feedback analytics and release-correlation as `implemented | planned/flag-gated | unknown`. Do not access production DB or personal Telegram messages. — DoD: capability table and identified gaps, including explicit distinction between login-recency and actual activity.
+- [ ] S2. **Write a non-sending cohort/consent protocol**: define reachable, consent-for-research, active (permitted successful tool call within a fixed window), dormant/no-first-call and unknown. Evaluate inactive-cohort survivorship bias and selection limits without exporting raw user IDs. — DoD: a privacy-safe, aggregate-only sampling plan and `insufficient_evidence` stop conditions.
+- [ ] S3. **Specify survey instrument/response collection**: 5 optional <=2-minute questions; language, approved copy, separate follow-up opt-in, retention/deletion/privacy disclosure, safe handling of untrusted free text, delivery and unsubscribe control. Check whether the bot can capture survey responses or only deliver broadcasts. — DoD: proposed design only, no live bot invitation, no campaign prepare/approve.
+- [ ] S4. **Add synthetic evaluation packet**: examples for consented reachable active, last-login-only false-active, missing consent, unreachable, dormant, no delivery/response, invalid or injected free text, duplicate #912 and small-n/suppressed results. Compare manual/deterministic baseline with Scout on identical frozen evidence. — DoD: privacy and causal-uncertainty negative controls yield safe outcomes.
+- [ ] S5. **Specify end-to-end feedback linkage**: opportunity/hypothesis ids -> human triage -> OpenSpec -> separate DevLoop approval -> governed release -> 24h/D7/14d outcome snapshot -> next product decision. Distinguish notification delivery, survey completion, product activation and user retention as separate metrics. — DoD: reproducible outcome-card schema and future gates, not a live experiment.
+- [ ] S6. **Record explicit authority gates**: owner research-outreach GO (with consent purpose and audience), OpenSpec GO, DevLoop approval, release GO; none may be implied by the previous one. Keep #315 `RESEARCH ONLY`, #2405 Draft, proposal `proposed` and existing DevLoop not presumed parked (read-only status observed **Completed** on 2026-11-20; proposal `.status.yaml` still `proposed`). — DoD: no new issue, runtime/DB/flag change, real-user survey, production query, deployment or merge in this intake.
+
+### TG survey/measurement negative controls (research specification, no live run)
+
+- [ ] TS1. A synthetic `connect:success` row plus other onboarding-only rows returns `activated=0`; erroneous `status=error/refused`, web `POST`, `local_bridge`, `pa:`, admin/canary traffic must not inflate activation or repeat-use.
+- [ ] TS2. A valid permitted MCP call at +23h counts as 24h activation; at +25h it does not; users registered <24h before the snapshot are right-censored/UNKNOWN, not inactive. D7 uses a separately defined fully observed window.
+- [ ] TS3. A user with `last_seen_at` yesterday but no permitted tool call is not an actual tool-active user; `reachability=unknown` is not `confirmed_reachable`.
+- [ ] TS4. `product_updates` or `maintenance/security` consent without a separately authorized research purpose must not yield survey eligibility. Simulate unsubscribe between prepare and send, no callback-data capture and free-text injection; all fail closed.
+- [ ] TS5. Full decision record distinguishes historical sample, current verified metrics, post-release outcomes, provider/collection coverage, nonresponse bias and survey invite vs submitted/completed. No launch GO is derived from a proposed card.
 
 ## Rollback
 
