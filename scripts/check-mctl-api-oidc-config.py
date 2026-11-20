@@ -47,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 import yaml
@@ -68,6 +69,24 @@ MIN_CHECKER_VERSION = "4.169.0"
 
 OK_LINE = "mctl-api check-config: ok"
 RUN_TIMEOUT = 90
+# Stage 2 (--readyz): boot the candidate against a throwaway Postgres and read
+# /readyz. Images are pinned by tag; the stage needs a Linux docker daemon.
+PG_IMAGE = "postgres:16-alpine"
+PROBE_IMAGE = "curlimages/curl:8.11.1"
+# Values that live in Secrets (Vault) and that boot, unlike --check-config,
+# insists on. Placeholders stand in; each is added only when the rendered env
+# lacks the key, and none touches a store.
+BOOT_PLACEHOLDERS = {
+    "ADMIN_PRINCIPALS": "prn_00000000000000000000000000",
+}
+# The Glovo basket store's schema is applied by a separate migrator (the
+# mctl-glovo migration Job), not by mctl-api: against an empty throwaway
+# database it refuses to open ("was ApplySchema run?"), and its flags require
+# one another. Every GLOVO_* key is therefore dropped, except the consent
+# routes (GLOVO_CONSENT_*, GLOVO_C2_*), which use mctl-api's own tables and are
+# exactly what this stage exists to exercise. The stage says what it dropped.
+KEEP_GLOVO_PREFIXES = ("GLOVO_CONSENT", "GLOVO_C2")
+READYZ_DEADLINE = 120  # seconds until /readyz must have answered
 PULL_ATTEMPTS = 3
 
 # The Secrets the Application reads these keys from, and the writer in
@@ -211,6 +230,143 @@ def check_image(image, env, docker="docker"):
         raise Refuse(f"{image} exited 0 without the line {OK_LINE!r}: it does not implement --check-config, so nothing was validated")
 
 
+def parse_readyz(code, body):
+    """Classify one /readyz answer. ("ok", why) only when the body parses and
+    checks.stores is "ok" with no failed_stores; ("fail", why) for a store that
+    did not init or a stores check that is not reporting; ("retry", why) for
+    anything that is not yet an answer (refused, non-JSON, other status). Other
+    probes (gitops_sync, vault, temporal) are deliberately not judged: the
+    throwaway has none of them. HTTP serves only after every store init has
+    finished (cmd/api/main.go), so the first parsed answer is final."""
+    if code not in ("200", "503"):
+        return "retry", f"HTTP {code or 'none'}"
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return "retry", "body is not JSON"
+    checks = doc.get("checks") if isinstance(doc, dict) else None
+    if not isinstance(checks, dict):
+        return "retry", "body has no checks object"
+    failed = doc.get("failed_stores")
+    if failed:
+        return "fail", f"stores failed to init: {failed}"
+    stores = checks.get("stores")
+    if stores == "ok":
+        return "ok", "stores ok"
+    return "fail", f"checks.stores is {stores!r}, not 'ok' (store init not observable is not ok)"
+
+
+def throwaway_signing_keys():
+    """OAUTH_JWT_SIGNING_KEYS the image demands at boot when the chart selects
+    EdDSA; the real one is a Vault Secret. A fresh Ed25519 key per run, never
+    committed and never leaving the throwaway container."""
+    if shutil.which("openssl") is None:
+        raise Refuse("RUNNER PROBLEM: openssl not found, cannot make the throwaway signing key; /readyz was NOT observed")
+    res = run(["openssl", "genpkey", "-algorithm", "ed25519"])
+    if res.returncode != 0 or "BEGIN PRIVATE KEY" not in res.stdout:
+        raise Refuse("RUNNER PROBLEM: openssl could not generate an Ed25519 key; /readyz was NOT observed")
+    return json.dumps({"active": "readyz-throwaway",
+                       "keys": [{"kid": "readyz-throwaway", "alg": "EdDSA", "private_key_pem": res.stdout}]}, separators=(",", ":"))
+
+
+def check_stores(image, env, docker="docker", deadline=READYZ_DEADLINE):
+    """Stage 2: the config check never opens a store, so a boot-time store-init
+    failure (mctl-api#1136: a cancelled init context failed the consent store
+    only when the chart lit it) passed it and showed in production only
+    (mctl-gitops#2827 / #2830). Start the image with the same rendered env plus
+    a throwaway Postgres on an internal network (no route out), and require
+    /readyz to report stores ok. Could not observe is a failure of the check."""
+    if shutil.which(docker) is None:
+        raise Refuse(f"RUNNER PROBLEM, not a config rejection: {docker} not found, cannot boot {image}")
+    import time
+    tag = f"{os.getpid()}"
+    net, pg, api = f"mctl-api-readyz-net-{tag}", f"mctl-api-readyz-pg-{tag}", f"mctl-api-readyz-{tag}"
+    port = env.get("PORT", "8080")
+    pw = "throwaway-not-a-secret"
+    for img in (PG_IMAGE, PROBE_IMAGE):
+        if run([docker, "image", "inspect", img]).returncode != 0:
+            for attempt in range(1, PULL_ATTEMPTS + 1):
+                if run([docker, "pull", img]).returncode == 0:
+                    break
+                if attempt == PULL_ATTEMPTS:
+                    raise Refuse(f"REGISTRY/PULL PROBLEM, not a config rejection: could not pull {img}; /readyz was NOT observed and unknown is not ok. Rerun the job")
+                time.sleep(float(os.environ.get("CHECK_PULL_DELAY", "10")) * attempt)
+    # Every *_DB_URL of the rendered env (they carry $(DB_USER)-style Secret
+    # references and point at shared-pg) is redirected to the throwaway server,
+    # keeping each database name; the superuser stands in for every role. A
+    # chart without AUDIT_DB_URL would leave the stores unconfigured, which is
+    # not the same as healthy, so that is a refusal.
+    if "ALLOW_INSECURE_DB" in env:
+        raise Refuse("ALLOW_INSECURE_DB is set in the chart env; the readyz stage sets it only for its own throwaway database")
+    if not str(env.get("AUDIT_DB_URL", "")).startswith(("postgres://", "postgresql://")):
+        raise Refuse("AUDIT_DB_URL is missing or not a postgres URL in the rendered env: the stores would be unconfigured and /readyz would say nothing")
+    renv, dbnames = dict(env), set()
+    for k, v in env.items():
+        if k.endswith("_DB_URL") and str(v).startswith(("postgres://", "postgresql://")):
+            name = urllib.parse.unquote(urllib.parse.urlsplit(v).path.lstrip("/"))
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+                raise Refuse(f"{k} names a database {name!r} the stage cannot create safely")
+            dbnames.add(name)
+            renv[k] = f"postgres://postgres:{pw}@{pg}:5432/{name}?sslmode=disable"
+    for k, v in BOOT_PLACEHOLDERS.items():
+        renv.setdefault(k, v)
+    if "OAUTH_JWT_SIGNING_KEYS" not in renv:
+        renv["OAUTH_JWT_SIGNING_KEYS"] = throwaway_signing_keys()
+    dropped = sorted(k for k in renv if k.startswith("GLOVO_") and not k.startswith(KEEP_GLOVO_PREFIXES))
+    for k in dropped:
+        del renv[k]
+    if dropped:
+        print(f"readyz stage: dropped {dropped}: the Glovo basket store is migrated elsewhere and is NOT exercised here", file=sys.stderr)
+    renv["ALLOW_INSECURE_DB"] = "true"  # EnforceTLS would demand TLS from the throwaway
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            envfile = Path(d) / "env"
+            envfile.write_text("".join(f"{k}={v}\n" for k, v in sorted(renv.items())))
+            if run([docker, "network", "create", "--internal", net]).returncode != 0:
+                raise Refuse("RUNNER PROBLEM: could not create the internal docker network; /readyz was NOT observed")
+            r = run([docker, "run", "-d", "--name", pg, "--network", net, "-e", f"POSTGRES_PASSWORD={pw}", PG_IMAGE])
+            if r.returncode != 0:
+                raise Refuse(f"RUNNER PROBLEM: throwaway Postgres did not start: {r.stderr.strip()[-300:]}")
+            # -h forces TCP: the image's temporary init server listens on the unix
+            # socket only and shuts down before the real one starts, so a socket
+            # probe goes green too early.
+            t0 = time.time()
+            while run([docker, "exec", pg, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]).returncode != 0:
+                if time.time() - t0 > 60:
+                    raise Refuse("RUNNER PROBLEM: throwaway Postgres never became ready; /readyz was NOT observed")
+                time.sleep(1)
+            for name in sorted(dbnames - {"postgres"}):
+                if run([docker, "exec", pg, "psql", "-U", "postgres", "-c", f'CREATE DATABASE "{name}"']).returncode != 0:
+                    raise Refuse(f"RUNNER PROBLEM: could not create database {name!r} in the throwaway Postgres")
+            r = run([docker, "run", "-d", "--name", api, "--network", net, "--read-only", "--tmpfs", "/tmp:rw,mode=1777", "--tmpfs", "/data:rw,mode=1777",
+                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--env-file", str(envfile), image])
+            if r.returncode != 0:
+                raise Refuse(f"RUNNER PROBLEM: {image} did not start: {r.stderr.strip()[-300:]}")
+            t0, last = time.time(), "no answer yet"
+            while time.time() - t0 < deadline:
+                st = run([docker, "inspect", "-f", "{{.State.Running}}", api])
+                if st.stdout.strip() != "true":
+                    logs = run([docker, "logs", "--tail", "40", api])
+                    raise Refuse(f"READYZ STAGE: {image} exited before answering /readyz (a boot failure with the rendered env):\n"
+                                 f"{(logs.stdout + logs.stderr).strip()[-1500:]}")
+                res = run([docker, "run", "--rm", "--network", net, PROBE_IMAGE, "-s", "-m", "3", "-w", "\n%{http_code}",
+                           f"http://{api}:{port}/readyz"])
+                body, _, code = res.stdout.rpartition("\n")
+                verdict, why = parse_readyz(code.strip(), body)
+                if verdict == "ok":
+                    return
+                if verdict == "fail":
+                    logs = run([docker, "logs", "--tail", "40", api])
+                    raise Refuse(f"READYZ STAGE: {image} reports {why}. This is what production would show. Boot log tail:\n{(logs.stdout + logs.stderr).strip()[-1500:]}")
+                last = why
+                time.sleep(1)
+            raise Refuse(f"READYZ STAGE: no usable /readyz answer from {image} in {deadline}s (last: {last}); not observed is not ok")
+    finally:
+        for c in (api, pg):
+            run([docker, "rm", "-f", c])
+        run([docker, "network", "rm", net])
+
+
 def legacy_rule(fixture_path, tag, min_version):
     """Static rule for tags below MIN_CHECKER_VERSION: refuse any
     MCTL_OIDC_PROVIDERS entry that carries service_subjects. An unreadable or
@@ -230,7 +386,7 @@ def legacy_rule(fixture_path, tag, min_version):
                          f"older ones are unproven). Roll the config back first, or move the pin to {min_version} or later")
 
 
-def guard(values, fixture_path, tag_override=None, min_version=MIN_CHECKER_VERSION, docker="docker"):
+def guard(values, fixture_path, tag_override=None, min_version=MIN_CHECKER_VERSION, docker="docker", readyz=False):
     tag = tag_override or (values.get("image") or {}).get("tag")
     if (values.get("image") or {}).get("repository") != IMAGE_REPO:
         raise Refuse(f"image.repository is not {IMAGE_REPO}")
@@ -251,23 +407,49 @@ def guard(values, fixture_path, tag_override=None, min_version=MIN_CHECKER_VERSI
     env = build_env(values, fixture)
     check_image(f"{IMAGE_REPO}:{tag}", env, docker)
     print(f"{IMAGE_REPO}:{tag} accepted the rendered configuration ({OK_LINE})")
+    if readyz:
+        check_stores(f"{IMAGE_REPO}:{tag}", env, docker)
+        print(f"{IMAGE_REPO}:{tag} booted on the rendered configuration and /readyz reports stores ok")
     return "ok"
 
 
 # ---------------------------------------------------------------- selftest
 FAKE_DOCKER = r"""#!/bin/sh
-# Stub docker: behaviour chosen by $FAKE_MODE; logs calls to $FAKE_LOG.
+# Stub docker: behaviour chosen by $FAKE_MODE (config stage) and $FAKE_READYZ
+# (readyz stage); logs calls to $FAKE_LOG.
 echo "$*" >> "$FAKE_LOG"
 case "$1" in
   image) [ "$FAKE_MODE" != pull_fails ] && [ "$FAKE_MODE" != pull_fails_inspect ] ; exit $? ;;
   pull) exit 1 ;;
-  rm) exit 0 ;;
+  rm|network) exit 0 ;;
+  exec) [ "$FAKE_READYZ" != pg_down ]; exit $? ;;
+  logs) echo "boot log line"; exit 0 ;;
+  inspect) if [ "$FAKE_READYZ" = exited ]; then echo false; else echo true; fi; exit 0 ;;
   run)
-    case "$FAKE_MODE" in
-      ok) echo "mctl-api check-config: ok"; exit 0 ;;
-      refuse) echo "mctl-api check-config: invalid configuration: boom" >&2; exit 1 ;;
-      old_image) echo '{"msg":"server started"}'; exit 0 ;;
-      ok_text_in_middle) echo "mctl-api check-config: ok"; echo "later"; exit 0 ;;
+    case "$*" in
+      *curlimages*)
+        case "$FAKE_READYZ" in
+          ok) printf '{"status":"ready","checks":{"stores":"ok"}}\n200' ;;
+          ok503) printf '{"status":"not ready","checks":{"stores":"ok","gitops_sync":"never_synced"}}\n503' ;;
+          store_failed) printf '{"status":"not ready","checks":{"stores":"init_failed"},"failed_stores":["glovo link consent"]}\n503' ;;
+          failed_no_marker) printf '{"status":"not ready","checks":{"stores":"ok"},"failed_stores":["x"]}\n503' ;;
+          not_configured) printf '{"status":"ready","checks":{"stores":"not_configured"}}\n200' ;;
+          malformed) printf 'not json\n200' ;;
+          refused) printf '\n000'; exit 7 ;;
+          late_ok) n=$(cat "$FAKE_LOG.n" 2>/dev/null || echo 0); echo $((n+1)) > "$FAKE_LOG.n"
+                   if [ "$n" -lt 2 ]; then printf '\n000'; exit 7; fi
+                   printf '{"status":"ready","checks":{"stores":"ok"}}\n200' ;;
+        esac; exit 0 ;;
+      *postgres:*) exit 0 ;;
+      *" -d "*--env-file*) f=$(echo "$*" | sed 's/.*--env-file \([^ ]*\).*/\1/'); cp "$f" "$FAKE_LOG.env"; exit 0 ;;
+      *--check-config*)
+        case "$FAKE_MODE" in
+          ok) echo "mctl-api check-config: ok"; exit 0 ;;
+          refuse) echo "mctl-api check-config: invalid configuration: boom" >&2; exit 1 ;;
+          old_image) echo '{"msg":"server started"}'; exit 0 ;;
+          ok_text_in_middle) echo "mctl-api check-config: ok"; echo "later"; exit 0 ;;
+        esac ;;
+      *) exit 0 ;;
     esac ;;
 esac
 exit 99
@@ -381,6 +563,79 @@ def selftest():
         nofx.write_text(json.dumps({"MCTL_OIDC_PROVIDERS": [{"name": "zitadel"}]}))
         expect("consent on, fixture has no service identity",
                lambda: guard(mut(consent_on), nofx, tag_override="4.167.0", min_version="4.0.0", docker=dk), "exactly one service identity")
+        # Stage 2: boot on a throwaway Postgres and read /readyz. Each way of not
+        # seeing stores ok is a failure; only an observed ok passes.
+        def gz(mode, deadline=3, values=None):
+            os.environ["FAKE_MODE"] = "ok"
+            os.environ["FAKE_READYZ"] = mode
+            (Path(str(log) + ".n")).unlink(missing_ok=True)
+            return lambda: check_stores("img:1", build_env(copy.deepcopy(values or base), json.loads(FIXTURE.read_text())), dk, deadline)
+
+        def ok_(fn):
+            return lambda: (fn(), "ok")[1]
+        expect("readyz: stores ok", ok_(gz("ok")), "ok")
+        expect("readyz: 503 for gitops_sync only is still stores ok (not judged here)", ok_(gz("ok503")), "ok")
+        expect("readyz: slow start, refused then ok", ok_(gz("late_ok", deadline=30)), "ok")
+        expect("readyz: a store failed init", gz("store_failed"), "reports stores failed to init")
+        expect("readyz: failed_stores listed while stores says ok", gz("failed_no_marker"), "reports stores failed to init")
+        expect("readyz: stores check not reporting", gz("not_configured"), "reports checks.stores")
+        expect("readyz: never answers (refused) is a failure, not a pass", gz("refused", deadline=2), "not observed is not ok")
+        expect("readyz: malformed body is a failure", gz("malformed", deadline=2), "not observed is not ok")
+        expect("readyz: image exits before answering", gz("exited"), "exited before answering")
+        expect("readyz: chart env sets ALLOW_INSECURE_DB itself",
+               lambda: check_stores("img:1", {"ALLOW_INSECURE_DB": "true"}, dk, 2), "sets it only for its own")
+        expect("readyz: rendered env has no AUDIT_DB_URL (stores would be unconfigured)",
+               lambda: check_stores("img:1", {}, dk, 2), "AUDIT_DB_URL is missing")
+        # What the stage hands the image: the stub keeps the env file it was given.
+        os.environ["FAKE_READYZ"] = "ok"
+        os.environ["FAKE_MODE"] = "ok"
+        log.write_text("")
+        rendered = build_env(copy.deepcopy(base), json.loads(FIXTURE.read_text()))
+        check_stores("img:1", {**rendered, "GLOVO_ENABLED": "true", "GLOVO_DB_URL": "postgresql://u:p@shared-pg:5432/x",
+                               "GLOVO_CONSENT_ENABLED": "true", "GLOVO_C2_CAPACITY": "1",
+                               "LIFECYCLE_DB_URL": "postgresql://u:p@shared-pg:5432/mctl-lifecycle?sslmode=require"}, dk, 3)
+        given = dict(ln.split("=", 1) for ln in Path(str(log) + ".env").read_text().splitlines())
+        calls = log.read_text()
+        problems = []
+        if any(k.startswith("GLOVO_") and not k.startswith(KEEP_GLOVO_PREFIXES) for k in given):
+            problems.append("a GLOVO_ basket key reached the image")
+        if given.get("GLOVO_CONSENT_ENABLED") != "true" or given.get("GLOVO_C2_CAPACITY") != "1":
+            problems.append("the consent keys were dropped")
+        if not given.get("ADMIN_PRINCIPALS") or not given.get("OAUTH_JWT_SIGNING_KEYS"):
+            problems.append("boot placeholders missing")
+        if given.get("ALLOW_INSECURE_DB") != "true":
+            problems.append("ALLOW_INSECURE_DB not set for the throwaway")
+        for k in ("AUDIT_DB_URL", "LIFECYCLE_DB_URL"):
+            if "shared-pg" in given.get(k, "") or "sslmode=disable" not in given.get(k, ""):
+                problems.append(f"{k} not redirected to the throwaway Postgres")
+        if not given.get("LIFECYCLE_DB_URL", "").endswith("/mctl-lifecycle?sslmode=disable"):
+            problems.append("the database name of LIFECYCLE_DB_URL was not kept")
+        for needle, what in (("--internal", "internal network"), ("--read-only", "read-only root"),
+                             ("pg_isready -h 127.0.0.1", "TCP readiness probe"), ('CREATE DATABASE "mctl-lifecycle"', "per-database create")):
+            if needle not in calls:
+                problems.append(f"the stage lost {what}")
+        print(("PASS " if not problems else "FAIL ") + "readyz: what the image is handed" + ("" if not problems else f" {problems}"))
+        if problems:
+            failures.append("env handed to the image")
+        def pe(code, body):
+            v = parse_readyz(code, body)[0]
+            if v != "ok":
+                raise Refuse(v)  # expect() reads a refusal as the verdict text
+            return "ok"
+        expect("parse: ok", lambda: pe("200", '{"checks":{"stores":"ok"}}'), "ok")
+        expect("parse: connection refused is retry, never ok", lambda: pe("000", ""), "retry")
+        expect("parse: unexpected status is retry", lambda: pe("404", '{"checks":{"stores":"ok"}}'), "retry")
+        expect("parse: body without checks is retry", lambda: pe("200", "{}"), "retry")
+        expect("parse: stores missing is fail", lambda: pe("200", '{"checks":{}}'), "fail")
+        expect("parse: failed_stores wins over stores ok", lambda: pe("503", '{"checks":{"stores":"ok"},"failed_stores":["a"]}'), "fail")
+        expect("readyz: docker missing", lambda: check_stores("x:1", {}, docker="/nonexistent/docker"), "not found")
+        os.environ["FAKE_READYZ"] = "ok"
+        os.environ["FAKE_MODE"] = "ok"
+        expect("guard with readyz on a good input", lambda: guard(copy.deepcopy(base), FIXTURE, tag_override="4.167.0", min_version="4.0.0", docker=dk, readyz=True), "ok")
+        os.environ["FAKE_READYZ"] = "store_failed"
+        expect("guard with readyz: config accepted but a store failed init",
+               lambda: guard(copy.deepcopy(base), FIXTURE, tag_override="4.167.0", min_version="4.0.0", docker=dk, readyz=True), "reports stores failed to init")
+        os.environ["FAKE_READYZ"] = "ok"
         expect("wrong image repository",
                g("ok", values=mut(lambda v: v["image"].update(repository="ghcr.io/other/x"))), "image.repository")
     if failures:
@@ -395,11 +650,12 @@ def main():
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--image-tag", help="local proofs only: use this tag instead of the pinned one")
     ap.add_argument("--min-version", default=MIN_CHECKER_VERSION, help="local proofs only")
+    ap.add_argument("--readyz", action="store_true", help="also boot the image on a throwaway Postgres and require /readyz stores ok")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
     try:
-        guard(load_values(), FIXTURE, a.image_tag, a.min_version)
+        guard(load_values(), FIXTURE, a.image_tag, a.min_version, readyz=a.readyz)
     except Refuse as e:
         print(f"::error title=mctl-api config guard::{e}")
         print(f"FAIL: {e}", file=sys.stderr)
