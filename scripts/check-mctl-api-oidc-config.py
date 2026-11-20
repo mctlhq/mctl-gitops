@@ -327,8 +327,11 @@ def check_stores(image, env, docker="docker", deadline=READYZ_DEADLINE):
             r = run([docker, "run", "-d", "--name", pg, "--network", net, "-e", f"POSTGRES_PASSWORD={pw}", PG_IMAGE])
             if r.returncode != 0:
                 raise Refuse(f"RUNNER PROBLEM: throwaway Postgres did not start: {r.stderr.strip()[-300:]}")
+            # -h forces TCP: the image's temporary init server listens on the unix
+            # socket only and shuts down before the real one starts, so a socket
+            # probe goes green too early.
             t0 = time.time()
-            while run([docker, "exec", pg, "pg_isready", "-U", "postgres"]).returncode != 0:
+            while run([docker, "exec", pg, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]).returncode != 0:
                 if time.time() - t0 > 60:
                     raise Refuse("RUNNER PROBLEM: throwaway Postgres never became ready; /readyz was NOT observed")
                 time.sleep(1)
@@ -438,6 +441,7 @@ case "$1" in
                    printf '{"status":"ready","checks":{"stores":"ok"}}\n200' ;;
         esac; exit 0 ;;
       *postgres:*) exit 0 ;;
+      *" -d "*--env-file*) f=$(echo "$*" | sed 's/.*--env-file \([^ ]*\).*/\1/'); cp "$f" "$FAKE_LOG.env"; exit 0 ;;
       *--check-config*)
         case "$FAKE_MODE" in
           ok) echo "mctl-api check-config: ok"; exit 0 ;;
@@ -582,20 +586,37 @@ def selftest():
                lambda: check_stores("img:1", {"ALLOW_INSECURE_DB": "true"}, dk, 2), "sets it only for its own")
         expect("readyz: rendered env has no AUDIT_DB_URL (stores would be unconfigured)",
                lambda: check_stores("img:1", {}, dk, 2), "AUDIT_DB_URL is missing")
-        # What the stage hands the image: capture the env file the stub saw.
-        def seen_env():
-            os.environ["FAKE_READYZ"] = "ok"
-            os.environ["FAKE_MODE"] = "ok"
-            envs = {}
-            orig = tempfile.TemporaryDirectory
-            check_stores("img:1", {**build_env(copy.deepcopy(base), json.loads(FIXTURE.read_text())), "GLOVO_ENABLED": "true", "GLOVO_CONSENT_ENABLED": "true", "GLOVO_C2_CAPACITY": "1"}, dk, 3)
-            return envs
-        seen_env()
+        # What the stage hands the image: the stub keeps the env file it was given.
+        os.environ["FAKE_READYZ"] = "ok"
+        os.environ["FAKE_MODE"] = "ok"
+        log.write_text("")
+        rendered = build_env(copy.deepcopy(base), json.loads(FIXTURE.read_text()))
+        check_stores("img:1", {**rendered, "GLOVO_ENABLED": "true", "GLOVO_DB_URL": "postgresql://u:p@shared-pg:5432/x",
+                               "GLOVO_CONSENT_ENABLED": "true", "GLOVO_C2_CAPACITY": "1",
+                               "LIFECYCLE_DB_URL": "postgresql://u:p@shared-pg:5432/mctl-lifecycle?sslmode=require"}, dk, 3)
+        given = dict(ln.split("=", 1) for ln in Path(str(log) + ".env").read_text().splitlines())
         calls = log.read_text()
-        for needle, what in (("--internal", "internal network"), ("--read-only", "read-only root")):
+        problems = []
+        if any(k.startswith("GLOVO_") and not k.startswith(KEEP_GLOVO_PREFIXES) for k in given):
+            problems.append("a GLOVO_ basket key reached the image")
+        if given.get("GLOVO_CONSENT_ENABLED") != "true" or given.get("GLOVO_C2_CAPACITY") != "1":
+            problems.append("the consent keys were dropped")
+        if not given.get("ADMIN_PRINCIPALS") or not given.get("OAUTH_JWT_SIGNING_KEYS"):
+            problems.append("boot placeholders missing")
+        if given.get("ALLOW_INSECURE_DB") != "true":
+            problems.append("ALLOW_INSECURE_DB not set for the throwaway")
+        for k in ("AUDIT_DB_URL", "LIFECYCLE_DB_URL"):
+            if "shared-pg" in given.get(k, "") or "sslmode=disable" not in given.get(k, ""):
+                problems.append(f"{k} not redirected to the throwaway Postgres")
+        if not given.get("LIFECYCLE_DB_URL", "").endswith("/mctl-lifecycle?sslmode=disable"):
+            problems.append("the database name of LIFECYCLE_DB_URL was not kept")
+        for needle, what in (("--internal", "internal network"), ("--read-only", "read-only root"),
+                             ("pg_isready -h 127.0.0.1", "TCP readiness probe"), ('CREATE DATABASE "mctl-lifecycle"', "per-database create")):
             if needle not in calls:
-                print(f"FAIL readyz stage lost {what}")
-                failures.append(what)
+                problems.append(f"the stage lost {what}")
+        print(("PASS " if not problems else "FAIL ") + "readyz: what the image is handed" + ("" if not problems else f" {problems}"))
+        if problems:
+            failures.append("env handed to the image")
         def pe(code, body):
             v = parse_readyz(code, body)[0]
             if v != "ok":
