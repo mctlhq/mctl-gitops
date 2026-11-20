@@ -79,6 +79,7 @@ WIRING = {
     "oauthZitadelSecret": "mctl-api-oidc-zitadel",
 }
 HOOK_SECRET = "mctl-api-zitadel-hook"
+CONSENT_SECRET = "mctl-api-glovo-consent"
 # Keys that only need to be non-empty for validation; the real ones are
 # Vault/ZITADEL generated and never in git.
 PLACEHOLDERS = {
@@ -151,6 +152,19 @@ def build_env(values, fixture):
     for k in FIXTURE_ENV_KEYS:
         if k in fixture:
             secret_keys[k] = env_text(fixture[k])
+    # The consent reader identity comes from the optional Secret
+    # mctl-api-glovo-consent (Vault), never from the chart env. When the chart
+    # lights the consent routes, stand that Secret in with the one service
+    # identity the fixture lists (the reader, F12): provider = its entry,
+    # subject = its subject. No service identity in the fixture is a refusal,
+    # never a skip: the image would reject the config in production too.
+    if env.get("GLOVO_CONSENT_ENABLED") is not None:
+        if CONSENT_SECRET not in (values.get("envFromOptionalSecrets") or []):
+            raise Refuse(f"GLOVO_CONSENT_ENABLED is set but envFromOptionalSecrets does not list {CONSENT_SECRET}")
+        readers = [(e.get("name"), subj) for e in fixture["MCTL_OIDC_PROVIDERS"] for subj in (e.get("service_subjects") or {})]
+        if len(readers) != 1:
+            raise Refuse(f"the fixture must list exactly one service identity for the consent reader, found {len(readers)}")
+        secret_keys["GLOVO_CONSENT_SERVICE_PROVIDER"], secret_keys["GLOVO_CONSENT_SERVICE_SUBJECT"] = readers[0]
     for k, v in {**secret_keys, **PLACEHOLDERS}.items():
         if k in env:
             raise Refuse(f"{k} is set both in the chart env and by a Secret; the chart refuses that, and so does the guard")
@@ -348,6 +362,25 @@ def selftest():
                g("ok", values=mut(lambda v: v.update(envFromOptionalSecrets=[]))), "envFromOptionalSecrets")
         expect("a Secret key also set in the chart env",
                g("ok", values=mut(lambda v: v["env"].update(ZITADEL_HOOK_CUSTOMERS_ORG_ID="1"))), "set both")
+        # Consent reader stand-in (apiConsent on): the real rendered env gets the
+        # fixture's service identity; each way to lose it is a refusal.
+        def consent_on(v):
+            v["env"].update(GLOVO_CONSENT_ENABLED="true", GLOVO_C2_CAPACITY="1")
+            v["envFromOptionalSecrets"] = list(v.get("envFromOptionalSecrets") or []) + [CONSENT_SECRET]
+        fx = json.loads(FIXTURE.read_text())
+        cenv = build_env(mut(consent_on), fx)
+        assert cenv["GLOVO_CONSENT_SERVICE_PROVIDER"] == "zitadel" and cenv["GLOVO_CONSENT_SERVICE_SUBJECT"] in fx["MCTL_OIDC_PROVIDERS"][0]["service_subjects"], "reader not taken from the fixture"
+        off = build_env(mut(lambda v: (v["env"].pop("GLOVO_CONSENT_ENABLED", None), v["env"].pop("GLOVO_C2_CAPACITY", None))), fx)
+        assert "GLOVO_CONSENT_SERVICE_PROVIDER" not in off, "reader keys must not appear while the consent routes are off"
+        expect("consent on: reader taken from the fixture", g("ok", values=mut(consent_on)), "ok")
+        expect("consent on, Secret not mounted",
+               g("ok", values=mut(lambda v: (consent_on(v), v.update(envFromOptionalSecrets=[HOOK_SECRET])))), "does not list")
+        expect("consent on, reader also set in the chart env",
+               g("ok", values=mut(lambda v: (consent_on(v), v["env"].update(GLOVO_CONSENT_SERVICE_SUBJECT="1")))), "set both")
+        nofx = d / "nofx.json"
+        nofx.write_text(json.dumps({"MCTL_OIDC_PROVIDERS": [{"name": "zitadel"}]}))
+        expect("consent on, fixture has no service identity",
+               lambda: guard(mut(consent_on), nofx, tag_override="4.167.0", min_version="4.0.0", docker=dk), "exactly one service identity")
         expect("wrong image repository",
                g("ok", values=mut(lambda v: v["image"].update(repository="ghcr.io/other/x"))), "image.repository")
     if failures:
