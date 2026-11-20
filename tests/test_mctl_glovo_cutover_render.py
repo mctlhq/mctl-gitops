@@ -15,6 +15,11 @@ Pins, on the bootstrap render:
   - apiConsent adds exactly the consent env and the reader Secret to mctl-api,
     and a Secret named in envFromOptionalSecrets, with no literal identifier.
 
+  - no sync wave of the service is positive: root-app manages itself in wave 0 and its
+    own health stays Missing until every resource exists, so a Deployment in wave 1
+    makes root-app wait for itself forever (2026-11-20); the migration Job still runs
+    before the Deployment (strictly lower wave).
+
 Run: python3 tests/test_mctl_glovo_cutover_render.py   (needs helm, pyyaml)
 """
 import pathlib
@@ -172,6 +177,17 @@ if es:
     check(keys == {"platform/mctl-api/glovo-consent"}, f"reader ExternalSecret reads {keys}")
     check(all(d["remoteRef"]["key"].startswith("platform/mctl-api/") for d in es[0]["spec"]["data"]),
           "reader ExternalSecret reads outside platform/mctl-api/")
+
+# No positive sync wave, with every switch on (a new wave-1 resource deadlocks root-app).
+r = helm(SVC, *BASE, *PROXIES, "--set", "mctlGlovo.apiConsent=true", "--set", "mctlGlovo.linkLogin=true",
+         "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.host=glovo.mctl.ai", extra_values=HOSTS)
+waves = [(d["kind"], int(d["metadata"].get("annotations", {}).get("argocd.argoproj.io/sync-wave", 0)))
+         for d in docs(r)]
+check(len(waves) > 5, f"too few resources rendered to check waves: {len(waves)}")
+check(not [w for w in waves if w[1] > 0], f"positive sync wave(s) in the service render: {[w for w in waves if w[1] > 0]}")
+job = [w for k, w in waves if k == "Job"]
+dep = [w for k, w in waves if k == "Deployment"]
+check(job and dep and job[0] < dep[0], f"the migration Job wave {job} is not before the Deployment wave {dep}")
 
 if failures:
     print("\n".join("FAIL " + f for f in failures), file=sys.stderr)
