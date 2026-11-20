@@ -1,160 +1,181 @@
-# Governed release calendar: S0 research for an image-bump window policy (partial coverage), with Argo CD Sync Windows as a secondary safeguard
+# Governed release calendar: S0 research for an image-bump window policy (partial coverage), with Argo CD Sync Windows as a secondary safeguard and an MCTL Governed Sync Broker as the candidate exception path
 
 ## Context
 
 Issue mctlhq/mctl-gitops#2828 asks for a research spike: what is the smallest
 safe architecture for an operator-visible release/change calendar that
-*enforces* (not merely displays) deployment freezes across MCTL's GitOps and
-governed release paths, reusing the existing release governance
-(`platform-gitops/release-gates.yaml`, `scripts/release-gate.py`,
-`scripts/release-preflight.py`, `scripts/release-ledger-shadow.py`, the
-MFA-backed mctl-api release ledger) without a second approval authority, a new
-deployment engine, or any live change.
+*enforces* deployment freezes across MCTL's GitOps and governed release paths?
+It must reuse the existing release governance (`platform-gitops/release-gates.yaml`,
+`scripts/release-gate.py`, `scripts/release-preflight.py`,
+`scripts/release-ledger-shadow.py`, the MFA-backed mctl-api action-approval
+and `release.grant` ledger), with no second approval authority, no new
+deployment engine and no live change.
 
-This is **revision 2**. The first version was reviewed independently
+This is **revision 3**. Revision 2 answered the independent review
 ([#2828 comment 7037225218](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7037225218),
-REQUEST_CHANGES, 4 P1 / 5 P2 / 2 P3), and the owner directed "return to
-research / rewrite proposal only". This revision therefore narrows the
-proposal to **stage S0: research and inert offline experiments only**. It
-authorizes nothing that runs in CI, in a workflow, in a cluster, or in
-production. The later stages are named only to bound S0's exit gate:
+4 P1 / 5 P2 / 2 P3). Revision 3 answers the owner's "Sync-broker integration
+design request" and "Revision 3 instruction" (2026-11-20). It makes the
+**MCTL Governed Sync Broker** a first-class alternative. The broker spends one
+human MFA grant from the existing mctl-api ledger and lets Argo CD apply
+exactly one approved release to one frozen Application without opening
+manual sync to tenants, CI or agents. Revision 3 compares the broker with E1
+(GitOps carve-out), E2 (RBAC-restricted `manualSync`), D (no runtime
+exception, break-glass only) and native or plugin mechanisms. **E1 is no
+longer the default.** The scope is still **S0 only**:
 
 | Stage | What | Authorized by this proposal? |
 |---|---|---|
-| S0 | Read-only inventory, inert local fixtures, an offline policy model, a decision memo | Yes, after owner GO on this proposal. Nothing is wired into any workflow. |
-| S1 | Shadow evaluator wired into CI (reports only) | **No.** Needs its own reviewed proposal and owner GO. |
-| S2 | Enforcement, MFA exceptions, exception consume protocol | **No.** Needs a separate owner security GO after the S0 P1 findings are closed. |
-| S3 | Generated Argo CD `AppProject.syncWindows` (secondary point-of-sync safeguard) | **No.** Needs a separate owner security GO and a narrowly scoped pilot. |
+| S0 | Read-only inventory, offline policy model, a local inert Argo CD v3.3.8 harness, an inert broker prototype against that harness, a decision memo | Only after a **separate explicit owner GO to run S0**. Accepting this proposal is not that GO. |
+| S1 | Shadow evaluator wired into CI (reports only) | **No.** Own proposal and owner GO. |
+| S2 | Enforcement at write points; dedicated mctl-api `release.freeze_exception` kind | **No.** Separate owner security GO. |
+| S3 | Argo `syncWindows`, Argo RBAC/account/project role, `argocd-cm` flags, broker deployment, secrets, pilot | **No.** Separate owner security GO and a narrowly scoped pilot. |
 
 Target architecture under investigation: **HYBRID**. A canonical MCTL window
-policy is judged at the GitOps write points, which are the primary release
-authorizer. Argo CD `AppProject.syncWindows` act as a secondary safeguard at
-the point of sync, are generated from the same policy, and never authorize
-anything. This revision does **not** reject Argo CD Sync Windows. It also does
-not claim universal enforcement. The current evidence (design.md, Current
-state) supports one MVP name only: **"image-bump window policy (partial
-coverage)"**. It must not be called a "production deployment freeze". Until
-the owner decides after S0, the effective outcome is `REUSE_EXISTING_ONLY`
-plus S0 research.
+policy is judged at GitOps write points. Argo CD `AppProject.syncWindows`
+are a secondary point-of-sync safeguard. The broker is the candidate path for
+an MFA-approved exception at the point of sync. Nothing is claimed as
+universal enforcement. The only defensible MVP name is **"image-bump window
+policy (partial coverage)"**. Until the owner decides after S0, the effective
+outcome is `REUSE_EXISTING_ONLY`.
 
-### Review finding index (where each one is resolved)
+### Finding index
 
-| Finding | Resolution in this revision |
+| Finding | Resolved in |
 |---|---|
-| P1-1 merge queue / point of effect | design.md section 3; R-Q1..R-Q5 below; tests T20-T25 |
-| P1-2 atomic single-use exception | design.md section 5; R-X1..R-X8; tests T30-T37 |
-| P1-3 exception vs Argo deny | design.md section 6; R-A6..R-A9; tests T40-T44 |
-| P1-4 truthful scope | design.md Current state tables A and B; R-S1..R-S4; MVP renamed |
-| P2-5 cron / one-off translation | design.md section 7 translation matrix; R-A1..R-A4; tests T50-T56 |
-| P2-6 allow semantics | design.md section 2 truth table; R-P3; tests T1, T5, T6 aligned |
-| P2-7 scope mapping | design.md Current state table C; R-M1..R-M4; tests T60-T64 |
-| P2-8 stale P7 | design.md Current state "P7 re-read"; R-S5 |
-| P2-9 base-trust evaluator | design.md section 4; R-T1..R-T4; tests T70-T74 |
-| P3-10 DST arithmetic | design.md section 2 time semantics; R-P5..R-P8; tests T2-T4, T10-T13 |
-| P3-11 syncOverrun / vendor evidence | design.md Current state "Argo CD 3.3.8 facts" and section 8; R-A5; task 9 |
+| P1-1 merge queue / point of effect | design section 3; R-Q1..R-Q5; T20-T25 |
+| P1-2 atomic single-use exception | design section 5, 6.2; R-X1..R-X8, R-G4..R-G7; T30-T37, T80-T89 |
+| P1-3 exception vs Argo deny | design sections 6-7; R-A6..R-A9, R-G1..R-G3; T40-T44, T90-T97 |
+| P1-4 truthful scope | design tables A/B; R-S1..R-S5 |
+| P2-5 cron / one-off translation | design section 9; R-A1..R-A4; T50-T56 |
+| P2-6 allow semantics | design section 2; R-P3; T1, T5, T6 |
+| P2-7 scope mapping | design table C; R-M1..R-M4; T60-T64 |
+| P2-8 stale P7 | design "Application shape"; R-S5 |
+| P2-9 base-trust evaluator | design section 4; R-T1..R-T4, R-G10; T70-T74 |
+| P3-10 DST | design section 2; R-P5..R-P8; T2-T4, T10-T13 |
+| P3-11 syncOverrun / vendors | design "Argo CD v3.3.8 facts", section 9; R-A5 |
+| Sync-broker request / Revision 3 items 1-8 | design sections 5-8; R-G1..R-G14; tasks 0, 8-11, 14; T80-T99 |
 
 ## User stories
 
-- AS the platform owner I WANT an S0 research result that says exactly which production write paths a window policy could refuse before effect, which it could only detect afterwards, and which it cannot see SO THAT I decide on S1/S2/S3 from evidence, not from a claim of universal enforcement.
-- AS a security reviewer I WANT an offline policy model with a single truth table and deterministic fixtures SO THAT the semantics of allow, deny, default, DST and recurrence can be checked before anything is wired into CI.
-- AS an on-call engineer I WANT S0 to show, on an inert cluster, that an approved hotfix or healthy rollback can pass an Argo CD deny window while an arbitrary manual sync stays denied SO THAT a later freeze cannot trap a needed fix and cannot be bypassed globally.
-- AS the mctl-api owner I WANT the exception design to reuse the existing atomic consume of action approvals SO THAT single use is a database compare-and-set, not a read followed by a hope.
-- AS an operator or AI agent I WANT every future view to label each path `enforced`, `detected-after-write`, `not-covered` or `unknown` SO THAT a freeze is never shown as stronger than it is.
+- AS the platform owner I WANT S0 to tell me, from evidence, whether a Governed Sync Broker, E2, E1 or break-glass-only can let exactly one MFA-approved release through a freeze SO THAT I can decide on S1-S3 without anyone opening manual sync for every tenant or agent.
+- AS a security reviewer I WANT the broker's Argo permissions, token scope, claim protocol and residual bypasses (admin, `kubectl`) stated exactly and tested on a local v3.3.8 harness SO THAT "Argo knows MFA" is never assumed.
+- AS the mctl-api owner I WANT the exception to reuse the action-approval store and the dedicated-kind namespace, and to state precisely which new spend semantics it needs SO THAT the ledger stays the only approval authority.
+- AS an on-call engineer I WANT an approved hotfix or a previously healthy rollback to pass a freeze through one bounded path while every other Application stays frozen SO THAT a freeze neither traps a needed fix nor is bypassed globally.
+- AS an operator or AI agent I WANT every path labelled `enforced`, `detected-after-write`, `not-covered` or `unknown` SO THAT a freeze is never presented as stronger than it is.
 
 ## Acceptance criteria (EARS)
 
-### Stage boundary (S0 only)
+### Stage boundary
 
-- R-B1. WHILE this proposal is in S0 THE SYSTEM SHALL NOT add or change any file under `.github/workflows/`, `platform-gitops/` (except this proposal directory), `scripts/` used by any workflow, any AppProject, ruleset, release-gates entry, ledger mode, Argo CD setting or live calendar event.
-- R-B2. WHEN an S0 artifact is produced THE SYSTEM SHALL place it only under `docs/spikes/2828-release-calendar/` (memo, inventory, evidence) or `tests/fixtures/release-calendar-s0/` and `tests/research/release_calendar_s0/` (inert model and fixtures), and SHALL NOT reference those files from any workflow, CWFT or Helm chart.
-- R-B3. WHEN S0 finishes THE SYSTEM SHALL stop at an exit gate: a decision memo with the S0 decision matrix and a recommended outcome (`REUSE_EXISTING_ONLY`, `BOUNDED_CALENDAR_MVP`, `ADOPT_ARGO_SYNC_WINDOWS`, `HYBRID` or `DEFER_UNTIL_GATES_CLOSED`), followed by an independent review and an owner decision recorded on #2828. No S1/S2/S3 task SHALL start from this proposal.
-- R-B4. THE SYSTEM SHALL NOT have any agent, DevLoop step, implementer or shepherd run an S1/S2/S3 change on the strength of this proposal's acceptance.
+- R-B1. WHILE this proposal is in S0 THE SYSTEM SHALL NOT add or change any file under `.github/workflows/`, `platform-gitops/` (except this proposal directory), workflow-used `scripts/`, any AppProject, Argo CD RBAC, account, `argocd-cm` key, ruleset, release-gates entry, ledger mode, mctl-api action kind, Vault path, secret or live calendar event.
+- R-B2. WHEN an S0 artifact is produced THE SYSTEM SHALL place it only under `docs/spikes/2828-release-calendar/`, `tests/fixtures/release-calendar-s0/` or `tests/research/release_calendar_s0/` (including `argo-inert/` and `broker-model/`), and SHALL NOT reference it from any workflow, CWFT, Helm chart, Dockerfile or service.
+- R-B3. WHEN S0 finishes THE SYSTEM SHALL stop at an exit gate: a decision memo with one calendar outcome (`REUSE_EXISTING_ONLY`, `BOUNDED_CALENDAR_MVP`, `ADOPT_ARGO_SYNC_WINDOWS`, `HYBRID`, `DEFER_UNTIL_GATES_CLOSED`) and one exception-path outcome (`BROKER_PILOT_CANDIDATE`, `E2_HUMAN_ROLE_ONLY`, `D_BREAKGLASS_ONLY`, `NEITHER_SAFE_YET`), then an independent review and an owner decision on #2828.
+- R-B4. THE SYSTEM SHALL NOT have any agent, DevLoop step, implementer or shepherd run an S0 task or any S1/S2/S3 change on the strength of this proposal's acceptance.
+- R-B5. IF the owner has not recorded an explicit GO to *run* S0 on #2828 THEN THE SYSTEM SHALL NOT start S0 tasks 1-15 in tasks.md. Any Argo permission, secret, AppProject, flag or production action SHALL additionally require a separate owner security GO, which this proposal never grants.
 
 ### Scope and truthful coverage
 
-- R-S1. WHEN S0 inventories production effect paths THE SYSTEM SHALL cover at least the paths in design.md tables A and B, including non-image changes: values fields other than `image.*`, the shared `base-service` and `tenant` charts, `bootstrap/templates/**` (Applications, AppProjects), `argocd/**` (RBAC, settings), Argo cluster templates, CWFT deploy-key pushes (`wft-create-tenant`, `wft-add/remove-custom-domain`, `wft-provision-database`, `wft-retire-service`, `wft-delete-tenant-safe`), `cloudflare-apply.yml`, Vault value changes, the ruleset `DeployKey` bypass (#2543), Argo CD UI/CLI/`kubectl`/`argocd --core` admin paths, and required status context trust (P12).
-- R-S2. WHEN a path is labelled THE SYSTEM SHALL use exactly one of `enforced` (refused before effect by trusted code), `detected-after-write`, `not-covered`, `unknown`, and SHALL cite a file and line, an API response or an inert test result for it. A failed or unauthorized read SHALL be labelled `unknown`, never `not-covered` or `enforced`.
-- R-S3. WHILE any path that can change production state is labelled other than `enforced` THE SYSTEM SHALL NOT call the result a "production deployment freeze". The MVP name SHALL be "image-bump window policy (partial coverage)" unless S0 shows otherwise.
-- R-S4. WHEN a later stage reports a verdict THE SYSTEM SHALL include the coverage label of the path that was evaluated (requirement carried forward to S1+, recorded here so S0 designs the label set).
-- R-S5. WHEN S0 re-reads P7 THE SYSTEM SHALL classify each source of `admins-mctl-api` separately: the mctl-api `helm/` chart pinned to `c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361` and the mctl-gitops `infra-components/mctl-platform/mctl-api` source tracking `main`. It SHALL treat runbook text as a claim to verify, not as live evidence.
+- R-S1. WHEN S0 inventories production effect paths THE SYSTEM SHALL cover at least design tables A and B. This includes non-image values, shared charts, `bootstrap/templates/**`, `argocd/**`, cluster templates, non-image CWFTs (including the tenant RBAC lines that `wft-create-tenant` generates), `cloudflare-apply.yml`, Vault values, the deploy-key bypass (#2543), tenant manual sync (P8a), admin Argo actions (P8b), `kubectl`/`argocd --core` (P8c), tenant resource actions (P8d) and status-context trust (P12).
+- R-S2. WHEN a path is labelled THE SYSTEM SHALL use exactly one of `enforced`, `detected-after-write`, `not-covered`, `unknown`, with a citation. A failed or unauthorized read SHALL be `unknown`.
+- R-S3. WHILE any production-changing path is not `enforced` THE SYSTEM SHALL NOT call the result a "production deployment freeze".
+- R-S4. WHEN a later stage reports a verdict THE SYSTEM SHALL include the coverage label of the evaluated path.
+- R-S5. WHEN S0 classifies `admins-mctl-api` THE SYSTEM SHALL treat source 1 (mctl-api `helm/` pinned `c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361`) and source 2 (`infra-components/mctl-platform/mctl-api` at `main`) separately, and SHALL treat `docs/runbooks/mctl-api-release-hold.md:66` ("`targetRevision: main`") as a stale claim, not as evidence.
 
 ### Policy semantics (offline model)
 
-- R-P1. WHEN the model evaluates a change THE SYSTEM SHALL take as input only (policy document, set of affected Argo Application names, evaluation interval, exception record or none) and SHALL return one of `ALLOW`, `DENY`, `UNKNOWN` with the deciding rule.
-- R-P2. IF the policy is absent, unparseable, has a duplicate key, an unknown field, an invalid IANA zone, an unsupported recurrence part, a window longer than `max_window`, or no `default` THEN THE SYSTEM SHALL return `UNKNOWN`. `UNKNOWN` SHALL never be read as `ALLOW`.
-- R-P3. WHEN windows are evaluated THE SYSTEM SHALL apply the single truth table in design.md section 2. This table is identical to Argo CD 3.3.8 `SyncWindows.CanSync` with `isManual=false`, except that `UNKNOWN` replaces Argo's error branch. `default` SHALL be `allow` in policy version 1 (a deny-by-default calendar is expressed with allow windows).
-- R-P4. WHILE a change touches several Applications THE SYSTEM SHALL evaluate each Application and return `DENY` if any is `DENY`, else `UNKNOWN` if any is `UNKNOWN`, else `ALLOW`.
-- R-P5. WHEN a recurring window is defined THE SYSTEM SHALL define its start and end as local wall-clock times in its declared IANA zone, per occurrence. An absolute `duration` SHALL be allowed only for windows whose zone is `UTC` and for one-off windows given as UTC instants.
-- R-P6. WHEN a local time does not exist (spring-forward gap) THE SYSTEM SHALL map it to the first instant after the gap. WHEN a local time is ambiguous (fall-back) THE SYSTEM SHALL choose the occurrence that makes a deny window longer and an allow window shorter.
-- R-P7. THE SYSTEM SHALL treat every window as half-open `[start, end)` in UTC, and SHALL judge a change over an interval `[t_check, t_effect_max]`, returning `DENY` if any part of it intersects an active deny (or lies outside all allows when allows match).
-- R-P8. THE SYSTEM SHALL bound recurrence expansion to the horizon `[t - max_window, t_effect_max]`, with `max_window` (proposed 21 days) a required policy field.
+- R-P1. WHEN the model evaluates a change THE SYSTEM SHALL take only (policy, affected Application names, interval, exception record or none) and return `ALLOW`, `DENY` or `UNKNOWN` with the deciding rule.
+- R-P2. IF the policy is absent, unparseable, has a duplicate key or unknown field, an invalid IANA zone, an unsupported recurrence part, a window longer than `max_window`, or no `default` THEN THE SYSTEM SHALL return `UNKNOWN`, and `UNKNOWN` SHALL never be read as `ALLOW`.
+- R-P3. WHEN windows are evaluated THE SYSTEM SHALL apply the design section 2 truth table, which equals Argo CD v3.3.8 `CanSync(false)` except that `UNKNOWN` replaces the error branch. `default` SHALL be `allow` in version 1.
+- R-P4. WHILE a change touches several Applications THE SYSTEM SHALL return `DENY` if any is `DENY`, else `UNKNOWN` if any is `UNKNOWN`, else `ALLOW`.
+- R-P5. WHEN a recurring window is defined THE SYSTEM SHALL define start and end as wall-clock times in its IANA zone per occurrence, and SHALL accept an absolute `duration` only for `UTC` windows and UTC one-offs.
+- R-P6. WHEN a local time is in a spring-forward gap THE SYSTEM SHALL use the first instant after the gap. WHEN it is ambiguous THE SYSTEM SHALL choose the reading that lengthens deny windows and shortens allow windows.
+- R-P7. THE SYSTEM SHALL treat windows as half-open `[start, end)` in UTC and judge the interval `[t_check, t_effect_max]`.
+- R-P8. THE SYSTEM SHALL bound recurrence expansion by the required field `max_window`.
 
 ### Merge queue and point of effect
 
-- R-Q1. WHEN S0 models the queued-PR path THE SYSTEM SHALL treat a check passed at time `T_check` as evidence only for `[T_check, T_check + margin]`, and SHALL NOT claim `enforced` for any PR or queue path where merge or sync can happen after that interval.
-- R-Q2. WHEN S0 models effect timing THE SYSTEM SHALL distinguish four instants: check, merge to `main`, Argo sync start, Argo sync end. It SHALL also separate "sync not started when the window opens" from "sync in flight when the window opens".
-- R-Q3. WHEN S0 runs the inert fixtures THE SYSTEM SHALL cover at least: check T-60m, freeze T, merge T+5m, sync T+6m; a PR held in the queue that merges after the freeze starts; a commit merged T-2m whose sync starts at T+1m; a multi-wave sync started at T-1m and still running at T.
-- R-Q4. IF Argo CD Sync Windows are absent for an Application THEN THE SYSTEM SHALL label every PR, queue and "commit before freeze, reconcile during freeze" path for that Application as `not-covered` at the point of effect.
-- R-Q5. WHEN S0 reports in-flight behaviour THE SYSTEM SHALL report what Argo CD 3.3.8 does (operation paused with "Sync operation blocked by sync window", per `controller/sync.go` at tag v3.3.8). It SHALL NOT assume `syncOverrun`, which v3.3.8 does not have.
+- R-Q1. WHEN S0 models a queued PR THE SYSTEM SHALL treat a check at `T_check` as evidence only for `[T_check, T_check + margin]` and SHALL NOT label any PR or queue path `enforced` at the point of effect.
+- R-Q2. THE SYSTEM SHALL distinguish check, merge, sync start and sync end, and SHALL separate "sync not started when the window opens" from "sync in flight".
+- R-Q3. WHEN S0 runs fixtures THE SYSTEM SHALL cover: check T-60m / freeze T / merge T+5m / sync T+6m; a PR held in the queue across T; a merge at T-2m with sync start at T+1m; a multi-wave sync in flight at T.
+- R-Q4. IF an Application has no Argo deny window THEN THE SYSTEM SHALL label every PR, queue and "commit before, reconcile during" path for it `not-covered` at the point of effect.
+- R-Q5. WHEN S0 reports in-flight behaviour THE SYSTEM SHALL report v3.3.8 behaviour (operation paused, "Sync operation blocked by sync window") and SHALL NOT assume `syncOverrun`.
 
-### Single-use exceptions (design only in S0)
+### Grant lifecycle (design only in S0)
 
-- R-X1. THE SYSTEM SHALL design exceptions as a decision kind in the existing mctl-api action-approval store, decided only by a human with fresh MFA on the existing decide page. No calendar view, ICS feed, MCP read tool, chat message or agent SHALL be able to grant one.
-- R-X2. WHEN an exception is used THE SYSTEM SHALL spend it by one atomic compare-and-set (`approved` to `consumed`, matching `intent_hash`, unexpired, `fresh_until` not passed), as `ConsumeActionApproval` in mctl-api `internal/workitems/action_approvals.go` already does, **before** any GitOps push. A read of the ledger SHALL never count as a claim.
-- R-X3. THE SYSTEM SHALL bind the exception's intent hash to: exception kind, environment, exact Argo Application name(s), exact GitOps path(s), image repository and digest (or, for a rollback, the target `dep_` deployment id and its recorded gitops commit and digest), reason class (`hotfix` or `rollback`) and `not_after`.
-- R-X4. IF the consume CAS fails for any reason (already consumed, expired, intent mismatch, stale, unreadable) THEN THE SYSTEM SHALL refuse the write and SHALL NOT retry with a different exception.
-- R-X5. WHEN a consumed exception's push fails, the run crashes, or a rebase changes the outgoing diff away from the bound intent THE SYSTEM SHALL leave the exception spent and require a new human decision (same rule as `deploy.apply`: "A grant is single use: after a failed submit, request a new one"). Push retries inside the same run SHALL be allowed only while the outgoing diff still equals the bound path and digest.
-- R-X6. WHEN an exception's change lands THE SYSTEM SHALL record the authoritative effect as the `main` commit carrying a `Release-Exception: <aar_id>` trailer and the intent hash. The audit record SHALL be the pair (consumed ledger row, that commit).
-- R-X7. WHEN reconciling THE SYSTEM SHALL require a 1:1 mapping: every freeze-window commit on a covered path carries exactly one consumed exception, and every exception id appears in at most one commit. A consumed exception with no commit after `not_after` SHALL be reported as "spent without effect", not as a violation.
-- R-X8. WHILE a version hold, gate group, ledger requirement or `min_tag` refuses a change THE SYSTEM SHALL keep refusing it whatever the calendar or the exception says (logical AND; the exception lifts only the calendar refusal).
+- R-X1. THE SYSTEM SHALL design every freeze exception as a grant in the existing mctl-api action-approval store under a dedicated `release.*` kind (proposed `release.freeze_exception`), decided only by a human with fresh MFA on the existing decide page. No calendar view, ICS feed, MCP tool, chat message, broker or agent SHALL be able to grant or decide one.
+- R-X2. WHEN a grant is spent THE SYSTEM SHALL use one atomic compare-and-set guarded by state, intent hash, expiry and `fresh_until` before any side effect. A ledger read SHALL never count as a claim.
+- R-X3. THE SYSTEM SHALL build the intent server-side, from trusted reads, binding: kind, AppProject, Application, tenant/environment, approved GitOps SHA, every source's resolved revision, rendered-manifest SHA-256, live Application spec digest, image repository and `sha256` digest(s), diff, reason class (hotfix, or rollback with `dep_` id), requester and `not_after`.
+- R-X4. IF the claim fails for any reason THEN THE SYSTEM SHALL refuse and SHALL NOT fall back to another grant.
+- R-X5. WHEN a write-path consumer (S2, not the broker) consumes a grant and its push fails or its diff changes on rebase THE SYSTEM SHALL leave the grant spent.
+- R-X6. WHEN a write-path exception lands THE SYSTEM SHALL record the effect as the `main` commit that carries `Release-Exception: <aar_id>` and the intent hash.
+- R-X7. WHEN reconciling THE SYSTEM SHALL require a 1:1 mapping between spent grants and effects (commits or Argo operations), and SHALL report "spent without effect" separately from a violation.
+- R-X8. WHILE a version hold, gate group, ledger requirement, `release.grant` requirement or `min_tag` refuses a change THE SYSTEM SHALL keep refusing it whatever the calendar or the exception says.
 
-### Argo CD layer (inert evaluation only in S0)
+### Governed Sync Broker (inert prototype in S0 only)
 
-- R-A1. WHEN S0 evaluates projection THE SYSTEM SHALL classify every policy construct in the translation matrix (design.md section 7) as `translatable`, `translatable-with-lifecycle` or `not-translatable`.
-- R-A2. IF any window that matches an Application is `not-translatable` THEN THE SYSTEM SHALL mark the Argo layer for that Application `incomplete`, SHALL NOT generate a partial projection that silently drops it, and SHALL NOT count Argo as coverage for that Application.
-- R-A3. WHEN a one-off window is projected as a yearly-repeating cron THE SYSTEM SHALL require a lifecycle: emitted no earlier than its start minus a lead time, removed after its end, and a drift check that fails if an expired one-off is still present.
-- R-A4. THE SYSTEM SHALL project only in UTC (`timeZone` unset or `UTC`). Argo CD 3.3.8 computes the zone offset from `time.Now()` (`scheduleOffsetByTimeZone`), not from the occurrence. Any window whose local occurrence crosses a DST transition SHALL therefore be widened outward by the offset change for deny (and narrowed for allow), or else marked `not-translatable`.
-- R-A5. WHEN S0 records Argo facts THE SYSTEM SHALL pin them to the deployed version (Argo CD v3.3.8, chart `argo-cd` 9.5.9 per `platform-gitops/argocd/Chart.yaml`) and verify `manualSync`, `timeZone`, `andOperator` and in-flight behaviour on an inert v3.3.8 cluster.
-- R-A6. THE SYSTEM SHALL NOT propose `manualSync: true` on any deny window that matches an Application whose tenant role has `applications, sync` (e.g. `platform-gitops/argocd/rbac/tenants/labs.csv`), because that turns every tenant sync into a freeze bypass.
-- R-A7. WHEN an exception has been consumed THE SYSTEM SHALL let the approved change reach the cluster through a carve-out bound to the exact Application name(s) and `not_after`, while every other Application in the window stays denied.
-- R-A8. WHEN S0 tests the Argo layer THE SYSTEM SHALL show on an inert cluster: an approved hotfix syncs; an unapproved manual sync of a frozen Application fails; an approved healthy rollback syncs; a carve-out left open past `not_after` is detected; restoring the deny never needs the freeze to be disabled globally.
-- R-A9. THE SYSTEM SHALL record that AppProjects are rendered by `root-app` (project `default`). A deny window in project `apps` or `platform` therefore does not stop a commit that removes the window itself from syncing. GitOps write guards and review are the only control on that path.
+- R-G1. THE SYSTEM SHALL evaluate the broker as a process separate from agent pods and worktrees, holding the only non-break-glass Argo identity with `applications, sync` (and `get`) on exactly the pilot Application names, with no `override`, `update`, `projects`, `exec` or wildcard.
+- R-G2. WHILE a deny window with `manualSync: true` matches a frozen Application THE SYSTEM SHALL require that no tenant role, CI account or agent identity holds `applications, sync` on it (explicit RBAC deny, or a tenant pattern that excludes it). S0 SHALL confirm that `wft-create-tenant.yaml:1093-1097` generates the broad `sync` line today, and SHALL test a tenant bypass attempt.
+- R-G3. THE SYSTEM SHALL record `role:admin` (`applications, *`, `projects, *`), `kubectl` and `argocd --core` as explicit break-glass residuals that the broker does not control.
+- R-G4. WHEN the broker spends a grant THE SYSTEM SHALL first write a durable journal row keyed uniquely by `aar_id` with a request id, then run one CAS `approved -> claimed(request_id)`, so that two concurrent brokers or requests cannot both reach Argo.
+- R-G5. WHEN the broker syncs THE SYSTEM SHALL call Argo `Sync` exactly once per grant, with no `manifests`, no `resources` subset, the Application's own prune and sync options, and an operation `info` carrying `aar_id` and request id.
+- R-G6. IF an Argo operation may have been created (sync call sent, outcome unknown, crash, timeout) THEN THE SYSTEM SHALL NOT return the grant to a spendable state. It SHALL only observe the existing operation by `info`, and SHALL end in `executed`, `spent_failed` or `spent_unknown`. The generic `SettleActionApproval(succeeded=false)` return-to-`consumed` SHALL NOT be reused.
+- R-G7. WHEN Argo resolves the sync revisions THE SYSTEM SHALL compare the rendered-manifest hash at the resolved revisions with the approved one. IF they differ THEN it SHALL terminate the operation, mark the grant `spent_failed` and record any partial apply as residual.
+- R-G8. THE SYSTEM SHALL record that Argo CD v3.3.8 refuses a manual sync to a non-`targetRevision` revision on an auto-synced Application (`resolveSourceRevisions`). The broker therefore binds content (manifest hash and source paths), not `main` HEAD, and SHALL NOT mutate the Application spec, the AppProject or RBAC to obtain a pin.
+- R-G9. IF there is no grant, mctl-api or Argo is unreachable, the policy is unreadable, the manifest or spec changed, the image digest differs, the Application is wrong or ambiguous, a source is unsupported, the grant is expired or rejected, or an operation is already running THEN THE SYSTEM SHALL refuse with no new sync and SHALL leave the window unchanged.
+- R-G10. THE SYSTEM SHALL have the broker read policy, Application map and intent only from mctl-api and a base-pinned revision, never from a request payload, a PR head or an agent worktree.
+- R-G11. WHEN a rollback is approved THE SYSTEM SHALL treat it as a forward GitOps commit restoring a `dep_` recorded healthy, followed by a broker sync under its own grant. Argo's history `Rollback` API is refused under auto-sync and SHALL NOT be used.
+- R-G12. WHEN S0 evaluates the token THE SYSTEM SHALL state the blast radius of a stolen broker token (sync current `main` of pilot Applications only) and SHALL test a detector for pilot-Application syncs without a journaled `aar_id`.
+- R-G13. WHEN S0 compares paths THE SYSTEM SHALL produce the decision/coverage/threat/cost matrix in design section 8, including E1 fail-open versus E2/broker fail-closed measured on the harness.
+- R-G14. THE SYSTEM SHALL record, with source links and read dates, that no v3.3.8 hook authorizes a single sync by request id and that argoproj/argo-cd#29558 is open. Any other mechanism SHALL be labelled `unknown`, not assumed.
+
+### Argo CD layer (inert evaluation only)
+
+- R-A1. WHEN S0 evaluates projection THE SYSTEM SHALL classify constructs as `translatable`, `translatable-with-lifecycle` or `not-translatable`.
+- R-A2. IF a matching window is `not-translatable` THEN THE SYSTEM SHALL mark the Argo layer `incomplete` for that Application and SHALL NOT emit a partial projection.
+- R-A3. WHEN a one-off is projected as a yearly cron THE SYSTEM SHALL require an emit/remove lifecycle and a drift check.
+- R-A4. THE SYSTEM SHALL project in UTC only, widening deny windows (narrowing allow windows) across DST, or marking them `not-translatable`.
+- R-A5. WHEN S0 records Argo facts THE SYSTEM SHALL pin them to v3.3.8 (chart 9.5.9) and verify `manualSync`, `andOperator`, `timeZone`, in-flight behaviour and the revision-sync refusal on the harness.
+- R-A6. THE SYSTEM SHALL NOT propose `manualSync: true` on any window that matches an Application on which a tenant, CI or agent role holds `applications, sync`.
+- R-A7. WHEN an exception is approved THE SYSTEM SHALL let the change reach the cluster only through the path S0 selects (candidate: broker), for exactly the bound Application, while every other Application stays denied and the window is not edited.
+- R-A8. WHEN S0 tests the Argo layer THE SYSTEM SHALL show on the harness: approved hotfix syncs; unapproved tenant sync fails; approved healthy rollback syncs; other Applications stay frozen; auto-sync and selfHeal remain blocked during the window.
+- R-A9. THE SYSTEM SHALL record that AppProjects are rendered by `root-app` (project `default`), so a window never blocks its own removal. Only write guards and review control that path.
 
 ### Scope mapping
 
-- R-M1. WHEN S0 maps scope THE SYSTEM SHALL produce a deterministic table `GitOps path -> Argo Application name -> AppProject -> destination namespace`, generated from a render of the ApplicationSets and bootstrap templates at a pinned commit, not by hand.
-- R-M2. THE SYSTEM SHALL express policy scope as exact Argo Application names (and, for path-based write guards, the derived path set). Any projected Sync Window SHALL use only the `applications` selector with exact names, with no wildcards, `namespaces` or `clusters`, so OR vs AND (`andOperator`) cannot widen or narrow it.
-- R-M3. WHEN an Application is added, renamed or removed in the render THE SYSTEM SHALL fail the mapping test until the mapping is updated.
-- R-M4. WHEN a path feeds several Applications (`platform-gitops/helm-charts/base-service/**` feeds every `apps` Application, `helm-charts/tenant/**` every `tenant-*`) THE SYSTEM SHALL map it to all of them.
+- R-M1. THE SYSTEM SHALL generate `GitOps path -> Application -> AppProject -> namespace` from a render at a pinned commit.
+- R-M2. THE SYSTEM SHALL scope policy, broker RBAC and projected windows by exact Application names, with no wildcards, `namespaces` or `clusters`.
+- R-M3. WHEN an Application is added, renamed or removed THE SYSTEM SHALL fail the mapping test until the map is regenerated.
+- R-M4. WHEN a path feeds several Applications THE SYSTEM SHALL map it to all of them, and the broker SHALL treat a change to it as a manifest change for each.
 
 ### Trust boundary
 
-- R-T1. WHEN a PR or merge-queue check evaluates the window policy THE SYSTEM SHALL run evaluator code and policy taken from the base commit, never from the candidate tree (today `validate-manifests.yml` runs `scripts/release-gate.py` from the PR merge-ref checkout; only the policy is read from `HEAD^1`).
-- R-T2. IF a candidate PR modifies the evaluator, its fixtures, its workflow or the policy THEN THE SYSTEM SHALL still return the base evaluator's verdict on the base policy.
-- R-T3. WHEN S0 assesses required checks THE SYSTEM SHALL record that ruleset 18465404 binds `validate`, `reserved-hosts` and `cloudflare-plan` to integration 15368 (GitHub Actions). Any workflow job of that name can report it (P12), so no Actions-reported context counts as trusted enforcement until an App-bound context exists.
-- R-T4. THE SYSTEM SHALL NOT rely on `auto-merge.yml` `protected_re` as a trust guarantee; it controls only the bot auto-merge route.
+- R-T1. WHEN a PR or queue check evaluates the policy THE SYSTEM SHALL run evaluator code and policy from the base commit.
+- R-T2. IF a candidate PR modifies the evaluator, fixtures, workflow or policy THEN THE SYSTEM SHALL still return the base verdict.
+- R-T3. THE SYSTEM SHALL NOT count integration-15368 contexts as trusted enforcement (P12).
+- R-T4. THE SYSTEM SHALL NOT rely on `auto-merge.yml` `protected_re` as a trust boundary.
 
 ### Agent and operator interface (design only)
 
-- R-I1. THE SYSTEM SHALL limit any future agent interface to read-only `list_release_windows`, `check_release_window`, `explain_release_block`, and an optional `request_exception` that can only create a pending human decision.
+- R-I1. THE SYSTEM SHALL limit any future agent interface to read-only `list_release_windows`, `check_release_window` and `explain_release_block`, plus an optional `request_exception` that only creates a pending human decision. No agent interface SHALL invoke the broker or hold its token.
 
 ## Out of scope
 
-- Any S1, S2 or S3 change: wiring an evaluator into CI or CWFTs, enforcement, exception decision kinds in mctl-api, AppProject `syncWindows`, MCP tools, calendar UI or ICS publication.
-- Any live action: creating calendar events, freezes, grants or approvals; changing release-gates, the ledger mode, AppProjects, Argo CD RBAC, rulesets or deploy keys; any experiment on the production cluster or production repository settings.
-- Closing #2543 (deploy-key bypass), the App-bound `release-hold` context (P12), or cluster admission policy (P8). This proposal depends on them and does not do them.
-- Adopting Octopus Deploy, Harness or GitLab as a release engine; rewriting DevLoop, the merge queue or ADR-006.
-- Inventing weekends or holidays; windows are owner-provided data.
-- Preview namespaces.
+- Running S0 without its own owner GO. Any S1, S2 or S3 change: CI wiring, enforcement, the mctl-api `release.freeze_exception` kind, a broker deployment, Argo accounts or project roles, RBAC lines, `argocd-cm` flags, AppProject `syncWindows`, Vault paths, MCP tools, calendar UI or ICS.
+- Any live action: calendar events, freezes, grants, approvals, syncs, and experiments against the production cluster, repo settings, mctl-api or Argo CD.
+- Closing #2543, adding an App-bound status context (P12), cluster admission policy, or controlling `role:admin`/`kubectl` (all recorded as dependencies or residuals).
+- Forking Argo CD, adopting Octopus, Harness or GitLab, or rewriting DevLoop, the merge queue or ADR-006.
+- Inventing weekends or holidays. Preview namespaces.
 
 ## Open questions
 
-- Owner: after S0, which outcome? This revision recommends evaluating `HYBRID`, with `DEFER_UNTIL_GATES_CLOSED` as the conservative alternative while #2543 (open, updated 2026-11-13) and P12 remain open.
-- Can mctl-api's generic `ConsumeActionApproval` path (it excludes "dedicated" kinds) host a calendar-exception kind, and can a GitHub Actions or CWFT writer authenticate to consume it? The read path admits only `refs/heads/main` workflows per `validate-manifests.yml` comments. mctl-api owner input needed (#1022 lineage).
-- Argo exception carve-out: E1 (GitOps carve-out commit to the generated AppProject) is the candidate. It needs an AppProject edit during a freeze, and a failed restore leaves the carve-out open (fail-open until detected). S0 must compare it with E2 (narrow sync RBAC plus `manualSync`) on an inert cluster before any recommendation.
-- Ruleset 18465404 `bypass_actors` could not be read (the API returned `null` to this non-admin token). The DeployKey bypass described in `docs/runbooks/mctl-api-release-hold.md` P5b is therefore **unknown** as of 2026-11-20, not confirmed and not refuted.
-- CLAUDE.md says `agy-formal-review` is a required queue check, but the repository ruleset read shows only `cloudflare-plan`, `reserved-hosts`, `validate`. The extra check may come from an org-level ruleset that was not read. Unknown.
-- Live Argo CD state (version actually running, live AppProjects, whether any `syncWindows` exist live, tenant/service list) was not observable: `mctl_whoami` reports a non-admin identity with no teams, and `mctl_get_service_status admins/mctl-api` returned "Application not found" (no access, not absence).
-- Propagation margin: #970 (closed 2026-09-02) reported up to ~7 min. The push webhook and `--revision-cache-expiration=30s` (`platform-gitops/argocd/values.yaml:313-322`) have since been added, so that figure is likely stale. No measured distribution exists; `argocd-freshness.yml` reports pass/fail only. S0 task 3 must measure or leave it unknown.
-- Should an open critical incident create an automatic deny window? Recommended no (a non-human policy writer); left for the owner.
-- Harness deployment freeze is documented as beta behind a feature flag, with account admins always able to bypass; licensing terms were not stated on the page read. Octopus restricts multi-project freezes to enterprise from 2025.2.7631. GitLab freezes need deploy jobs to honour `$CI_DEPLOY_FREEZE`. Prices were not found in the primary docs read; S0 task 9 records them or marks them unknown.
+- Owner: which calendar outcome and which exception-path outcome after S0? This proposal hypothesizes `HYBRID` + `BROKER_PILOT_CANDIDATE`. `DEFER_UNTIL_GATES_CLOSED` / `NEITHER_SAFE_YET` is the conservative alternative while #2543 (OPEN, updated 2026-11-13) and P12 are open.
+- mctl-api owner: is a dedicated `release.freeze_exception` kind with terminal `claimed -> executed | spent_failed | spent_unknown` states acceptable? The generic reserve/settle returns a failed call to `consumed` (mctl-api#772), which is wrong for a sync whose outcome may be unknown. Where would the broker journal live (mctl-api DB or broker-owned)? Mapped to mctl-api#1022.
+- Broker placement: separate Deployment (default candidate) or inside mctl-api. Argo identity: local account or project-scoped JWT role. Both are unresolved until the harness comparison (task 10).
+- TOCTOU: Argo v3.3.8 resolves `main` at sync time and refuses an explicit SHA on auto-synced Applications. Is the residual window between preflight and resolution, plus terminate-on-mismatch, acceptable? Or must the pilot Application's paths also be write-frozen (only image bumps are guardable today)?
+- Tenant UX: removing the owning tenant's manual sync on a pilot Application is permanent, not window-bound, unless a further RBAC lifecycle is added. Who is the pilot Application and tenant?
+- Live state is `unknown`: the running Argo CD version, live `argocd-cm` (including `requireOverridePrivilegeForRevisionSync`), live RBAC, any live `syncWindows` and project roles. `mctl_whoami` is non-admin with no teams, and `mctl_get_service_status admins/mctl-api` returned "not found" (no access).
+- Do tenant resource actions (`Deployment/restart`) bypass sync windows? Not verified; the harness tests it (T93).
+- Ruleset 18465404 `bypass_actors` is unreadable (`null`); the DeployKey bypass is `unknown`. CLAUDE.md lists `agy-formal-review` as a queue check that the repository ruleset read does not show (possibly an org ruleset): `unknown`.
+- Propagation latency (#970 about 7 min) is stale until measured.
+- Should an open critical incident create a deny window automatically? Recommended no.
+- Vendor prices are `unknown` (not stated on the primary pages read).
