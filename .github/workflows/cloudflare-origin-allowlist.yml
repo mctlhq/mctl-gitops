@@ -103,7 +103,7 @@ jobs:
 
       - name: Notify Telegram — real drift
         if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift == 'true'
-        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        uses: appleboy/telegram-action@68ac04bda0e0f4755e24649161566b4b6732cc83 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -115,7 +115,7 @@ jobs:
 
       - name: Notify Telegram — the check itself failed
         if: failure() && github.event_name == 'schedule' && steps.compare.outputs.drift != 'true'
-        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        uses: appleboy/telegram-action@68ac04bda0e0f4755e24649161566b4b6732cc83 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
