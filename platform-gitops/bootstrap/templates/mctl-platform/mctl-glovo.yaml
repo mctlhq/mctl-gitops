@@ -1,4 +1,13 @@
 {{- /*
+Sync waves in this file are all <= 0 on purpose. root-app manages itself in wave 0
+and its own health stays Missing until every resource of the chart exists, so a
+POSITIVE wave here makes root-app wait for itself and never reach it (the same
+deadlock as 2026-10-03, hit again on 2026-11-20 when `deploy` first rendered a
+Deployment in wave 1). The order is: namespace -3, secrets and policies -2, the
+migration Job -1 (the sync waits for it to complete), Deployment, Service and
+Ingress 0.
+*/ -}}
+{{- /*
 The C2 cluster service (mctlhq/mctl-gitops#2725 and the service repo's epic 11), as one bootstrap-owned
 namespace: its own NetworkPolicies, ServiceAccounts and ExternalSecrets, which
 a base-service cannot carry (the chart refuses NetworkPolicy).
@@ -82,7 +91,7 @@ metadata:
     # capabilities, seccomp RuntimeDefault, no privilege escalation).
     pod-security.kubernetes.io/enforce: restricted
   annotations:
-    argocd.argoproj.io/sync-wave: "-2"
+    argocd.argoproj.io/sync-wave: "-3"
 ---
 # The server pod: Vault login needs the projected token (automount on).
 apiVersion: v1
@@ -91,7 +100,7 @@ metadata:
   name: {{ $app }}
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 automountServiceAccountToken: true
 ---
 # The migration Job: no token at all.
@@ -101,7 +110,7 @@ metadata:
   name: {{ $app }}-migrate
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 automountServiceAccountToken: false
 ---
 # Default deny, both directions. Everything below opens one path.
@@ -111,7 +120,7 @@ metadata:
   name: default-deny-all
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   podSelector: {}
   policyTypes:
@@ -124,7 +133,7 @@ metadata:
   name: allow-dns
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   podSelector: {}
   policyTypes:
@@ -146,7 +155,7 @@ metadata:
   name: allow-migrate-egress
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   podSelector:
     matchLabels:
@@ -181,7 +190,7 @@ metadata:
   name: allow-server
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   podSelector:
     matchLabels:
@@ -282,7 +291,7 @@ metadata:
   name: {{ $app }}-eso
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 automountServiceAccountToken: false
 ---
 apiVersion: external-secrets.io/v1beta1
@@ -291,7 +300,7 @@ metadata:
   name: {{ $app }}-vault
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   provider:
     vault:
@@ -318,7 +327,7 @@ metadata:
   name: {{ $app }}-migrate-db
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -348,7 +357,7 @@ metadata:
   name: {{ $app }}-runtime
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -383,7 +392,7 @@ metadata:
   name: {{ $app }}-egress
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -413,7 +422,7 @@ metadata:
   name: {{ $app }}-access
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -445,7 +454,7 @@ metadata:
   name: {{ $app }}-control
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -480,7 +489,7 @@ metadata:
   name: {{ $app }}-consent-reader
   namespace: {{ $ns }}
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -520,7 +529,7 @@ metadata:
     app.kubernetes.io/name: {{ $app }}
     app.kubernetes.io/component: migrate
   annotations:
-    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   backoffLimit: 3
   activeDeadlineSeconds: 600
@@ -567,7 +576,7 @@ metadata:
     app.kubernetes.io/name: {{ $app }}
     app.kubernetes.io/component: server
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   replicas: 1
   revisionHistoryLimit: 3
@@ -818,7 +827,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $app }}
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   type: ClusterIP
   selector:
@@ -841,7 +850,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $app }}
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   ingressClassName: traefik
   rules:
