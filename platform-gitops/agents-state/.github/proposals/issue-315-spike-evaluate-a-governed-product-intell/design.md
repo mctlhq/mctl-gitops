@@ -171,3 +171,41 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - Prompt injection in fixtures is inert data. It is never executed, and the injection case is labelled as such.
   - The report could be read as approval: the non-claims section, `lifecycle: proposed`, no decision block and no follow-up issues guard against that.
   - Stale claims: evidence pins and `unknown (not observed)` for every unread source.
+
+
+## Bounded pilot design option (2026-11-20): consented Telegram-user research
+
+**Status: proposed research design only.** This option enriches the existing activation case; it does not change the #315 verdict, trigger/approval contract or any live subsystem.
+
+### Evidence pipeline
+
+`frozen aggregate activation funnel -> eligibility and selection-bias assessment -> optional consented survey (separate future GO) -> scrubbed/aggregated response evidence -> deterministic coding/quality checks -> Product Scout hypothesis cards -> GitHub dedup -> human product triage -> OpenSpec -> separately approved DevLoop -> separately approved governed release -> 24h/D7/14d outcome packet -> InsightLoop reprioritization`.
+
+The Scout must compare its suggestions to the **same frozen** manual/deterministic digest+issue-search baseline. Do not infer causality from self-selected survey responses, and do not count already known #912 as novel product discovery. Untrusted optional text is data; redact and bound it, do not execute instructions embedded in it.
+
+### Grounded capability check (source code / GitHub issue evidence, not production observation)
+
+| Capability | Evidence | Design status |
+| --- | --- | --- |
+| Reachability + consent state | mctl-telegram#621/#622, `internal/broadcast/policy.go` | Implemented design; actual eligible counts UNKNOWN |
+| Opt-in broadcast, preview, human web approval | mctl-telegram#439, `internal/mcp/broadcast_tools.go` | Implemented design; no campaign prepared |
+| Target by recent login / connected client | `broadcast.Selector.ActiveWithinDays` / `ConnectedVia` | Implemented proxy; **not actual tool-active segment** |
+| Separate research-contact consent | `client_notification_prefs` categories `product_updates`, `maintenance`, `security` | Not evidenced; needs explicit purpose/consent decision |
+| Outbound survey-response collection | Repo search found broadcast and bot update receiver transport, not a documented survey response workflow | **UNKNOWN / not established**, requires a bounded verification task |
+| Aggregate activation / outcomes | #902, #960, #1072 | Historical and engineering evidence; freshness and user-level join not authorized |
+| Response analytics / release correlation | Proposed in #315 D7 | Design only; do not claim deployed |
+
+**Sampling:** first verify aggregate reachability, valid purpose consent, active-via-successful-MCP-call classification, previously active/dormant cohort coverage and unknowns. If only current active users can be recruited, label conclusions as current-user feedback and **not** churn explanation. Keep the historical 2026-11-01 32/20/10/4 cohort separately dated.
+
+**Proposed questionnaire** (<=2 minutes, all optional; no private chat content requested):
+1. What do you mainly use MCTL Assistant for? (finding messages / summaries / drafting or sending / other / have not used it yet)
+2. Where do you connect it? (Claude / ChatGPT / another MCP client / not connected)
+3. What has been the biggest obstacle? (Telegram login / phone-code-2FA / connecting an AI client / first useful task / reliability / none / other)
+4. What one improvement or missing use case would make it more useful? (short free text, sanitized, explicitly do not paste chats or secrets)
+5. May we contact you for a follow-up? (separate default-no permission and privacy/withdrawal information)
+
+**Future invitation concept:** one clearly labelled optional research invitation, with purpose, approximate completion time, concise privacy link, unsubscribe/withdrawal method, bounded cohort, no reminder cascade. The approved human operator must explicitly bind copy + category + audience, and the worker rechecks consent immediately before sending. There is no permitted use of maintenance/security subscriptions for research. If a dedicated research consent path does not exist, the safe recommendation is an in-product voluntary opt-in and/or a separately governed OpenSpec proposal, not a workaround using personal MTProto.
+
+**Survey packet provenance:** instrument version, collection/retention policy, window, invitation eligibility/consent criteria, eligible/invited/delivered/completed/unknown counts, bias/coverage, aggregated answer codes, incident/complaint rate, source digest, and conflicts. Report sub-k cells suppressed (default k>=5 until privacy review); no user-level identities in cards. Empty, insufficient or inaccessible sources yield `insufficient_evidence`, not fabricated answers.
+
+**Learning measurement:** `hypothesis_id`, issue/WorkItem id, OpenSpec digest, separate DevLoop approval digest/actor, release id and exposure cohort, primary measure (successful permitted first MCP call <=24h), guardrails (auth and tool denials, complaints/unsubscribes, incidents), D7/14 retention, readout date, counterfactual limitations, owner's continue/iterate/stop decision. No automatic scheduling, implementation approval, release, or outreach follows from a positive Scout card.
