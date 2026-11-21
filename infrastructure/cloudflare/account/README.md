@@ -1,8 +1,8 @@
 # Cloudflare — account-scoped root
 
 Holds resources that are not attached to a single zone: R2 buckets, Access
-applications/policies/IdPs and organization settings, Zero Trust gateway and
-device settings, and eventually the MCP Portal and its servers.
+applications/policies and the ZITADEL IdP (organization settings, the other
+IdPs and Zero Trust gateway/device settings are not held yet, see below), and eventually the MCP Portal and its servers.
 
 **What it holds.** The root was empty until `projects.mctl.ai` landed in
 `projects-mcp.tf`, an Access application created here rather than imported.
@@ -14,8 +14,35 @@ first identity provider here, ZITADEL as a public PKCE client with no
 secret, offered only by a throwaway test application
 (`access-zitadel-test.mctl.ai`) until the owner's test login passes. Every policy on these applications is
 app-scoped, so none has a standalone resource; each is either written inline
-or referenced by id from its application. Everything else in `#1088` is still
-to be imported.
+or referenced by id from its application.
+
+**What `#1088` still lacks (partial; needs a live import by the owner).** Held
+here from that issue: the `media` and `jellyfin` applications and the two
+reusable policies (`google`, `seerrsense_service_token`) in
+`access-legacy-apps.tf`. NOT held, and not guessable from Git: the App
+Launcher application and the Zero Trust organization settings
+(`auth_domain`, session and login-page options). Importing them needs their
+live attribute values, which only a read with the account credential gives;
+writing a resource block from memory would plan a diff against the live
+object. They stay unmanaged until the owner runs the import and commits the
+generated, reduced resource blocks. The `vault` and `workflows` applications
+are not in this root either.
+
+**Identity providers.** Only ZITADEL is declared (`zitadel-idp.tf`, a public
+PKCE client with no secret). The Google and one-time PIN providers are
+currently dashboard-managed (importing them, or recording that they stay
+there, is an owner decision tracked in #1328): the Google OAuth
+client secret lives in Cloudflare (and its client in Google Cloud), never in
+this repository, and the root only references both providers by id
+(`projects_mcp_google_idp_id`, `projects_mcp_otp_idp_id` in `projects-mcp.tf`).
+`access-idps-read.tf` fails every plan if the plan identity cannot see them, so
+a vanished or unreadable provider is an error, not an empty list. Their
+settings are therefore not drift-checked; the Access login probe
+(`scripts/access-login-probe.py`) watches Google through `media.mctl.ai` and
+ZITADEL through its test application. Keep-alive decision: Google stays on
+`media`, `jellyfin` and `projects` and keeps being probed; if it is retired,
+remove the Google target from the probe and the id from `allowed_idps` in the
+same change (#1328, #1329).
 
 `ai-gateway.tf` (#2262, Phase A of the spike) declares the `mctl-support` AI
 Gateway: logs off, authenticated, cache off, rate limiting off. Nothing in

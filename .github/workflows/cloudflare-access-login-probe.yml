@@ -12,8 +12,10 @@ name: Cloudflare Access login probe
 # the IdP must answer that link by starting a login rather than with an
 # error. It needs no credential at all.
 #
-# Today it watches ZITADEL through access-zitadel-test.mctl.ai (#1500); add a
-# target in the script for each IdP an application offers.
+# Today it watches ZITADEL through access-zitadel-test.mctl.ai (#1500) and
+# Google through the media application (#1329); add a target in the script for
+# each IdP an application offers. The Google target is anonymous, so a throttle
+# or captcha for the runner address reads as Unknown, never as healthy.
 #
 # Telegram is told once per distinct problem per UTC day, as in
 # cloudflare-portal-health.yml. "Could not determine" (exit 2) is reported as

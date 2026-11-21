@@ -35,6 +35,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / ".github" / "deploy-signal.yaml"
 SERVICES_GLOB = "platform-gitops/services/*/*/values.yaml"
+# First-party images whose tag is inline in an Argo CD Application (#1292).
+# There is no values.yaml for these, so SERVICES_GLOB cannot see them.
+BOOTSTRAP_GLOB = "platform-gitops/bootstrap/templates/mctl-platform/*.yaml"
+BOOTSTRAP_IMAGE_RE = re.compile(
+    r"^\s*repository:\s*(?:ghcr\.io/)?mctlhq/\S+\s*\n\s*tag:", re.M)
 
 # A release needs time to become a deployment: image build, the gitops commit,
 # then Argo CD picking it up (3 min poll + jitter + refs cache, ~8 min at the
@@ -76,6 +81,63 @@ def read_manifest(path=MANIFEST):
         if not entry.get("path"):
             raise Drift(f"{path}: entry #{i + 1} has no path: {entry_repr(entry)}")
     return services
+
+
+def read_bootstrap(path=MANIFEST):
+    """The `bootstrap:` entries of the manifest, validated; [] when absent.
+
+    Absent is a legitimate manifest, and bootstrap_on_disk() then reports every
+    first-party template as uncovered. Only `unmapped` is accepted here: reading
+    an inline tag out of a string-in-YAML is not implemented (#1292 option 1),
+    so a kind that implied watching would claim cover nobody provides.
+    """
+    doc = yaml.safe_load(path.read_text())
+    entries = doc.get("bootstrap") if isinstance(doc, dict) else None
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise Drift(f"{path}: bootstrap must be a list, got {type(entries).__name__}")
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise Drift(f"{path}: bootstrap entry #{i + 1} is a {type(entry).__name__}, not a mapping")
+        if not entry.get("path"):
+            raise Drift(f"{path}: bootstrap entry #{i + 1} has no path: {entry_repr(entry)}")
+    return entries
+
+
+def bootstrap_on_disk():
+    """Bootstrap templates that deploy a first-party (mctlhq) image by inline tag."""
+    out = []
+    for path in REPO_ROOT.glob(BOOTSTRAP_GLOB):
+        if BOOTSTRAP_IMAGE_RE.search(path.read_text()):
+            out.append(str(path.relative_to(REPO_ROOT)))
+    return sorted(out)
+
+
+def check_bootstrap(entries):
+    """Problems with bootstrap coverage. Unmapped-with-reason is reported, not red."""
+    problems = []
+    declared = [e["path"] for e in entries]
+    if len(declared) != len(set(declared)):
+        dupes = sorted({p for p in declared if declared.count(p) > 1})
+        problems.append(f"bootstrap lists the same template twice: {', '.join(dupes)}")
+    for e in entries:
+        extra = [k for k in e if k not in ("path", "unmapped")]
+        reason = e.get("unmapped")
+        if extra or not (isinstance(reason, str) and reason.strip()):
+            problems.append(
+                f"bootstrap entry {e['path']}: must be path + a non-empty unmapped reason "
+                f"(found {entry_repr(e)}); inline-tag watching is not implemented"
+            )
+    on_disk = set(bootstrap_on_disk())
+    for missing in sorted(on_disk - set(declared)):
+        problems.append(
+            f"{missing} deploys a first-party image by inline tag but has no entry under "
+            "bootstrap: in .github/deploy-signal.yaml — add one with an unmapped reason"
+        )
+    for stale in sorted(set(declared) - on_disk):
+        problems.append(f"bootstrap entry {stale} names a template that no longer deploys a first-party inline tag")
+    return problems
 
 
 def image_block(doc):
@@ -422,6 +484,49 @@ def self_test():
     finally:
         g["services_on_disk"], g["deployed_tag"], g["latest_release"] = real_disk, real_tag, real_release
 
+    # #1292: bootstrap templates with inline first-party tags. Covered by an
+    # unmapped entry is green; a new template with no entry, a stale entry and
+    # an entry without a reason are red.
+    real_boot = bootstrap_on_disk
+    try:
+        g["bootstrap_on_disk"] = lambda: ["t/a.yaml", "t/b.yaml"]
+        ok_entries = [{"path": "t/a.yaml", "unmapped": "r"}, {"path": "t/b.yaml", "unmapped": "r"}]
+        boot_cases = [
+            ("a bootstrap template with no entry", ok_entries[:1], "has no entry under bootstrap"),
+            ("a stale bootstrap entry", ok_entries + [{"path": "t/gone.yaml", "unmapped": "r"}],
+             "no longer deploys"),
+            ("a bootstrap entry with no reason", [ok_entries[0], {"path": "t/b.yaml", "unmapped": ""}],
+             "non-empty unmapped reason"),
+            ("a bootstrap entry claiming a watched kind",
+             [ok_entries[0], {"path": "t/b.yaml", "release_repo": "o/r"}], "non-empty unmapped reason"),
+            ("a bootstrap template listed twice", ok_entries + [ok_entries[0]], "same template twice"),
+        ]
+        for name, entries, expected in boot_cases:
+            problems = check_bootstrap(entries)
+            if not any(expected in p for p in problems):
+                print(f"SELF-TEST FAILED: {name}: expected {expected!r}, got {problems}")
+                return 1
+            print(f"  detects {name}")
+        if check_bootstrap(ok_entries):
+            print(f"SELF-TEST FAILED: converged bootstrap coverage must be silent, got {check_bootstrap(ok_entries)}")
+            return 1
+        print("  stays silent when every bootstrap template is declared")
+    finally:
+        g["bootstrap_on_disk"] = real_boot
+
+    # The detector's own pattern must match a real inline first-party tag and
+    # ignore upstream chart versions, or the coverage claim is hollow.
+    for name, body, want in (
+        ("a ghcr first-party image", 'image:\n  repository: ghcr.io/mctlhq/x\n  tag: "1.0.0"\n', True),
+        ("a bare mctlhq repository", "image:\n  repository: mctlhq/x\n  tag: 1.0.0\n", True),
+        ("an upstream chart version", "chart: x\ntargetRevision: 12.4.2\n", False),
+        ("a third-party image", 'image:\n  repository: docker.io/other/x\n  tag: "1"\n', False),
+    ):
+        if bool(BOOTSTRAP_IMAGE_RE.search(body)) != want:
+            print(f"SELF-TEST FAILED: bootstrap detection on {name} should be {want}")
+            return 1
+    print("  recognises inline first-party tags and ignores upstream versions")
+
     # A chart can disable a component with a bare `image:`, which YAML reads as
     # None. services_on_disk decides what coverage is measured against, so it
     # has to survive that rather than crash the whole check.
@@ -510,6 +615,8 @@ def main():
     try:
         services = read_manifest()
         problems, watched, unmapped = check(services, token, args.grace_minutes)
+        bootstrap = read_bootstrap()
+        problems += check_bootstrap(bootstrap)
     except Drift as exc:
         # Everything this script refuses to continue past is a finding about
         # the platform or its own configuration, and a finding deserves a
@@ -523,6 +630,11 @@ def main():
         for svc in services:
             if "unmapped" in svc:
                 print(f"  {svc['path']}: {svc['unmapped']}")
+
+    if bootstrap:
+        print(f"bootstrap (inline tags, not watched): {len(bootstrap)}")
+        for e in bootstrap:
+            print(f"  {e['path']}: {e.get('unmapped')}")
 
     if problems:
         print()
