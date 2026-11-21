@@ -11,7 +11,31 @@ It must reuse the existing release governance (`platform-gitops/release-gates.ya
 store and the `release.grant` kind). It must add no second approval
 authority, no new deployment engine and no live change.
 
-This is **revision 4**. Revision 2 answered the first review
+This is **revision 5**. It answers the independent review of revision 4
+([comment 7064106704](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7064106704),
+2026-11-21, REQUEST_CHANGES 1 P1 / 2 P2):
+
+- **Self-lockout (P1).** Revision 4's R-A9 ("a window never blocks its own
+  removal") is **false** for a deny window in AppProject `default` that
+  matches `root-app`. `root-app` is in `default`, auto-syncs
+  `platform-gitops/bootstrap` and applies every AppProject. R-A9 is
+  withdrawn. It is replaced by a negative self-lockout and recoverability
+  invariant (R-L1..R-L9): the MVP refuses **every** window in AppProject
+  `default`, and refuses any window in any project whose rendered selector
+  matches a recovery-chain Application. The check is a render-based match
+  against the generated Applications, and it runs on every path, including
+  human PRs.
+- **Single-pilot pin migration (P2).** The `apps` ApplicationSet renders
+  both sources of every Application, and its own git generator, from one
+  shared `.Values.spec.source.targetRevision`. Changing that value is
+  forbidden as a pilot pin (R-PM1). S0 adds a read-only feasibility test of
+  three per-Application pin mechanisms (R-PM2..R-PM7).
+- **Allow windows (P2).** The MVP is **deny-only** (R-N1..R-N5). An allow
+  window freezes its matched Applications at every time outside it. Allow
+  stays in the offline model only, so that the model mirrors Argo and can
+  detect a hand-written allow.
+
+Revision 4 is summarized next. Revision 2 answered the first review
 ([comment 7037225218](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7037225218),
 4 P1 / 5 P2 / 2 P3). Revision 3 made the **MCTL Governed Sync Broker** a
 first-class alternative to E1 (GitOps carve-out), E2 (RBAC-restricted
@@ -71,7 +95,7 @@ Earlier reviews (revisions 2 and 3, carried forward):
 | R1 P2-9 base-trust evaluator | design section 4; R-T1..R-T4, R-G10; T70-T74 |
 | R1 P3-10 DST | design section 2; R-P5..R-P8; T2-T4, T10-T13 |
 | R1 P3-11 syncOverrun / vendors | design "Argo CD v3.3.8 facts", section 10; R-A5 |
-| Sync-broker request / Revision 3 items 1-8 | design sections 5-9; R-G1..R-G14; tasks 0, 8-12, 17 |
+| Sync-broker request / Revision 3 items 1-8 | design sections 5-9; R-G1..R-G14; tasks 0, 8-12, 20 |
 
 Re-review of revision 3 (2026-11-21). Each row gives the affected
 requirements, design sections, S0 fixtures and the exit criterion:
@@ -87,6 +111,15 @@ requirements, design sections, S0 fixtures and the exit criterion:
 | P2-7 journal / claim crash gaps | R-J1..R-J7 | 6.5 | T80, T88, T89, T120-T129 | Crash matrix complete; every row has an expected end state |
 | P3-8 idempotent, diff-restricted MCP ops | R-I3..R-I6 | 8.2 | T141-T146 | Duplicate requests produce one PR and one window; weakening refused |
 
+Review of revision 4 (2026-11-21, comment 7064106704). Each row gives the
+affected requirements, design sections, S0 fixtures and the exit criterion:
+
+| Finding | Requirements | Design | S0 fixtures | Exit criterion |
+|---|---|---|---|---|
+| P1-1 freeze deadlocks its own bootstrap/reversal path | R-L1..R-L9 (replace R-A9); R-I3, R-I5; R-W1; R-V4 | 3.2, 6.7, 8.2, 8.3; Table C | T160-T169 | (a) a `default`/root-app deny fails before a PR exists; (b) a deny in `apps` leaves root-app able to apply a reviewed revert; (c) a project migration, rename or selector expansion that introduces self-lockout is refused; (d) an injected existing self-lockout is reported `self-locked: not recoverable via GitOps`, not as activation drift; break-glass recovery is walked on the harness only |
+| P2-2 single-Application pin migration for the real AppSet | R-PM1..R-PM7 | 6.3.1 | T170-T177 | One pilot pinned with byte-equal generated output for every other Application, no Application or resource deleted or recreated, and a proven reverse migration; or the memo records "no safe per-Application pin" and G0 is unavailable |
+| P2-3 `kind: allow` without an allow-specific impact test | R-N1..R-N5; R-I3 | 2.1, 8.2 | T180-T186 | MVP deny-only enforced by the validator and the MCP model; inactive allow and concurrent allow+deny measured on the harness; the effective-policy simulator exists for any later allow proposal |
+
 ## User stories
 
 - AS the platform owner I WANT S0 to tell me, from evidence, which effect-time guarantee (G0, G1, G2 or none) each exception path can give on Argo CD v3.3.8 SO THAT I never accept a "single approved release" claim that is really post-effect detection.
@@ -95,6 +128,8 @@ requirements, design sections, S0 fixtures and the exit criterion:
 - AS the mctl-api owner I WANT the exception to reuse the action-approval store and the dedicated-kind namespace, with the claim and journal in one transaction, SO THAT the ledger stays the only approval authority and a crash never leaves a grant spendable.
 - AS an on-call engineer I WANT an approved hotfix or a previously healthy rollback to pass a freeze through one bounded path while every other Application stays frozen SO THAT a freeze neither traps a needed fix nor is bypassed globally.
 - AS an operator or AI agent I WANT to propose or remove a window only by opening a reviewed GitOps PR SO THAT no caller can edit an AppProject or sync an Application directly.
+- AS the platform owner I WANT no window, from any author, to be able to match `root-app`, `argocd-self-managed` or anything else in AppProject `default` SO THAT a reviewed revert of a bad freeze can always reach the cluster through GitOps, without break-glass.
+- AS a tenant service owner I WANT a pilot pin to change only the pilot's own Application SO THAT my service's sources, project and reconciliation are untouched by someone else's freeze experiment.
 
 ## Acceptance criteria (EARS)
 
@@ -104,7 +139,7 @@ requirements, design sections, S0 fixtures and the exit criterion:
 - R-B2. WHEN an S0 artifact is produced THE SYSTEM SHALL place it only under `docs/spikes/2828-release-calendar/`, `tests/fixtures/release-calendar-s0/` or `tests/research/release_calendar_s0/` (including `argo-inert/`, `broker-model/` and `mcp-model/`). It SHALL NOT reference the artifact from any workflow, CWFT, Helm chart, Dockerfile or service.
 - R-B3. WHEN S0 finishes THE SYSTEM SHALL stop at an exit gate: a decision memo that records exactly one calendar outcome (`REUSE_EXISTING_ONLY`, `BOUNDED_CALENDAR_MVP` limited to image bumps, `ADOPT_ARGO_SYNC_WINDOWS`, `HYBRID`, `DEFER_UNTIL_GATES_CLOSED`) and exactly one exception-path outcome (`BROKER_PINNED_PILOT_CANDIDATE`, `BROKER_DETECT_ONLY_REQUIRES_OWNER_RISK_ACCEPTANCE`, `E2_HUMAN_ROLE_ONLY`, `D_BREAKGLASS_ONLY`, `NEITHER_SAFE_YET`). An independent review and an owner decision on #2828 SHALL follow.
 - R-B4. THE SYSTEM SHALL NOT have any agent, DevLoop step, implementer or shepherd run an S0 task, or any S1/S2/S3 change, because this proposal was accepted.
-- R-B5. IF the owner has not recorded on #2828 an explicit GO to *run* S0 THEN THE SYSTEM SHALL NOT start tasks 1-17. Any Argo permission, secret, AppProject, flag, source pin, MCP tool or production action SHALL also require a separate owner security GO, which this proposal never grants.
+- R-B5. IF the owner has not recorded on #2828 an explicit GO to *run* S0 THEN THE SYSTEM SHALL NOT start tasks 1-20. Any Argo permission, secret, AppProject, flag, source pin, MCP tool or production action SHALL also require a separate owner security GO, which this proposal never grants.
 
 ### Effect-time guarantee (re-review P1-1)
 
@@ -120,7 +155,7 @@ requirements, design sections, S0 fixtures and the exit criterion:
 
 ### Window activation lifecycle (re-review P1-2)
 
-- R-W1. THE SYSTEM SHALL model each window, per intended Application, through observed states: `proposed → merged → reconciling → armed → effective → expired`, plus the side states `drifted` and `unknown`.
+- R-W1. THE SYSTEM SHALL model each window, per intended Application, through observed states: `proposed → merged → reconciling → armed → effective → expired`, plus the side states `drifted`, `self-locked` (R-L6) and `unknown`. `self-locked` takes precedence over `drifted` and `reconciling`.
 - R-W2. THE SYSTEM SHALL report `armed` only when four checks agree: the window is in the merged policy at SHA S; root-app's synced revision contains S; the live `AppProject.spec.syncWindows` equals the projection rendered from S; and every intended Application lists the window in `assignedWindows` while no unintended Application does.
 - R-W3. THE SYSTEM SHALL report `effective` only WHILE the window is `armed`, it is in its time span, and the Application's `activeWindows` (from `GetApplicationSyncWindows`) contains the deny. For an exception design it SHALL also check that `canSync` matches the intended `manualSync` value.
 - R-W4. IF any read is older than `max_read_age`, returns 403, times out or errors THEN THE SYSTEM SHALL report `unknown` and never `effective`.
@@ -222,7 +257,37 @@ requirements, design sections, S0 fixtures and the exit criterion:
 - R-A6. THE SYSTEM SHALL NOT propose `manualSync: true` on any window that matches an Application on which a tenant, CI or agent role holds `applications, sync`.
 - R-A7. WHEN an exception is approved THE SYSTEM SHALL let the change reach the cluster only through the path S0 selects, for exactly the bound Application. Every other Application SHALL stay denied, and the window SHALL NOT be edited.
 - R-A8. WHEN S0 tests the Argo layer THE SYSTEM SHALL show on the harness that: an approved hotfix syncs; an unapproved tenant sync fails; an approved healthy rollback syncs; other Applications stay frozen; auto-sync and selfHeal stay blocked during the window.
-- R-A9. THE SYSTEM SHALL record that AppProjects are rendered by `root-app` (project `default`), so a window never blocks its own removal. Only write guards and review control that path.
+- R-A9. *(Withdrawn in revision 5.)* Revision 4 stated that a window never blocks its own removal. That is false for a deny in AppProject `default` that matches `root-app`. It is replaced by R-L1..R-L9.
+
+### Bootstrap self-lockout and recoverability (revision 4 review P1-1)
+
+- R-L1. THE SYSTEM SHALL define the **recovery chain** as the Applications that must stay syncable for a reviewed GitOps revert of a window, a pin or RBAC to reach the cluster. It has two required members: `root-app` (`bootstrap/templates/bootstrap/root-app.yaml`, project `default`), which applies every AppProject, every Application spec and both ApplicationSets; and `argocd-self-managed` (`argocd/templates/argocd-self-managed.yaml`, project `default`), which applies `argocd-rbac-cm` and `argocd-cm`. S0 SHALL enumerate further dependencies, for example SSO through `zitadel` or secret delivery through `vault`/`external-secrets`. Until S0 has done so, they are `unknown`.
+- R-L2. WHILE the MVP is in force THE SYSTEM SHALL refuse **every** sync window placed in AppProject `default`, whatever its kind, selector or `manualSync` value. This covers both members of the recovery chain and every other platform Application in `default` (26 bootstrap template files besides `root-app.yaml` set `project: default` at `f27a075`).
+- R-L3. THE SYSTEM SHALL refuse any window, in any AppProject, whose rendered match set intersects the recovery chain. The match set is computed with Argo v3.3.8 semantics (`applications`, `namespaces` and `clusters` globs, OR by default, AND with `andOperator`) against the Applications **actually rendered**: the bootstrap chart and the ApplicationSet generators expanded at the candidate commit. It SHALL NOT be computed from the policy file's intended scope.
+- R-L4. WHEN a candidate commit changes an Application's `project`, renames an Application or AppProject, adds an Application to `default`, or widens a selector THE SYSTEM SHALL recompute R-L3 on the candidate render, and SHALL refuse the change if it would create a self-lockout. This holds even when no window text changed.
+- R-L5. THE SYSTEM SHALL apply R-L2..R-L4 on every path that can introduce a window: the canonical policy validator, the projection generator, `mctl_propose_release_window`, and a scan of the **rendered AppProjects** that catches `syncWindows` hand-written into `bootstrap/templates/projects/*.yaml` by a human PR. The rules SHALL run from the base (R-T1).
+- R-L6. IF the live state shows a window that matches a recovery-chain Application THEN THE SYSTEM SHALL report activation state `self-locked` with the text "not recoverable via GitOps". It SHALL NOT report the state as `drifted` or `reconciling`, and it SHALL alert.
+- R-L7. WHEN S0 evaluates recovery from `self-locked` THE SYSTEM SHALL walk an explicit, audited break-glass procedure on the harness only (design 3.2). The revert is merged to `main` **before** the live window is removed, because root-app's selfHeal would otherwise re-apply the window from `main`.
+- R-L8. WHEN a deny window in `apps` (or `platform`) is `effective` THE SYSTEM SHALL show on the harness that root-app still applies a reviewed revert of that window, and that argocd-self-managed still applies a reviewed RBAC change.
+- R-L9. THE SYSTEM SHALL record that the comment in `bootstrap/templates/projects/project-default.yaml:46-48` ("root-app can always sync a revert of this file") holds only while R-L2/R-L3 hold. Correcting the comment is a follow-up and is not done in S0 (R-B1).
+
+### Single-pilot pin migration (revision 4 review P2-2)
+
+- R-PM1. THE SYSTEM SHALL NOT propose pinning a pilot by changing `.Values.spec.source.targetRevision` (`bootstrap/values.yaml:4`). That value feeds the `apps` generator's own `revision` (`applicationset-apps.yaml:14`), both sources of every `apps` Application (`:38`, `:50`), root-app, the `tenants` ApplicationSet and every other bootstrap Application.
+- R-PM2. WHEN S0 evaluates G0 THE SYSTEM SHALL test, offline on the harness, at least three per-Application pin mechanisms: (M1) a merge generator that overlays a per-path pin onto the existing directory generator; (M2) a per-service pin file read by a git files generator; and (M3) isolation of the pilot into its own Application, outside the `apps` ApplicationSet.
+- R-PM3. WHEN a pin mechanism is applied in the harness THE SYSTEM SHALL show that every non-pilot generated Application spec is byte-equal after normalization to its spec before the migration, including name, project, sources, paths, annotations, `syncPolicy` and `ignoreDifferences`.
+- R-PM4. WHEN a pin mechanism is applied THE SYSTEM SHALL show that no Application is deleted or recreated (its `metadata.uid` is unchanged), and that no pilot resource is pruned or recreated (resource uids are unchanged). The `apps` ApplicationSet sets `preserveResourcesOnDeletion: false` (`applicationset-apps.yaml:10`), so a dropped Application would cascade-delete its workloads. Any mechanism that hands the pilot from the ApplicationSet to another owner SHALL prove that this cannot happen.
+- R-PM5. WHEN the pilot is pinned THE SYSTEM SHALL show that only the pilot's two `targetRevision` values change. The generator `revision` stays `main`, and reconciliation ownership (the ApplicationSet, or the named single owner for M3) is explicit.
+- R-PM6. WHEN S0 tests a pin mechanism THE SYSTEM SHALL also run the reverse migration and show the pre-migration output restored byte-equal, with no deletion.
+- R-PM7. IF no mechanism passes R-PM3..R-PM6 THEN THE SYSTEM SHALL record "no safe per-Application pin" and SHALL NOT conclude `BROKER_PINNED_PILOT_CANDIDATE`. S0 SHALL also record a consequence of every passing mechanism: a pinned pilot's image bumps by `release-deploy`/`gitops-bump` take effect only after a reviewed pin move, which is a Table B write.
+
+### Allow windows (revision 4 review P2-3)
+
+- R-N1. WHILE the MVP is in force THE SYSTEM SHALL accept only `kind: deny` in the canonical policy, the projection generator, `mctl_propose_release_window` and the rendered-AppProject scan. A `kind: allow` from any author SHALL be refused.
+- R-N2. THE SYSTEM SHALL keep `allow` in the offline model (truth-table rows 3-4) only to mirror Argo `CanSync(false)` and to classify a hand-written allow. Model support SHALL NOT be read as permission to emit one.
+- R-N3. THE SYSTEM SHALL record that, on v3.3.8, an Application matched by any allow window is denied at every instant at which no matching allow is active. Adding an inactive allow therefore freezes its matched Applications immediately.
+- R-N4. IF a later proposal re-admits `allow` THEN THE SYSTEM SHALL require, separately from deny: an effective-policy diff over a stated horizon that lists every instant at which the decision changes, inside and outside the allow; a blast-radius list from the rendered match set (R-L3); a check that no recovery-chain Application is matched; an owner approval; and negative fixtures.
+- R-N5. WHEN S0 evaluates allow THE SYSTEM SHALL measure on the harness, in the target AppProject: an inactive allow alone; a concurrent allow plus deny; and an allow whose selector drifts to an extra Application. It SHALL compare each result with the model (T180-T186).
 
 ### Scope mapping
 
@@ -245,7 +310,7 @@ requirements, design sections, S0 fixtures and the exit criterion:
   - an optional `request_exception`, which only creates a pending human decision;
   - `mctl_propose_release_window` and `mctl_propose_window_removal`, which only author a GitOps PR against the policy file.
 - R-I2. THE SYSTEM SHALL NOT give any MCP caller Argo `projects, update`, `applications, sync`, the broker token or direct write access to an AppProject. No MCP tool SHALL call the broker.
-- R-I3. WHEN a window is proposed THE SYSTEM SHALL validate, from the base, the exact-scope input schema: exact Application names, IANA zone, recurrence subset, duration not above `max_window`, owner, and `decided_in`. It SHALL derive the window id deterministically and show the derived blast radius (the exact Applications matched).
+- R-I3. WHEN a window is proposed THE SYSTEM SHALL validate, from the base, the exact-scope input schema: exact Application names, IANA zone, recurrence subset, duration not above `max_window`, owner, and `decided_in`. It SHALL accept `kind: deny` only (R-N1), refuse AppProject `default` (R-L2), and refuse any rendered match set that intersects the recovery chain (R-L3). It SHALL derive the window id deterministically and show the derived blast radius (the exact Applications matched in the candidate render).
 - R-I4. WHEN the same request is repeated THE SYSTEM SHALL return the existing PR. The request is identified by the idempotency key and the window id, and deduplicated on branch `release-window/<window_id>`. THE SYSTEM SHALL NOT create a second PR or an overlapping duplicate window.
 - R-I5. THE SYSTEM SHALL restrict the PR diff to the allowlisted YAML paths of the policy file. IF the diff touches any other path, deletes a deny the caller does not own, broadens a selector, or shortens or weakens an existing deny THEN THE SYSTEM SHALL refuse it, unless the request is an explicit `propose_window_removal` that needs owner review.
 - R-I6. WHEN a rebase or retry happens THE SYSTEM SHALL recompute the diff against the new base and refuse if it is no longer the same semantic change.
@@ -257,7 +322,7 @@ requirements, design sections, S0 fixtures and the exit criterion:
 - R-V1. THE SYSTEM SHALL return, per Application, four values separately: the policy decision (`ALLOW`/`DENY`/`UNKNOWN` with the rule), the activation state (R-W1), the coverage label of the asked-about path (R-S2), and the guarantee class of any exception (R-E1).
 - R-V2. THE SYSTEM SHALL include evidence with each answer: policy source SHA, root-app synced revision, live AppProject window hash, `assignedWindows`/`activeWindows`, read timestamps and age.
 - R-V3. THE SYSTEM SHALL NOT present Argo `canSync=true` or `false` as proof that every deployment path is covered. In v3.3.8, `canSync` is the **manual**-sync answer (`CanSync(true)`).
-- R-V4. IF the live AppProject is missing, the Application is in an unrelated project, a selector changed, or the evidence is stale THEN THE SYSTEM SHALL report `unknown` or `drifted`, not `effective`.
+- R-V4. IF the live AppProject is missing, the Application is in an unrelated project, a selector changed, or the evidence is stale THEN THE SYSTEM SHALL report `unknown` or `drifted`, not `effective`. IF a live window matches a recovery-chain Application THEN THE SYSTEM SHALL report `self-locked` (R-L6).
 - R-V5. THE SYSTEM SHALL list residuals in every answer: admin, `kubectl`, in-flight syncs and tenant restart actions (P8d).
 
 ## Out of scope
@@ -268,12 +333,18 @@ requirements, design sections, S0 fixtures and the exit criterion:
 - Closing #2543, adding an App-bound status context (P12), cluster admission policy, and controlling `role:admin` or `kubectl`. All are recorded as dependencies or residuals.
 - Forking Argo CD; adopting Octopus, Harness or GitLab; rewriting DevLoop, the merge queue or ADR-006.
 - Accepting any G1 or G2 guarantee on the owner's behalf.
+- `kind: allow` windows in the MVP (R-N1), and any window in AppProject `default` (R-L2).
+- Changing the shared `.Values.spec.source.targetRevision`, or the `apps` ApplicationSet generator, in the repository. S0 tests pin mechanisms on the harness only (R-PM2).
+- Editing the `project-default.yaml` comment (R-L9); it is a follow-up.
 - Inventing weekends or holidays. Preview namespaces.
 
 ## Open questions
 
 - Owner: which calendar outcome and which exception-path outcome after S0? Revision 4's working hypothesis is `HYBRID` with either `BROKER_PINNED_PILOT_CANDIDATE` (only if T100-T103 hold) or `NEITHER_SAFE_YET`. `DEFER_UNTIL_GATES_CLOSED` remains the conservative calendar alternative while #2543 (OPEN, updated 2026-11-13) and P12 stay open.
-- G0 requires a pilot Application whose sources are **all** SHA-pinned. No `apps` Application is pinned today: both of its sources track `main` (`applicationset-apps.yaml:38,50`). `admins-mctl-api` pins only source 1. Is the owner willing, in a later S3, to pin a pilot's sources, and therefore change that Application's normal deployment flow to "move the pin by PR"? Without that, the broker is G2 at best.
+- G0 requires a pilot Application whose sources are **all** SHA-pinned. No `apps` Application is pinned today: both of its sources track `main` (`applicationset-apps.yaml:38,50`), from the shared value that also drives the generator (`:14`). `admins-mctl-api` pins only source 1. Is the owner willing, in a later S3, to pin a pilot's sources through one of M1-M3 (R-PM2), and therefore change that Application's normal deployment flow to "move the pin by PR"? Without a mechanism that passes T170-T177, the broker is G2 at best.
+- Which pin mechanism, if any, does the owner prefer? M1 (merge generator) leaves ownership with the ApplicationSet but changes the generator of every `apps` Application. M2 (git files generator) does the same and adds a file per service. M3 (isolation) touches only the pilot, but needs an ownership handoff that is safe under `preserveResourcesOnDeletion: false`. The `missingkey=error` template option (`applicationset-apps.yaml:8`) means a missing pin key must be handled explicitly (M1/M2). Whether each passes is `unknown` until S0.
+- Recovery chain completeness: is `root-app` + `argocd-self-managed` enough for a GitOps revert, or do SSO (`zitadel`), secrets (`vault`, `external-secrets`) or ingress belong to it? The MVP sidesteps the question by refusing all of `default` (R-L2). Whether any recovery-relevant Application lives outside `default` is `unknown` until S0 task 4.
+- Is admin manual sync of a self-locked `root-app` refused by the window on v3.3.8? Revision 4's design reads the `Sync` window check (`application.go:2027`) as having no role exemption, so the answer is expected to be yes. That is unverified until T99/T166.
 - G0 residual: v3.3.8 `Sync` reads the Application, builds the operation, then calls `SetAppOperation`. Do non-revision spec fields (path, helm parameters) changed by a concurrent root-app sync reach the controller with the old revisions? This is `unknown` until T103.
 - mctl-api owner: is a dedicated `release.freeze_exception` kind acceptable, with terminal states `executed | spent_failed | spent_unknown` and the `release_exception_ops` row in the same transaction as the CAS? The generic reserve/settle returns a failed call to `consumed` (mctl-api#772). Mapped to mctl-api#1022.
 - Broker placement (separate Deployment as the default candidate, or inside mctl-api) and Argo identity (project-role JWT with TTL, or local account). Who mints and rotates a short-lived project-role token, given that minting needs `projects, update` on the pilot project?

@@ -1,5 +1,24 @@
 # Design: issue-2828-spike-release-governed-release-calendar
 
+Revision 5 (2026-11-21). It answers the independent review of revision 4
+([comment 7064106704](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7064106704):
+1 P1 / 2 P2). What changed in revision 5:
+
+- **Bootstrap self-lockout (P1; sections 3.2, 6.7, 8.2, 8.3).** Revision 4
+  claimed that a window never blocks its own removal. That is false for a
+  deny in AppProject `default` that matches `root-app`, which applies every
+  AppProject. The MVP now refuses every window in `default`, and refuses any
+  window whose **rendered** match set reaches the recovery chain
+  (`root-app`, `argocd-self-managed`). A live self-lockout is a distinct
+  state, `self-locked`, with a harness-only break-glass walk.
+- **Single-pilot pin migration (P2; section 6.3.1).** The shared
+  `.Values.spec.source.targetRevision` cannot pin one pilot. Three
+  per-Application mechanisms (M1 merge generator, M2 git files generator,
+  M3 isolation) are specified as S0 feasibility tests with byte-equal and
+  no-deletion proofs, plus a reverse migration.
+- **Deny-only MVP (P2; sections 2.1, 8.2).** `kind: allow` is refused on
+  every write path. Allow stays in the offline model only.
+
 Revision 4 (2026-11-21). Revision 2 answered the first review
 ([comment 7037225218](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7037225218)).
 Revision 3 made the **MCTL Governed Sync Broker** a first-class alternative
@@ -29,7 +48,11 @@ authorized to be built.
 
 ## Current state
 
-Clone read at `main` = `a1e22940d2d7a89a8f640f6a90b2a80b490ab658`
+Revision 5 re-read the bootstrap files at `main` =
+`f27a075d3ed4ca9d70fe409af7805851aa24892c` (2026-11-21 14:30 UTC): blobs
+`root-app.yaml` `8f1057cc0229`, `project-default.yaml` `4c380348bd77`,
+`applicationset-apps.yaml` `4b17775eedbc`. The other citations below were
+read for revision 4 at `main` = `a1e22940d2d7a89a8f640f6a90b2a80b490ab658`
 (2026-11-21 10:14 UTC; the re-review observed the same HEAD). The clone is
 shallow, so the cited lines were re-read at this SHA. Line numbers moved
 since revision 3 (`467d6de`), and the citations below are the corrected
@@ -122,6 +145,50 @@ mctl-api citations are at `main` = `2a8de33ae4494f214ddb798d4cf880de24251160`
   resource-level `Prune=false`. root-app renders every AppProject and every
   Application spec, so a pin move or a window edit takes effect only when
   root-app syncs.
+- The `apps` ApplicationSet's git directory generator reads
+  `platform-gitops/services/*/*` at `revision:
+  {{ .Values.spec.source.targetRevision }}` (`applicationset-apps.yaml:14`),
+  the same value as both sources (`:38`, `:50`). It sets
+  `goTemplateOptions: ["missingkey=error"]` (`:8`) and
+  `syncPolicy.preserveResourcesOnDeletion: false` (`:10`). There is no
+  per-Application revision parameter. `bootstrap/values.yaml:4` sets the
+  shared value to `main`.
+
+### Bootstrap recovery chain (revision 4 review P1-1)
+
+- `root-app` is in AppProject `default` (`root-app.yaml`, `spec.project`).
+  It applies every AppProject in `bootstrap/templates/projects/`
+  (`project-default`, `project-apps`, `project-platform`, `project-prod`),
+  both live ApplicationSets and every bootstrap Application.
+- `argocd-self-managed` (`argocd/templates/argocd-self-managed.yaml:4-11`)
+  is in `default`, tracks `main` with automated selfHeal and prune `false`,
+  and applies the `argocd` chart: `argocd-rbac-cm` (assembled from
+  `argocd/rbac/tenants/*.csv`) and `argocd-cm`. It is not rendered by
+  root-app; it manages itself.
+- At `f27a075`, 26 bootstrap template files besides `root-app.yaml` set
+  `project: default` (for example `core-infra/vault.yaml`,
+  `core-infra/zitadel.yaml`, `core-infra/external-secrets.yaml`,
+  `observability/monitoring.yaml`, `mctl-platform/mctl-portal.yaml`). Four
+  files set `project: platform` (including the `tenants` ApplicationSet),
+  and the `apps` ApplicationSet sets `project: apps`.
+- Argo evaluates a window only against Applications of the AppProject that
+  holds it (`proj.Spec.SyncWindows.Matches(a)`, `application.go:2027`). A
+  window in `apps` or `platform` therefore cannot match root-app or
+  argocd-self-managed **unless** one of them is moved into that project. A
+  window in `default` can match them, through `applications: ["*"]`,
+  `namespaces: ["argocd"]`, `clusters: ["*"]` or an exact name.
+- **Consequence.** A `default` deny that matches root-app blocks root-app's
+  auto-sync. A PR that removes the window can merge, but root-app cannot
+  apply it until the window ends. Manual sync of root-app is also refused
+  unless the deny has `manualSync: true`, and the v3.3.8 window check in
+  `Sync` has no role exemption (expected; T166 verifies). The comment at
+  `project-default.yaml:46-48` ("root-app can always sync a revert of this
+  file") is true only while no window in `default` matches root-app. A
+  `default` deny that matches argocd-self-managed similarly blocks RBAC
+  changes, including the RBAC steps of the section 6.7 rollback.
+- No `syncWindows` exist in the repository today (re-grepped at
+  `f27a075`), so no self-lockout exists now. This is desired state only;
+  the live AppProjects are `unknown` (no access).
 
 ### Argo CD v3.3.8 facts relevant to a broker (read from source at the tag)
 
@@ -227,8 +294,9 @@ Labels: `enforced`, `detected-after-write`, `not-covered`, `unknown`.
 | `tenants/<t>/` + `helm-charts/tenant/` | `tenant-<t>` | `platform` | tenant chart | no |
 | `bootstrap/templates/mctl-platform/mctl-api.yaml` + `infra-components/mctl-platform/mctl-api` | `admins-mctl-api` | `platform` | admins | source 1 only |
 | `bootstrap/templates/erpact/applications.yaml` | `erpact-*` | `erpact` | erpact | not re-read |
-| `bootstrap/**` (including AppProjects) | `root-app` | `default` | argocd | no |
-| `argocd/**` | `argocd-self-managed` | `default` | argocd | no |
+| `bootstrap/**` (including AppProjects) | `root-app` (recovery chain) | `default` | argocd | no |
+| `argocd/**` | `argocd-self-managed` (recovery chain) | `default` | argocd | no |
+| `bootstrap/templates/{core-infra,data,observability,mctl-platform,system}/*` (26 files) | platform Applications | `default` | various | mixed; not re-read per file |
 
 Application names are hyphen-joined (`<team>-<svc>`), so wildcards are
 unsafe and only exact names are used (R-M2). AppProjects and RBAC are applied
@@ -248,7 +316,19 @@ their effect order is independent of commit order (R-R4).
   almost never `main` HEAD by the time a sync runs.
 
 Deployed state checked:
-- `git log -1` on the clone: `a1e22940...` (2026-11-21 10:14 UTC). The clone
+- Revision 5: `git log -1` on the clone: `f27a075d...` (2026-11-21 14:30
+  UTC, an image bump). Re-read `root-app.yaml`, `project-default.yaml`,
+  `applicationset-apps.yaml`, `applicationset-tenants.yaml`,
+  `project-apps.yaml`, `argocd/templates/argocd-self-managed.yaml` and
+  `bootstrap/values.yaml`. `grep -rln "project: default"
+  platform-gitops/bootstrap/templates` gave 27 files including root-app.
+  `grep -rn syncWindows platform-gitops`: no hits.
+- Revision 5: `mctl_whoami` re-run 2026-11-21: `agent:issue-investigator`,
+  Admin false, Teams [], no namespaces. Live AppProjects, live Applications
+  in `default` and the live Argo version remain `unknown`.
+- Revision 5: `gh api .../issues/comments/7064106704` (the revision 4
+  review) was read in full and is the input for revision 5.
+- Revision 4: `git log -1` on the clone: `a1e22940...` (2026-11-21 10:14 UTC). The clone
   is shallow, so `467d6de` cannot be resolved for a diff, and the cited
   lines were re-read directly instead.
 - `grep syncWindows|freeze` over `platform-gitops/bootstrap`,
@@ -292,9 +372,13 @@ prototypes. It does **not** produce a running system.
    Argo CD **v3.3.8** (chart `argo-cd` 9.5.9) and a local git server. It
    holds dummy Applications shaped like MCTL's: multi-source,
    AppSet-generated, tracking `main`. It adds **one fully SHA-pinned
-   multi-source pilot** for the G0 tests, a root-app-like parent Application
-   that renders AppProjects and Application specs, and RBAC copied from
-   `rbac/tenants/labs.csv`.
+   multi-source pilot** for the G0 tests (reached through each pin
+   mechanism of 6.3.1 in turn), a root-app-like parent Application **in its
+   own `default`-like AppProject** that renders AppProjects and Application
+   specs, a self-managed RBAC Application in the same project, and RBAC
+   copied from `rbac/tenants/labs.csv`. The ApplicationSet is a copy of
+   `applicationset-apps.yaml` with `preserveResourcesOnDeletion: false`
+   kept, so that the deletion risk of 6.3.1 is real in the harness.
 4. `tests/research/release_calendar_s0/broker-model/`: an inert broker
    prototype (section 6). It talks only to the harness Argo CD and to a local
    Postgres holding a copy of the `action_approval_requests` schema, the
@@ -372,6 +456,47 @@ Time semantics (unchanged):
 - Recurrence subset: daily, weekly or monthly, with `byday` (no ordinals)
   and `bymonthday`, and no `COUNT` or `UNTIL`. Anything else is `UNKNOWN`.
 
+#### 2.1 Deny-only MVP (revision 4 review P2-3)
+
+The truth table keeps rows 3 and 4 so that the model mirrors Argo
+`CanSync(false)` and can classify a hand-written allow. The MVP **emits and
+accepts no allow window** (R-N1):
+
+- the canonical policy validator refuses `kind: allow` (T183);
+- the projection generator has no allow output;
+- `mctl_propose_release_window` accepts `kind: deny` only (section 8.2);
+- the rendered-AppProject scan (section 3.2) refuses a `kind: allow` that a
+  human PR writes directly into `bootstrap/templates/projects/*.yaml`
+  (T184).
+
+Why allow is not "just another window": on v3.3.8, once **any** allow
+matches an Application, that Application is denied at every instant at
+which no matching allow is active (row 4). Adding an allow that is inactive
+now freezes the matched Applications now. An allow whose selector drifts
+to an extra Application freezes that one too. Those effects are outside the
+interval the author wrote, and the deny-weakening checks of revision 4
+(R-I5, T145) do not see them.
+
+A later proposal that re-admits allow must bring, separately from deny
+(R-N4):
+
+1. An **effective-policy diff**. The S0 simulator
+   (`model.py effective-diff`, offline) evaluates base and candidate per
+   matched Application over a horizon (default 35 days) and lists every
+   boundary instant where the decision changes, inside and outside the
+   allow interval.
+2. A **blast radius** from the rendered match set (section 3.2), not from
+   the intended scope.
+3. A recovery-chain check (R-L3).
+4. An owner approval.
+5. Negative fixtures: an inactive allow, allow plus deny, a drifted
+   selector and a cross-midnight allow.
+
+S0 measures on the harness, in the target AppProject (T180-T182): an
+inactive allow alone blocks auto-sync immediately; a concurrent allow plus
+deny gives deny; a drifted allow selector freezes the extra Application.
+Each result is compared with the model.
+
 ### 3. Merge queue and point of effect
 
 There are four instants: `t_check`, `t_merge`, `t_sync_start` and
@@ -403,6 +528,7 @@ per (window, intended Application):
 | `effective` | `armed`, and `start <= now < end`, and `activeWindows` contains the deny. For an exception design, `canSync` (manual) also equals the intended `manualSync` |
 | `expired` | `now >= end`, and the projection has been removed (or never recurs) |
 | `drifted` | Live and desired disagree after `reconciling` exceeded its SLA; or a yearly-cron projection of a one-off is still present after `end`; or an unintended Application is matched |
+| `self-locked` | A live window matches a recovery-chain Application (section 3.2). It takes precedence over `drifted` and `reconciling`, and is reported as "not recoverable via GitOps" |
 | `unknown` | Any read returned 403, a timeout or an error, or is older than `max_read_age` |
 
 Rules:
@@ -438,6 +564,79 @@ Cases S0 fixtures cover (T110-T117):
 - A changed selector that drops an intended Application, or adds an
   unintended one.
 - A 403 or stale read giving `unknown`.
+
+#### 3.2 Bootstrap self-lockout guard and recoverability (revision 4 review P1-1)
+
+Invariant (replaces revision 4's R-A9): **no sync window, from any author,
+may match an Application in the recovery chain**. The chain has two
+required members, `root-app` and `argocd-self-managed`; S0 task 4
+enumerates further dependencies. The MVP rule is stricter and simpler:
+**no window at all in AppProject `default`** (R-L2). That covers both
+members and every other platform Application in `default`, without having
+to prove the chain complete first.
+
+The check is a **rendered match**, not a reading of the policy's intended
+scope (R-L3):
+
+1. Render `platform-gitops/bootstrap` with `bootstrap/values.yaml` at the
+   candidate commit (as `scripts/validate-argocd-project-scope.py` already
+   renders this chart and the argocd chart for project scope).
+2. Add `argocd-self-managed` from the argocd chart render.
+3. Expand the ApplicationSet generators offline: the `apps` directory
+   generator over `services/*/*` and the `tenants` generator, both at the
+   candidate tree.
+4. For every AppProject in the render and every window in it, compute the
+   match set with v3.3.8 semantics: glob over `applications`, `namespaces`
+   and `clusters`; OR across them by default, AND with `andOperator`;
+   evaluated only against Applications whose `spec.project` is that
+   AppProject.
+5. Refuse when the window is in `default` (R-L2), when the match set
+   intersects the recovery chain (R-L3), or when the window has
+   `kind: allow` (R-N1).
+6. Run the same computation on base and candidate, so that a change that
+   **moves** an Application (a `project` edit, an AppProject rename, a new
+   Application in `default`, a widened selector) is refused even when no
+   window text changed (R-L4).
+
+Where it runs (all from the base, R-T1): the canonical policy validator;
+the projection generator; the `mctl_propose_release_window` model
+(section 8.2); and a scan of rendered AppProjects for **hand-written**
+`syncWindows`, so that a human PR to `project-*.yaml` is caught too
+(R-L5). In S0 all four are offline fixtures. Wiring any of them into CI is
+S1.
+
+Positive control (R-L8, T162). With an `effective` deny in `apps` that
+matches a pilot, root-app is not matched (a different project), so it
+still applies a reviewed revert of the window. argocd-self-managed still
+applies a reviewed RBAC change. Both are measured on the harness.
+
+Existing self-lockout (R-L6, T165). If the live state shows a window that
+matches a recovery-chain Application (injected on the harness, for example
+by an admin `kubectl edit` of the `default` AppProject), the status is
+`self-locked`: "not recoverable via GitOps". It is not `drifted` or
+`reconciling`, because waiting for reconciliation cannot fix it. An alert
+fires.
+
+Break-glass recovery, walked on the harness only (R-L7, T166-T167):
+
+1. Declare an incident and record who acts.
+2. Merge the revert of the window to `main` through the normal reviewed
+   path. root-app cannot apply it yet.
+3. As admin, try `argocd app sync root-app` and record the result. The
+   expected result is a refusal by the window (no role exemption), unless
+   the deny has `manualSync: true`.
+4. As cluster admin, `kubectl edit appproject default` and delete the
+   window from the live object only.
+5. root-app's auto-sync resumes and applies `main`, which no longer holds
+   the window. **The order matters.** If step 4 runs before step 2,
+   root-app's selfHeal re-applies the window from `main` and locks itself
+   again (T167, a negative case).
+6. Verify that the activation state is no longer `self-locked`, and attach
+   the audit trail (the Kubernetes audit entry for the edit, the admin
+   identity, the PR, the root-app sync revision) to the incident.
+
+The `project-default.yaml:46-48` comment is accurate only while this
+invariant holds. Correcting it is a follow-up (R-L9).
 
 ### 4. Trust boundary
 
@@ -589,6 +788,7 @@ In both cases the grant is `applications, sync` and `get` on
   together with the approved revisions. This is `unknown` until T103
   measures it. If T103 shows that such a change can be applied, G0 is
   downgraded to G1 for spec fields, and the memo must say so.
+- **Pin mechanism.** See 6.3.1. The shared value cannot be used.
 - **Shared charts and AppSet updates.** For a G0 pilot, a shared-chart change
   takes effect only through a reviewed pin move. For main-tracking `apps`
   Applications, a `helm-charts/base-service` change re-renders every
@@ -603,6 +803,50 @@ In both cases the grant is `applications, sync` and `get` on
 - **Diff basis.** The intent diff is computed between the reviewed base
   render and the **current destination live state**, not between two git
   commits. Drift in live state therefore appears in the approved diff.
+
+#### 6.3.1 Per-Application pin migration for the deployed ApplicationSet (revision 4 review P2-2)
+
+Today every `apps` Application gets both `targetRevision` values from
+`.Values.spec.source.targetRevision`, and the generator reads directories at
+the same value (`applicationset-apps.yaml:14,38,50`). **Changing that value
+is forbidden as a pilot pin** (R-PM1). It would pin the generator, every
+`apps` Application, root-app, the `tenants` ApplicationSet and every
+bootstrap Application to one commit, and it would stop all deploys.
+
+S0 evaluates three per-Application mechanisms on the harness. It renders
+them offline against a copy of the deployed ApplicationSet and applies none
+of them to the repository:
+
+| Mechanism | Shape | Ownership | Main risk to test |
+|---|---|---|---|
+| M1 merge generator | `merge` of the existing directory generator with a `list` (or git files) generator keyed on `path.path`, which carries `chartRevision`/`valuesRevision` for the pilot only. The template uses an explicit default (for example `{{ dig "chartRevision" "<shared>" . }}`) because of `missingkey=error` | `apps` ApplicationSet, unchanged | The generator of **every** `apps` Application changes. Non-pilot output must be byte-equal (T170). The generator `revision` must stay `main` (T172) |
+| M2 git files generator | Replace the directory generator by a git files generator over `services/*/*/release-pin.yaml` (or an optional key), with the same `path` parameters | `apps` ApplicationSet | Parameter names change (`path` vs `path.path` segments); a mis-mapped name renames an Application, which is a delete plus a create under `preserveResourcesOnDeletion: false` (T171) |
+| M3 isolation | Exclude the pilot directory from the `apps` generator (`exclude: true`) and declare a standalone Application in `bootstrap/templates/` with SHA-pinned sources, like `mctl-platform/mctl-api.yaml` | root-app (a new single owner) | Excluding the directory makes the ApplicationSet **delete** the generated Application, and with `preserveResourcesOnDeletion: false` its resources go too. A safe handoff needs one of: the standalone Application lands first under the same name, and the ApplicationSet controller is shown not to delete an Application it no longer owns; or a temporary `applicationsSync: create-update` policy. Both are `unknown` until T173 |
+
+For each mechanism S0 shows (T170-T177):
+
+1. Every non-pilot generated Application is byte-equal after normalization
+   (drop `status`, `metadata.resourceVersion`, `generation` and
+   `managedFields`) to its pre-migration spec: name, project, sources,
+   paths, `helm.valueFiles`, annotations (including
+   `manifest-generate-paths`), `syncPolicy` and `ignoreDifferences`.
+2. No Application `metadata.uid` changes, and no pilot resource uid
+   changes: nothing is pruned or recreated.
+3. The pilot differs only in its two `targetRevision` values. The
+   generator `revision` stays `main`.
+4. The reverse migration restores the pre-migration output byte-equal,
+   again with no deletion.
+5. A mutation test that "pins" by editing the shared value makes check 1
+   fail for every Application, which proves the check detects it.
+
+If no mechanism passes, the memo records "no safe per-Application pin", G0
+is unavailable, and `BROKER_PINNED_PILOT_CANDIDATE` cannot be concluded
+(R-PM7). For any passing mechanism the memo records the cost: the pilot's
+image bumps from `release-deploy.yaml`/`gitops-bump.yaml` change the
+values file on `main` but take effect only after a reviewed pin move,
+which is a `bootstrap/**` write (Table B). The pin move itself goes through
+root-app, which is why the recovery-chain invariant (3.2) is a precondition
+of G0 too.
 
 #### 6.4 RBAC isolation for frozen Applications
 
@@ -711,7 +955,9 @@ B ∈ {present, absent}):
   state, alert, and do not continue.
 
 RBAC changes go through `argocd-self-managed` and window changes through
-`root-app`. They are separate commits that are each **observed** before the
+`root-app`. Both are in AppProject `default`, so the rollback order is
+executable through GitOps only because no window may exist in `default`
+(3.2). A self-lockout would turn every rollback step into break-glass. They are separate commits that are each **observed** before the
 next one is merged. Commit order alone proves nothing (R-R4). Revision 3's
 rollback ("restore tenant RBAC, then remove the window") passed through the
 unsafe cell and is withdrawn. T96 and T130-T133 test every edge.
@@ -790,7 +1036,9 @@ cannot merge.
 - **Input schema (exact scope).**
   - `scope` is a list of exact Application names, each present in the
     generated map (Table C / task 4).
-  - `kind` is `deny` or `allow`.
+  - `kind` must be `deny`. `allow` is refused in the MVP (2.1, T183).
+  - The target AppProject must not be `default`, and the rendered match
+    set must not reach the recovery chain (3.2, T160-T161).
   - Schedule: either `zone` (IANA, validated with `zoneinfo`) plus `recur`
     (the section 2 subset) plus `start_local`/`end_local`; or
     `start_utc`/`end_utc`.
@@ -847,6 +1095,8 @@ cover:
 
 - an unrelated project (the window does not match, so the policy says `DENY`
   but the activation state is `drifted`);
+- a live window that matches `root-app` (`self-locked`, "not recoverable via
+  GitOps", never `drifted`; T165);
 - a changed selector;
 - a missing live AppProject (`unknown`);
 - admin and `kubectl` residuals;
@@ -864,7 +1114,8 @@ cover:
 | Tenant manual-sync bypass | blocked if T revoked first (6.7) | same | open during carve-out | blocked | blocked | n/a |
 | Admin / kubectl bypass | residual | residual | residual | residual | is the path | residual |
 | Second approval authority | no (mctl-api ledger) | no | no | **the role holder** | the admin | n/a |
-| Requires a pin change of the pilot (S3) | **yes** | no | no | no | no | fork |
+| Requires a pin change of the pilot (S3) | **yes**, through M1/M2/M3 only (6.3.1, T170-T177) | no | no | no | no | fork |
+| Recovery chain stays syncable | required (3.2, T160-T169) | required | the carve-out edits the AppProject through root-app, so required | required | required | n/a |
 | New trusted component and state | broker, Argo role, `release_exception_ops`, dedicated kind, token minter | same | generator + detector | role + token | none | fork |
 | Tenant UX cost | loses manual sync on the pilot; deploys by pin PR | loses manual sync | none | loses manual sync | none | n/a |
 | Implementation burden | high | high | medium | low | none | very high |
@@ -874,6 +1125,8 @@ Falsifiable S0 outcome. The memo picks exactly one:
 
 - `BROKER_PINNED_PILOT_CANDIDATE`, only if all of the following hold:
   - T100-T103 show zero unapproved apply on the pinned harness pilot;
+  - one pin mechanism passes T170-T177;
+  - T160-T169 pass (no self-lockout is reachable, and recovery is shown);
   - T80-T96, T120-T133 pass;
   - the token-compromise boundary is accepted **explicitly** as a residual;
   - the dedicated-kind semantics are acceptable to the mctl-api owner.
@@ -903,7 +1156,8 @@ Translation to v3.3.8 `syncWindows`:
 | One-offs, including the cross-year `0 0 24 12 *` + `216h` | translatable-with-lifecycle (emit near start, remove after end, drift check feeding the `drifted` state) |
 | Ordinal weekday, `COUNT`, `UNTIL` | not-translatable; the Argo layer is `incomplete`, with a non-zero exit and no partial projection |
 
-`timeZone` is not used.
+`timeZone` is not used. Allow rows are model-only: the MVP projection emits
+deny windows only (2.1), never into AppProject `default` (3.2).
 
 Products (primary docs read 2026-11-20):
 
@@ -933,6 +1187,14 @@ only, and prices are `unknown`.
 - **Direct AppProject writes by MCP tools.** Rejected in favour of PR
   authoring (section 8).
 - **External CD product.** Dropped as an engine.
+- **Pinning a pilot through the shared `targetRevision`.** Rejected: it pins
+  every Application and the generator (6.3.1).
+- **Windows in AppProject `default`.** Rejected for the MVP: they can lock
+  root-app and argocd-self-managed (3.2). A narrower rule ("only selectors
+  that miss root-app") was dropped because it depends on proving the
+  recovery chain complete, which S0 has not done.
+- **Allow windows in the MVP.** Dropped: an allow freezes its matched
+  Applications outside its interval (2.1).
 - **Mutating the Application spec per exception.** Dropped: it is an unbound
   production write with a fail-open revert. Pinning by a reviewed PR is
   different: it is the normal GitOps path, and it is evaluated only as an S3
@@ -951,7 +1213,10 @@ only, and prices are `unknown`.
 - Eventual production boundary. This is not authorized and is recorded only
   for a future security GO. Each item is a separate reviewed change,
   applied in the 6.7 order and each observed before the next:
-  - pin the pilot's sources;
+  - pin the pilot's sources through the one mechanism that passed
+    T170-T177 (never the shared value);
+  - the recovery-chain guard (3.2) and the deny-only rule (2.1) in CI,
+    before any window is merged;
   - an Argo project role and token minter;
   - the `argocd-cm` flag;
   - RBAC deny lines for the pilot and a narrower `wft-create-tenant`;
@@ -970,4 +1235,8 @@ only, and prices are `unknown`.
   - G2 detection mistaken for enforcement: R-E2 and the matrix.
   - A merged window mistaken for an active one: section 3.1.
   - Token theft: 6.6, labelled not enforced.
+  - A freeze locking its own revert path: 3.2, refused on every write path
+    and reported `self-locked` if it appears live.
+  - A pilot pin rippling into other services: 6.3.1, byte-equal proofs.
+  - An allow window freezing outside its interval: 2.1, deny-only MVP.
   - The broker becoming a second authority: it only spends ledger grants.

@@ -1,6 +1,8 @@
 # Tasks: issue-2828-spike-release-governed-release-calendar
 
-Revision 4 covers **S0 only**. S0 is research, a read-only inventory, an
+Revision 5 covers **S0 only**. It adds tasks 17-19 and tests T160-T186 for
+the revision 4 review (self-lockout, single-pilot pin migration, deny-only
+MVP). S0 is research, a read-only inventory, an
 offline model, a local inert Argo CD v3.3.8 harness, an inert Governed Sync
 Broker prototype and an inert MCP-PR-authoring model.
 
@@ -32,14 +34,15 @@ S1, S2 and S3 tasks are deliberately **absent**.
 - [ ] 1. Re-verify design tables A/B read-only (depends on 0). Read: ruleset 18465404 `bypass_actors` and the org rulesets (an owner admin read, else `unknown`); the deploy keys; the live Argo CD version, `argocd-cm`, `argocd-rbac-cm` and AppProjects; `syncWindows`; project roles. — DoD: `docs/spikes/2828-release-calendar/inventory.md` labels P1-P17 (P8a-P8d separately), each with a citation and a date. Failed reads are `unknown`.
 - [ ] 2. Re-read P7 per source, and flag `docs/runbooks/mctl-api-release-hold.md:66` as stale (depends on 0) — DoD: P7a, P7b and P7c are listed separately. `admins-mctl-api` is recorded as partially pinned, so it is not a G0 pilot. The runbook fix is mapped as a follow-up to the #2528 lineage and is not filed without an owner GO.
 - [ ] 3. Measure commit-to-sync-start latency and root-app reconcile latency from existing read-only data (depends on 0) — DoD: p50/p95/max with sample size and date range, or `unknown` with the reason. This sets proposed values for `activation.lead` and `max_read_age`. #970's figure is not reused unmeasured.
-- [ ] 4. Generate the scope map from a render at a pinned SHA (depends on 1) — DoD: `tests/fixtures/release-calendar-s0/app-map.json` lists `path -> Application -> AppProject -> namespace`, the per-Application sources with their `targetRevision` and a pinned flag, and `manifest-generate-paths`. T60-T64 pass.
+- [ ] 4. Generate the scope map from a render at a pinned SHA (depends on 1) — DoD: `tests/fixtures/release-calendar-s0/app-map.json` lists `path -> Application -> AppProject -> namespace`, the per-Application sources with their `targetRevision` and a pinned flag, and `manifest-generate-paths`. It includes `argocd-self-managed` from the argocd chart render and the offline expansion of both ApplicationSet generators. Each entry carries a `recovery_chain` flag: `root-app` and `argocd-self-managed` are `required`; other candidates (`zitadel`, `vault`, `external-secrets`, ingress) are `required`, `not-required` or `unknown` with a reason. T60-T64 pass.
 - [ ] 5. Offline model `tests/research/release_calendar_s0/model.py`: the policy function and the activation-state function (stdlib, PyYAML and `zoneinfo`; injected clock; `python3 -I`) (depends on 0) — DoD: T1-T13 and T110-T117 (the model parts) pass. Nothing else imports it.
 - [ ] 6. Inert harness `argo-inert/` (depends on 4). Contents:
   - kind/k3d with Argo CD v3.3.8 (chart 9.5.9) and a local git server;
   - an AppSet generating multi-source, auto-sync, main-tracking Applications;
   - **one fully SHA-pinned multi-source pilot Application**;
-  - a root-app-like parent rendering AppProjects and Application specs;
-  - a self-managed RBAC Application;
+  - a root-app-like parent rendering AppProjects and Application specs, in its own `default`-like AppProject;
+  - a self-managed RBAC Application in the same project;
+  - a copy of `applicationset-apps.yaml` with `missingkey=error` and `preserveResourcesOnDeletion: false` kept;
   - two tenants with RBAC copied from `rbac/tenants/labs.csv`;
   - `role:admin` as in `argocd/values.yaml:178-184`.
 
@@ -54,15 +57,19 @@ S1, S2 and S3 tasks are deliberately **absent**.
 - [ ] 14. Status-contract fixtures (depends on 5, 7) — DoD: T150-T156 pass against the design 8.3 schema.
 - [ ] 15. Translation prototype (stdout only) and a vendor evidence refresh (depends on 5, 6) — DoD: T50-T56 pass. The vendor table carries URLs, the access date and `unknown` prices.
 - [ ] 16. Base-trust fixtures in a local throwaway git repo (depends on 5) — DoD: T70-T73 pass. T74 stays `unknown` unless it is reproduced in an owner-provided sandbox repo.
-- [ ] 17. Decision memo `docs/spikes/2828-release-calendar/decision.md` (depends on 1-16). DoD, all of:
+- [ ] 17. Recovery-chain guard model and self-lockout walk (depends on 4, 5, 6). Build the offline rendered-match checker of design 3.2 (`model.py lockout-check`: render, expand generators, v3.3.8 match semantics with OR and `andOperator`, base and candidate) and run the harness positive control, the injected self-lockout and the break-glass walk. — DoD: T160-T169 recorded. The memo states whether admin manual sync of a self-locked root-app is refused on v3.3.8, and the exact break-glass order. The `project-default.yaml:46-48` comment correction is listed as a follow-up and is not filed without an owner GO.
+- [ ] 18. Single-pilot pin migration feasibility on the harness (depends on 4, 6). Render and apply M1, M2 and M3 (design 6.3.1) in turn to the harness copy of the `apps` ApplicationSet, then their reverse migrations. Nothing is changed in the repository. — DoD: T170-T177 recorded for each mechanism with pass/fail. The memo names the mechanism that passed, or records "no safe per-Application pin" (R-PM7), and states the deploy-flow cost for the pilot.
+- [ ] 19. Allow-window impact on the harness and the effective-policy simulator (depends on 5, 6). — DoD: T180-T186 recorded. `model.py effective-diff` exists offline for any later allow proposal. The deny-only rule is shown to hold on every modelled write path.
+- [ ] 20. Decision memo `docs/spikes/2828-release-calendar/decision.md` (depends on 1-19). DoD, all of:
   - the refreshed design section 9 matrix;
   - exactly one calendar outcome;
   - exactly one exception-path outcome (`BROKER_PINNED_PILOT_CANDIDATE` / `BROKER_DETECT_ONLY_REQUIRES_OWNER_RISK_ACCEPTANCE` / `E2_HUMAN_ROLE_ONLY` / `D_BREAKGLASS_ONLY` / `NEITHER_SAFE_YET`), defaulting to `NEITHER_SAFE_YET` when evidence is incomplete;
   - a reuse statement: what comes from mctl-api as-is, and what would be new (broker, Argo role and minter, `release_exception_ops`, dedicated kind, pilot pin);
   - residual risks: admin, `kubectl`, the spec-field race (T103), token compromise (T105), the activation gap;
   - follow-ups mapped to existing issues (#2543, #2668, #2528, mctl-api#1022, .github#181, .github#254, mctl-agents#217, argoproj/argo-cd#29558);
-  - a "resolved by / still open" line for every finding of both reviews (R1 P1-1..P3-11; re-review P1-1..P1-4, P2-5..P2-7, P3-8) and for every Revision 3 item 1-8.
-- [ ] 18. Independent re-review and owner decision (depends on 17) — DoD: a reviewer other than the investigator comments on #2828, and the owner records the outcome. `.status.yaml` stays `proposed` until that human process changes it.
+  - a "resolved by / still open" line for every finding of all three reviews (R1 P1-1..P3-11; re-review of revision 3 P1-1..P1-4, P2-5..P2-7, P3-8; review of revision 4 P1-1, P2-2, P2-3) and for every Revision 3 item 1-8;
+  - the recovery-chain result (T160-T169), the pin mechanism result (T170-T177) and the allow result (T180-T186).
+- [ ] 21. Independent re-review and owner decision (depends on 20) — DoD: a reviewer other than the investigator comments on #2828, and the owner records the outcome. `.status.yaml` stays `proposed` until that human process changes it.
 
 ## Tests
 
@@ -168,7 +175,7 @@ Argo layer and baselines (tasks 10, 12)
 - [ ] T93. A tenant resource action (`Deployment/restart`) during a deny window -> record whether it is blocked, and label P8d accordingly.
 - [ ] T97. Injected failures side by side: E1's restore fails, the broker crashes mid-claim, the E2 role token is unavailable -> E1 is left open; the broker and E2 are left closed.
 - [ ] T98. `requireOverridePrivilegeForRevisionSync` `"true"` against unset: a `sync`-only principal passing a non-`targetRevision` SHA is refused, by `override` when the flag is true and by auto-sync in both cases.
-- [ ] T99. Admin bypass evidence: `role:admin` syncs during a deny, edits the window and uses `override`; `kubectl apply` changes a frozen resource. Each is recorded as break-glass with its audit trail.
+- [ ] T99. Admin bypass evidence: `role:admin` attempts a manual sync during a deny (with and without `manualSync`), edits the window and uses `override`; `kubectl apply` changes a frozen resource. Each result is recorded, and each successful path is labelled break-glass with its audit trail.
 
 MCP PR authoring (task 13; re-review P2-5, P3-8)
 - [ ] T140. A valid proposal -> exactly one branch `release-window/<window_id>`, one PR, and a diff limited to one `windows[]` entry.
@@ -214,9 +221,42 @@ Trust boundary (task 16)
 - [ ] T73. A `yaml.py` planted in the candidate tree is not imported.
 - [ ] T74. A same-named `validate` job -> `unknown` unless reproduced in an owner sandbox repo.
 
+Bootstrap self-lockout and recoverability (task 17; revision 4 review P1-1)
+- [ ] T160. (a) A proposed deny in AppProject `default`, with any selector (`applications: ["root-app"]`, `["*"]`, `namespaces: ["argocd"]`, `clusters: ["*"]`, or a selector matching only a non-chain `default` Application) -> refused by the policy validator and by the `mctl_propose_release_window` model before any branch exists.
+- [ ] T161. A hand-written `syncWindows` deny added to `project-default.yaml` in a human PR (no policy-file change) -> refused by the rendered-AppProject scan run from the base. The same for `kind: allow`.
+- [ ] T162. (b) Positive control on the harness: an `effective` deny in the `apps`-like project matches a pilot; a reviewed revert of that window is merged; root-app applies it and the window disappears from the live AppProject. A reviewed RBAC change is applied by the self-managed RBAC Application during the same window.
+- [ ] T163. (c) Project migration: a candidate commit changes root-app's `spec.project` from `default` to `apps` while `apps` holds a deny with `applications: ["*"]` -> refused, although no window text changed. The same for moving `argocd-self-managed`, and for renaming an AppProject so that a window lands on the chain.
+- [ ] T164. (c) Selector expansion: a deny in `apps` widened from an exact name to `["*"]` or to a `namespaces` glob -> the rendered match set is recomputed; refused only if it reaches the chain. With `andOperator: true` and with OR, the checker agrees with the harness `assignedWindows`.
+- [ ] T165. (d) Injected existing self-lockout: an admin `kubectl edit` adds a deny matching root-app to the live `default`-like AppProject -> the status is `self-locked`, "not recoverable via GitOps", never `drifted` or `reconciling`, and the alert fires.
+- [ ] T166. Break-glass walk (harness only, recorded as an audited incident): the revert is merged; an admin `argocd app sync root-app` is attempted and the result recorded; the live window is removed by `kubectl edit`; root-app applies `main`; the state leaves `self-locked`. The audit trail (Kubernetes audit entry, admin identity, PR, root-app sync revision) is attached.
+- [ ] T167. Negative order: the live window is removed **before** the revert is merged -> root-app's selfHeal re-applies the window from `main` and the state returns to `self-locked`. This proves the order in design 3.2.
+- [ ] T168. A deny in `default` that matches only a non-chain Application (for example a `monitoring`-like one) -> still refused by the MVP rule (R-L2). A mutation that relaxes R-L2 to "chain-only" makes this test fail.
+- [ ] T169. A mutation of the checker that reads the policy's intended scope instead of the render -> T163 and T164 fail, proving the render is what is checked.
+
+Single-pilot pin migration (task 18; revision 4 review P2-2)
+- [ ] T170. For M1, M2 and M3: every non-pilot generated Application spec is byte-equal after normalization before and after the migration (name, project, sources, paths, `helm.valueFiles`, annotations including `manifest-generate-paths`, `syncPolicy`, `ignoreDifferences`).
+- [ ] T171. For each mechanism: no Application `metadata.uid` changes, and no resource uid of the pilot or of any other Application changes. Nothing is pruned or recreated.
+- [ ] T172. For each mechanism: the pilot differs only in its two `targetRevision` values, both set to commit SHAs, and the generator `revision` is still `main`.
+- [ ] T173. M3 handoff under `preserveResourcesOnDeletion: false`: excluding the pilot directory, with each handoff variant (standalone Application first under the same name; a temporary `applicationsSync: create-update`) -> record whether the ApplicationSet deletes the Application or its resources. A variant that deletes anything fails.
+- [ ] T174. For each mechanism, a pin key missing for a non-pilot under `missingkey=error` -> the template renders the shared value, and no generator error stops the ApplicationSet.
+- [ ] T175. The reverse migration for each mechanism -> pre-migration output byte-equal, no deletion (T170/T171 re-run).
+- [ ] T176. Mutation: pinning by editing the shared `.Values.spec.source.targetRevision` -> T170 fails for every Application and T172 fails for the generator, proving the checks detect it.
+- [ ] T177. After a passing mechanism, an image bump to the pilot's `values.yaml` on `main` -> no change to the pilot until a reviewed pin move lands, which is recorded as the deploy-flow cost.
+
+Allow windows and deny-only MVP (task 19; revision 4 review P2-3)
+- [ ] T180. Harness: an allow window that is **inactive** now, added alone to the target AppProject -> matched Applications are blocked for auto-sync now (`CanSync(false)` false); the model's row 4 agrees.
+- [ ] T181. Harness: an active allow plus an active deny on the same Application -> deny; the model's row 2 agrees (consistent with T5).
+- [ ] T182. Harness: an allow whose selector drifts to an extra Application -> the extra Application is frozen outside the allow interval; the effective-policy diff lists it.
+- [ ] T183. The policy validator and the `mctl_propose_release_window` model refuse `kind: allow`, whatever the scope.
+- [ ] T184. A hand-written `kind: allow` in a rendered AppProject (human PR) -> refused by the rendered-AppProject scan.
+- [ ] T185. `model.py effective-diff` over 35 days for a candidate allow lists every boundary instant at which the decision changes, inside and outside the allow interval; a cross-midnight allow and a DST week are included.
+- [ ] T186. Mutation: the deny-only check disabled -> T183 and T184 fail.
+
 ## Rollback
 
 - S0 changes nothing live. Withdrawing or rejecting the proposal is the rollback.
+- The pin-migration experiments (task 18) run only against the harness copy of the ApplicationSet. Each has a tested reverse migration (T175). Nothing in `bootstrap/` is changed.
+- The self-lockout injection and the break-glass walk (task 17) run only on the harness. The production recovery order, if one is ever needed, is the one T166 proves: merge the revert first, then remove the live window, then let root-app apply `main`.
 - S0 artifacts are documentation and inert test assets. Workflows, charts, CWFTs, services and MCP do not reference them. Reverting the PR that adds them removes them completely.
 - The harness clusters and the local Postgres are deleted with `kind delete cluster` / `k3d cluster delete` and by removing the container. They hold no production data or credentials.
 - The phase order for an eventual pilot is recorded for the security GO only (design 6.7). It replaces the revision 3 order, which passed through the unsafe state.
