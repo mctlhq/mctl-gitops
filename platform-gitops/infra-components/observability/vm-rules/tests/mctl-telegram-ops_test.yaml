@@ -310,22 +310,94 @@ tests:
 
   # ------------------------------------------------------ worker-token auth
   #
-  # mctl_worker_token_revocation_refresh_failures_total moves once per failed
-  # inline refresh. In an outage every worker-token request is one, and the
-  # pool worker's worst-case error backoff is 60s, so one failure a minute is
-  # the slowest sustained outage there is. It must page; a lone failure, a
-  # burst and a flat counter must not.
-  - interval: 1m
-    name: revocation refreshes failing once a minute page after the hold
+  # mctl_worker_token_revocation_snapshot_age_seconds is how old the served
+  # snapshot is, from when its read began; the server refuses every worker
+  # token once it is above 15. The background refresher keeps it under 10
+  # on a healthy store, and it is computed at each scrape, so it climbs
+  # through an outage with no traffic at all (workers that exit on 401 and
+  # crash-loop send almost none). Samples every 30s, as the prod scrape.
+
+  # Store fails at 2m: the age climbs 30s per scrape. Above 15 from the 2m
+  # evaluation, so pending from there and firing once the 5m hold has run.
+  - interval: 30s
+    name: revocation snapshot past its bound pages after the hold
     input_series:
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0 0 1+1x30'
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '3 3 3 3 30+30x40'
     alert_rule_test:
-      # Not yet: two failures are in the window from 3m, so the alert is
-      # pending, and the five-minute hold has not run out.
       - eval_time: 6m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
+      - eval_time: 8m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+              description: "The worker-token revocation snapshot reached 6m 30s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
+
+  # A pod started into the outage has no snapshot: it reports its own age
+  # since the cache was created, never 0, so it pages like a stale one.
+  # Above 15 from the 1m evaluation, firing at 6m and not before.
+  - interval: 30s
+    name: a pod that never loads its snapshot pages
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '1+30x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+              description: "The worker-token revocation snapshot reached 6m 1s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
+
+  # Pod a goes stale at 1m and is replaced at 3.5m by pod b, which cannot
+  # load either. max by (job) over the two series stays above the bound
+  # through the restart, so the hold is not reset.
+  - interval: 30s
+    name: an outage across a pod restart keeps paging
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '3 3 30+30x4'
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="b"}'
+        values: '_x7 1+30x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+              description: "The worker-token revocation snapshot reached 3m 31s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
+
+  # Every other scrape lands on a fresh snapshot. An instant sample would
+  # reset the hold each time; max_over_time over [1m] sees the stale one.
+  - interval: 30s
+    name: a flapping store that refuses tokens every minute pages
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20 2 20'
+    alert_rule_test:
       - eval_time: 10m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts:
@@ -335,20 +407,32 @@ tests:
               job: mctl-telegram
             exp_annotations:
               summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
-              description: "3 worker-token revocation refreshes failed in the last 3 minutes, and refreshes have kept failing for five minutes. Once the last good snapshot is 15 seconds old, every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down or unreachable): check the database, not the bound."
+              description: "The worker-token revocation snapshot reached 20s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
 
-  # A rollout restarts the counter on a new pod. sum by (job) drops pod, and
-  # increase() handles the reset, so an outage spanning a restart still pages.
-  - interval: 1m
-    name: a sustained outage across a pod restart still pages
+  # The server refuses at age > 15s, so 15 has refused nothing yet. Pins the
+  # threshold from below: `>= 15` or `> 14` would page here.
+  - interval: 30s
+    name: an age of exactly the bound does not page
     input_series:
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0 0 1 2 3 4 5 6 _x20'
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="b"}'
-        values: '_x8 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19'
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '15x40'
     alert_rule_test:
-      - eval_time: 16m
+      - eval_time: 10m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts: []
+
+  # Pins the threshold from above: `> 16` or a higher bound would not page.
+  - interval: 30s
+    name: an age just past the bound pages
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '16x40'
+    alert_rule_test:
+      - eval_time: 10m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts:
           - exp_labels:
@@ -357,18 +441,17 @@ tests:
               job: mctl-telegram
             exp_annotations:
               summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
-              description: "3 worker-token revocation refreshes failed in the last 3 minutes, and refreshes have kept failing for five minutes. Once the last good snapshot is 15 seconds old, every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down or unreachable): check the database, not the bound."
+              description: "The worker-token revocation snapshot reached 16s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
 
-  # One failed refresh is repaired by the next request's refresh: the
-  # snapshot is served throughout (it never reaches 15s) and no token is
-  # refused. The threshold, not the hold, is what keeps this silent: the
-  # expression never turns true. Checked at every point the window holds it.
-  - interval: 1m
-    name: a single failed refresh never pages
+  # A shared-pg failover: two stale scrapes, then healthy. The [1m] window
+  # drops them within the 5m hold, which is what silences it; a window as
+  # long as the hold, or no hold, would page.
+  - interval: 30s
+    name: one stale minute does not page
     input_series:
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0 0 1x30'
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '3 3 3 3 20 25 3x40'
     alert_rule_test:
       - eval_time: 3m
         alertname: MctlWorkerTokenRevocationRefreshFailing
@@ -376,68 +459,62 @@ tests:
       - eval_time: 5m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
-      - eval_time: 8m
-        alertname: MctlWorkerTokenRevocationRefreshFailing
-        exp_alerts: []
-      - eval_time: 20m
-        alertname: MctlWorkerTokenRevocationRefreshFailing
-        exp_alerts: []
-
-  # A shared-pg failover with traffic in flight: fifty failures over two
-  # minutes, then healthy. The expression is true while the [3m] lookback
-  # holds the burst (2m to 4m, evaluated at 3m below, where a rule without
-  # the hold would fire) and forgets it before the five-minute hold runs
-  # out, however large the burst.
-  - interval: 1m
-    name: a two-minute burst of failures ages out before the hold
-    input_series:
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0 0 25 50x30'
-    alert_rule_test:
-      - eval_time: 3m
-        alertname: MctlWorkerTokenRevocationRefreshFailing
-        exp_alerts: []
-      - eval_time: 4m
-        alertname: MctlWorkerTokenRevocationRefreshFailing
-        exp_alerts: []
       - eval_time: 7m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
+      - eval_time: 8m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts: []
+
+  # One replica stale while the other is healthy (its own connection pool
+  # exhausted): the workers routed to it are refused, so it pages. Pins the
+  # worst pod, not the best or the average of them.
+  - interval: 30s
+    name: one stale replica next to a healthy one pages
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '3x40'
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="b"}'
+        values: '16x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlWorkerTokenRevocationRefreshFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+              description: "The worker-token revocation snapshot reached 16s in the last minute and has been past its 15-second bound for five minutes. Past the bound every worker, pool, Local Bridge and job token is refused with 401, so agent workers are stopped. The store is the cause (shared-pg down, unreachable or hung): check the database, not the bound."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
+
+  # Interval 5s plus a read deadline of 5s keeps the age at or under 10.
+  - interval: 30s
+    name: a healthy refresher does not page
+    input_series:
+      - series: 'mctl_worker_token_revocation_snapshot_age_seconds{job="mctl-telegram",instance="prod",pod="a"}'
+        values: '3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10 3 8 1 9 4 7 2 10'
+    alert_rule_test:
       - eval_time: 10m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
-
-  # Intermittent, not an outage: one refresh in two fails, the other
-  # succeeds and keeps the snapshot younger than 15s, so tokens are served.
-  # Each [3m] window holds one failure; promtool extrapolates that to 1.5,
-  # which is why the threshold is > 1.5 and not > 1.
-  - interval: 1m
-    name: a failure every other minute amid successful refreshes stays silent
-    input_series:
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13 14 14 15'
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: MctlWorkerTokenRevocationRefreshFailing
-        exp_alerts: []
       - eval_time: 30m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
 
-  # The healthy state: the counter exists at 0 from server start and stays
-  # there. Also isolated failures far apart, each repaired at once.
-  - interval: 1m
-    name: a flat counter and isolated failures stay silent
+  # Binaries before #1360 export no age gauge: no data, no alert, so the
+  # rule cannot page falsely while the old release is still running.
+  - interval: 30s
+    name: no snapshot age series (binary without the refresher) does not page
     input_series:
       - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="a"}'
-        values: '0x60'
-      - series: 'mctl_worker_token_revocation_refresh_failures_total{job="mctl-telegram",instance="prod",pod="b"}'
-        values: '0x10 1x10 2x10 3x10 4x20'
+        values: '0+1x40'
     alert_rule_test:
-      - eval_time: 30m
+      - eval_time: 10m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
-      - eval_time: 55m
+      - eval_time: 20m
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
 
