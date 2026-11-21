@@ -283,19 +283,20 @@ spec:
         # success.
         - - name: implement-fallback
             template: run-implementer
-            # Two exit codes are refusals, not failures worth a second run on
-            # the other account, which would reach the identical answer:
-            #   64  the collector's structured no-commits refusal (#1053)
+            # Exit 45 is a refusal, not a failure worth a second run on the
+            # other account, which would reach the identical answer:
             #   45  EXIT_BLOCKED_ONLY from run_implementer: only proposals
             #       blocked on a missing approval, decided before any model
             #       call (mctl-agents#349, gitops#1206)
+            # A no-commits result is NOT skipped: it is indistinguishable
+            # from a 429 / usage-limit result, which the fallback is for.
             # Expression tag with an explicit default rather than a plain
             # `{{steps...exitCode}}`: a pod-level Error (deadline, OOM,
             # controller error) can leave the node without outputs, an
             # unresolved plain tag would fail the whole step group, and the
             # fallback must still run on exactly that path. `??` yields '0'
             # there. Compared as strings; exitCode is one.
-            when: "{{=steps['implement'].status != 'Succeeded' && !((steps['implement'].exitCode ?? '0') in ['45', '64'])}}"
+            when: "{{=steps['implement'].status != 'Succeeded' && !((steps['implement'].exitCode ?? '0') in ['45'])}}"
             arguments:
               parameters:
                 - name: oauth-key
@@ -720,41 +721,11 @@ spec:
                         fh.write(rel + "\n")
                         print("handing off DELETION of %s" % rel)
 
-            # A deliberate refusal is not a crash (#1053). When the agent ran
-            # to completion, changed nothing, and the ONLY thing handed off is
-            # needs-triage / failure.code no-commits, repeating the identical
-            # run on the second account cannot change the answer, so exit
-            # with a distinct code and let `implement-fallback` skip on it.
-            # Anything else (a crash, a mix with other proposals' updates, a
-            # deletion, an unreadable status file) keeps the real exit code
-            # and therefore still falls back.
-            NO_COMMITS_RC = 64
-
-
-            def _is_no_commits(rel):
-                try:
-                    with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
-                        lines = fh.read().splitlines()
-                except OSError:
-                    return False
-                top = [ln.partition(":")[2].strip().strip("'\"")
-                       for ln in lines if ln.startswith("status:")]
-                code = None
-                in_failure = False
-                for ln in lines:
-                    if ln.startswith("failure:"):
-                        in_failure = True
-                    elif in_failure and ln.startswith("  code:"):
-                        code = ln.partition(":")[2].strip().strip("'\"")
-                        break
-                    elif in_failure and ln and not ln.startswith(" "):
-                        break
-                return top == ["needs-triage"] and code == "no-commits"
-
-
-            if rc != 0 and copies and not deletions and all(_is_no_commits(p) for p in copies):
-                print("structured no-commits refusal; exiting %d so the fallback is skipped" % NO_COMMITS_RC)
-                sys.exit(NO_COMMITS_RC)
+            # No-commits is deliberately NOT mapped to a distinct exit code.
+            # run_implementer does not inspect ResultMessage.is_error, so a
+            # 429 / usage-limit result also ends as needs-triage / no-commits
+            # with no commits; the two are indistinguishable here, and the
+            # account-2 retry exists for exactly the quota case.
             sys.exit(rc)
             COLLECT
         env:
@@ -1361,10 +1332,6 @@ spec:
             45)
               echo "❌ Nothing was implemented: every accepted proposal is blocked on a missing approval (exit 45, not a quota failure)." >&2
               echo "   Look for the blocked marker in the proposal's .status.yaml and approve it; the fallback was skipped on purpose." >&2
-              exit 1 ;;
-            64)
-              echo "❌ The implementer declined: no commits, recorded as needs-triage / no-commits (exit 64, not a quota failure)." >&2
-              echo "   Inspect the proposal's .status.yaml; the fallback was skipped because a second run reaches the same answer." >&2
               exit 1 ;;
           esac
           echo "❌ Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason." >&2

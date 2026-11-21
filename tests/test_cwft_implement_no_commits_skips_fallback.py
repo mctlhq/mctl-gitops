@@ -1,4 +1,5 @@
-"""Refusals must not trigger implement-fallback (#1053, #1206).
+"""The blocked-only refusal (45) must not trigger implement-fallback (#1206);
+no-commits must (it is indistinguishable from a 429).
 
 run-implementer's collector decides the step exit code. Real exit codes are
 kept for crashes; only "everything handed off is needs-triage / no-commits"
@@ -61,9 +62,11 @@ def collect(rc, files):
         return r.returncode
 
 
-check("no-commits refusal, rc=1 -> 64", collect(1, {"a": NO_COMMITS}) == 64)
-check("two no-commits refusals -> 64",
-      collect(1, {"a": NO_COMMITS, "b": NO_COMMITS}) == 64)
+# A 429 / usage-limit result ends as needs-triage / no-commits too (the
+# implementer never inspects is_error), so it must keep the real exit code and
+# fall back to account 2.
+check("no-commits (quota-shaped), rc=1 -> real rc, fallback runs", collect(1, {"a": NO_COMMITS}) == 1)
+check("two no-commits -> real rc", collect(1, {"a": NO_COMMITS, "b": NO_COMMITS}) == 1)
 check("no-commits mixed with another failure -> real rc",
       collect(1, {"a": NO_COMMITS, "b": OTHER}) == 1)
 check("no-commits mixed with an implemented proposal -> real rc",
@@ -76,8 +79,8 @@ when = next(s for st in TEMPLATES["implement-proposals"]["steps"] for s in st
             if s["name"] == "implement-fallback")["when"]
 check("fallback when keeps the != Succeeded guard",
       "steps['implement'].status != 'Succeeded'" in when, when)
-check("fallback when skips on exit codes 45 and 64",
-      "in ['45', '64']" in when, when)
+check("fallback when skips only on exit code 45, never on 64",
+      "in ['45']" in when and "64" not in when, when)
 check("fallback when defaults a missing exit code (pod-level Error still falls back)",
       "exitCode ?? '0'" in when, when)
 
@@ -99,9 +102,6 @@ def assert_attempt(primary, fallback, exit_code):
 r = assert_attempt("Failed", "Omitted", "45")
 check("exit 45 -> fails, names the missing approval, not quota",
       r.returncode == 1 and "missing approval" in r.stderr and "usage limit" not in r.stderr, r.stderr)
-r = assert_attempt("Failed", "Omitted", "64")
-check("exit 64 -> fails, names the no-commits refusal, not quota",
-      r.returncode == 1 and "no commits" in r.stderr and "usage limit" not in r.stderr, r.stderr)
 r = assert_attempt("Failed", "Failed", "1")
 check("other failure -> fails with the quota hint", r.returncode == 1 and "usage limit" in r.stderr, r.stderr)
 r = assert_attempt("Failed", "Succeeded", "1")
