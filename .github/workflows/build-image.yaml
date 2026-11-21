@@ -108,6 +108,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  # Image vulnerability scan after the push (mctlhq/mctl-gitops#332).
+  # "false" = warn-only: findings and a scan that could not run are reported
+  # as annotations and a step summary, and never fail the build or block a
+  # deploy. Flip this single value to "true" to make the scan blocking
+  # (CRITICAL/HIGH with a fix available fail the job after the image is
+  # already pushed, so a failure here blocks the digest handoff, not the push).
+  IMAGE_SCAN_BLOCKING: "false"
 
 jobs:
   build:
@@ -681,6 +688,75 @@ jobs:
           echo "pushed ${IMAGE_NAME}@${DIGEST}"
           mkdir -p "$RUNNER_TEMP/image-digest"
           printf '%s@%s\n' "${IMAGE_NAME}" "${DIGEST}" > "$RUNNER_TEMP/image-digest/image-ref.txt"
+
+      # Trivy scan of the image just pushed, by digest. Warn-only unless
+      # IMAGE_SCAN_BLOCKING is "true" (see the env block). The SARIF goes up as
+      # a run artifact rather than to code scanning: this workflow is also
+      # called by release-deploy.yaml, whose permissions do not include
+      # security-events, and widening them would fail that caller at startup.
+      # The scan reads the image through the GHCR login above.
+      - name: Scan image (Trivy)
+        id: scan
+        continue-on-error: ${{ env.IMAGE_SCAN_BLOCKING != 'true' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: "linux/amd64"
+        with:
+          scan-type: image
+          image-ref: ${{ inputs.image_name }}@${{ steps.digest.outputs.digest }}
+          format: sarif
+          output: ${{ runner.temp }}/image-scan/trivy-image.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: ${{ env.IMAGE_SCAN_BLOCKING == 'true' && '1' || '0' }}
+          version: v0.69.3
+
+      # A scan that did not run, or left no readable report, is surfaced as a
+      # warning. It is never reported as a clean result.
+      - name: Report scan outcome
+        if: ${{ !cancelled() }}
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          SARIF: ${{ runner.temp }}/image-scan/trivy-image.sarif
+          IMAGE_REF: ${{ inputs.image_name }}@${{ steps.digest.outputs.digest }}
+          BLOCKING: ${{ env.IMAGE_SCAN_BLOCKING }}
+        run: |
+          set -uo pipefail
+          if [ "${SCAN_OUTCOME}" != "success" ]; then
+            echo "::warning::Trivy image scan did not complete (outcome: ${SCAN_OUTCOME}) for ${IMAGE_REF}; blocking=${BLOCKING}. The image is NOT known to be clean."
+            echo "Image scan did not complete (${SCAN_OUTCOME}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          count=$(python3 - "$SARIF" <<'PY'
+          import json, sys
+          try:
+              doc = json.load(open(sys.argv[1]))
+              print(sum(len(r.get("results") or []) for r in doc["runs"]))
+          except Exception as e:
+              print(f"unreadable:{type(e).__name__}")
+          PY
+          )
+          case "$count" in
+            unreadable:*|"")
+              echo "::warning::Trivy reported success but its SARIF report is missing or unreadable (${count}) for ${IMAGE_REF}. The image is NOT known to be clean."
+              echo "Image scan report unreadable (${count}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            0) echo "Trivy: no fixable CRITICAL/HIGH findings in ${IMAGE_REF}" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              echo "::warning::Trivy found ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF} (blocking=${BLOCKING}); see the trivy-image-sarif artifact."
+              echo "Trivy: ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF}; see the trivy-image-sarif artifact." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
+
+      - name: Upload image scan report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-image-sarif
+          path: ${{ runner.temp }}/image-scan/trivy-image.sarif
+          if-no-files-found: warn
+          retention-days: 14
 
       # A dispatched build has no outputs a caller can read, so the digest is
       # also left as a run artifact. preview-deploy (trigger-github-build)
