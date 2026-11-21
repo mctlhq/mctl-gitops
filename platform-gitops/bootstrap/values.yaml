@@ -750,8 +750,8 @@ obiSpike:
 # render. Each flip is its own reviewed PR; rollback is flipping it back.
 mctlGlovo:
   deploy: true
-  c2: false
-  allowlist: false
+  c2: true
+  allowlist: true
   consent: false
   control: false
   # mctl-api's side of the consent read (the consent routes, their cap and the
