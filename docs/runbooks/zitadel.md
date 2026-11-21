@@ -742,74 +742,17 @@ All state is in the `zitadel` database on shared-pg, backed up by CNPG to R2
 database to a point in time, keep the masterkey from Vault unchanged, and
 restart both Deployments.
 
-### ERPact copy sign-in (#1501)
+### ERPact copy sign-in (#1501) - removed
 
-`iac/erpact.tf` lets the Frappe sites of the ERPact copy (tenant `erpact`,
-the copy only) sign their users in through ZITADEL:
-
-- **Project `ERPact`** owned by organization `erpact`, with
-  `has_project_check` and one role, `frappe`, granted to the MCTL
-  organization (project grant) for platform admins: only users of `erpact`
-  and of MCTL get a token, and the path confers no Argo CD, mctl-api or
-  tenant-admin rights. Every `erpact` user holds `frappe`; an admin holds it
-  only with a `frappe` field in `secret/platform/zitadel/admins`. The role
-  gates sign-in once `project_role_check` is on, a separate change made
-  after the grants exist.
-- **Admins sign in with a second key.** The `mctl` key's
-  `urn:zitadel:iam:org:id:<erpact>` scope makes ZITADEL refuse any user of
-  another organization, grant or not, so admins use the Social Login Key
-  `mctl_admin` (provider name "MCTL Admin", button "Login with MCTL Admin"),
-  scoped to the MCTL organization
-  (`admin_org_id` in `erpact/erpact-oidc-zitadel`; a second redirect URI per
-  site, `.../custom/mctl_admin`). Their Frappe user is the one under the MCTL
-  account's e-mail.
-- **Application `erpact-frappe`**: web, `client_secret_post` (what Frappe's
-  rauth client sends), opaque access token read at userinfo; one redirect URI
-  per site, `https://<site>/api/method/frappe.integrations.oauth2_logins.custom/mctl`.
-  The Job writes `client_id`, `client_secret` and `org_id` into
-  `erpact/erpact-oidc-zitadel` (`infra-components/erpact/oidc-zitadel.yaml`).
-- **Verified e-mail only.** Frappe matches users by the `email` claim alone,
-  without `email_verified` and without the stored `sub`. The action
-  `erpactVerifiedEmail` (`PRE_USERINFO_CREATION`, in the same trigger as
-  `argocdGroups`, not allowed to fail, so it aborts userinfo wherever it runs
-  in the trigger) refuses userinfo for this client
-  unless the user's e-mail is verified. It returns at once for every other
-  client. It is declared in both `erpact` and MCTL: an action only runs for
-  users of its own organization.
-- **Frappe side** (git.mctl.ai/erpact/mctl-apps, the restore Jobs' `sso`
-  step): Social Login Key `mctl` per site, sign-up of unknown users disabled
-  (v15 `sign_ups = Deny`; v14 Website Settings `disable_signup`), users
-  matched by e-mail to the users each site already has.
-- **Users the sites must have.** The copy's databases come from production,
-  which has no MCTL people, so such a user would get the 403. A user's Vault
-  entry (`secret/platform/zitadel/users/erpact`) may carry
-  `"frappe": {"sites": ["erpact-control.mctl.ai"], "roles": ["System Manager"]}`.
-  The Job writes every such user, and only those, into
-  `erpact/erpact-frappe-users` (`users.json`: `{version, users: [{email,
-  first_name, last_name, sites, roles}]}`). The restore Jobs and the users
-  CronJob of mctl-apps then create the User (named by e-mail, enabled,
-  System User) or add the missing roles. The manifest grants roles and never
-  revokes them. A site outside `local.erpact_frappe_sites`, an empty or
-  malformed `sites`/`roles`, or a `frappe` field on another tenant's user
-  fails the run before anything is written.
-
-Not yet verified with a real sign-in. The owner's first sign-in on the copy
-checks it both ways before anyone else is pointed at it:
-
-1. A verified `erpact` user signs in on one site and lands on `/app` as their
-   existing Frappe user.
-2. An `erpact` user whose e-mail is not verified is refused at the userinfo
-   step (Frappe shows an error; nobody is signed in).
-3. A user of `MCTL` on the `mctl` key is refused by ZITADEL ("User is no
-   member of the required organization"), grant or not.
-4. A platform admin with a `frappe` field signs in on the `mctl_admin` key
-   and lands on `/app` as the Frappe user of their MCTL e-mail.
-5. A user of `MCTL` without the `frappe` grant, on the `mctl_admin` key: until
-   `project_role_check` is on, ZITADEL issues the token and Frappe refuses
-   (no such user, sign-up disabled); once it is on, ZITADEL refuses
-   (`Errors.User.GrantRequired`).
-6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
-   disabled".
+The Frappe sign-in of the ERPact copy (project `ERPact`, the `erpact-frappe`
+OIDC application, the `erpactVerifiedEmail` actions, the grants, and the
+Secrets `erpact-oidc-zitadel` and `erpact-frappe-users`) was removed when the
+copy left this cluster; ERPact runs on its own CLO cluster. The history of
+`iac/erpact.tf` has the design. The tenant organization `erpact` and its users
+stay: Forgejo signs in through ZITADEL and its accounts are linked to them.
+The Frappe user grants were forgotten from state (`removed` blocks) rather than
+destroyed, so no user name had to be listed in `allowedDeletes`; destroying the
+project removes them in ZITADEL.
 
 ### Labs apps sign-in ("Log in with MCTL account")
 
