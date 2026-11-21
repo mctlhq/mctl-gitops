@@ -15,8 +15,6 @@ kind: Application
 metadata:
   name: erpact-oidc-zitadel
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
