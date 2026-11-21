@@ -22,7 +22,7 @@ resource "cloudflare_ruleset" "firewall_custom" {
       }
       description = "seerr — skip SBFM/BIC for in-cluster server-to-server calls (gitops#1089 item 8)"
       enabled     = true
-      expression  = "(ip.src.asnum eq 24940 and http.host in {\"secrets.mctl.ai\" \"ops.mctl.ai\" \"app.mctl.ai\" \"api.mctl.ai\" \"media.mctl.ai\" \"tg.mctl.ai\" \"workflows.mctl.ai\"})"
+      expression  = "(ip.src.asnum eq 24940 and http.host in {\"secrets.mctl.ai\" \"ops.mctl.ai\" \"app.mctl.ai\" \"api.mctl.ai\" \"media.mctl.ai\" \"tg.mctl.ai\" \"tg-preview.mctl.ai\" \"workflows.mctl.ai\"})"
       logging = {
         enabled = true
       }
