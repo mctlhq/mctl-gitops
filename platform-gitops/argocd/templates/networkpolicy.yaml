@@ -14,9 +14,6 @@
 #                      UI users signed in through ZITADEL, the blackbox probe
 #                      of ops.mctl.ai/healthz, and GitHub's /api/webhook.
 #                      There is no cloudflared tunnel in the cluster.
-#   erpact-deployer    tenant erpact, ARGOCD_URL
-#                      http://argocd-server.argocd.svc.cluster.local: the one
-#                      in-cluster client of the API (ERPact site tools).
 #   vmagent            scrapes the controller :8082, server :8083 and
 #                      repo-server :8084 (VMServiceScrape argocd-*).
 #
@@ -79,15 +76,6 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: erpact
-          # Both labels, as in bootstrap/templates/erpact/networkpolicy.yaml:
-          # the deployer pods only, not anything else in that release.
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/instance: erpact-deployer
-              app.kubernetes.io/name: helm-deployer
       ports:
         - protocol: TCP
           port: 8080

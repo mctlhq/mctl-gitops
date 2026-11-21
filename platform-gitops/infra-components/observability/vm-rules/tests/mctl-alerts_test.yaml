@@ -60,19 +60,11 @@ tests:
         exp_alerts: []
 
   # ---------------------------------------------------------------------
-  # ArgoCDApplicationOutOfSyncLong / ArgoCDApplicationDegraded and the
-  # parked ERPact copy (#2615, #2672)
-  #
-  # Both directions: an erpact-project app that is OutOfSync/Degraded stays
-  # quiet, and a non-erpact app in the same state, evaluated at the same
-  # time, still fires. Removing the project!="erpact" matcher makes the
-  # quiet cases fail; making the matcher too broad makes the firing ones fail.
+  # ArgoCDApplicationOutOfSyncLong / ArgoCDApplicationDegraded
   # ---------------------------------------------------------------------
   - interval: 1m
-    name: a parked erpact app OutOfSync for 2h stays quiet, a platform app fires
+    name: a platform app OutOfSync for 2h fires
     input_series:
-      - series: 'argocd_app_info{name="erpact-infra",project="erpact",dest_namespace="erpact",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
-        values: '1x130'
       - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
         values: '1x130'
     alert_rule_test:
@@ -99,10 +91,8 @@ tests:
                 operationState for the actual cause.
 
   - interval: 1m
-    name: a parked erpact app Degraded for 1h stays quiet, a non-erpact app fires
+    name: an app Degraded for 1h fires
     input_series:
-      - series: 'argocd_app_info{name="erpact-shared",project="erpact",dest_namespace="erpact",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Degraded"}'
-        values: '1x70'
       - series: 'argocd_app_info{name="labs-mctl-telegram",project="default",dest_namespace="labs",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
         values: '1x70'
     alert_rule_test:
@@ -333,17 +323,17 @@ tests:
   - interval: 1m
     name: usage at 44-46% of quota exported on both kubelet paths stays quiet
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '4294967296x20'
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
         values: '4294967296x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '0+330x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
         values: '0+330x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.memory"}'
         values: '9663676416x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.cpu"}'
         values: '12x20'
     alert_rule_test:
       - eval_time: 20m
@@ -356,13 +346,13 @@ tests:
   - interval: 1m
     name: usage above 85% of quota fires for the namespace
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '8589934592x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '0+660x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.memory"}'
         values: '9663676416x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.cpu"}'
         values: '12x20'
     alert_rule_test:
       - eval_time: 20m
@@ -370,17 +360,17 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              namespace: erpact
+              namespace: labs
             exp_annotations:
-              summary: Namespace erpact memory usage is at 88.89% of quota
+              summary: Namespace labs memory usage is at 88.89% of quota
       - eval_time: 20m
         alertname: TenantCPUQuotaHigh
         exp_alerts:
           - exp_labels:
               severity: warning
-              namespace: erpact
+              namespace: labs
             exp_annotations:
-              summary: Namespace erpact CPU usage is at 91.67% of quota
+              summary: Namespace labs CPU usage is at 91.67% of quota
 
   # ---------------------------------------------------------------------
   # UmamiRetentionStale / UmamiRetentionJobFailed
