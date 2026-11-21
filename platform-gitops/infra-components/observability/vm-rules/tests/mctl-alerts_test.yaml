@@ -124,9 +124,9 @@ tests:
   - interval: 1m
     name: OutOfSync keeps one continuous alert while the operation label flaps
     input_series:
-      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="apps",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
         values: '1x30 _x5 1x45'
-      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="apps",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy",operation="sync"}'
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy",operation="sync"}'
         values: '_x30 1x5 _x45'
     alert_rule_test:
       - eval_time: 70m
@@ -135,7 +135,7 @@ tests:
           - exp_labels:
               severity: warning
               name: admins-mctl-agents-worker
-              project: apps
+              project: tenant
               dest_namespace: admins
               dest_server: https://kubernetes.default.svc
             exp_annotations:
@@ -185,7 +185,7 @@ tests:
   - interval: 1m
     name: an app with sync status Unknown for 45m fires
     input_series:
-      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="apps",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="Unknown",health_status="Healthy"}'
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="Unknown",health_status="Healthy"}'
         values: '1x50'
     alert_rule_test:
       - eval_time: 45m
@@ -194,7 +194,7 @@ tests:
           - exp_labels:
               severity: warning
               name: admins-mctl-agents-worker
-              project: apps
+              project: tenant
               dest_namespace: admins
               dest_server: https://kubernetes.default.svc
             exp_annotations:
@@ -202,7 +202,7 @@ tests:
                 ArgoCD application admins-mctl-agents-worker sync status Unknown for 30m
               description: >-
                 admins/admins-mctl-agents-worker (project
-                apps) has reported sync status Unknown for
+                tenant) has reported sync status Unknown for
                 30m: the controller cannot compute the diff, so drift on this
                 app is not being detected. Check the application conditions
                 (`argocd app get admins-mctl-agents-worker`) and the application

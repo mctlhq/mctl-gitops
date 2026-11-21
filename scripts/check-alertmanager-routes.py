@@ -156,7 +156,7 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      ["telegram", "mctl-agent-paged"]),
     ("warning tenant ArgoCD sync-Unknown app stays agent-only",
      {"alertname": "ArgoCDApplicationSyncUnknown", "severity": "warning",
-      "project": "apps"},
+      "project": "tenant"},
      ["mctl-agent"]),
     # The alerting path pages regardless of severity.
     ("critical Alertmanager alert pages once",
