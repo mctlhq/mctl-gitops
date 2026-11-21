@@ -409,3 +409,36 @@ spec:
               rejected" log lines for the error, and Telegram's token
               endpoint and JWKS reachability.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#loginpathsignals"
+
+        - alert: MctlTelegramOAuthClientRejected
+          # An MCP client tried to register (RFC 7591 DCR) with a redirect_uri
+          # host that is not in OAUTH_ALLOWED_IMPLICIT_HOSTS. The client's UI
+          # only says "problem connecting to this MCP server" (Grok, 2026-11-21),
+          # and nothing on our side noticed: the rejection was an INFO audit
+          # line. The remedy is a values edit by a human (add the host to
+          # OAUTH_ALLOWED_IMPLICIT_HOSTS and, for a browser client, to
+          # ALLOWED_ORIGINS), so this is routed to Telegram only.
+          # Only redirect_host_not_allowed: the other rejection reasons are
+          # malformed or hostile requests, not a client we would want to admit.
+          # The counter has no host label (closed label set, by design), so the
+          # host is read from the log line named below.
+          expr: |
+            sum by (job) (
+              increase(mctl_oauth_client_registrations_total{outcome="rejected",reason="redirect_host_not_allowed"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: an MCP client was refused at registration (redirect host not allowed)"
+            description: >-
+              Someone tried to add https://tg.mctl.ai/mcp in an MCP client whose
+              redirect_uri host is not allowlisted, so registration was
+              rejected with redirect_host_not_allowed. Find the host in the
+              labs/mctl-telegram logs: the line "oauth: client_registration
+              audit" with outcome=rejected carries client_name and
+              redirect_host. If the client should be admitted, add the host to
+              OAUTH_ALLOWED_IMPLICIT_HOSTS (and its origin to ALLOWED_ORIGINS
+              if it connects from a browser) in
+              platform-gitops/services/labs/mctl-telegram/values.yaml. If not,
+              ignore.
