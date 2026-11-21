@@ -100,10 +100,6 @@ jobs:
         # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
         run: python3 tests/test_release_gate_bootstrap_hold.py
 
-      - name: Release gate ledger mode (shadow / enforce)
-        # mctlhq/mctl-api#1022 S4: cases and mutants for the ledger block.
-        run: python3 tests/test_release_gate_ledger_hold.py
-
       # With a hold's ledger enforced, pull-request CI cannot read the release
       # ledger (mctl-api admits only workflows on refs/heads/main as its
       # reader), so it checks who proposes a change of the held tag instead:
@@ -360,11 +356,6 @@ jobs:
         # only install with --require-hashes from the pinned requirements file.
         run: python3 tests/test_pip_installs_hashed.py
 
-      - name: Release gate in the shared workflow templates
-        # The templates' own scripts run against a local bare repository: every
-        # refusal must leave it untouched, other services must still deploy and
-        # retire, and each guard layer is removed in turn to prove a test fails.
-        run: python3 tests/test_release_gate_guard.py
       - name: Rollback by tag restores tag and digest together
         # A values file that pins image.digest renders repository:tag@digest, so
         # a tag-only rollback keeps the new image running. Both image reference
@@ -375,12 +366,6 @@ jobs:
         # The restore step runs against a local bare repository: every refusal
         # leaves it untouched, and each guard is removed in turn to prove a test fails.
         run: python3 tests/test_rollback_revision.py
-      - name: Promote by digest pins the preview's image
-        # verify-image and pin-image run against a local bare repository and a
-        # stub registry: every refusal leaves it untouched, each guard is
-        # removed in turn to prove a test fails.
-        run: python3 tests/test_promote_deployment.py
-
       - name: Release bump PR route (routes file, tag-only diff guard, wiring)
         # #2543 stage 1 fast track: the route decision fails closed, the guard
         # accepts only image tag moves, and the workflows can write only to a
@@ -395,23 +380,10 @@ jobs:
           python3 tests/test_release_bump_supersede.py
           python3 tests/test_release_bump_apply.py
 
-      - name: Ledger of references to the gitops write credentials
-        # Shrink-only: a new reference, or a ledger row whose reference is
-        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
-        # chart, so it needs the Helm install above.
-        run: |
-          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
-          python3 tests/test_gitops_write_credential_holders.py
-
       - name: Tenant-class templates and Secret readers, by credential name
         run: |
           python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
           python3 tests/test_gitops_tenant_template_write_set.py
-
-      - name: Preview deploys the image its build pushed, by digest
-        run: |
-          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
-          python3 tests/test_preview_deploy_digest.py
 
       - name: Unit-test the App-token scope validation
         # rotate-github-app-tokens narrows mctl-api's installation token to one
@@ -531,20 +503,6 @@ jobs:
           docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
             python:3.12-alpine sh -c 'pip install -q pyyaml &&
               python3 tests/test_preview_deploy_compiled_values.py'
-
-      - name: Preview ttl_hours is stamped and enforced
-        # Nothing deleted expired previews before preview-reaper; a May
-        # preview release was still on record in October. Runs the reaper's
-        # own script with stub kubectl/helm/date and renders the tenant
-        # chart's CronWorkflow for every tenant. The second run repeats the
-        # script cases under busybox sh, the shell of the tools image the
-        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 tests/test_preview_reaper.py
-          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
-            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
-              python3 tests/test_preview_reaper.py Reaper Deploy'
 
       - name: The central workflow SA holds only opted-in grants in tenant namespaces
         # It used to hold argo-workflow-helm-deploy and smoke-verify in every
@@ -1030,6 +988,10 @@ jobs:
           fi
           python3 tests/test_otel_collector_redaction_e2e.py
 
+      - name: Release gate ledger mode (shadow / enforce)
+        # mctlhq/mctl-api#1022 S4: cases and mutants for the ledger block.
+        run: python3 tests/test_release_gate_ledger_hold.py
+
   validate-4:
     runs-on: ubuntu-latest
     steps:
@@ -1469,6 +1431,45 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_promtail_audit_log.py
+
+      - name: Ledger of references to the gitops write credentials
+        # Shrink-only: a new reference, or a ledger row whose reference is
+        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
+        # chart, so it needs the Helm install above.
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_write_credential_holders.py
+
+      - name: Preview deploys the image its build pushed, by digest
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_preview_deploy_digest.py
+
+      - name: Preview ttl_hours is stamped and enforced
+        # Nothing deleted expired previews before preview-reaper; a May
+        # preview release was still on record in October. Runs the reaper's
+        # own script with stub kubectl/helm/date and renders the tenant
+        # chart's CronWorkflow for every tenant. The second run repeats the
+        # script cases under busybox sh, the shell of the tools image the
+        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_reaper.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
+              python3 tests/test_preview_reaper.py Reaper Deploy'
+
+      - name: Promote by digest pins the preview's image
+        # verify-image and pin-image run against a local bare repository and a
+        # stub registry: every refusal leaves it untouched, each guard is
+        # removed in turn to prove a test fails.
+        run: python3 tests/test_promote_deployment.py
+
+      - name: Release gate in the shared workflow templates
+        # The templates' own scripts run against a local bare repository: every
+        # refusal must leave it untouched, other services must still deploy and
+        # retire, and each guard layer is removed in turn to prove a test fails.
+        run: python3 tests/test_release_gate_guard.py
 
   reserved-hosts:
     timeout-minutes: 15
