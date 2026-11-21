@@ -406,33 +406,37 @@ securityCodeScanning:
 # The control-caller credential of the C2 kill switch (C2 epic):
 # lets mctl-api call the C2 service's kill switch endpoint with a ZITADEL
 # machine-user token that a refresher sidecar keeps fresh in a file
-# (mctl-api >= 4.164.0 ships the route dark). All false: nothing renders.
-# Order, each its own reviewed PR, rollback is flipping it back:
+# (mctl-api >= 4.164.0). All four switches are on since 2026-11-21
+# (#2856 chartSlots, #2858 enabled, #2861 killSwitch); the route is mounted,
+# but a PUT to it is a separate production action with its own owner GO.
+# Flip order, each its own reviewed PR; rollback is the reverse order:
 #   0. Prerequisites: mctlhq/mctl-gitops#2737 applied (machine user and the
 #      ConfigMap mctl-api-c2-machine-ids with control_scope exist); owner wrote
 #      Vault platform/<c2 service>/control-caller with user_id, key_id and key;
 #      the refresher image is released and its tag set below; the mctl-api chart
 #      pin carries extraContainers / extraVolumes / extraVolumeMounts.
-#   1. enabled: true (ExternalSecret, sidecar, URL and token file; the route
+#   1. chartSlots + the chart pin move + the refresher tag and command.
+#   2. enabled: true (ExternalSecret, sidecar, URL and token file; the route
 #      stays dark). Confirm the Secret synced and the token file appears.
-#   2. Bump ROLLOUT_MARKER in its own PR if the pods did not roll.
-#   3. killSwitch: true (turns the route on).
+#   3. killSwitch: true (mounts the route).
 # A pod with enabled while the Secret or the ConfigMap is missing cannot start
 # the sidecar and stays NotReady: do not flip enabled before step 0 is checked.
 apiC2Control:
   enabled: true
   killSwitch: true
-  # Must be set true in the same PR that moves the mctl-api chart pin to a
+  # Must be true in the same PR that moves the mctl-api chart pin to a
   # revision with the three slots above; the render refuses enabled without it.
   chartSlots: true
   refresherImage:
     repository: ghcr.io/mctlhq/mctl-glovo
-    # Placeholder: the release flow does NOT bump this line yet (its
-    # values_path is the C2 service template). Set it by hand to the released
-    # tag, or extend the flow; enabled refuses the placeholder.
+    # The release flow does NOT bump this line (its values_path is the C2
+    # service template): move it by hand to a released tag. The refresher is
+    # the token-refresher command of the service image, so this normally
+    # follows the service tag. enabled refuses the unreleased placeholder
+    # 0.0.0-unreleased.
     tag: "0.3.2"
-    # TODO(refresher): the command of the control-caller refresher; empty
-    # until that image exists (enabled refuses it).
+    # The control-caller refresher: a command of the service image above.
+    # enabled refuses an empty command.
     command: ["token-refresher"]
 
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
