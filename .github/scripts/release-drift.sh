@@ -43,6 +43,13 @@ to_epoch() {
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s
 }
 strip_v() { printf '%s' "${1#v}"; }
+# Success iff $1 is an ISO-8601 UTC timestamp to_epoch can read. Anything
+# else (garbage, empty, null) is "could not observe", never a date: an
+# unchecked value would crash the arithmetic in check_image and drop rows.
+TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+valid_ts() {
+  [[ "$1" =~ $TS_RE ]] && to_epoch "$1" >/dev/null 2>&1
+}
 
 # A tag that release-please or a human tagged as a version. Anything else
 # (main-<sha>, bare SHAs, dates) is a preview or a manual pin and is not a
@@ -73,17 +80,21 @@ is_metadata_path() {
 
 # stdin: the GitHub compare payload for <tag>...main.
 # stdout: "<count>\t<oldest-releasable-commit-date-or-empty>".
+# Exit 1 when the payload is unreadable or a releasable commit carries a
+# date that is not a timestamp: that is not "zero unreleased commits".
 unreleased_from_compare() {
-  local count=0 oldest=""
+  local count=0 oldest="" rows
+  rows=$(jq -r '.commits[]? | [.commit.committer.date, (.commit.message | split("\n")[0])] | @tsv') || return 1
   while IFS=$'\t' read -r date subject; do
     [ -z "$subject" ] && continue
     if is_releasable_subject "$subject"; then
+      valid_ts "$date" || return 1
       count=$((count + 1))
       if [ -z "$oldest" ] || [ "$(to_epoch "$date")" -lt "$(to_epoch "$oldest")" ]; then
         oldest="$date"
       fi
     fi
-  done < <(jq -r '.commits[]? | [.commit.committer.date, (.commit.message | split("\n")[0])] | @tsv')
+  done <<<"$rows"
   printf '%s\t%s\n' "$count" "$oldest"
 }
 
@@ -186,6 +197,9 @@ latest_release() {
   if rel=$(gh api "repos/$ORG/$repo/releases/latest" 2>/dev/null); then
     out=$(jq -r '[.tag_name, .published_at] | @tsv' <<<"$rel") || return 2
     case "$out" in ''|null$'\t'*|*$'\t'null|*$'\t') return 2 ;; esac
+    # jq @tsv renders null as an empty field, so the case above misses a
+    # null tag with a good date; check both fields explicitly.
+    [ -n "${out%%$'\t'*}" ] && valid_ts "${out#*$'\t'}" || return 2
     printf '%s\n' "$out"
     return 0
   fi
@@ -203,7 +217,7 @@ latest_release() {
   [ -n "$best" ] || return 1
   local date
   date=$(gh api "repos/$ORG/$repo/commits/$best" --jq '.commit.committer.date' 2>/dev/null) || return 2
-  [ -n "$date" ] && [ "$date" != "null" ] || return 2
+  valid_ts "$date" || return 2
   printf '%s\t%s\n' "$best" "$date"
 }
 
@@ -242,13 +256,18 @@ check_image() {
   # A compare that cannot be read is a verdict of its own, never an "ok":
   # defaulting to zero commits would turn a rate limit or a renamed default
   # branch into a silent pass, the exact failure this check exists to end.
-  local cmp count oldest
+  local cmp count oldest uc
   if ! cmp=$(gh api "repos/$ORG/$repo/compare/$released...main" 2>/dev/null); then
     printf '%s\t%s\t%s\t%s\t%s\t-\t-\t-\tCOMPARE_FAILED_%s...main\n' \
       "$path" "$repo" "$deployed" "$released" "$released_at" "$released"
     return
   fi
-  IFS=$'\t' read -r count oldest < <(unreleased_from_compare <<<"$cmp")
+  if ! uc=$(unreleased_from_compare <<<"$cmp"); then
+    printf '%s\t%s\t%s\t%s\t%s\t-\t-\t-\tCOMPARE_UNREADABLE_%s...main\n' \
+      "$path" "$repo" "$deployed" "$released" "$released_at" "$released"
+    return
+  fi
+  IFS=$'\t' read -r count oldest <<<"$uc"
 
   # Last release-please run on main; "n/a" for repos that tag by hand.
   local rp_run
@@ -297,16 +316,33 @@ verdict_ok() {
 }
 
 report() {
-  local failed=0 line
+  local failed=0 line images rows=0 expected=0
+  images=$(pinned_images) || { echo "::error::could not list pinned images"; return 1; }
+  [ -z "$images" ] || expected=$(printf '%s\n' "$images" | wc -l | tr -d ' ')
   {
     echo "| values.yaml | repo | deployed | released | unreleased | release-please | verdict |"
     echo "|---|---|---|---|---|---|---|"
   } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
   while IFS=$'\t' read -r path repo deployed released released_at count oldest rp verdict; do
+    rows=$((rows + 1))
     line="| \`${path#$SERVICES_DIR/}\` | $repo | $deployed | $released | $count | $rp | $verdict |"
     echo "$line" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
     verdict_ok "$verdict" || { failed=1; echo "::error::$repo: $verdict ($path)"; }
-  done < <(pinned_images | while IFS=$'\t' read -r p r t; do check_image "$p" "$r" "$t"; done)
+  done < <(
+    # A check_image that dies (in its own subshell) is a row of its own, and
+    # the row count is checked against the images found: a truncated report
+    # must never read as clean.
+    printf '%s\n' "$images" | while IFS=$'\t' read -r p r t; do
+      [ -n "$p" ] || continue
+      if ! ( check_image "$p" "$r" "$t" ); then
+        printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tCHECK_CRASHED\n' "$p" "$r" "$t"
+      fi
+    done
+  )
+  if [ "$rows" -ne "$expected" ]; then
+    echo "::error::release-drift produced $rows rows for $expected pinned images; report is incomplete"
+    failed=1
+  fi
   return $failed
 }
 
@@ -496,7 +532,39 @@ GHSTUB
   [ "$verdict" = "ok" ] || { echo "self-test: a recent commit inside the lag window should be ok, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1; }
   verdict=$(now_epoch() { to_epoch 2026-09-10T00:00:00Z; }; PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":"1.1.0","published_at":"2030-01-01T00:00:00Z"}' STUB_COMPARE='{"commits":[]}' check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
   case "$verdict" in *FUTURE_DATED_RELEASE_*) ;; *) echo "self-test: a future-dated release should be reported, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
-  rm -rf "$ghstub" "$vf"
+  # Unparseable dates and a null tag beside a good date are "could not
+  # observe": exit 2 / a failing verdict, never a crash that drops rows.
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":"1.1.0","published_at":"garbage"}' latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: an unparseable release date should exit 2, got $rc"; rm -rf "$ghstub" "$vf"; return 1; }
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":null,"published_at":"2026-01-01T00:00:00Z"}' latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: a null release tag should exit 2, got $rc"; rm -rf "$ghstub" "$vf"; return 1; }
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=1.0.0 STUB_COMMIT_DATE=garbage latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: an unparseable tag date should exit 2, got $rc"; rm -rf "$ghstub" "$vf"; return 1; }
+  verdict=$(PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":"1.1.0","published_at":"garbage"}' check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  case "$verdict" in TAGS_UNREADABLE_*) ;; *) echo "self-test: garbage release date should give TAGS_UNREADABLE, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
+  verdict=$(PATH="$ghstub:$PATH" STUB_RELEASE="$rel_ok" STUB_COMPARE='{"commits":[{"commit":{"committer":{"date":"garbage"},"message":"feat: x"}}]}' check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  case "$verdict" in COMPARE_UNREADABLE_*) ;; *) echo "self-test: garbage commit date should give COMPARE_UNREADABLE, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
+  verdict_ok "$verdict" && { echo "self-test: COMPARE_UNREADABLE must fail the run"; rm -rf "$ghstub" "$vf"; return 1; }
+  # report(): a service that fails must not truncate or hide the others, and
+  # the run must fail. Two services; the first has a garbage release date.
+  local sd out_r
+  sd=$(mktemp -d)
+  mkdir -p "$sd/t/a" "$sd/t/b"
+  printf 'image:\n  repository: ghcr.io/mctlhq/a\n  tag: "1.0.0"\n' >"$sd/t/a/values.yaml"
+  printf 'image:\n  repository: ghcr.io/mctlhq/b\n  tag: "1.0.0"\n' >"$sd/t/b/values.yaml"
+  rc=0; out_r=$(SERVICES_DIR="$sd" PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":"1.0.0","published_at":"garbage"}' report 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || { echo "self-test: report with unreadable dates must fail"; rm -rf "$ghstub" "$vf" "$sd"; return 1; }
+  [ "$(grep -c 'TAGS_UNREADABLE_' <<<"$out_r")" -ge 2 ] || { echo "self-test: report must list every service, got: $out_r"; rm -rf "$ghstub" "$vf" "$sd"; return 1; }
+  # A check_image that dies outright is a failing row, not a dropped one.
+  rc=0; out_r=$( check_image() { [ "$2" = a ] && exit 3; printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tok\n' "$1" "$2" "$3"; }
+    SERVICES_DIR="$sd" report 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || { echo "self-test: a crashed check_image must fail the report"; rm -rf "$ghstub" "$vf" "$sd"; return 1; }
+  grep -q 'CHECK_CRASHED' <<<"$out_r" || { echo "self-test: a crashed check_image must show CHECK_CRASHED, got: $out_r"; rm -rf "$ghstub" "$vf" "$sd"; return 1; }
+  # A silently dropped row (check_image prints nothing) trips the row count.
+  rc=0; out_r=$( check_image() { [ "$2" = a ] && return 0; printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tok\n' "$1" "$2" "$3"; }
+    SERVICES_DIR="$sd" report 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || { echo "self-test: a dropped row must fail the report"; rm -rf "$ghstub" "$vf" "$sd"; return 1; }
+  rm -rf "$ghstub" "$vf" "$sd"
   echo "self-test: ok"
 }
 
