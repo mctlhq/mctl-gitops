@@ -22,10 +22,9 @@ allowedActions: "no-op read create update"
 # Resource addresses the Job may destroy or replace, space-separated. Any
 # other delete in a plan fails the Job. Name the exact address, in the PR
 # that needs it, and empty the list once it has applied.
-#   The ERPact organization removal lists its six addresses (the organization
-#   takes its members and anything else in it along); empty the list once the
-#   Job has applied it.
-allowedDeletes: 'grafana_organization.erpact grafana_data_source.erpact_metrics grafana_folder.erpact grafana_folder_permission.erpact grafana_dashboard.erpact_overview grafana_dashboard.erpact_workloads'
+#   The ERPact organization removal listed its six addresses; applied
+#   2026-11-21, emptied again here.
+allowedDeletes: ""
 
 # The CronJob's schedule. It reverts permissions changed in the UI, which no
 # sync observes. Offset from zitadel-iac (:17) and vault-human-auth-iac (:37).
