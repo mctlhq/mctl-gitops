@@ -5,7 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/pfeifenpatenschaft-backend
-  tag: "0.7.0"
+  tag: "0.7.1"
+  digest: "sha256:61a10945bffff03f8b3942f9c645105431bf8080fb7f5e4a53ed749149fdfab0"
 imagePullSecrets:
   - name: ghcr-credentials
 # Force a pod rollout when the admin secret keys are added below. envFrom
