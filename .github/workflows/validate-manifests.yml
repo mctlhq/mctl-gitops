@@ -418,6 +418,12 @@ jobs:
         # unreachable mctl-api or a missing OIDC token must refuse.
         run: python3 tests/test_build_image_source_repo_check.py
 
+      - name: Unit-test build-image's input validation
+        # git_ref, image_name and image_tag refuse control characters, and a
+        # pull-request ref gets neither the GH_PACKAGES_TOKEN BuildKit secret
+        # nor a minted App token (gitops#1029). Runs the step's own script.
+        run: python3 tests/test_build_image_validate_inputs.py
+
       - name: Unit-test write-service-secrets against a fake Vault
         # Values reach Vault byte for byte (quotes, backslashes, code-shaped
         # text), existing keys survive the merge, and an unreadable current
