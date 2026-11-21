@@ -1463,6 +1463,13 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_api_c2_control_render.py
 
+      - name: Unit-test the audit-log shipping (promtail mount, scrape job, policy)
+        # #871: the apiserver audit log must reach Loki, and the audit policy
+        # must keep Secret and token bodies out of it.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_promtail_audit_log.py
+
   reserved-hosts:
     timeout-minutes: 15
     runs-on: ubuntu-latest

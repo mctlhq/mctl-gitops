@@ -139,6 +139,25 @@ spec:
               # log volume grew with mctl-agents proposals and agent sessions.
               # 256Mi gives 2x cushion; cluster-wide cost is +384Mi (3 nodes).
               memory: 256Mi
+          # Kubernetes API audit log (#871, SOC F20). k3s writes it on the
+          # control-plane node only (kube.tf: audit-log-path), so it never
+          # left that disk. The chart's default tolerations already let
+          # promtail run on the control-plane node. The DaemonSet mounts the
+          # same hostPath everywhere: DirectoryOrCreate makes the kubelet
+          # create an empty directory on the workers, so the glob below
+          # matches nothing there and promtail stays quiet.
+          # Read-only. What the log holds is set by audit-policy.yaml:
+          # Metadata for everything including Secrets, bodies only for
+          # authorization reviews, so no Secret value or token is shipped.
+          extraVolumes:
+            - name: k3s-audit
+              hostPath:
+                path: /var/lib/rancher/k3s/server/logs
+                type: DirectoryOrCreate
+          extraVolumeMounts:
+            - name: k3s-audit
+              mountPath: /var/log/k3s-audit
+              readOnly: true
           config:
             clients:
               - url: http://loki-stack:3100/loki/api/v1/push
@@ -157,6 +176,18 @@ spec:
             # scrape-annotation opt-out and the mctl.ai/team and
             # mctl.ai/component labels — are re-added under extraRelabelConfigs.
             snippets:
+              # The audit log is JSON lines, not CRI, so it gets no pipeline
+              # stages: the pod pipeline below is not applied to extra jobs.
+              # The glob covers the live file and lumberjack's rotated
+              # copies (audit-<timestamp>.log, maxbackup=10).
+              extraScrapeConfigs: |
+                - job_name: kube-apiserver-audit
+                  static_configs:
+                    - targets: [localhost]
+                      labels:
+                        job: kube-apiserver-audit
+                        app: kube-apiserver
+                        __path__: /var/log/k3s-audit/audit*.log
               pipelineStages:
                 # k3s writes CRI-format logs; the old block said `docker: {}`,
                 # which would have mangled every line had it ever been applied.
