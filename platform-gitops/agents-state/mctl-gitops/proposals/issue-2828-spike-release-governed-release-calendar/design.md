@@ -1,158 +1,181 @@
 # Design: issue-2828-spike-release-governed-release-calendar
 
-Revision 3 (2026-11-20). Revision 2 answered the independent review
-([#2828 comment 7037225218](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7037225218):
-4 P1, 5 P2, 2 P3). Revision 3 adds the owner's "Sync-broker integration design
-request" and "Revision 3 instruction". It makes the **MCTL Governed Sync
-Broker** a first-class alternative and compares it with E1 (GitOps carve-out),
-E2 (RBAC-restricted `manualSync`), D (no runtime exception, break-glass only)
-and native or plugin mechanisms. **E1 is no longer the preferred
-candidate.** The scope is still **S0 only**: research, read-only inventory,
-inert local experiments and a decision memo. Running S0 itself needs a
-separate owner GO (requirements R-B5). Sections 5-9 describe what S0 must
-*evaluate*; none of it is authorized to be built.
+Revision 4 (2026-11-21). Revision 2 answered the first review
+([comment 7037225218](https://github.com/mctlhq/mctl-gitops/issues/2828#issuecomment-7037225218)).
+Revision 3 made the **MCTL Governed Sync Broker** a first-class alternative
+to E1 (GitOps carve-out), E2 (RBAC-restricted `manualSync`), D (break-glass
+only) and native or plugin mechanisms. Revision 4 answers the independent
+re-review of revision 3 (#2828, 2026-11-21: 4 P1 / 3 P2 / 1 P3). The
+finding-to-section map is in requirements.md, "Finding index".
+
+What changed in revision 4:
+
+- **Guarantee classes (section 6.0).** The revision 3 claim "exactly one
+  approved release: yes" is withdrawn. A broker that syncs an Application
+  tracking `main` gets G2 at best: it detects after the operation is created
+  and then terminates.
+- **A G0 candidate, read from v3.3.8 source (section 6.3).** A broker can
+  `Sync` with the exact SHA-pinned `targetRevision` of every source.
+- **An observed window activation lifecycle (section 3.1).**
+- **A token-compromise boundary (section 6.6).**
+- **A safe transition order (section 6.7).**
+- **A single-transaction journal and claim with a crash matrix (section 6.5).**
+- **MCP PR-authoring tools and a status contract (section 8).** Both are
+  design only.
+
+The scope is still **S0 only**. Running S0 needs a separate owner GO
+(R-B5). Sections 5-9 describe what S0 must *evaluate*. None of it is
+authorized to be built.
 
 ## Current state
 
-Clone read at `main` = `467d6de920c1d69bd4fae6f2adce26f262d46482`
-(2026-11-20 16:12 UTC). Repo citations are at this SHA. Revision 2 cited
-`5bdf00a0`. The lines it relied on were re-read at `467d6de` and were
-unchanged: `mctl-api.yaml:19,827-829,893-895`, `argocd/values.yaml:42-48,163-173`
-and `argocd/rbac/tenants/*.csv`. Upstream Argo CD citations are at tag
-`v3.3.8` (commit `7ae7d2cc723f5408b080a31263e705198af08613`, read 2026-11-20).
+Clone read at `main` = `a1e22940d2d7a89a8f640f6a90b2a80b490ab658`
+(2026-11-21 10:14 UTC; the re-review observed the same HEAD). The clone is
+shallow, so the cited lines were re-read at this SHA. Line numbers moved
+since revision 3 (`467d6de`), and the citations below are the corrected
+ones: `argocd/values.yaml` RBAC block `:174-184`, accounts `:53,59`;
+`mctl-api.yaml` source 2 `:824`, automated `:889-891`;
+`wft-create-tenant.yaml:1095`. Upstream Argo CD citations are at tag
+`v3.3.8` (commit `7ae7d2cc723f5408b080a31263e705198af08613`). They were
+re-read on 2026-11-21 via `gh api repos/argoproj/argo-cd/contents/server/application/application.go?ref=v3.3.8`.
 mctl-api citations are at `main` = `2a8de33ae4494f214ddb798d4cf880de24251160`
-(committed 2026-11-19).
+(read for revision 3 and not re-read).
 
 ### Version governance that exists (no temporal policy)
 
-- `platform-gitops/release-gates.yaml` has `version_holds` and `gates`. It has
-  no time, window or freeze field, and no `syncWindows` exist anywhere in the
-  repo.
+- `platform-gitops/release-gates.yaml` has `version_holds` and `gates`. It
+  has no time, window or freeze field. No `syncWindows` exist anywhere in
+  `platform-gitops/bootstrap` or `platform-gitops/argocd` (re-grepped at
+  `a1e2294`).
 - `scripts/release-gate.py` (`check`/`verify`/`diff`/`pr-identity`): exit 6
-  means refused, exit 7 means could not observe. It reads the policy from a git
-  revision.
+  means refused and exit 7 means could not observe. It reads the policy from
+  a git revision.
 - `scripts/release-ledger-shadow.py` `judge_ledger` is a **pure read**. It
-  does not reserve or consume anything (review P1-2).
-- mctl-api `internal/workitems/action_approvals.go` (header lines 18-50) is
-  the existing single-use approval store, with states `pending -> approved |
-  denied`, `approved -> consumed` (`ConsumeActionApproval`, line 912, one
-  CAS guarded by state, `intent_hash`, `expires_at` and `fresh_until`),
-  `consumed -> executed` (`MarkActionApprovalExecuted`, line 968) and
-  `consumed -> in_flight -> executed | consumed` (`ReserveActionApproval`
-  line 1056, `SettleActionApproval` line 1123, mctl-api#772). A failed
-  settle returns `in_flight` to `consumed` "so a failed call does not burn the
-  human approval". Requests are idempotent per `(requested_by,
-  idempotency_key)`. Self-decision is refused (`ErrApprovalSelfDecision`).
-- mctl-api `internal/workitems/release_approvals.go` defines the dedicated
-  kind `release.grant` (mctl-api#1022, mctl-gitops#2528). It binds
-  `execution_id` = tag commit, `target` = `<repo>@<version>` and
-  `artifact_hash` = image digest, and the server builds the intent itself
-  ("nothing in it comes from a request body"). `deploy_approvals.go:54-61`:
-  `release.*`, `deploy.*` and `glovo.*` are **dedicated kinds** that every
-  generic create, decide, consume, reserve or settle route refuses
-  (`dedicatedKindPredicate`). Decisions are made on the MFA page
-  (`release_decisions.go`, `release_approval_page.go`).
+  neither reserves nor consumes anything.
+- mctl-api `internal/workitems/action_approvals.go` is the existing
+  single-use approval store. Its transitions:
+  - `pending -> approved | denied`;
+  - `approved -> consumed` (`ConsumeActionApproval`): one CAS guarded by
+    state, `intent_hash`, `expires_at` and `fresh_until`;
+  - `consumed -> executed`;
+  - `consumed -> in_flight -> executed | consumed` (`ReserveActionApproval`
+    / `SettleActionApproval`, mctl-api#772). A failed settle returns the
+    grant to `consumed`.
+
+  Requests are idempotent per `(requested_by, idempotency_key)`.
+  Self-decision is refused.
+- mctl-api `release_approvals.go` defines the dedicated kind `release.grant`
+  (mctl-api#1022, mctl-gitops#2528), whose intent the server builds itself.
+  `deploy_approvals.go:54-61`: `release.*`, `deploy.*` and `glovo.*` are
+  dedicated kinds that every generic route refuses. Decisions are made on
+  the MFA page (`release_decisions.go`, `release_approval_page.go`).
 - `platform-gitops/argo-workflows/scripts/release-gate-guard.sh` guards gated
   groups only. It is called by `tpl-git-commit`, `tpl-validate-tenant`,
   `wft-add/remove-custom-domain`, `wft-deploy-service`,
-  `wft-promote-deployment`, `wft-provision-database`, `wft-rollback-revision`
-  and `wft-rollback-service`.
+  `wft-promote-deployment`, `wft-provision-database`,
+  `wft-rollback-revision` and `wft-rollback-service`.
 - `.github/workflows/release-gate-watch.yml` detects after the write.
-  `.github/workflows/argocd-freshness.yml` checks resolution after push and
+  `.github/workflows/argocd-freshness.yml` checks resolution after a push and
   is "Not a merge gate".
 
 ### Argo CD identities and RBAC today (desired state)
 
-- `platform-gitops/argocd/values.yaml:163-173`: `policy.default: ""` and
+- `platform-gitops/argocd/values.yaml:174-184`: `policy.default: ""` and
   `scopes: "[groups]"`. `role:admin` has `applications, *, */*`,
   `projects, *`, `repositories, *` and `exec, create`, and is bound to group
-  `admins`. `:30-31` names the break-glass path, `argocd --core` against the
-  cluster kubeconfig.
-- Local accounts `mctl-api` and `ci-freshness` (`apiKey` only, `:42-48`)
-  have `applications, get, */*` only. No account has `sync`.
-- `platform-gitops/argocd/rbac/tenants/{labs,mctl,karabu,namax66,redloop,erpact,commerce-proof}.csv`:
-  every tenant role has `applications, sync, apps/<tenant>-*, allow` (erpact
-  also has `erpact/*`), plus `action/apps/Deployment/restart` and
-  `action/apps/StatefulSet/restart`.
-  `platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml:1093-1097`
-  **generates** these lines for every new tenant.
+  `admins`. The break-glass path is `argocd --core` against the cluster
+  kubeconfig.
+- The local accounts `mctl-api` (`:53`) and `ci-freshness` (`:59`) are
+  `apiKey` only, with `applications, get` and no `sync`.
+- `platform-gitops/argocd/rbac/tenants/{commerce-proof,erpact,karabu,labs,mctl,namax66,redloop}.csv`
+  each have `applications, sync, apps/<tenant>-*, allow` at line 4.
+  `erpact.csv:12` also has `erpact/*`. Every tenant also has the restart
+  actions.
+  `platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml:1093-1099`
+  **generates** these lines for every new tenant; the `sync` line is at
+  `:1095`.
 - `application.sync.requireOverridePrivilegeForRevisionSync` is **not set**
-  in `argocd/values.yaml`. At v3.3.8, `util/settings/settings.go:1525` reads
-  it as `== "true"`, so it is effectively `false`. No principal holds
-  `applications, override`, except `role:admin` through `applications, *`.
-- `bootstrap/templates/projects/project-apps.yaml` defines no `roles:`, so no
-  project-scoped JWT tokens exist, and no `syncWindows`.
+  in `argocd/values.yaml`, so at v3.3.8 it is effectively `false`. No
+  principal holds `override` except `role:admin`.
+- `bootstrap/templates/projects/project-apps.yaml` defines no `roles:` and no
+  `syncWindows`. `project-prod.yaml` exists, but its content is the TODO noted
+  in revision 3 (no production/preview split).
 
 ### Application shape (relevant to an exact pin)
 
-- `bootstrap/templates/bootstrap/applicationset-apps.yaml:34-61`: every
-  `apps` Application is **multi-source**. Source 1 is the
-  `helm-charts/base-service` path and source 2 is a `ref: values` source. Both
-  are at `targetRevision` `main`. `syncPolicy.automated` has `prune: true` and
-  `selfHeal: true`, and the options include `ApplyOutOfSyncOnly`. The
-  ApplicationSet controller owns the Application spec.
-  `manifest-generate-paths` limits refreshes to `/<svc path>` and
-  `/platform-gitops/helm-charts/base-service`.
-- `bootstrap/templates/mctl-platform/mctl-api.yaml`: source 1 is mctl-api
-  `helm/` pinned at `c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361` (`:19`),
-  source 2 is mctl-gitops `infra-components/mctl-platform/mctl-api` at
-  `main` (`:827-829`), and automated sync has prune and selfHeal
-  (`:893-895`), in project `platform`.
+- `bootstrap/templates/bootstrap/applicationset-apps.yaml`: every `apps`
+  Application is **multi-source**. Source 1 is the chart
+  `helm-charts/base-service` (`targetRevision` at `:38`); source 2 is a
+  `ref: values` source (`:50`). Both take `.Values.spec.source.targetRevision`,
+  which is `main`. `syncPolicy.automated` (`:56-58`) has prune and selfHeal.
+  The ApplicationSet owns the Application spec. **No `apps` Application is
+  SHA-pinned.**
+- `bootstrap/templates/mctl-platform/mctl-api.yaml`: source 1 is the mctl-api
+  `helm/` chart, pinned to `c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361` (`:19`,
+  with the #2528 rationale at `:11-18`). Source 2 is
+  `infra-components/mctl-platform/mctl-api` at `main` (`:824`). Automated
+  sync has prune and selfHeal (`:889-891`). The Application is in project
+  `platform`. It is **partially pinned**, so it is not a G0 pilot as
+  deployed.
+- `bootstrap/templates/bootstrap/root-app.yaml`: project `default`, source
+  `platform-gitops/bootstrap`, automated with prune and selfHeal, and a
+  resource-level `Prune=false`. root-app renders every AppProject and every
+  Application spec, so a pin move or a window edit takes effect only when
+  root-app syncs.
 
 ### Argo CD v3.3.8 facts relevant to a broker (read from source at the tag)
 
-- `server/application/application.go` `Sync` (around line 2020):
-  1. It loads the Application and project with `get`, then evaluates
-     `proj.Spec.SyncWindows.Matches(a).CanSync(true)`. Manual syncs are
-     blocked by an active deny unless every active deny has `manualSync`.
-  2. It then enforces `applications, sync`. Local `Manifests` need
-     `applications, override` and are refused under auto-sync.
-  3. `resolveSourceRevisions` (line 2136): a requested revision that differs
-     from the source's `targetRevision` needs `override` **only when**
-     `requireOverridePrivilegeForRevisionSync` is true. It is **always
-     refused with FailedPrecondition when automated sync is enabled**
-     ("Cannot sync to %s: auto-sync currently set to %s"). The same applies
-     per source for multi-source Applications.
-  4. Without a revision, `resolveRevision` resolves `targetRevision`
-     (`main`) through the repo server **at request time** and stores the
-     resolved SHA(s) in `Operation.Sync.Revision`/`Revisions`. It also stores
-     `InitiatedBy.Username` and the caller's `Infos` key/values on the
-     operation (lines 2091-2107).
-  5. `argo.SetAppOperation` refuses if an operation is already running, so
-     Argo serializes one operation per Application natively.
-- **Consequence:** on v3.3.8, an auto-synced Application cannot be
-  manual-synced to an exact, non-`targetRevision` SHA without mutating its
-  spec (disabling automation or changing `targetRevision`). The API resolves
-  `main` at call time, so a sync "to the approved SHA" holds only if `main`
-  still renders the same manifests for that Application. For the `apps`
-  Applications this spec is owned by the ApplicationSet. A live mutation is
-  reverted by the AppSet controller unless it ignores those fields, and a
-  GitOps mutation is itself a production-governance write.
-- `Rollback` (history id) is refused when auto-sync is enabled ("rollback cannot be initiated
-  when auto-sync is enabled", the `Rollback` function right after
-  `resolveSourceRevisions`).
-  `TerminateOperation` needs only `applications, sync` (line 2445), so a
-  tenant can terminate a broker operation. That is a denial of service, not a
-  bypass.
-- `docs/user-guide/sync_windows.md` (v3.3.8) line 40: an active deny overrides
-  an active allow. `manualSync: true` opens manual syncs for every principal
-  that has `sync`. There is no per-role or per-request override. Upstream
-  argoproj/argo-cd#29558 ("Allow specific RBAC roles to override an active
-  deny sync window") was OPEN at the 2026-11-20 read (created 2026-09-04,
-  last updated 2026-09-07). No native hook, admission plugin or sync-window
-  webhook exists at v3.3.8 to authorize a single sync by request id. **Not
-  found, and therefore treated as nonexistent.**
-- From revision 2, re-confirmed: v3.3.8 `SyncWindow` has no `syncOverrun`
-  (it exists only on upstream master). The `timeZone` offset is taken at
-  `time.Now()`. Auto-sync and selfHeal are gated by `CanSync(false)`. An
-  operation running when a deny window opens stays `Running` ("Sync operation
-  blocked by sync window") and resumes after the window ends. A deny window
-  **suspends** auto-sync for matching Applications while active. It does not
-  change `syncPolicy`, and auto-sync resumes at window end with whatever
-  `main` holds then.
-- `docs/operator-manual/rbac.md` (v3.3.8) lines 207-221: `override` lets a
-  caller sync arbitrary manifests or, with the flag, arbitrary revisions. The
-  flag defaults to `false` "to prevent breaking changes".
+- `server/application/application.go` `Sync` (`:2019`):
+  1. It loads the Application and project, then evaluates
+     `proj.Spec.SyncWindows.Matches(a).CanSync(true)` (`:2027`). A manual
+     sync is blocked by an active deny unless every active deny has
+     `manualSync`.
+  2. It enforces `applications, sync`. Local `manifests` need `override`
+     and are refused under auto-sync.
+  3. `resolveSourceRevisions` (`:2136-2200`, re-read 2026-11-21). For each
+     source, if the requested revision is non-empty **and differs from**
+     `targetRevision` (or `HEAD`), then `override` is enforced when the flag
+     is true, and on an auto-synced Application the request is refused with
+     `FailedPrecondition`: "Cannot sync source %s to %s: auto-sync currently
+     set to %s" for multi-source (in the loop starting `:2155`), and "Cannot
+     sync to %s: auto-sync currently set to %s" for single-source (`:2191`). A requested revision **equal to**
+     `targetRevision` passes. `resolveRevision` then resolves it. For a
+     commit SHA, this yields that SHA.
+  4. Without a revision, `targetRevision` (`main`) is resolved **at request
+     time**, and the result is stored in `Operation.Sync.Revision(s)`
+     together with `InitiatedBy` and the caller's `Infos`.
+  5. `argo.SetAppOperation` (`:2115`) refuses if an operation is already
+     running. Argo serializes one operation per Application.
+- `TerminateOperation` (`:2442`) needs only `applications, sync`. A tenant
+  that keeps `sync` can therefore terminate a broker operation: a denial of
+  service, not a bypass.
+- `GetApplicationSyncWindows` (`:2808-2831`) needs only `applications, get`.
+  It returns `AssignedWindows`, `ActiveWindows` and `CanSync`, and
+  **`CanSync` is `CanSync(true)`, the manual-sync answer**. With an active
+  deny that has `manualSync: true`, it reports `canSync: true` even though
+  auto-sync is blocked. Activation logic must read `activeWindows`, not
+  `canSync` alone (R-V3).
+- `Rollback` by history id is refused when auto-sync is enabled.
+- `docs/user-guide/sync_windows.md` (v3.3.8): an active deny overrides an
+  active allow. `manualSync: true` opens manual sync to **every** principal
+  that has `sync`. There is no per-role override. argoproj/argo-cd#29558 was
+  **OPEN** at the 2026-11-21 read (`gh api`, `updated_at`
+  2026-09-07T21:21:04Z). No v3.3.8 hook authorizes a single sync by request
+  id.
+- Re-confirmed from revision 2:
+  - v3.3.8 has no `syncOverrun`.
+  - The `timeZone` offset is taken at `time.Now()`.
+  - Auto-sync and selfHeal are gated by `CanSync(false)`.
+  - An operation that is in flight when a deny opens stays `Running`
+    ("Sync operation blocked by sync window").
+  - A deny **suspends** auto-sync for matching Applications while it is
+    active. It does not change `syncPolicy`, and auto-sync resumes at window
+    end with whatever `main` holds then.
+- The controller (`controller/sync.go` `SyncAppState`) renders and applies
+  the operation's revisions independently of the API server. The re-review
+  cross-checked this. **Consequence:** once `Sync` returns, the apply may
+  already be under way. A broker check made after `Sync` returns cannot
+  prevent the first apply (re-review P1-1).
 
 ### Table A: production effect paths, labelled for a window policy
 
@@ -161,113 +184,131 @@ Labels: `enforced`, `detected-after-write`, `not-covered`, `unknown`.
 | # | Path | Changes | Pre-effect hook | Label for a future window check | Evidence |
 |---|---|---|---|---|---|
 | P1 | `release-deploy.yaml` (`preflight`, `ledger-gate`, `bump`, `publish-direct` env `gitops-bump`, `publish-pr`, `enqueue-bump`) | image tag/digest | in workflow, before push | candidate `enforced` at write; effect gap (section 3) | workflow file |
-| P2 | `gitops-bump.yaml` (same job structure) | image tag/digest | yes | as P1 | workflow file |
-| P3 | Human PR through merge queue | anything | PR + `merge_group` checks | `not-covered` at effect (section 3); check runs candidate code (section 4) | ruleset 18465404; `validate-manifests.yml` |
+| P2 | `gitops-bump.yaml` | image tag/digest | yes | as P1 | workflow file |
+| P3 | Human PR through the merge queue | anything | PR and `merge_group` checks | `not-covered` at effect; the check runs candidate code (section 4) | ruleset 18465404; `validate-manifests.yml` |
 | P4 | `claude/*` auto-merge | anything not in `protected_re` | `validate` | as P3 | `auto-merge.yml` |
-| P4b | `release-bump/*` enqueued by `scripts/release-bump-enqueue-wait.sh` | image | guard before enqueue | `not-covered` at merge/sync without an Argo layer | script header |
-| P5a | CWFTs pushing to `main` (`wft-deploy-service`, `wft-rollback-*`, `wft-promote-deployment`, `tpl-git-commit`) | values incl. image | in template | candidate `enforced` after a hook exists | `grep -l "git push"` |
-| P5c | Non-image CWFTs (`wft-create-tenant`, `wft-delete-tenant-safe`, `wft-retire-service`, `wft-add/remove-custom-domain`, `wft-provision-database`, `wft-platform-skill-*`) | namespaces, ingress, DB, removals, **tenant RBAC lines** | same | `not-covered` in an image-bump MVP | same grep; `wft-create-tenant.yaml:1093-1097` |
-| P5b/P6 | Write deploy key outside template code; mctl-agents `commit-and-push` | any path | none | `unknown`: ruleset `bypass_actors` unreadable; #2543 OPEN (updated 2026-11-13) | `gh api` ruleset; runbook |
-| P7a | `admins-mctl-api` source 1, mctl-api `helm/` pinned `c5e5d6f9...` | chart | pin moves only by GitOps PR | as P3 | `mctl-api.yaml:10-20` |
-| P7b | `admins-mctl-api` source 2, `infra-components/mctl-platform/mctl-api` at `main` | manifests | none beyond P3 | as P3 | `mctl-api.yaml:827-829` |
+| P4b | `release-bump/*` enqueued by `scripts/release-bump-enqueue-wait.sh` | image | guard before enqueue | `not-covered` at merge/sync without an `effective` Argo deny | script header |
+| P5a | CWFTs that push to `main` (`wft-deploy-service`, `wft-rollback-*`, `wft-promote-deployment`, `tpl-git-commit`) | values, including image | in template | candidate `enforced` once a hook exists | `grep -l "git push"` |
+| P5c | Non-image CWFTs (`wft-create-tenant`, `wft-delete-tenant-safe`, `wft-retire-service`, `wft-add/remove-custom-domain`, `wft-provision-database`, `wft-platform-skill-*`) | namespaces, ingress, DB, removals, **tenant RBAC lines** | same | `not-covered` in an image-bump MVP | same grep; `wft-create-tenant.yaml:1095` |
+| P5b/P6 | Write deploy key outside template code; mctl-agents `commit-and-push` | any path | none | `unknown`: ruleset `bypass_actors` unreadable; #2543 OPEN | ruleset read; runbook |
+| P7a | `admins-mctl-api` source 1, pinned `c5e5d6f9...` | chart | the pin moves only by GitOps PR | as P3 | `mctl-api.yaml:19` |
+| P7b | `admins-mctl-api` source 2 at `main` | manifests | none beyond P3 | as P3 | `mctl-api.yaml:824` |
 | P7c | All `apps`/`tenants`/root Applications at `main` | everything under `platform-gitops/` | none beyond P3 | as P3 | `applicationset-apps.yaml`, `root-app.yaml` |
-| P8a | Tenant manual sync (`applications, sync` on `apps/<tenant>-*`) | applies current `main` | Sync Windows (no `manualSync`) | `not-covered` today (no windows); `enforced` at sync start only with a deny window and no `manualSync` | tenant CSVs |
-| P8b | `role:admin` sync, Application spec edit, `projects, *` (edit or delete windows), `override` | anything | none Argo can enforce against admin | `not-covered` (break-glass residual) | `argocd/values.yaml:167-172` |
-| P8c | `kubectl` / `argocd --core` with cluster kubeconfig | anything | none | `not-covered` (break-glass residual) | `values.yaml:30-31` |
-| P8d | Tenant resource actions (`Deployment/restart`) | restarts pods | not a sync; window effect unknown | `unknown` until the harness tests it (T93) | tenant CSVs |
+| P8a | Tenant manual sync | applies the current spec | Sync Windows (no `manualSync`) | `not-covered` today; `enforced` at sync start only while a deny without `manualSync` is `effective` | tenant CSVs |
+| P8b | `role:admin` sync, spec edit, `projects, *`, `override` | anything | none | `not-covered` (break-glass residual) | `argocd/values.yaml:178-184` |
+| P8c | `kubectl` / `argocd --core` | anything | none | `not-covered` (break-glass residual) | `argocd/values.yaml` comments |
+| P8d | Tenant resource actions (`Deployment/restart`) | restarts pods | not a sync | `unknown` until T93 | tenant CSVs |
 | P9/P10 | Vault values, optional Secrets | runtime config | none in git | `not-covered` | runbook |
-| P12 | Required contexts bound to integration 15368 | merge-gate trust | none | `unknown` / spoofable by a same-named job | ruleset read |
+| P12 | Required contexts bound to integration 15368 | merge-gate trust | none | `unknown`; spoofable by a same-named job | ruleset read |
 | P14 | `cloudflare-apply.yml` | edge/DNS/WAF | env reviewer | `not-covered` | workflow file |
-| P15 | Merged before freeze, applied during freeze | as committed | Argo deny only | `not-covered` today | section 3 |
+| P15 | Merged before a freeze, applied during it | as committed | Argo deny only | `not-covered` today | section 3 |
+| P16 | Window merged but not yet `effective` (new) | any | none | `not-covered` for `[start, t_effective)` | section 3.1 |
+| P17 | Direct `Sync` with an exfiltrated broker token (new) | the pilot app's current spec | none pre-effect | `not-covered` (detected after the fact) | section 6.6 |
 
 ### Table B: non-image GitOps writes
 
-`helm-charts/base-service/**` (every `apps` Application), `helm-charts/tenant/**`
-(every `tenant-*`), non-`image` keys in `services/<team>/<svc>/values.yaml`,
-`bootstrap/templates/**` (Applications, AppProjects, ApplicationSets),
-`argocd/**` (RBAC CSVs, `argocd-cm`), `argo-workflows/**`,
-`infra-components/**`. `release-gate.py` parses none of them. The MVP name
-therefore stays **"image-bump window policy (partial coverage)"**. A
-broker-protected Application changes this only at the point of sync and only
-for that Application (section 6).
+- `helm-charts/base-service/**`: feeds every `apps` Application.
+- `helm-charts/tenant/**`: feeds every `tenant-*` Application.
+- Non-`image` keys in `services/<team>/<svc>/values.yaml`.
+- `bootstrap/templates/**`: Applications, AppProjects and ApplicationSets,
+  including pins.
+- `argocd/**`: the RBAC CSVs and `argocd-cm`.
+- `argo-workflows/**`.
+- `infra-components/**`.
+
+`release-gate.py` parses none of these. The MVP name therefore stays
+**"image-bump window policy (partial coverage)"**.
 
 ### Table C: GitOps path to Application to AppProject (hand-read; S0 task 4 regenerates it from a render)
 
-| GitOps path | Application | AppProject | Destination ns |
-|---|---|---|---|
-| `services/<team>/<svc>/` + `helm-charts/base-service/` | `<team>-<svc>` (multi-source, auto-sync) | `apps` | `<team>` |
-| `tenants/<t>/` + `helm-charts/tenant/` | `tenant-<t>` | `platform` | tenant chart |
-| `bootstrap/templates/mctl-platform/mctl-api.yaml` + `infra-components/mctl-platform/mctl-api` | `admins-mctl-api` | `platform` | admins |
-| `bootstrap/templates/erpact/applications.yaml` | `erpact-*` | `erpact` | erpact |
-| `bootstrap/**` (incl. AppProjects) | `root-app` | `default` | argocd |
-| `argocd/**` | `argocd-self-managed` | `default` | argocd |
+| GitOps path | Application | AppProject | Destination ns | Pinned? |
+|---|---|---|---|---|
+| `services/<team>/<svc>/` + `helm-charts/base-service/` | `<team>-<svc>` (multi-source, auto-sync) | `apps` | `<team>` | no (both `main`) |
+| `tenants/<t>/` + `helm-charts/tenant/` | `tenant-<t>` | `platform` | tenant chart | no |
+| `bootstrap/templates/mctl-platform/mctl-api.yaml` + `infra-components/mctl-platform/mctl-api` | `admins-mctl-api` | `platform` | admins | source 1 only |
+| `bootstrap/templates/erpact/applications.yaml` | `erpact-*` | `erpact` | erpact | not re-read |
+| `bootstrap/**` (including AppProjects) | `root-app` | `default` | argocd | no |
+| `argocd/**` | `argocd-self-managed` | `default` | argocd | no |
 
-Observations: hyphen-joined `<team>-<svc>` names make wildcards unsafe, so
-only exact names are used (R-M2). AppProjects are rendered by `root-app` in
-project `default`, so a window never blocks the commit that edits it (R-A9).
-There is no production/preview project split (`project-prod.yaml` is a
-commented TODO).
+Application names are hyphen-joined (`<team>-<svc>`), so wildcards are
+unsafe and only exact names are used (R-M2). AppProjects and RBAC are applied
+by two different Applications (`root-app` and `argocd-self-managed`), so
+their effect order is independent of commit order (R-R4).
 
 ### Timing
 
 - #970 (closed 2026-09-02) reported about 7 min. A push webhook,
   `--revision-cache-expiration=30s` and a 180 s poll have been added since.
-  No latency distribution exists, so the figure is stale until measured.
-- Merge queue (ruleset 18465404): `check_response_timeout_minutes: 120`,
-  build and merge 1 entry, method `MERGE`.
-- `main` receives frequent bot commits under `agents-state/` (10-20 per hour,
-  per the comment in `applicationset-apps.yaml:28-32`). An approved
-  **GitOps SHA is therefore almost never `main` HEAD** by the time a sync
-  runs (section 6.3).
+  The figure is stale until measured.
+- Merge queue: `check_response_timeout_minutes: 120`, one entry per build
+  and merge, method `MERGE`.
+- `main` receives frequent bot commits under `agents-state/` and image
+  bumps; the HEAD commit is itself a bump (`a1e2294 chore: bump
+  labs/agent-worker-managed-preview`). An approved GitOps SHA is therefore
+  almost never `main` HEAD by the time a sync runs.
 
 Deployed state checked:
-- `git log -1` on the clone: `467d6de9...` (2026-11-20 16:12 UTC).
-- `$MCTL_GITOPS_ROOT/services/*` and `tenants/*` were listed. This is desired
-  state only. Tenants with services: admins, karabu, labs, namax66, redloop.
-- `mctl_whoami` (re-run 2026-11-20): `agent:issue-investigator`, Admin false,
-  Teams [], no namespaces.
-- `mctl_get_service_status admins/mctl-api` (re-run): "ArgoCD application not
-  found: admins-mctl-api". Recorded as **no access, not absence**. Live Argo
-  CD version, live AppProjects, live `argocd-cm` (including
-  `requireOverridePrivilegeForRevisionSync`) and live RBAC are `unknown`.
-- `gh issue view 2543`: OPEN, updated 2026-11-13. argoproj/argo-cd#29558:
-  OPEN, updated 2026-09-07.
-- Upstream Argo CD v3.3.8 read: `server/application/application.go`,
-  `util/settings/settings.go`, `docs/operator-manual/rbac.md`,
-  `docs/operator-manual/argocd-cm.yaml`, `docs/user-guide/sync_windows.md`.
-- mctl-api at `2a8de33`: `internal/workitems/action_approvals.go`,
-  `release_approvals.go`, `deploy_approvals.go:54-61`.
-- From revision 2, not re-run: ruleset 18465404 read (`bypass_actors` null);
-  `argocd-freshness.yml` run listing; vendor docs (section 9).
+- `git log -1` on the clone: `a1e22940...` (2026-11-21 10:14 UTC). The clone
+  is shallow, so `467d6de` cannot be resolved for a diff, and the cited
+  lines were re-read directly instead.
+- `grep syncWindows|freeze` over `platform-gitops/bootstrap`,
+  `platform-gitops/argocd` and `release-gates.yaml`: no `syncWindows`. The
+  only "freeze" hits are an unrelated SLO merge-freeze comment
+  (`observability/monitoring.yaml:27,32,862`) and a `release-gates.yaml:28`
+  comment.
+- `$MCTL_GITOPS_ROOT/services/*` and `tenants/*` were listed for revision 3.
+  This is desired state only. Tenants with services: admins, karabu, labs,
+  namax66, redloop.
+- `mctl_whoami` (revision 3, 2026-11-20): `agent:issue-investigator`, Admin
+  false, Teams [], no namespaces. Not re-run; still assumed non-admin.
+- `mctl_get_service_status admins/mctl-api` (revision 3): "ArgoCD
+  application not found". Recorded as **no access, not absence**. The live
+  Argo CD version, AppProjects, `argocd-cm` and RBAC are `unknown`.
+- `gh issue view 2828` comments: the 2026-11-21 re-review was read in full
+  and is the input for revision 4.
+- `gh api` argoproj/argo-cd#29558: open, `updated_at` 2026-09-07T21:21:04Z.
+- Upstream v3.3.8 `server/application/application.go` was re-read
+  (`Sync`, `resolveSourceRevisions`, `TerminateOperation`,
+  `GetApplicationSyncWindows`). `controller/sync.go` was not re-read by this
+  investigator; it is taken from the re-review and marked for S0 task 6
+  re-verification.
+- From revision 3, not re-run: the mctl-api `2a8de33` files, the ruleset
+  18465404 read, vendor docs.
 
 ## Proposed solution
 
-S0 produces evidence, an offline model and a local inert harness. It does
-**not** produce a running system. Sections 1-4 carry revision 2 forward.
-Sections 5-8 are new or rewritten for the broker.
+S0 produces evidence, an offline model, a local inert harness and inert
+prototypes. It does **not** produce a running system.
 
 ### 1. S0 deliverables and exit gate
 
-1. `docs/spikes/2828-release-calendar/inventory.md`: tables A-C re-verified,
-   plus the live Argo version, `argocd-cm` and RBAC, read by the owner
-   (read-only), or `unknown`.
+1. `docs/spikes/2828-release-calendar/inventory.md`: tables A-C
+   re-verified, plus the live Argo version, `argocd-cm` and RBAC, read
+   read-only by the owner, or `unknown`.
 2. `tests/research/release_calendar_s0/model.py`: the pure policy function
-   (section 2), run only by hand with `python3 -I`.
+   (section 2) and the activation-state function (section 3.1). Run only by
+   hand, with `python3 -I`.
 3. `tests/research/release_calendar_s0/argo-inert/`: a kind/k3d harness with
-   Argo CD **v3.3.8** (chart `argo-cd` 9.5.9), a local git server and dummy
-   Applications shaped like MCTL's (multi-source, auto-sync, AppSet-generated,
-   two AppProjects, tenant CSVs copied from `rbac/tenants/labs.csv`).
-4. `tests/research/release_calendar_s0/broker-model/`: an **inert broker
-   prototype** (section 6). It talks only to the harness Argo CD and to a
-   local Postgres that holds a copy of the `action_approval_requests` schema
-   and CAS statements from mctl-api `2a8de33`. It is not a deployable
-   service: no Dockerfile, chart or CI references.
-5. `docs/spikes/2828-release-calendar/decision.md`: the matrix in section 8
-   refreshed with results, one recommended outcome, residual risks and
-   follow-ups mapped to existing issues.
-6. Exit gate: independent review of the memo, then an owner decision on
-   #2828. S1 needs a new proposal. Any Argo RBAC, AppProject, window, secret,
-   account, flag or production change needs a separate owner **security** GO.
+   Argo CD **v3.3.8** (chart `argo-cd` 9.5.9) and a local git server. It
+   holds dummy Applications shaped like MCTL's: multi-source,
+   AppSet-generated, tracking `main`. It adds **one fully SHA-pinned
+   multi-source pilot** for the G0 tests, a root-app-like parent Application
+   that renders AppProjects and Application specs, and RBAC copied from
+   `rbac/tenants/labs.csv`.
+4. `tests/research/release_calendar_s0/broker-model/`: an inert broker
+   prototype (section 6). It talks only to the harness Argo CD and to a local
+   Postgres holding a copy of the `action_approval_requests` schema, the
+   proposed `release_exception_ops` table and the CAS statements.
+5. `tests/research/release_calendar_s0/mcp-model/`: an offline model of the
+   two PR-authoring operations (section 8) against a throwaway local git
+   repo. It never runs against GitHub.
+6. `docs/spikes/2828-release-calendar/decision.md`: the section 9 matrix
+   refreshed with results, one calendar outcome, one exception-path outcome,
+   residual risks, and follow-ups mapped to existing issues.
+7. Exit gate: an independent review of the memo, then an owner decision on
+   #2828. S1 needs a new proposal. Any Argo RBAC, AppProject, window, pin,
+   secret, account, flag, MCP tool or production change needs a separate
+   owner **security** GO.
 
 ### 2. Policy model (illustrative schema, fixtures only)
 
@@ -276,12 +317,14 @@ Sections 5-8 are new or rewritten for the broker.
 version: 1
 default: allow
 max_window: 21d
-margins: {sync_start: 5m}       # placeholder until S0 task 3 measures it
+margins: {sync_start: 5m}                 # placeholder until S0 task 3 measures it
+activation: {lead: 30m, max_read_age: 60s} # placeholders (section 3.1)
 scopes:
   platform-api: {applications: [admins-mctl-api]}
   labs-bot:     {applications: [labs-mctl-telegram]}
 windows:
-  - name: example-weekend-freeze
+  - id: w-7f3a9c                         # derived: sha256(scope|kind|schedule|zone)[:6]
+    name: example-weekend-freeze
     owner: <github-login>
     decided_in: mctlhq/mctl-gitops#NNNN
     kind: deny
@@ -290,8 +333,9 @@ windows:
     recur: {freq: weekly, byday: [FR]}
     start_local: "16:00"
     end_local: {day_offset: 3, time: "08:00"}
-    exception_path: broker           # broker | none (S0 compares e1/e2 only in fixtures)
-  - name: example-year-end
+    exception_path: none                 # broker only if S0 concludes BROKER_PINNED_PILOT_CANDIDATE
+  - id: w-1c04de
+    name: example-year-end
     owner: <github-login>
     decided_in: mctlhq/mctl-gitops#NNNN
     kind: deny
@@ -301,356 +345,629 @@ windows:
     exception_path: none
 ```
 
-Truth table (per Application, interval `I = [t_check, t_effect_max]`, first
-matching row wins). It is unchanged from revision 2 and is identical to
-`CanSync(false)` except that row 0 returns `UNKNOWN`:
+Truth table (per Application, interval `I = [t_check, t_effect_max]`, the
+first matching row wins). It is unchanged from revision 2 and equals
+`CanSync(false)` except for row 0:
 
 | # | Condition | Result | Argo 3.3.8 `CanSync(false)` |
 |---|---|---|---|
-| 0 | policy unreadable/invalid | `UNKNOWN` | error → blocked |
+| 0 | policy unreadable or invalid | `UNKNOWN` | error → blocked |
 | 1 | no window matches | `default` (`ALLOW`) | allow |
-| 2 | a matching deny active in `I` | `DENY` | deny |
+| 2 | a matching deny is active in `I` | `DENY` | deny |
 | 3 | allows match and `I` lies inside them | `ALLOW` | allow |
 | 4 | allows match, otherwise | `DENY` | deny |
 | 5 | only denies match, none active | `ALLOW` | allow |
 
-Time semantics (unchanged): wall-clock local occurrences in an IANA zone with
-`zoneinfo`; absolute `duration` only for `UTC` windows or UTC one-offs;
-half-open `[start, end)`. A spring-forward gap moves to the first existing
-instant. A fall-back ambiguity widens deny windows and narrows allow windows.
-Fri 16:00 to Mon 08:00 Europe/Berlin is 64 h normally, 65 h across fall-back
-and 63 h across spring-forward. Recurrence subset: daily, weekly or monthly,
-with `byday` (no ordinals) and `bymonthday`, and no `COUNT`/`UNTIL`; anything
-else is `UNKNOWN`.
+Time semantics (unchanged):
+
+- Occurrences are wall-clock local times in an IANA zone, computed with
+  `zoneinfo`.
+- An absolute `duration` is allowed only for `UTC` windows and UTC
+  one-offs.
+- Windows are half-open: `[start, end)`.
+- A spring-forward gap moves to the first instant after it.
+- A fall-back ambiguity widens deny windows and narrows allow windows.
+- Example: Fri 16:00 to Mon 08:00 Europe/Berlin is 64 h normally, 65 h
+  across fall-back and 63 h across spring-forward.
+- Recurrence subset: daily, weekly or monthly, with `byday` (no ordinals)
+  and `bymonthday`, and no `COUNT` or `UNTIL`. Anything else is `UNKNOWN`.
 
 ### 3. Merge queue and point of effect
 
-Four instants: `t_check`, `t_merge`, `t_sync_start`, `t_sync_end`.
-Direct-push writers can re-check seconds before the push. Queued PRs can merge
-up to 120 min after their check, so **no PR or queue path is `enforced` at the
-point of effect** without an Argo deny window on the target Application. With
-a deny window and no `manualSync`, a commit merged before the freeze is applied
-at window end ("pending changes apply when the freeze ends"). A multi-wave
-sync that is in flight when the window opens pauses partially applied
-(v3.3.8). Fixtures T20-T25 are unchanged from revision 2.
+There are four instants: `t_check`, `t_merge`, `t_sync_start` and
+`t_sync_end`.
+
+- Direct-push writers can re-check seconds before the push.
+- Queued PRs can merge up to 120 min after their check. So **no PR or queue
+  path is `enforced` at the point of effect** unless an `effective` Argo
+  deny covers the target Application.
+- With an `effective` deny and no `manualSync`, a commit merged before the
+  freeze is applied at window end.
+- A multi-wave sync that is in flight when the window opens pauses,
+  partially applied.
+
+Fixtures T20-T25 are unchanged from revision 2.
+
+#### 3.1 Window activation lifecycle (re-review P1-2)
+
+A merged window is desired state. Argo enforces only the live AppProject that
+root-app has applied. Activation is therefore an **observed** state, computed
+per (window, intended Application):
+
+| State | Required evidence (all fresh, each read within `max_read_age`) |
+|---|---|
+| `proposed` | The PR is open and adds the window (base-pinned validator passed) |
+| `merged` | The window is in the policy at `main` SHA S |
+| `reconciling` | root-app `status.sync.revision` does not yet contain S, **or** the live AppProject `spec.syncWindows` hash differs from the projection rendered at S |
+| `armed` | The live AppProject window hash equals the projection at S; `GetApplicationSyncWindows(app).assignedWindows` contains the window for every intended Application and for no unintended one (an exact match test against Table C); time is before `start` |
+| `effective` | `armed`, and `start <= now < end`, and `activeWindows` contains the deny. For an exception design, `canSync` (manual) also equals the intended `manualSync` |
+| `expired` | `now >= end`, and the projection has been removed (or never recurs) |
+| `drifted` | Live and desired disagree after `reconciling` exceeded its SLA; or a yearly-cron projection of a one-off is still present after `end`; or an unintended Application is matched |
+| `unknown` | Any read returned 403, a timeout or an error, or is older than `max_read_age` |
+
+Rules:
+
+- `unknown` never reports `effective`.
+- The coverage gap `[start, t_effective)` is reported `not-covered` for the
+  affected Applications (P16).
+- If a window is not `armed` at `start - activation.lead`, an **activation
+  SLA missed** alert fires.
+
+Operator instructions when the activation SLA is missed (design only):
+
+1. Announce that the freeze is **not in force**.
+2. Hold human-initiated deploy writes by the existing release-gate holds
+   where they apply.
+3. Escalate to an admin to inspect root-app sync. The admin action is
+   break-glass and recorded.
+4. Never treat the merge as a successful emergency freeze.
+
+Observation needs `applications, get` for `GetApplicationSyncWindows`, which
+mctl-api's account already has. A live AppProject read may need
+`projects, get`. That is `unknown`, and any new permission is S3.
+
+Cases S0 fixtures cover (T110-T117):
+
+- A window merged at T-1m, with root-app syncing at T+4m, so `effective`
+  starts at T+4m and `[T, T+4m)` is `not-covered`.
+- A pre-scheduled window whose start passes while root-app is degraded.
+- Removal of an expired one-off, and a missing removal producing `drifted`
+  on next year's recurrence.
+- An Argo application-controller restart while a window is active (the
+  window is still enforced on the next reconcile; recorded).
+- A changed selector that drops an intended Application, or adds an
+  unintended one.
+- A 403 or stale read giving `unknown`.
 
 ### 4. Trust boundary
 
-`validate-manifests.yml` runs `scripts/release-gate.py` from the PR merge-ref
-checkout and reads only the policy from `HEAD^1`. Any evaluator must take code
-and policy from the base commit and run with `python3 -I` from a directory that
-holds no candidate files. Integration-15368 contexts are not trusted
-enforcement (P12). `protected_re` is not a trust boundary. The same rule
-applies to the broker: it reads policy, Application map and approved intent
-from mctl-api and from a pinned base revision, **never from a payload, an
-agent worktree or a PR head** (R-G10). Fixtures T70-T74 are unchanged.
+`validate-manifests.yml` runs `scripts/release-gate.py` from the PR
+merge-ref checkout, and reads only the policy from `HEAD^1`. Any evaluator,
+including the MCP PR validator (section 8), must take its code and policy
+from the base commit, and run with `python3 -I` from a directory that holds
+no candidate files. Integration-15368 contexts are not trusted enforcement
+(P12), and `protected_re` is not a trust boundary. The broker reads its
+policy, Application map and intent from mctl-api and from a pinned base
+revision only (R-G10). Fixtures T70-T74 are unchanged.
 
 ### 5. Grant lifecycle (shared by every exception path)
 
-Authority stays with a human on the existing mctl-api MFA decide page. The
-calendar, the broker and agents add no approver.
+Authority stays with a human on the existing mctl-api MFA decide page.
 
-**Reused from mctl-api (no new authority):** the `action_approval_requests`
-table and its CAS discipline (`ConsumeActionApproval`); the
-dedicated-kind namespace mechanism (`release.*` is already dedicated, so
-`release.freeze_exception` would be refused by every generic route); the
-server-built intent pattern from `release.grant` (intent from what the server
-reads, never from a request body); `fresh_until`, `expires_at`, refusal of
-self-decision, idempotency per `(requested_by, idempotency_key)`; the MFA
-release decide page.
+**Reused from mctl-api, adding no new authority:**
 
-**New (would need its own proposal and mctl-api owner GO):** a dedicated kind
-`release.freeze_exception` with its own create, decide and spend paths. The
-spend path must **not** reuse `SettleActionApproval(succeeded=false)`, which
-returns `in_flight -> consumed` and makes a grant reusable. Once an Argo
-operation may have been created, the grant must never become spendable again
-(R-G6). Proposed dedicated states: `approved -> claimed(broker_op_id) ->
-executed | spent_failed | spent_unknown`. Only `claimed -> executed` and the
-two `spent_*` states are terminal, and none returns to `approved` or
-`consumed`.
+- the `action_approval_requests` table and its CAS discipline;
+- the dedicated-kind namespace (`release.*` is already dedicated);
+- the server-built intent pattern of `release.grant`;
+- `fresh_until` and `expires_at`;
+- the refusal of self-decision;
+- idempotency per `(requested_by, idempotency_key)`;
+- the MFA release decide page.
 
-**Intent (server-built).** The fields are kind, AppProject, Application name
-and namespace, tenant and environment, approved GitOps SHA, **every** source's
-resolved revision (for `apps`: base-service chart source and values source;
-for `admins-mctl-api`: the mctl-api chart pin and the `infra-components`
-source), the SHA-256 of the rendered manifests for that Application at those
-revisions (canonical JSON of the repo-server `GetManifests` output, sorted),
-a digest of the live Application spec that the render assumes (sources,
-destination, `syncPolicy`, `syncOptions`), image repository and `sha256`
-digest(s), the diff against the live state, the reason class (`hotfix` or
-`rollback` plus the target `dep_` id), requester, `not_after` and a single-use
-nonce. mctl-api computes the intent from its own reads (or from the broker's
-trusted render, see 6.2). A client field that is not reproduced by that read
-is refused (T86).
+**New, needing its own proposal and an mctl-api owner GO:**
 
-**Logical AND.** A version hold, gate group, ledger requirement or `min_tag`
-still refuses even with a valid exception. A separate `release.grant` is
-still required wherever it is required today (R-X8).
+- the dedicated kind `release.freeze_exception`, with the states
+  `approved -> claimed -> sync_requested -> executed | spent_failed |
+  spent_unknown`. None of them returns to `approved` or `consumed`. The kind
+  does **not** reuse `SettleActionApproval(succeeded=false)`.
+- the table `release_exception_ops`, written in the same transaction as the
+  CAS (section 6.5).
+
+**Intent (server-built).** The intent binds:
+
+- kind, AppProject, Application name and namespace, tenant and environment;
+- the approved GitOps SHA;
+- every source's revision (for a G0 pilot, the pinned SHAs);
+- the SHA-256 of the rendered manifests at those revisions;
+- the live Application spec digest;
+- the image repository and `sha256` digest(s);
+- the diff against live;
+- the reason class (`hotfix`, or `rollback` with the `dep_` id);
+- the requester, `not_after` and a nonce.
+
+A client field that the server's own read does not reproduce is refused
+(T86). A version hold, gate group, ledger requirement or `min_tag` still
+refuses (R-X8).
 
 ### 6. MCTL Governed Sync Broker (first-class alternative; S0 builds an inert prototype only)
 
+#### 6.0 Guarantee classes (re-review P1-1)
+
+| Class | Meaning | Where it can come from on v3.3.8 |
+|---|---|---|
+| G0 | Before any apply, Argo refuses any revision other than the approved immutable SHAs | Broker `Sync` with `revisions` equal to every source's **SHA-pinned** `targetRevision` (`resolveSourceRevisions` `:2155-2166`) |
+| G1 | Checked before the request; content can still diverge before the effect | Preflight only, with no pin |
+| G2 | Divergence detected after the operation exists, then terminated; partial unauthorized apply is possible | Broker on an Application tracking `main`: post-`Sync` revision/hash check plus `TerminateOperation` |
+| none | No check | E1, a tenant sync under `manualSync: true` |
+
+The revision 3 broker on `apps` Applications is **G2**. Its "exactly one
+approved release: yes" is withdrawn. T104 is the adversarial schedule that
+demonstrates it: approved hash A → preflight A → `main` moves to B → `Sync`
+resolves B → the controller applies B → the broker terminates. The expected
+outcome is partial or full apply of B before terminate, **recorded as a
+failure of single-release semantics**.
+
 #### 6.1 Shape
 
-A small trusted process, **separate from agent pods and agent worktrees**,
-that owns the only non-break-glass Argo CD identity allowed to sync a frozen
-pilot Application. In S0 it exists only as `broker-model/` against the
-harness. For an eventual production boundary (not authorized here), the memo
+The broker is a small trusted process, **separate from agent pods and agent
+worktrees**. It owns the only non-break-glass Argo identity allowed to sync a
+frozen pilot Application. In S0 it exists only as `broker-model/` against the
+harness. For an eventual production boundary (not authorized), the memo
 compares two placements:
 
-- **(i) Separate Deployment in `admins`** with its own ServiceAccount, its
-  Argo token delivered by ExternalSecret from a Vault path that no agent role
-  reads, and a NetworkPolicy that allows only mctl-api → broker and
-  broker → `argocd-server`. The broker pulls grants by id from mctl-api and
-  accepts no manifest, revision or Application spec from callers.
-- **(ii) Inside mctl-api.** This removes a hop, but puts the sync token in a
-  process that agents reach through MCP and widens mctl-api's Argo account
-  beyond today's `applications, get`. S0 records why (i) is the default
-  candidate. This is not decided.
+- **(i) a separate Deployment in `admins`** (the default candidate). It has
+  its own ServiceAccount; its token is delivered by ExternalSecret from a
+  Vault path that no agent role reads; and a NetworkPolicy allows only
+  mctl-api → broker and broker → `argocd-server`. The broker accepts only a
+  grant id from callers.
+- **(ii) inside mctl-api.** This puts the sync token in a process that
+  agents reach through MCP, which widens the blast radius.
 
-Argo identity options, compared in the harness: a local account
-`release-broker` (`apiKey` only, no `login`) with
-`p, release-broker, applications, sync, <project>/<exact app>, allow` and
-`get`; **or** a project-scoped role on the pilot AppProject with a JWT token.
-Both have no `override`, no `update`, no `projects` and no wildcard. Under
-both, `requireOverridePrivilegeForRevisionSync` would be set to `"true"`, so
-that no one without `override` can sync a non-`targetRevision` revision
-(defence in depth; on auto-sync Applications it is refused anyway).
+Argo identity options, compared on the harness:
+
+- a project-scoped role on the pilot AppProject, with a short-TTL JWT;
+- a local `apiKey` account.
+
+In both cases the grant is `applications, sync` and `get` on
+`<project>/<exact app>` only. Both are evaluated with
+`requireOverridePrivilegeForRevisionSync: "true"` as defence in depth.
 
 #### 6.2 Flow (one grant, one sync)
 
-1. **Intent.** After the hotfix or rollback commit is on `main` (merged
-   through the normal guarded path; during a deny window the write may land,
-   because the Argo window holds the effect), a requester (operator or agent)
-   asks mctl-api for a `release.freeze_exception`. mctl-api asks the broker
-   (trusted render, base-pinned) to compute the intent fields in section 5 at
-   the named SHA. The request is pending.
-2. **Decision.** A human approves it on the MFA decide page. A separate
+1. **Intent.** The hotfix or rollback lands on `main` through the normal
+   guarded path. For a G0 pilot, the reviewed PR **moves the pin(s)** to the
+   approved SHA(s), and root-app applies the new spec. The deny window still
+   holds auto-sync. A requester asks mctl-api for a
+   `release.freeze_exception`. mctl-api, using the broker's trusted render at
+   the named SHA, builds the intent.
+2. **Decision.** A human approves on the MFA decide page. A separate
    `release.grant` is still required where one applies.
-3. **Preflight (no side effect).** The broker re-reads: the live AppProject
-   (windows active, deny with `manualSync: true` on exactly the pilot
-   Applications, no allow-overrides); the live Application spec digest; `main`
-   resolved by the repo server for every source; the rendered manifest hash
-   for the Application at those revisions; the image digest(s); release-gates
-   and holds at the base; no operation running. Any mismatch → refuse; the
-   grant stays `approved` (nothing has been claimed).
-4. **Claim (atomic, durable).** The broker writes a journal row
-   `(aar_id UNIQUE, request_id, app, expected_revisions, manifest_hash,
-   state=claiming)` and then runs the dedicated CAS `approved ->
-   claimed(request_id)` with the intent hash. One of two concurrent brokers or
-   requests wins. The loser gets a refusal and never calls Argo (T80).
-5. **Sync.** The broker calls `ApplicationService.Sync` once, with **no
-   revision** (a revision is refused on auto-sync Applications, section
-   Current state), fixed `prune`/`syncOptions`/`strategy` equal to the
-   Application's own, no `resources` subset, no `manifests`, and
-   `infos: [{name: mctl-release-exception, value: <aar_id>/<request_id>}]`.
-6. **Bind the operation.** The response carries `operation.sync.revisions`,
-   which the API server resolved. If they differ from the expected revisions
-   **and** the rendered manifest hash at them differs, the broker immediately
-   calls `TerminateOperation` and moves the grant to `spent_failed`. Some
-   resources may already have been applied, which is recorded as a residual
-   (T85). If the revisions differ but the manifest hash is equal (an unrelated
-   commit such as an `agents-state/` bot commit), the sync is accepted and the
-   journal records both SHAs (section 6.3).
-7. **Observe and reconcile.** The broker polls `status.operationState` until
-   `Succeeded`, `Failed` or `Error`, matches it by `info` `aar_id`, records the
-   synced revisions, the live image digest and health, and moves the grant to
-   `executed` or `spent_failed`. If it crashes, times out or loses Argo, the
-   journal holds `claimed`. On restart the broker **only observes**: it looks
-   up the operation by `info` and `initiatedBy`. It never issues a second sync
-   for that grant. Unknown after a bound → `spent_unknown`, and an alert asks a
-   human. A new sync needs a new grant (T88, T89).
-8. **Window unchanged.** At no step does the broker edit the AppProject, the
-   Application spec or RBAC. The deny window keeps blocking auto-sync and
-   selfHeal before and after the exception.
+3. **Preflight (no side effect).** The broker re-reads:
+   - the window activation state (it must be `effective`, section 3.1);
+   - the live Application spec digest, and for G0 that every source's
+     `targetRevision` equals the bound SHA;
+   - the rendered manifest hash;
+   - the image digests;
+   - holds;
+   - that no operation is running.
 
-#### 6.3 What "sync the approved SHA" can and cannot mean on v3.3.8
+   Any mismatch → refuse. The grant stays `approved`.
+4. **Claim (one transaction, section 6.5).** `approved → claimed` together
+   with the insert into `release_exception_ops`.
+5. **Commit intent to call.** `claimed → sync_requested(op_id, epoch,
+   deadline)` is committed durably.
+6. **Sync, at most once.** For a G0 pilot, `Sync(revisions=[pinned SHAs],
+   sourcePositions=[1..n], prune/options = the Application's own, infos=
+   [mctl-release-exception=<aar_id>/<op_id>])`. If root-app moved a pin in
+   the meantime, Argo refuses with `FailedPrecondition` **before any
+   apply**, and the grant becomes `spent_failed` with no effect. For a
+   main-tracking Application (G2), the call is made without revisions.
+7. **Observe (G2 detection also for G0).** The broker reads
+   `operation.sync.revisions` and compares them with the bound revisions and
+   manifest hash. On a mismatch it calls `TerminateOperation`, records the
+   grant as `spent_failed` and records any partial apply. For G0, a
+   mismatch here is a protocol violation that S0 must never observe (T101).
+8. **Reconcile.** The broker polls `status.operationState` and matches it by
+   `initiatedBy` (the broker account) and `info`. It ends in `executed` or
+   `spent_failed`, or after the deadline in `spent_unknown` (R-J7).
+9. **Window unchanged.** The broker never edits the AppProject, the
+   Application spec or RBAC.
 
-- **Exact pin by SHA is not available** for auto-synced Applications without
-  mutating their spec. The broker therefore binds **content, not HEAD**: the
-  sync is accepted if the revisions Argo resolves render the same manifest hash
-  for that Application as the approved SHA, and the diff from approved SHA to
-  resolved SHA touches none of the Application's `manifest-generate-paths` or
-  source paths (for `apps`: `/<svc path>` and
-  `/platform-gitops/helm-charts/base-service`).
-- A non-HEAD approved SHA is the normal case (bot commits). If `main` changed
-  the Application's render after approval (another hotfix, a shared-chart
-  change, an AppSet template change), the broker refuses in step 3 or
-  terminates in step 6. The grant cannot be reused, and a new grant binds the
-  new content.
-- **Race after approval, before sync:** writes between steps 3 and 5 are the
-  TOCTOU gap. It is narrowed by step 6 (post-resolution check plus
-  terminate). It is closed for a protected Application only if GitOps write
-  guards also refuse writes to its paths during the window, which is an
-  image-bump-only guard today (Table B). S0 measures the gap on the harness
-  (T84, T85) and states it as residual.
-- **Live Application spec changes** (AppSet regeneration, admin edit) change
-  what a sync applies without any git diff on the service path. Step 3
-  compares the spec digest, and step 6 re-reads it.
-- **Multi-source Applications**: every source's resolved revision is bound.
-  A source pinned to a SHA (mctl-api chart `c5e5d6f9`) is bound as-is. A
-  multi-source Application whose sources resolve to repos the broker cannot
-  render is `REFUSE` (unsupported).
-- **Rollback**: a "previously healthy rollback" is a **forward commit** that
-  restores the values of a `dep_` deployment recorded as healthy (the
-  `wft-rollback-revision` path), followed by a broker sync under its own
-  grant. Argo's history `Rollback` API is refused under auto-sync and is not
-  used.
+#### 6.3 G0 versus G2, and what S0 must prove
 
-#### 6.4 RBAC and token isolation for frozen Applications
+- **G0 requires every source to be SHA-pinned.** No MCTL Application meets
+  that today (Table C). A pilot would need a later, separately approved S3
+  change that pins its sources. Its normal deployment flow would then become
+  "move the pin by PR", like `admins-mctl-api` source 1 today. S0 tests this
+  only on the harness pilot.
+- **What G0 closes.** Under G0, a pin move between preflight and `Sync` is
+  refused by Argo itself (T100). A `main` commit to the pilot's paths does
+  not change what a pinned source resolves to (T102).
+- **What G0 does not close.** v3.3.8 `Sync` reads the Application and then
+  calls `SetAppOperation`. A concurrent root-app update of non-revision spec
+  fields (path, helm parameters, `syncOptions`) could reach the controller
+  together with the approved revisions. This is `unknown` until T103
+  measures it. If T103 shows that such a change can be applied, G0 is
+  downgraded to G1 for spec fields, and the memo must say so.
+- **Shared charts and AppSet updates.** For a G0 pilot, a shared-chart change
+  takes effect only through a reviewed pin move. For main-tracking `apps`
+  Applications, a `helm-charts/base-service` change re-renders every
+  Application (R-M4) and is a G2 divergence.
+- **Non-HEAD revisions.** For G0, syncing a non-HEAD commit is the normal
+  case: the pin names a commit, and `main` HEAD is irrelevant. For G2, the
+  broker binds content (the manifest hash at the resolved revisions), and an
+  unrelated commit with an equal hash is accepted (T87).
+- **Rollback.** A pin move (G0), or a forward restore commit (G2), to a
+  `dep_` recorded as healthy, under its own grant. The history `Rollback` API
+  is not used.
+- **Diff basis.** The intent diff is computed between the reviewed base
+  render and the **current destination live state**, not between two git
+  commits. Drift in live state therefore appears in the approved diff.
 
-- With `deny` and `manualSync: true` on a pilot Application, **every**
-  principal with `applications, sync` can sync it. For a pilot in project
-  `apps`, the owning tenant's role (`apps/<tenant>-*`) must therefore lose
-  `sync` on that exact Application, through an explicit RBAC `deny` line for
-  that Application or by narrowing the tenant pattern. `wft-create-tenant`
-  must stop regenerating the broad line for it. The harness tests both forms
-  (T90). Outside a freeze, the tenant loses manual sync on that Application
-  permanently, which is a UX cost. Auto-sync is unaffected outside the window.
-- `role:admin` (group `admins`) keeps `applications, *` and `projects, *`, so
-  it can sync, edit windows or override. `kubectl` and `argocd --core` bypass
-  Argo RBAC entirely. These are **explicit break-glass residuals** and are
-  never claimed as covered. S0 records evidence only: Argo audit events of
-  `initiatedBy` and `kubectl` audit availability (unknown).
-- Token exfiltration boundary: the broker token is scoped to `sync`/`get` on
-  the exact pilot Applications. Stolen, it lets an attacker sync current `main`
-  of those Applications during a freeze, not arbitrary manifests or revisions
-  (no `override`). This is the residual blast radius. Mitigations to evaluate:
-  short-lived project-role JWT, rotation, Vault path not readable by agent
-  roles, NetworkPolicy, and a detector that alerts on any sync of a pilot
-  Application whose `info` lacks a journaled `aar_id` (T91).
+#### 6.4 RBAC isolation for frozen Applications
 
-#### 6.5 Default deny and recoverability
+- With `deny` and `manualSync: true`, every principal holding `sync` can sync
+  the Application. The owning tenant's role must lose `sync` on that exact
+  Application, through an explicit RBAC deny line or a narrowed pattern.
+  `wft-create-tenant.yaml:1095` must stop regenerating the broad line for it
+  (a later S3 change). The harness tests both forms (T90).
+- A tenant that keeps `sync` can also `TerminateOperation` a broker sync
+  (`:2442`). If tenant `sync` is revoked, that denial of service goes away
+  too.
+- `role:admin` and `kubectl`/`argocd --core` are **explicit break-glass
+  residuals** (T99).
 
-No grant, mctl-api unreachable, policy unreadable, changed manifest, changed
-spec, unknown operation outcome, broker down or Argo down → **no new
-unauthorized sync**. The window stays deny and nothing is opened (fail
-closed). Recovery when the broker is down is the documented break-glass
-(admin, out of band, reviewed afterwards), never a window edit by automation.
-No persistent bypass is created, because the broker never changes the window,
-RBAC or Application spec.
+#### 6.5 Journal and claim protocol (re-review P2-7)
+
+There is one authoritative store, the mctl-api database. Any broker-local
+file is a cache only.
+
+```
+approved --[TX1: CAS state+intent_hash+expiry+fresh_until; INSERT release_exception_ops(aar_id UNIQUE, op_id, epoch)]--> claimed
+claimed  --[TX2: UPDATE ... WHERE epoch=$mine AND state='claimed' SET state='sync_requested', deadline]--> sync_requested
+sync_requested --(single Sync call by the TX2 writer, only if now < deadline)--> observe
+observe  --> executed | spent_failed | spent_unknown   (all terminal; never back to approved/consumed)
+```
+
+The broker takes a lease row (`broker_lease(epoch)`) with a TTL. A takeover
+increments the epoch, and every transition is conditional on the epoch.
+After a takeover, the new instance may continue an op in state `claimed`
+(the same `op_id`). It may **only observe** an op in state
+`sync_requested`. A stale instance that resumes after losing its lease fails
+its next conditional write. It may still issue its one `Sync` if it had
+already committed TX2. That is still only one call, because no other
+instance ever calls for that grant. The `deadline` check bounds how late
+that call can be.
+
+Crash matrix (T120-T129):
+
+| Crash or failure point | Durable state | Recovery | End state |
+|---|---|---|---|
+| Before TX1 commits | `approved` | none needed | grant reusable by the same request only (nothing claimed) |
+| TX1 serialization conflict (two writers) | one `claimed` | the loser is refused | the winner continues |
+| After TX1, before TX2 | `claimed` | new epoch, same `op_id`, re-preflight | proceeds or `spent_failed` (never `approved`) |
+| After TX2, before the `Sync` call is sent | `sync_requested` | observe only; no operation found by the deadline | `spent_unknown` with evidence (R-J7) |
+| `Sync` sent, response lost or timeout | `sync_requested` | observe by `initiatedBy` + `info` | `executed` / `spent_failed` / `spent_unknown` |
+| `Sync` refused by Argo (`FailedPrecondition`, window, RBAC) | `sync_requested` | the refusal is recorded | `spent_failed`, no effect |
+| Operation found, result `Failed`/`Error` | `sync_requested` | recorded | `spent_failed` |
+| Two operations carrying the same `info`, or an operation with `info` and no row | any | alert | `spent_unknown`, human review |
+| Stale instance writes after a takeover | any | the conditional write fails | no change |
+| mctl-api DB unavailable | unchanged | the broker refuses to start any step | no sync |
+
+The `info` value is correlation only: anyone with `sync` can set any
+`info`. Authorization is the claimed row plus the broker account in
+`initiatedBy`.
+
+#### 6.6 Token-compromise boundary (re-review P1-3)
+
+A holder of the broker's Argo token can call `Sync` directly. While a
+`manualSync: true` deny is active, Argo accepts the call with **no grant**,
+because Argo knows nothing about the ledger. This is an **unenforced
+boundary** (P17):
+
+- For a G0 pilot, the attacker can apply the currently pinned revisions.
+  Those are reviewed commits, but they reach production unapproved for the
+  freeze.
+- For G2, the attacker can apply the current `main` render.
+- `override`, arbitrary revisions, spec edits and non-pilot Applications stay
+  refused.
+- The detector (a pilot sync whose `initiatedBy` and `info` do not match a
+  `sync_requested` row) is **post-effect**.
+
+Constraints S0 evaluates:
+
+- the shortest workable project-role JWT TTL;
+- who mints the JWT (minting needs `projects, update`, so the minter becomes
+  a higher-value target, and that is recorded);
+- a Vault path that no agent policy reads;
+- the token never present in agent worktrees or MCP processes.
+
+A NetworkPolicy is **not** counted as proof that the token cannot be used
+elsewhere: the token is a bearer credential valid at `argocd-server` from
+any reachable client. T105 performs the direct sync without a grant and
+expects **success**. T106 checks that the detector fires and is labelled
+post-effect.
+
+#### 6.7 Phase transitions and rollback ordering (re-review P1-4)
+
+The state is the triple (window W ∈ {none, deny-mS:false, deny-mS:true},
+tenant `sync` on the pilot T ∈ {present, revoked}, broker identity
+B ∈ {present, absent}):
+
+| W | T present | T revoked |
+|---|---|---|
+| none | safe (normal) | safe (tenant UX cost) |
+| deny-mS:false | safe; the broker cannot sync either (D behaviour) | safe |
+| deny-mS:true | **UNSAFE**: any tenant can sync during the freeze | safe; the broker is the only non-admin sync path if B is present |
+
+- **Rollout order.** Revoke T and verify it (tenant `can-i sync` is refused
+  on the harness). Then add B and verify it. Then set W to deny-mS:true and
+  verify it is `effective` (section 3.1).
+- **Rollback order.** Set W to deny-mS:false and verify it `effective`
+  (`canSync` false for manual), or end the freeze under its own approved
+  procedure and verify that the window is gone. Then remove B. Then restore
+  T.
+- **On a verification failure** at any step, stay at the last verified
+  state, alert, and do not continue.
+
+RBAC changes go through `argocd-self-managed` and window changes through
+`root-app`. They are separate commits that are each **observed** before the
+next one is merged. Commit order alone proves nothing (R-R4). Revision 3's
+rollback ("restore tenant RBAC, then remove the window") passed through the
+unsafe cell and is withdrawn. T96 and T130-T133 test every edge.
+
+#### 6.8 Argo resource hooks: a hypothesis only
+
+A PreSync hook Job that verifies the operation's revisions against a claimed
+grant before the Sync phase starts would be a pre-effect check inside Argo.
+It is labelled **`unknown`, and weak by construction**, because the hook is
+part of the content being verified: content B can omit it. The hook would
+also need ledger credentials inside the tenant namespace. S0 records the
+idea, with the reason it is not a G0 mechanism. It is not prototyped unless
+the memo finds a source-independent placement, and none is known at v3.3.8.
+
+#### 6.9 Default deny and recoverability
+
+The following lead to **no new authorized sync**, with the window unchanged:
+
+- no grant;
+- mctl-api unreachable;
+- policy unreadable;
+- window not `effective`;
+- changed manifest or spec;
+- unknown outcome;
+- broker down;
+- Argo down.
+
+Recovery when the broker is unavailable is the documented admin break-glass,
+recorded and reviewed afterwards. Automation never edits the window. No
+persistent bypass exists, because the broker never edits the window, RBAC or
+spec. One exception remains: the token-compromise boundary (6.6), which is a
+residual and is not a fail-open of the design.
 
 ### 7. Other exception paths (compared, not preferred)
 
-- **E1, GitOps carve-out.** After an approval, a commit regenerates the
-  AppProject without the Application in the deny window, auto-sync applies
-  `main`, and a second commit restores the window. This **fails open**: a
-  failed or late restore leaves the Application unprotected, and during the
-  carve-out every tenant sync and every new commit to its paths is applied.
-  It applies whatever `main` holds, with no content binding at effect. Its
-  AppProject writes during a freeze ride `root-app` (project `default`).
-  Retained only as a comparison baseline (T97).
-- **E2, RBAC-restricted `manualSync`.** Deny with `manualSync: true` plus
-  tenant `sync` removed for the frozen Application, and a human with a
-  dedicated role syncs by hand. This is fail-closed at Argo, but it has no
-  digest or grant binding: any holder of the role can sync any `main` content.
-  **The Broker is E2 plus a grant-bound, journaled, single-use caller.** If
-  the broker is rejected, E2 with a human-held role is the fallback, but it
-  is not "exactly one MFA-authorized release".
-- **B (issue), temporary per-Application window exception.** This is the same
-  mechanism as E1, with a TTL and generated cleanup. It inherits E1's
-  fail-open restore and its unbound content. Rejected unless S0 proves
-  otherwise.
-- **C (issue), upstream, fork or proxy.** No v3.3.8 hook exists, and #29558 is
-  open. A fork means owning Argo upgrades. A proxy in front of
-  `argocd-server` does not stop UI, CLI or admin paths that do not go through
-  it. Recorded with cost only, not prototyped.
-- **D, no runtime exception.** Immutable deny with `manualSync: false`. A
-  hotfix needs an admin break-glass (remove window, or `argocd --core`) with an
-  incident record. This is simplest and fully fail-closed for non-admins, but
-  every hotfix is an admin action with a manual, unbound audit.
+- **E1, GitOps carve-out.** Regenerate the AppProject without the
+  Application, let auto-sync apply `main`, then restore the window. It
+  **fails open**: a failed restore leaves the Application unprotected. Its
+  guarantee is `none`. Kept as a baseline (T97).
+- **E2, RBAC-restricted `manualSync`.** Deny with `manualSync: true`, tenant
+  `sync` removed, and a human role syncs by hand. It is fail-closed at Argo
+  but has no grant binding, so the role holder is the de facto authority. Its
+  guarantee is `none` with respect to the ledger. **The broker is E2 plus a
+  grant-bound, journaled, single-call caller.** A role-held human can also
+  pass pinned revisions, so E2 on a pinned pilot gets G0 *revision*
+  pinning, but still without a grant.
+- **B (issue), temporary per-Application window exception.** The same
+  mechanism as E1, with a TTL. It inherits E1's fail-open behaviour.
+- **C (issue), upstream, fork or proxy.** No v3.3.8 hook exists, and #29558
+  is open. A proxy does not cover UI, CLI or admin paths. Recorded with cost
+  only.
+- **D, no runtime exception.** An immutable deny with `manualSync: false`. A
+  hotfix is an admin break-glass with an incident record. Simplest, and
+  fail-closed for non-admins.
 
-### 8. S0 decision / coverage / threat / cost matrix (current evidence; refreshed at S0 exit)
+### 8. Operator and agent interface and status contract (design only; re-review P2-5, P2-6, P3-8)
 
-| Criterion | Broker | E1 carve-out | E2 manualSync + RBAC | D break-glass only | Native/plugin (C) |
-|---|---|---|---|---|---|
-| Exactly one approved release | yes, grant CAS + journal + content check | no (applies `main`) | no (role holder, any time) | no (admin) | n/a (none at v3.3.8) |
-| Fail mode | closed | **open** on failed restore | closed | closed | n/a |
-| Content binding at effect | manifest hash + revisions, post-resolution check; TOCTOU residual | none | none | none | n/a |
-| Tenant manual-sync bypass | blocked (tenant `sync` removed) | open during carve-out | blocked | blocked (no `manualSync`) | n/a |
-| Admin / kubectl bypass | residual | residual | residual | residual (is the path) | residual |
-| Second approval authority | no (mctl-api ledger) | no | **human role is de facto authority** | admin is | n/a |
-| New trusted component and state | broker process, Argo token, journal, dedicated kind | generator + detector | role + token | none | fork |
-| Tenant UX cost | loses manual sync on pilot app | none | loses manual sync on frozen app | none | n/a |
-| Implementation burden | high | medium | low | none | very high |
-| Recovery when component down | break-glass (D) | must restore window | role holder | n/a | n/a |
+No tool is implemented in S0. `mcp-model/` is an offline model only.
 
-Falsifiable S0 outcome. The memo must pick exactly one:
-- `BROKER_PILOT_CANDIDATE`: T80-T96 pass on the harness, the TOCTOU residual
-  is measured and bounded, and the dedicated-kind spend semantics are
-  acceptable to the mctl-api owner.
-- `E2_HUMAN_ROLE_ONLY`: the broker fails a fail-closed or single-use test
-  that cannot be fixed without an Argo change, but RBAC isolation (T90) holds.
-- `D_BREAKGLASS_ONLY`: neither the broker nor E2 isolates tenants on v3.3.8.
-- `NEITHER_SAFE_YET` (equivalently `DEFER_UNTIL_GATES_CLOSED`): blocking
-  unknowns remain (#2543, P12, live RBAC/argocd-cm unreadable).
+#### 8.1 Tools
 
-The calendar decision outcome (`REUSE_EXISTING_ONLY` / `BOUNDED_CALENDAR_MVP`
-/ `ADOPT_ARGO_SYNC_WINDOWS` / `HYBRID` / `DEFER_UNTIL_GATES_CLOSED`) is
-recorded alongside it. The working hypothesis is `HYBRID`, with Sync Windows
-as the secondary point-of-sync safeguard and the broker as the exception
-path, both under investigation.
+| Tool | Effect | Never |
+|---|---|---|
+| `list_release_windows`, `check_release_window`, `explain_release_block` | read-only; return the 8.3 contract | write anything |
+| `request_exception` | creates a **pending** `release.freeze_exception` request in mctl-api | decide, claim or call the broker |
+| `mctl_propose_release_window` | opens a GitOps PR adding one window to the policy file | `PUT` an AppProject, sync, merge, approve |
+| `mctl_propose_window_removal` | opens a GitOps PR removing or shortening one window | the same; it also needs an owner reviewer |
 
-### 9. Translation matrix and product comparison (from revision 2, unchanged)
+The MCP server's identity holds no Argo `projects, update`, no
+`applications, sync` and no broker token. It writes only through a GitHub
+App identity that can push branches `release-window/*` and open PRs, and it
+cannot merge.
 
-Translation to v3.3.8 `syncWindows`: weekly, daily and `bymonthday` UTC →
-translatable. Recurring windows in DST zones → UTC cron widened for deny and
-narrowed for allow, or `not-translatable`. One-offs, including cross-year
-`0 0 24 12 *` + `216h` → translatable-with-lifecycle (emit near start,
-remove after end, drift check). Ordinal weekday, `COUNT` or `UNTIL` →
-not-translatable, so the Argo layer is `incomplete` and the generator exits
-non-zero with no partial projection. `timeZone` is not used. The broker
-needs only that the deny window exists with `manualSync: true` on exactly the
-pilot Applications; it adds no translation constructs.
+#### 8.2 PR-authoring contract (P2-5, P3-8)
+
+- **Input schema (exact scope).**
+  - `scope` is a list of exact Application names, each present in the
+    generated map (Table C / task 4).
+  - `kind` is `deny` or `allow`.
+  - Schedule: either `zone` (IANA, validated with `zoneinfo`) plus `recur`
+    (the section 2 subset) plus `start_local`/`end_local`; or
+    `start_utc`/`end_utc`.
+  - `owner`, `decided_in` (an issue link) and `reason` are required.
+  - The duration must not exceed `max_window`.
+  - Unknown fields are refused.
+- **Deterministic id.** `window_id = "w-" + sha256(canonical(scope, kind,
+  schedule, zone))[:12]`. The idempotency key is `(caller,
+  client_request_id)`.
+- **Dedup.** The branch is `release-window/<window_id>`. If an open PR exists
+  for it, the tool returns that PR. If the window is already on `main`, the
+  tool returns "already present" with the merge SHA. A request that overlaps
+  an existing window with the same scope and kind is refused, with a pointer
+  to the existing window.
+- **Diff restriction.** The allowlist is the one policy file, and within it
+  only the `windows[]` entry with this id. The validator, run from the base,
+  diffs the PR against the base. It refuses any change outside that entry,
+  any widened scope, and any change that shortens, removes or converts an
+  existing deny, unless the PR is a `propose_window_removal` for that id.
+- **Rebase or retry.** On a base change, the tool recomputes the semantic
+  diff. If it no longer equals the original request, the PR is closed with a
+  reason and nothing is force-pushed over it.
+- **Approval.** Normal review applies, with no self-approval: the requester
+  identity cannot be the approver. Removals and weakenings need an owner
+  reviewer (CODEOWNERS on the policy file, a later S1/S2 decision). The
+  merge goes through the merge queue like any PR.
+- **Derived blast radius.** The PR body lists the exact Applications
+  matched, their AppProjects, and whether each is a G0 pilot. It includes a
+  dry-run projection that is marked `incomplete` if any construct is
+  not-translatable.
+- **Audit.** Request id, caller, window id, PR number, reviewed head SHA,
+  merge SHA, and later the activation-state transitions.
+
+#### 8.3 Status contract (P2-6)
+
+```json
+{
+  "application": "labs-mctl-telegram",
+  "project": "apps",
+  "policy": {"decision": "DENY", "rule": "row2:w-7f3a9c", "source_sha": "<sha>"},
+  "activation": {"state": "effective", "window_id": "w-7f3a9c",
+                 "root_app_synced_revision": "<sha>", "live_window_hash": "<sha256>",
+                 "assigned": true, "active": true, "manual_can_sync": false,
+                 "read_at": "2026-11-21T10:30:00Z", "read_age_s": 12},
+  "coverage": {"path": "P8a", "label": "enforced",
+               "residuals": ["P8b admin", "P8c kubectl", "P8d restart (unknown)", "in-flight sync"]},
+  "exception": {"path": "none", "guarantee": "none"},
+  "notes": ["canSync is the manual-sync answer; it is not proof of path coverage"]
+}
+```
+
+`coverage.label` is per asked-about path, never "all paths". The fixtures
+cover:
+
+- an unrelated project (the window does not match, so the policy says `DENY`
+  but the activation state is `drifted`);
+- a changed selector;
+- a missing live AppProject (`unknown`);
+- admin and `kubectl` residuals;
+- an in-flight sync at the start;
+- a tenant restart action (P8d `unknown`).
+
+### 9. S0 decision / coverage / threat / cost matrix (current evidence; refreshed at S0 exit)
+
+| Criterion | Broker on G0 pinned pilot | Broker on main-tracking app (G2) | E1 carve-out | E2 manualSync + RBAC | D break-glass only | Native/plugin (C) |
+|---|---|---|---|---|---|---|
+| Guarantee at effect | G0 for revisions; spec-field race `unknown` (T103) | **G2**: partial unauthorized apply possible (T104) | none | none (G0 revisions if pinned, no grant) | n/a | n/a at v3.3.8 |
+| Exactly one approved release | only if T100-T103 pass, and excluding token compromise and admin | **no** | no | no | no | n/a |
+| Fail mode | closed | closed (after detection) | **open** on a failed restore | closed | closed | n/a |
+| Token compromise | **not enforced**: pinned revisions applied without a grant (T105) | **not enforced**: `main` applied without a grant | n/a | role token: same | n/a | n/a |
+| Tenant manual-sync bypass | blocked if T revoked first (6.7) | same | open during carve-out | blocked | blocked | n/a |
+| Admin / kubectl bypass | residual | residual | residual | residual | is the path | residual |
+| Second approval authority | no (mctl-api ledger) | no | no | **the role holder** | the admin | n/a |
+| Requires a pin change of the pilot (S3) | **yes** | no | no | no | no | fork |
+| New trusted component and state | broker, Argo role, `release_exception_ops`, dedicated kind, token minter | same | generator + detector | role + token | none | fork |
+| Tenant UX cost | loses manual sync on the pilot; deploys by pin PR | loses manual sync | none | loses manual sync | none | n/a |
+| Implementation burden | high | high | medium | low | none | very high |
+| Recovery when the component is down | D | D | must restore the window | role holder | n/a | n/a |
+
+Falsifiable S0 outcome. The memo picks exactly one:
+
+- `BROKER_PINNED_PILOT_CANDIDATE`, only if all of the following hold:
+  - T100-T103 show zero unapproved apply on the pinned harness pilot;
+  - T80-T96, T120-T133 pass;
+  - the token-compromise boundary is accepted **explicitly** as a residual;
+  - the dedicated-kind semantics are acceptable to the mctl-api owner.
+- `BROKER_DETECT_ONLY_REQUIRES_OWNER_RISK_ACCEPTANCE`: G0 fails or pinning is
+  unacceptable, so only G2 remains. S0 does **not** recommend this outcome;
+  it names it so that the owner can reject or accept it explicitly.
+- `E2_HUMAN_ROLE_ONLY`: the broker fails single-call or fail-closed tests,
+  but RBAC isolation (T90) holds.
+- `D_BREAKGLASS_ONLY`: tenant isolation fails on v3.3.8.
+- `NEITHER_SAFE_YET`: blocking unknowns remain (#2543, P12, live
+  RBAC/`argocd-cm` unreadable, the T103 result, activation observability).
+  This is the **default if evidence is incomplete**.
+
+The calendar outcome is recorded alongside. The working hypothesis is
+`HYBRID`, with Sync Windows as the secondary safeguard counted only when
+`effective`. `BOUNDED_CALENDAR_MVP` is scoped to the image-bump window
+policy.
+
+### 10. Translation matrix and product comparison (from revision 2, unchanged)
+
+Translation to v3.3.8 `syncWindows`:
+
+| Construct | Classification |
+|---|---|
+| Weekly, daily and `bymonthday` windows in UTC | translatable |
+| Recurring windows in DST zones | UTC cron, widened for deny or narrowed for allow; otherwise `not-translatable` |
+| One-offs, including the cross-year `0 0 24 12 *` + `216h` | translatable-with-lifecycle (emit near start, remove after end, drift check feeding the `drifted` state) |
+| Ordinal weekday, `COUNT`, `UNTIL` | not-translatable; the Argo layer is `incomplete`, with a non-zero exit and no partial projection |
+
+`timeZone` is not used.
 
 Products (primary docs read 2026-11-20):
-[GitLab deploy freezes](https://docs.gitlab.com/user/project/releases/) set
-an advisory `$CI_DEPLOY_FREEZE`.
-[Octopus deployment freezes](https://octopus.com/docs/deployments/deployment-freezes)
-have project, environment and tenant scope and an override-with-reason
-permission; multi-project freezes are enterprise-only from 2025.2.7631.
-[Harness deployment freeze](https://developer.harness.io/docs/continuous-delivery/manage-deployments/deployment-freeze/)
-is beta behind a flag, "Account admins will always be able to bypass", and a
-running pipeline finishes its stage. None governs MCTL's GitOps writes or Argo
-syncs, all are reference only, and prices are `unknown`.
+
+- [GitLab deploy freezes](https://docs.gitlab.com/user/project/releases/):
+  advisory `$CI_DEPLOY_FREEZE`.
+- [Octopus deployment freezes](https://octopus.com/docs/deployments/deployment-freezes):
+  project, environment and tenant scope, with an override-with-reason
+  permission. Multi-project freezes are enterprise-only.
+- [Harness deployment freeze](https://developer.harness.io/docs/continuous-delivery/manage-deployments/deployment-freeze/):
+  beta, and "Account admins will always be able to bypass".
+
+None of these governs MCTL's GitOps writes or Argo syncs. They are reference
+only, and prices are `unknown`.
 
 ## Alternatives
 
-- **E1 as the default exception path (revision 2's leaning).** Dropped as the
-  default: it fails open and applies unbound `main` content (section 7). Kept
-  as a test baseline.
-- **Global `manualSync: true`.** Rejected: every tenant and admin sync becomes
-  a bypass while the tenant CSVs grant `sync`.
+- **Broker on main-tracking Applications as the recommended path (revision
+  3).** Dropped as a recommendation: it is G2, so unapproved content can be
+  applied before terminate (re-review P1-1). It is kept only as the named
+  `BROKER_DETECT_ONLY_REQUIRES_OWNER_RISK_ACCEPTANCE` outcome.
+- **E1 as the default.** Dropped: it fails open and gives no guarantee.
+- **Global `manualSync: true`.** Rejected while the tenant CSVs grant `sync`.
 - **ADOPT_ARGO_SYNC_WINDOWS alone as the authorizer.** Dropped: Argo cannot
-  see MFA grants or digests. Sync Windows stay the secondary safeguard.
-- **External CD product (Octopus, Harness, GitLab).** Dropped as an engine
-  (second authority, governs only its own pipelines).
-- **Mutating the Application spec to pin a SHA (disable auto-sync or set
-  `targetRevision` per exception).** Dropped: the AppSet owns the spec, the
-  mutation is itself an unbound production write, and the revert is a
-  fail-open step similar to E1.
-- **A "production deployment freeze" claim.** Dropped: Table A/B paths have no
-  pre-effect hook.
+  see MFA grants. Windows count only when observed as `effective`.
+- **A PreSync-hook guard.** Not a G0 mechanism, because the hook is part of
+  the verified content (6.8).
+- **Direct AppProject writes by MCP tools.** Rejected in favour of PR
+  authoring (section 8).
+- **External CD product.** Dropped as an engine.
+- **Mutating the Application spec per exception.** Dropped: it is an unbound
+  production write with a fail-open revert. Pinning by a reviewed PR is
+  different: it is the normal GitOps path, and it is evaluated only as an S3
+  precondition.
+- **A "production deployment freeze" claim.** Dropped (Tables A/B).
 
 ## Platform impact
 
 - Migrations: none. S0 adds documentation, inert fixtures, a local harness
-  and an inert broker prototype. Workflows, charts, CWFTs and services
-  reference none of them.
+  and inert prototypes. Nothing references them.
 - Backward compatibility: no behaviour change. Release holds, ledger mode,
-  merge queue, Argo settings, RBAC, AppProjects and mctl-api are untouched.
-- Resources: a local kind/k3d cluster and a local Postgres on the researcher's
-  machine only.
-- Eventual production boundary (not authorized; recorded for the security
-  GO): it would require an Argo account or project role, an `argocd-cm` flag,
-  RBAC deny lines for pilot Applications, a narrower `wft-create-tenant`
-  template, a deny window on one pilot AppProject, a Vault path and
-  ExternalSecret, a broker Deployment and NetworkPolicy, and a mctl-api
-  dedicated kind. Every one is a separate reviewed change, reversible by
-  revert, with the broker removable without touching the window (fail-closed
-  remove).
-- Risks and mitigations: S0 output mistaken for a GO (stage table, R-B4);
-  the harness touching production (the scripts refuse any kube context but
-  their own and use no mctl credentials); stale evidence (every claim pinned
-  to a SHA, tag or dated read; unreadable means `unknown`); broker becoming a
-  second authority (it only spends ledger grants and cannot create or decide
-  them).
+  the merge queue, Argo settings, RBAC, AppProjects, Application pins,
+  mctl-api and MCP are untouched.
+- Resources: a local kind/k3d cluster and a local Postgres, on the
+  researcher's machine only.
+- Eventual production boundary. This is not authorized and is recorded only
+  for a future security GO. Each item is a separate reviewed change,
+  applied in the 6.7 order and each observed before the next:
+  - pin the pilot's sources;
+  - an Argo project role and token minter;
+  - the `argocd-cm` flag;
+  - RBAC deny lines for the pilot and a narrower `wft-create-tenant`;
+  - a deny window on one pilot AppProject;
+  - a Vault path and an ExternalSecret;
+  - the broker Deployment and NetworkPolicy;
+  - the mctl-api dedicated kind and `release_exception_ops`;
+  - the MCP tools.
+
+  Rollback follows the 6.7 order.
+- Risks and mitigations:
+  - S0 output mistaken for a GO: the stage table and R-B4.
+  - The harness touching production: its scripts refuse any kube context
+    but their own and use no mctl credentials.
+  - Stale evidence: every claim is pinned to a SHA, tag or dated read.
+  - G2 detection mistaken for enforcement: R-E2 and the matrix.
+  - A merged window mistaken for an active one: section 3.1.
+  - Token theft: 6.6, labelled not enforced.
+  - The broker becoming a second authority: it only spends ledger grants.

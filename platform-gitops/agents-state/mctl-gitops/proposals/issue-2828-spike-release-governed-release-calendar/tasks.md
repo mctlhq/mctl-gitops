@@ -1,142 +1,226 @@
 # Tasks: issue-2828-spike-release-governed-release-calendar
 
-Revision 3 covers **S0 only**: research, read-only inventory, an offline
-model, a local inert Argo CD v3.3.8 harness and an inert Governed Sync Broker
-prototype. **None of these tasks may start until the owner records an
-explicit GO to run S0 on #2828** (R-B5). Accepting this proposal is not that
-GO. The Tier 2 implementer, the shepherd and automatic workflows never run
-them. They are carried out by a human-directed research run.
+Revision 4 covers **S0 only**. S0 is research, a read-only inventory, an
+offline model, a local inert Argo CD v3.3.8 harness, an inert Governed Sync
+Broker prototype and an inert MCP-PR-authoring model.
 
-Artifacts go only under `docs/spikes/2828-release-calendar/`,
-`tests/fixtures/release-calendar-s0/` and `tests/research/release_calendar_s0/`
-(`argo-inert/`, `broker-model/`). No workflow, CWFT, chart, Dockerfile or
-service references them. The following are never touched: the production
-cluster, production Argo CD, mctl-api, Vault, rulesets, AppProjects, RBAC,
+**None of these tasks may start until the owner records on #2828 an explicit
+GO to run S0** (R-B5). Accepting this proposal is not that GO. The Tier 2
+implementer, the shepherd and automatic workflows never run these tasks. A
+human-directed research run carries them out.
+
+Artifacts go only under:
+
+- `docs/spikes/2828-release-calendar/`
+- `tests/fixtures/release-calendar-s0/`
+- `tests/research/release_calendar_s0/` (`argo-inert/`, `broker-model/`,
+  `mcp-model/`)
+
+No workflow, CWFT, chart, Dockerfile or service references them.
+
+These are never touched: the production cluster, production Argo CD,
+mctl-api, MCP, Vault, rulesets, AppProjects, Application pins, RBAC,
 `argocd-cm`, release gates and the ledger. Any Argo permission, secret,
-AppProject, flag or production action needs a separate owner **security** GO,
-which these tasks never request on their own.
+AppProject, flag, pin, MCP tool or production action needs a separate owner
+**security** GO. These tasks never request one on their own.
 
 S1, S2 and S3 tasks are deliberately **absent**.
 
 ## S0 tasks
 
-- [ ] 0. Owner GO to run S0 recorded on #2828 — DoD: a comment by the owner explicitly authorizing S0 execution. Without it, stop here.
-- [ ] 1. Re-verify design tables A/B read-only (depends on 0): ruleset 18465404 `bypass_actors` and org rulesets (owner admin read, else `unknown`), deploy keys, the live Argo CD version, live `argocd-cm` (`requireOverridePrivilegeForRevisionSync`, accounts), live `argocd-rbac-cm`, live AppProjects, `syncWindows` and project roles — DoD: `docs/spikes/2828-release-calendar/inventory.md` labels P1-P15 (P8a-P8d separately) with a citation and date; failed reads are `unknown`.
-- [ ] 2. Re-read P7 per source and flag `docs/runbooks/mctl-api-release-hold.md:66` as stale (depends on 0) — DoD: P7a (pin `c5e5d6f9...`), P7b and P7c are listed separately; the runbook fix is mapped as a follow-up to the #2528 lineage and is not filed without owner GO.
-- [ ] 3. Measure commit-to-sync-start latency from existing read-only data (depends on 0) — DoD: p50/p95/max with sample size and date range, or `unknown` with the reason; #970's 7 min figure is not reused unmeasured.
-- [ ] 4. Generate the scope map from a render at a pinned SHA (depends on 1) — DoD: `tests/fixtures/release-calendar-s0/app-map.json` with `path -> Application -> AppProject -> namespace`, per-Application source list and `manifest-generate-paths`, including shared-chart fan-out; T60-T64 pass.
-- [ ] 5. Offline policy model `tests/research/release_calendar_s0/model.py` (stdlib + PyYAML + `zoneinfo`, injected clock, `python3 -I`) (depends on 0) — DoD: T1-T13 pass; imported by nothing else.
-- [ ] 6. Inert harness `argo-inert/`: kind/k3d, Argo CD v3.3.8 (chart `argo-cd` 9.5.9), local git server, an AppSet generating multi-source auto-sync Applications shaped like `applicationset-apps.yaml`, two tenants with RBAC copied from `rbac/tenants/labs.csv`, `role:admin` as in `argocd/values.yaml:167-172`; the script refuses any kube context other than its own (depends on 4) — DoD: reproducible from the spike directory; no mctl or production credential used.
-- [ ] 7. Point-of-effect and in-flight experiments (depends on 5, 6) — DoD: T20-T25 recorded; the memo states which paths can be labelled at the point of effect.
-- [ ] 8. Grant-lifecycle model (depends on 6): local Postgres with `action_approval_requests` and the CAS statements copied from mctl-api `internal/workitems/action_approvals.go` at `2a8de33`, plus a *model* of the proposed dedicated `release.freeze_exception` states (`approved -> claimed -> executed | spent_failed | spent_unknown`) — DoD: T30-T37 recorded; the gap against the generic `SettleActionApproval` return-to-`consumed` is written up for the mctl-api owner under mctl-api#1022.
-- [ ] 9. Inert Governed Sync Broker prototype `broker-model/` (depends on 6, 8): preflight, journal, claim, single `Sync` with `infos`, post-resolution manifest-hash check with terminate, observation and crash recovery, all against the harness only; no Dockerfile, chart or deploy manifest — DoD: T80-T92 and T94-T96 recorded with pass/fail and evidence.
-- [ ] 10. Argo identity and RBAC isolation comparison on the harness (depends on 6): local `apiKey` account vs project-scoped JWT role for the broker; tenant `sync` removal by explicit `deny` line vs narrowed pattern; `requireOverridePrivilegeForRevisionSync: "true"` on and off; a copy of `wft-create-tenant`'s RBAC block shown to regenerate the broad line — DoD: T90, T93, T98 and T99 recorded; the exact minimal permission set is written in the memo.
-- [ ] 11. E1, E2 and D baselines on the harness (depends on 6, 9) — DoD: T40-T44 and T97 recorded; E1 fail-open vs E2/broker fail-closed shown side by side.
-- [ ] 12. Translation prototype (stdout only) and vendor evidence refresh (depends on 5, 6) — DoD: T50-T56 pass; vendor table carries URLs, access date and `unknown` prices.
-- [ ] 13. Base-trust fixtures in a local throwaway git repo (depends on 5) — DoD: T70-T73 pass; T74 is `unknown` unless reproduced in an owner-provided sandbox repo.
-- [ ] 14. Decision memo `docs/spikes/2828-release-calendar/decision.md` (depends on 1-13) — DoD: refreshed design section 8 matrix; exactly one calendar outcome and one exception-path outcome (`BROKER_PILOT_CANDIDATE` / `E2_HUMAN_ROLE_ONLY` / `D_BREAKGLASS_ONLY` / `NEITHER_SAFE_YET`); a reuse statement (what comes from mctl-api as-is, what would be new: broker process, Argo identity, journal, dedicated kind); residual risks (admin, `kubectl`, TOCTOU, token blast radius); follow-ups mapped to existing issues (#2543, #2668, #2528, mctl-api#1022, .github#181, .github#254, mctl-agents#217, argoproj/argo-cd#29558); every review finding P1-1..P3-11 and every Revision 3 item 1-8 has a "resolved by / still open" line.
-- [ ] 15. Independent re-review and owner decision (depends on 14) — DoD: a reviewer other than the investigator comments on #2828; the owner records the outcome; `.status.yaml` stays `proposed` until that human process changes it.
+- [ ] 0. Owner GO to run S0 recorded on #2828 — DoD: an owner comment explicitly authorizes S0 execution. Without it, stop here.
+- [ ] 1. Re-verify design tables A/B read-only (depends on 0). Read: ruleset 18465404 `bypass_actors` and the org rulesets (an owner admin read, else `unknown`); the deploy keys; the live Argo CD version, `argocd-cm`, `argocd-rbac-cm` and AppProjects; `syncWindows`; project roles. — DoD: `docs/spikes/2828-release-calendar/inventory.md` labels P1-P17 (P8a-P8d separately), each with a citation and a date. Failed reads are `unknown`.
+- [ ] 2. Re-read P7 per source, and flag `docs/runbooks/mctl-api-release-hold.md:66` as stale (depends on 0) — DoD: P7a, P7b and P7c are listed separately. `admins-mctl-api` is recorded as partially pinned, so it is not a G0 pilot. The runbook fix is mapped as a follow-up to the #2528 lineage and is not filed without an owner GO.
+- [ ] 3. Measure commit-to-sync-start latency and root-app reconcile latency from existing read-only data (depends on 0) — DoD: p50/p95/max with sample size and date range, or `unknown` with the reason. This sets proposed values for `activation.lead` and `max_read_age`. #970's figure is not reused unmeasured.
+- [ ] 4. Generate the scope map from a render at a pinned SHA (depends on 1) — DoD: `tests/fixtures/release-calendar-s0/app-map.json` lists `path -> Application -> AppProject -> namespace`, the per-Application sources with their `targetRevision` and a pinned flag, and `manifest-generate-paths`. T60-T64 pass.
+- [ ] 5. Offline model `tests/research/release_calendar_s0/model.py`: the policy function and the activation-state function (stdlib, PyYAML and `zoneinfo`; injected clock; `python3 -I`) (depends on 0) — DoD: T1-T13 and T110-T117 (the model parts) pass. Nothing else imports it.
+- [ ] 6. Inert harness `argo-inert/` (depends on 4). Contents:
+  - kind/k3d with Argo CD v3.3.8 (chart 9.5.9) and a local git server;
+  - an AppSet generating multi-source, auto-sync, main-tracking Applications;
+  - **one fully SHA-pinned multi-source pilot Application**;
+  - a root-app-like parent rendering AppProjects and Application specs;
+  - a self-managed RBAC Application;
+  - two tenants with RBAC copied from `rbac/tenants/labs.csv`;
+  - `role:admin` as in `argocd/values.yaml:178-184`.
+
+  The `controller/sync.go` behaviour (apply after the operation is created) is re-verified from source. The scripts refuse any kube context but their own. — DoD: reproducible from the spike directory, and no mctl or production credential is used.
+- [ ] 7. Point-of-effect, in-flight and activation experiments (depends on 5, 6) — DoD: T20-T25 and T110-T117 recorded. The memo states which paths can be labelled at the point of effect, and the measured activation gap.
+- [ ] 8. Grant-lifecycle and journal model (depends on 6). Use a local Postgres with `action_approval_requests` and the CAS statements copied from mctl-api `internal/workitems/action_approvals.go` at `2a8de33`. Add a *model* of the dedicated states (`approved -> claimed -> sync_requested -> executed | spent_failed | spent_unknown`) with `release_exception_ops` in the same transaction, plus lease/epoch fencing. — DoD: T30-T37 and T120-T129 recorded. The gap against the generic `SettleActionApproval` is written up for the mctl-api owner under mctl-api#1022.
+- [ ] 9. Inert broker prototype `broker-model/` (depends on 6, 8). It covers preflight (including activation `effective`), claim, `sync_requested`, a single `Sync` (pinned revisions for G0, none for G2), the post-resolution check with terminate, observation and crash recovery. It runs against the harness only, with no Dockerfile, chart or deploy manifest. — DoD: T80-T92, T94-T96 and T100-T106 recorded with pass/fail and evidence. The guarantee class of each run is stated.
+- [ ] 10. Argo identity and RBAC isolation comparison on the harness (depends on 6). Compare: a project-role JWT with TTL against a local `apiKey` account; tenant `sync` removal by a `deny` line against a narrowed pattern; `requireOverridePrivilegeForRevisionSync` on and off; and a copy of the `wft-create-tenant.yaml:1093-1099` block, shown to regenerate the broad line. — DoD: T90, T93, T98 and T99 recorded. The exact minimal permission set and the minting dependency (`projects, update`) are written up.
+- [ ] 11. Phase-transition model and harness walk (depends on 6, 10) — DoD: all 12 (W, T, B) states classified; T96 and T130-T133 recorded. The documented rollout and rollback orders never enter the unsafe cell.
+- [ ] 12. E1, E2 and D baselines on the harness (depends on 6, 9) — DoD: T40-T44 and T97 recorded, with E1 fail-open and E2/broker fail-closed shown side by side.
+- [ ] 13. Offline MCP-PR-authoring model `mcp-model/` against a throwaway local git repo (depends on 4, 5) — DoD: T140-T149 pass. No GitHub call, MCP registration or tool implementation.
+- [ ] 14. Status-contract fixtures (depends on 5, 7) — DoD: T150-T156 pass against the design 8.3 schema.
+- [ ] 15. Translation prototype (stdout only) and a vendor evidence refresh (depends on 5, 6) — DoD: T50-T56 pass. The vendor table carries URLs, the access date and `unknown` prices.
+- [ ] 16. Base-trust fixtures in a local throwaway git repo (depends on 5) — DoD: T70-T73 pass. T74 stays `unknown` unless it is reproduced in an owner-provided sandbox repo.
+- [ ] 17. Decision memo `docs/spikes/2828-release-calendar/decision.md` (depends on 1-16). DoD, all of:
+  - the refreshed design section 9 matrix;
+  - exactly one calendar outcome;
+  - exactly one exception-path outcome (`BROKER_PINNED_PILOT_CANDIDATE` / `BROKER_DETECT_ONLY_REQUIRES_OWNER_RISK_ACCEPTANCE` / `E2_HUMAN_ROLE_ONLY` / `D_BREAKGLASS_ONLY` / `NEITHER_SAFE_YET`), defaulting to `NEITHER_SAFE_YET` when evidence is incomplete;
+  - a reuse statement: what comes from mctl-api as-is, and what would be new (broker, Argo role and minter, `release_exception_ops`, dedicated kind, pilot pin);
+  - residual risks: admin, `kubectl`, the spec-field race (T103), token compromise (T105), the activation gap;
+  - follow-ups mapped to existing issues (#2543, #2668, #2528, mctl-api#1022, .github#181, .github#254, mctl-agents#217, argoproj/argo-cd#29558);
+  - a "resolved by / still open" line for every finding of both reviews (R1 P1-1..P3-11; re-review P1-1..P1-4, P2-5..P2-7, P3-8) and for every Revision 3 item 1-8.
+- [ ] 18. Independent re-review and owner decision (depends on 17) — DoD: a reviewer other than the investigator comments on #2828, and the owner records the outcome. `.status.yaml` stays `proposed` until that human process changes it.
 
 ## Tests
 
-All tests are offline or run on the local inert harness. None run in mctl-gitops CI.
+All tests are offline or run on the local inert harness. None run in
+mctl-gitops CI.
 
 Policy model (task 5)
-- [ ] T1. No window matches -> `default` `ALLOW`; `default` missing or not `allow` -> `UNKNOWN`.
-- [ ] T2. Half-open: instant == start -> `DENY`; == end -> `ALLOW`.
-- [ ] T3. Spring-forward gap start moves to the first instant after the gap.
+- [ ] T1. No window matches -> `default` `ALLOW`. `default` missing or not `allow` -> `UNKNOWN`.
+- [ ] T2. Half-open: an instant equal to start -> `DENY`; equal to end -> `ALLOW`.
+- [ ] T3. A start in a spring-forward gap moves to the first instant after the gap.
 - [ ] T4. Fall-back ambiguity: deny takes the longer span, allow the shorter.
-- [ ] T5. Active allow + active deny -> `DENY`.
-- [ ] T6. Allows match, interval outside -> `DENY`; only inactive denies match -> `ALLOW`.
-- [ ] T7. Deny on X does not refuse Y; a change touching X and Y -> `DENY`.
-- [ ] T8. `t_check` outside, `t_effect_max` inside -> `DENY`.
-- [ ] T9. Unknown field, duplicate key, invalid zone, unsupported recurrence, over-`max_window` -> `UNKNOWN`.
+- [ ] T5. An active allow plus an active deny -> `DENY`.
+- [ ] T6. Allows match but the interval is outside them -> `DENY`. Only inactive denies match -> `ALLOW`.
+- [ ] T7. A deny on X does not refuse Y. A change touching X and Y -> `DENY`.
+- [ ] T8. `t_check` outside the window and `t_effect_max` inside -> `DENY`.
+- [ ] T9. Unknown field, duplicate key, invalid zone, unsupported recurrence or a window over `max_window` -> `UNKNOWN`.
 - [ ] T10. Fri 16:00 to Mon 08:00 Europe/Berlin: 65 h across fall-back, 63 h across spring-forward.
-- [ ] T11. One-off 2026-12-24T00:00Z to 2027-01-02T00:00Z covers the year boundary; end exclusive.
-- [ ] T12. Overlapping denies in different zones -> union, order-independent.
-- [ ] T13. Expansion horizon bounded; a mutation dropping the bound fails.
+- [ ] T11. The one-off 2026-12-24T00:00Z to 2027-01-02T00:00Z covers the year boundary, with the end exclusive.
+- [ ] T12. Overlapping denies in different zones -> their union, independent of order.
+- [ ] T13. The expansion horizon is bounded. A mutation that drops the bound fails.
 
 Point of effect (task 7)
-- [ ] T20. Check T-60m, freeze T, merge T+5m, sync T+6m: applies without a window (`not-covered`); held until window end with a deny window.
-- [ ] T21. PR in the merge queue across T -> cannot be labelled `enforced`.
-- [ ] T22. Merge T-2m, sync start T+1m: applies without a window, held with one.
-- [ ] T23. Multi-wave sync in flight at T -> v3.3.8 pause behaviour recorded.
-- [ ] T24. Direct-push re-check at push time refuses a push landing at T+10s.
-- [ ] T25. selfHeal during deny: drift at T+1m not reverted until window end; auto-sync resumes at window end with current `main`.
+- [ ] T20. Check T-60m, freeze T, merge T+5m, sync T+6m: applied without a window (`not-covered`), held until window end with an `effective` deny.
+- [ ] T21. A PR in the merge queue across T -> cannot be labelled `enforced`.
+- [ ] T22. Merge T-2m, sync start T+1m: applied without a window, held with one.
+- [ ] T23. A multi-wave sync in flight at T -> the v3.3.8 pause behaviour is recorded.
+- [ ] T24. A direct-push re-check at push time refuses a push landing at T+10s.
+- [ ] T25. selfHeal during a deny: drift at T+1m is not reverted until window end, and auto-sync resumes at window end with the current `main`.
+
+Window activation (tasks 5, 7; re-review P1-2)
+- [ ] T110. Window merged at T-1m, root-app syncs at T+4m -> `reconciling` until T+4m, then `effective`. `[T, T+4m)` is reported `not-covered`, and the activation-SLA alert fired at T-lead.
+- [ ] T111. Pre-scheduled window, root-app degraded across start -> it never reports `effective`; the alert fires; the operator text says "not in force".
+- [ ] T112. A selector edit drops an intended Application -> `drifted` for that Application. A selector that matches an unintended Application -> `drifted`.
+- [ ] T113. A one-off removed after end -> `expired`. A missing removal of its yearly-cron projection -> `drifted` before next year's recurrence.
+- [ ] T114. An application-controller restart during an active window -> the window is still enforced after restart (recorded); the activation state stays `effective` only once fresh reads confirm it.
+- [ ] T115. A 403, a timeout or a read older than `max_read_age` -> `unknown`, never `effective`.
+- [ ] T116. `GetApplicationSyncWindows` with a deny that has `manualSync: true` -> `canSync: true` while `activeWindows` holds the deny. The model reports auto-sync blocked and manual sync open, and never "not frozen".
+- [ ] T117. A live AppProject edited by an admin (window removed) while git still holds it -> `drifted`, and root-app selfHeal restoration is observed.
 
 Grant lifecycle (task 8)
 - [ ] T30. Two concurrent consumers of one approved grant -> exactly one CAS succeeds.
 - [ ] T31. Replay of a spent grant -> refused.
-- [ ] T32. Expired, stale (`fresh_until`) or intent-mismatched grant -> refused with the specific reason.
-- [ ] T33. Crash after claim, before effect -> grant spent; "spent without effect" reported; new decision required.
-- [ ] T34. Write-path consumer: rebase keeps diff == intent -> retry under the same claim; diff changes -> abort, spent.
-- [ ] T35. Reconciler flags an un-granted effect, an effect citing a non-spent grant, and two effects for one grant.
-- [ ] T36. Grant valid but a version hold or missing `release.grant` refuses -> still refused.
-- [ ] T37. Requester (agent identity) tries to decide or self-approve -> refused; only a pending request exists.
+- [ ] T32. An expired, stale (`fresh_until`) or intent-mismatched grant -> refused with the specific reason.
+- [ ] T33. Crash after the claim and before the effect -> the grant is spent; "spent without effect" is reported; a new decision is required.
+- [ ] T34. Write-path consumer: a rebase that keeps the diff equal to the intent -> retry under the same claim; a changed diff -> abort, grant spent.
+- [ ] T35. The reconciler flags an un-granted effect, an effect citing a non-spent grant, and two effects for one grant.
+- [ ] T36. A valid grant, but a version hold or a missing `release.grant` refuses -> still refused.
+- [ ] T37. The requester (an agent identity) tries to decide or self-approve -> refused; only a pending request exists.
+
+Journal and claim crash matrix (task 8; re-review P2-7)
+- [ ] T120. Crash before TX1 commits -> the grant stays `approved`, with no `release_exception_ops` row.
+- [ ] T121. Two writers run TX1 concurrently -> one row and one `claimed`; the loser is refused and never calls Argo.
+- [ ] T122. Crash after TX1, before TX2 -> takeover under a new epoch continues with the same `op_id`. The grant never returns to `approved`.
+- [ ] T123. Crash after TX2, before `Sync` is sent -> the new instance only observes, finds no operation by the deadline, and the grant becomes `spent_unknown` with the R-J7 evidence. No second `Sync`.
+- [ ] T124. `Sync` sent and the response lost -> observe by `initiatedBy` and `info`, then `executed` or `spent_failed`. No second `Sync`.
+- [ ] T125. Argo refuses `Sync` (`FailedPrecondition`, window, RBAC) -> `spent_failed`, no effect.
+- [ ] T126. A stale instance (lease lost) attempts a transition -> the conditional write fails. If it had committed TX2, at most its one call exists; it is not made after the deadline.
+- [ ] T127. Two operations carrying the same `info`, or a foreign operation with a copied `info` -> `spent_unknown` plus an alert. `info` is never treated as authorization.
+- [ ] T128. mctl-api DB unavailable -> no step starts, no sync.
+- [ ] T129. The mutation "settle failure returns to `consumed`" applied to the model -> the test suite fails, proving the property is checked.
 
 Governed Sync Broker (task 9, harness only)
-- [ ] T80. Two brokers (or two requests) race on one grant -> one claim; the loser never calls Argo; exactly one Argo operation exists.
-- [ ] T81. Replay: the same grant presented after `executed`, `spent_failed` or `spent_unknown` -> refused, no Argo call.
-- [ ] T82. Wrong image digest in the rendered manifests vs the grant -> refused at preflight.
-- [ ] T83. Misleading identity: grant for `labs-a`, request for `labs-a-x` or a same-named Application in another project or namespace -> refused (exact name + project + namespace match).
-- [ ] T84. Stale source: `main` changed the Application's render after approval -> refused at preflight; the grant stays `approved` (unclaimed) and cannot be applied to the new content.
-- [ ] T85. Drift between preflight and effect: a commit to the service path lands between preflight and `Sync` -> the post-resolution hash mismatch triggers terminate; grant `spent_failed`; any partial apply recorded.
-- [ ] T86. A client-supplied field (revision, manifests, resources, prune, app name) differing from the server-built intent -> refused; the broker API accepts only a grant id.
-- [ ] T87. Unrelated commit (e.g. `agents-state/`) between approval and sync -> resolved SHA differs, manifest hash equal -> accepted; both SHAs journaled.
-- [ ] T88. Argo outage during the sync call (timeout, no response) -> grant `claimed`; after restart the broker finds the operation by `info` or marks `spent_unknown`; it never issues a second sync.
-- [ ] T89. Orphan operation: an operation with the broker's `info` but no journal row, or a journal row with no operation after the bound -> detector reports it; the grant does not become spendable.
-- [ ] T90. A tenant holding today's `applications, sync, apps/<tenant>-*` attempts `argocd app sync` on a frozen pilot Application with `deny` + `manualSync: true`: (a) with tenant sync left in place -> **succeeds** (proves R-A6 risk); (b) with the RBAC deny line -> refused. The same check for the `ci-freshness`-style account and an agent-like account.
-- [ ] T91. Broker token used outside the broker (exfiltration): it can sync current `main` of pilot Applications only; `override`, revision pin, spec update, project edit and non-pilot Applications are all refused; the detector flags a sync without a journaled `aar_id`.
-- [ ] T92. Approved previously-healthy rollback: a forward commit restoring a `dep_`-recorded state plus its own grant -> broker sync succeeds; Argo history `Rollback` under auto-sync is refused (recorded).
-- [ ] T94. During and after a broker sync, auto-sync and selfHeal of the pilot Application and every other frozen Application stay blocked; the AppProject window is unchanged.
-- [ ] T95. Broker down, mctl-api down or policy unreadable -> no sync; window unchanged; break-glass is the only path (recorded).
-- [ ] T96. Phase rollback of the prototype: removing the broker account or role and restoring tenant RBAC leaves the Application frozen (fail-closed removal); removing the window restores normal auto-sync.
+- [ ] T80. Two brokers or two requests race on one grant -> one claim, the loser never calls Argo, and exactly one Argo operation exists.
+- [ ] T81. The same grant presented after `executed`, `spent_failed` or `spent_unknown` -> refused, with no Argo call.
+- [ ] T82. An image digest in the rendered manifests that differs from the grant -> refused at preflight.
+- [ ] T83. Misleading identity: a grant for `labs-a` with a request for `labs-a-x`, or a same-named Application in another project or namespace -> refused.
+- [ ] T84. `main` changed the Application's render after approval -> refused at preflight; the grant stays `approved` and unclaimed.
+- [ ] T85. G2 drift between preflight and effect -> the post-resolution mismatch triggers terminate, the grant becomes `spent_failed`, and the partial apply is recorded. **The result is labelled G2 detection, not prevention.**
+- [ ] T86. A client-supplied field (revision, manifests, resources, prune, app name) -> refused; only a grant id is accepted.
+- [ ] T87. An unrelated commit (G2 only) -> the resolved SHA differs and the manifest hash is equal -> accepted, with both SHAs journaled.
+- [ ] T88. Argo outage during the sync call -> no second sync (see T124).
+- [ ] T89. Orphan operation, or a row with no operation after the deadline -> the detector reports it, and the grant does not become spendable.
+- [ ] T90. A tenant holding `applications, sync, apps/<tenant>-*` attempts `argocd app sync` on a pilot under a deny with `manualSync: true`: (a) with tenant sync left in place -> **succeeds**; (b) with the RBAC deny line -> refused. The same check is run for a `ci-freshness`-style account and an agent-like account.
+- [ ] T91. The broker token used outside the broker: `override`, a non-pinned revision, a spec update, a project edit and non-pilot Applications are all refused.
+- [ ] T92. An approved previously-healthy rollback (a pin move or a forward restore) under its own grant -> the broker sync succeeds. The history `Rollback` under auto-sync is refused (recorded).
+- [ ] T94. During and after a broker sync, auto-sync and selfHeal of every frozen Application stay blocked, and the window is unchanged.
+- [ ] T95. Broker down, mctl-api down, policy unreadable or the window not `effective` -> no sync, and the window is unchanged.
+- [ ] T96. Phase rollback in the 6.7 order: the window is set to `manualSync: false` and verified, then the broker is removed, then tenant `sync` is restored. Each intermediate state is observed safe. The revision 3 order (tenant RBAC restored first) is run as a **negative** case, and it shows a tenant sync succeeding during the freeze.
 
-Argo layer and baselines (tasks 10-11)
-- [ ] T40. E1 carve-out: the approved hotfix syncs; other Applications stay denied.
-- [ ] T41. Unapproved tenant sync of a frozen Application (no `manualSync`) -> refused.
-- [ ] T42. Approved rollback through the E1 path -> succeeds (baseline for T92).
-- [ ] T43. E1 carve-out not restored past `not_after` -> the Application stays open (fail-open recorded); the detector reports it.
-- [ ] T44. E2: `manualSync: true` with tenant sync removed -> tenant refused; dedicated role allowed; `role:admin` allowed (residual).
-- [ ] T93. Tenant resource action (`Deployment/restart`) during a deny window -> record whether it is blocked (expected: not a sync, so not blocked; label P8d accordingly).
-- [ ] T97. Side by side: an injected failure of each mechanism (E1 restore commit fails; broker crashes mid-claim; E2 role token unavailable) -> E1 left open, broker and E2 left closed.
-- [ ] T98. `requireOverridePrivilegeForRevisionSync` `"true"` vs unset: a `sync`-only principal passing a non-`targetRevision` SHA -> refused (override) when the flag is true; refused (auto-sync) in both cases on auto-sync Applications; on a harness Application without auto-sync the flag alone decides.
-- [ ] T99. Admin bypass evidence: `role:admin` syncs during deny, edits the window and uses `override`; `kubectl apply` changes a frozen resource. Each recorded as break-glass with its audit trail (Argo events, `initiatedBy`), not as covered.
+Effect-time guarantee (task 9; re-review P1-1)
+- [ ] T100. G0: approval binds pins X; preflight passes; root-app moves the pilot's pin to Y before the broker's `Sync(revisions=X)` -> Argo refuses with `FailedPrecondition`. Zero resources change (resource versions and the live image digest are compared before and after). The grant becomes `spent_failed`.
+- [ ] T101. G0: a normal broker sync -> `operation.sync.revisions` equal X exactly. A mismatch is treated as a protocol violation that fails the test.
+- [ ] T102. G0: commits to the pilot's chart and values paths on `main` during the window -> the broker sync applies only X (the rendered hash of X is verified on live objects).
+- [ ] T103. G0 residual: a concurrent root-app change to non-revision spec fields (path, helm parameters, `syncOptions`) between `Sync` and the controller pick-up, with the race forced by injected delays. Record whether the changed fields are applied. If they are, the memo downgrades G0 to G1 for spec fields.
+- [ ] T104. G2 adversarial schedule: approved hash A → preflight A → `main` moves to B → `Sync` resolves B → the controller applies B before the broker terminates. The expected result is that B is (partially) applied, recorded as **unapproved production effect**. This test, if reproduced, forbids any "exactly one" claim for main-tracking Applications.
 
-Translation (task 12)
-- [ ] T50. Weekly UTC window -> exact cron + duration; the harness agrees with the model.
-- [ ] T51. Europe/Berlin window in a DST week -> widened/narrowed or `not-translatable`, never an unwidened `timeZone`.
-- [ ] T52. One-off within a year -> lifecycle metadata; drift check fails if present after `end`.
-- [ ] T53. Cross-year one-off -> `0 0 24 12 *` + `216h` with lifecycle; agreement on 2026-12-31 and 2027-01-02.
-- [ ] T54. Ordinal weekday, `COUNT`, `UNTIL` -> `not-translatable`, non-zero exit, `incomplete`.
-- [ ] T55. Invalid zone in a hand-written AppProject -> v3.3.8 behaviour recorded.
-- [ ] T56. Model vs harness `CanSync(false)` agree on truth-table rows 1-5.
+Token compromise (task 9; re-review P1-3)
+- [ ] T105. A direct `Sync` with the broker token and **no grant**, while a deny with `manualSync: true` is active -> expected to **succeed**: the pinned revisions (G0) or current `main` (G2) are applied. The result is labelled `not enforced`.
+- [ ] T106. The detector flags T105 (an `initiatedBy` broker operation with no `sync_requested` row) and labels the alert post-effect. Token TTL expiry is shown to stop further use.
+
+Phase transitions (task 11; re-review P1-4)
+- [ ] T130. All 12 (W, T, B) states are enumerated in the model; exactly the deny-`manualSync:true` + tenant-present cells are unsafe.
+- [ ] T131. Rollout order on the harness: revoke T, then add B, then arm W. Each step is observed before the next. Merging the window first is run as a negative case, and it shows the unsafe cell.
+- [ ] T132. Rollback when verifying `manualSync: false` fails (an injected root-app failure) -> the procedure stops with tenant `sync` still revoked, and an alert fires.
+- [ ] T133. RBAC and AppProject commits merged together -> the two Applications reconcile independently. The observed order is recorded, and the test shows that commit order is no proof of effect order.
+
+Argo layer and baselines (tasks 10, 12)
+- [ ] T40. E1 carve-out: the approved hotfix syncs, and other Applications stay denied.
+- [ ] T41. An unapproved tenant sync of a frozen Application (no `manualSync`) -> refused.
+- [ ] T42. An approved rollback through the E1 path -> succeeds.
+- [ ] T43. An E1 carve-out not restored past `not_after` -> the Application stays open (fail-open recorded).
+- [ ] T44. E2: `manualSync: true` with tenant sync removed -> the tenant is refused, the dedicated role is allowed, and `role:admin` is allowed (residual).
+- [ ] T93. A tenant resource action (`Deployment/restart`) during a deny window -> record whether it is blocked, and label P8d accordingly.
+- [ ] T97. Injected failures side by side: E1's restore fails, the broker crashes mid-claim, the E2 role token is unavailable -> E1 is left open; the broker and E2 are left closed.
+- [ ] T98. `requireOverridePrivilegeForRevisionSync` `"true"` against unset: a `sync`-only principal passing a non-`targetRevision` SHA is refused, by `override` when the flag is true and by auto-sync in both cases.
+- [ ] T99. Admin bypass evidence: `role:admin` syncs during a deny, edits the window and uses `override`; `kubectl apply` changes a frozen resource. Each is recorded as break-glass with its audit trail.
+
+MCP PR authoring (task 13; re-review P2-5, P3-8)
+- [ ] T140. A valid proposal -> exactly one branch `release-window/<window_id>`, one PR, and a diff limited to one `windows[]` entry.
+- [ ] T141. The same request repeated (same key) -> the same PR returned, with no new branch or commit.
+- [ ] T142. An equivalent request with a different key -> the same `window_id`, and the existing PR is returned.
+- [ ] T143. A request overlapping an existing same-scope, same-kind window -> refused, with a pointer to the existing window.
+- [ ] T144. A diff touching another path, another window, a wildcard or a widened scope -> refused by the base-pinned validator.
+- [ ] T145. A "proposal" that shortens or removes an existing deny -> refused unless it is `propose_window_removal`, which is marked as needing an owner reviewer.
+- [ ] T146. The base changes and a rebase alters the semantic diff -> the PR is closed with a reason, and nothing is force-pushed.
+- [ ] T147. Invalid IANA zone, unsupported recurrence, over `max_window`, an unknown field, or an Application not in the map -> refused before any branch exists.
+- [ ] T148. The requester approving its own PR -> counted as no approval (modelled).
+- [ ] T149. The tool identity has no Argo credential and no broker token: the model asserts its configuration surface contains neither.
+
+Status contract (task 14; re-review P2-6)
+- [ ] T150. An Application in an unrelated project -> the policy says `DENY`, the activation is `drifted` (unmatched), and it is never `effective`.
+- [ ] T151. A selector that changed after merge -> `drifted`, with both window hashes shown.
+- [ ] T152. A missing live AppProject, or a 403 -> `unknown`.
+- [ ] T153. Every response lists the admin and `kubectl` residuals.
+- [ ] T154. An in-flight sync at the start -> reported as in flight and paused, not as "blocked before effect".
+- [ ] T155. A tenant restart action -> reported under P8d with the T93 result or `unknown`.
+- [ ] T156. `manual_can_sync: true` under a deny with `manualSync: true` is never rendered as "not frozen".
+
+Translation (task 15)
+- [ ] T50. A weekly UTC window -> exact cron plus duration, and the harness agrees with the model.
+- [ ] T51. A Europe/Berlin window in a DST week -> widened or narrowed, or `not-translatable`.
+- [ ] T52. A one-off within a year -> lifecycle metadata, and the drift check fails if it is present after `end`.
+- [ ] T53. A cross-year one-off -> `0 0 24 12 *` + `216h` with a lifecycle.
+- [ ] T54. Ordinal weekday, `COUNT` or `UNTIL` -> `not-translatable`, non-zero exit, `incomplete`.
+- [ ] T55. An invalid zone in a hand-written AppProject -> the v3.3.8 behaviour is recorded.
+- [ ] T56. The model and the harness `CanSync(false)` agree on truth-table rows 1-5.
 
 Scope mapping (task 4)
 - [ ] T60. Each `services/*/*` maps to exactly one `<team>-<svc>` in project `apps`.
-- [ ] T61. Adding, renaming or removing a service in a fixture copy fails until regenerated.
+- [ ] T61. Adding, renaming or removing a service in a fixture copy fails until the map is regenerated.
 - [ ] T62. `helm-charts/base-service/` maps to every `apps` Application.
-- [ ] T63. Projections and broker RBAC with wildcards, `namespaces` or `clusters` fail.
+- [ ] T63. Projections and broker RBAC that use wildcards, `namespaces` or `clusters` fail.
 - [ ] T64. A window for `labs-mctl-telegram` matches no other tenant's Application, with and without `andOperator`.
 
-Trust boundary (task 13)
-- [ ] T70. A candidate PR changes the evaluator to always allow -> base-pinned run still `DENY`.
-- [ ] T71. A candidate PR deletes the active window -> base policy -> `DENY`.
-- [ ] T72. A candidate PR changes fixtures or selftest -> verdict unchanged.
-- [ ] T73. A planted `yaml.py` in the candidate tree is not imported.
+Trust boundary (task 16)
+- [ ] T70. A candidate PR changes the evaluator to always allow -> the base-pinned run still returns `DENY`.
+- [ ] T71. A candidate PR deletes the active window -> the base policy still returns `DENY`.
+- [ ] T72. A candidate PR changes fixtures or a selftest -> the verdict is unchanged.
+- [ ] T73. A `yaml.py` planted in the candidate tree is not imported.
 - [ ] T74. A same-named `validate` job -> `unknown` unless reproduced in an owner sandbox repo.
 
 ## Rollback
 
 - S0 changes nothing live. Withdrawing or rejecting the proposal is the rollback.
-- S0 artifacts are documentation and inert test assets with no references from
-  workflows, charts, CWFTs or services. Reverting the PR that adds them
-  removes them completely.
-- Harness clusters and the local Postgres are deleted with
-  `kind delete cluster` / `k3d cluster delete` and by removing the container.
-  They hold no production data or credentials.
-- Phase rollback of an eventual pilot is recorded for the security GO only
-  (design "Platform impact"). Remove the broker identity first (fail-closed),
-  then restore tenant RBAC, then remove the window. Never roll back by
-  weakening `version_holds`, the ledger mode, `protected_re`, rulesets or Argo
-  CD settings, none of which S0 touches.
+- S0 artifacts are documentation and inert test assets. Workflows, charts, CWFTs, services and MCP do not reference them. Reverting the PR that adds them removes them completely.
+- The harness clusters and the local Postgres are deleted with `kind delete cluster` / `k3d cluster delete` and by removing the container. They hold no production data or credentials.
+- The phase order for an eventual pilot is recorded for the security GO only (design 6.7). It replaces the revision 3 order, which passed through the unsafe state.
+  - Rollout: revoke tenant `sync` on the pilot, then add the broker identity, then arm the deny with `manualSync: true`. Each step is observed effective before the next.
+  - Rollback: first set the window to `manualSync: false` and verify it `effective`, or end the freeze under its own approved procedure and verify the window is gone. Then remove the broker identity. Only then restore tenant `sync`.
+  - If any verification fails, stay at the last verified, restricted state and alert.
+  - Never roll back by weakening `version_holds`, the ledger mode, `protected_re`, rulesets or Argo CD settings. S0 touches none of them.
