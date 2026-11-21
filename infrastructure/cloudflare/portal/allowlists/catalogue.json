@@ -63,6 +63,7 @@
       "mctl_get_service_pods",
       "mctl_get_service_status",
       "mctl_get_support_task",
+      "mctl_get_sync_windows",
       "mctl_get_tenant",
       "mctl_get_usage_summary",
       "mctl_get_work_item",
