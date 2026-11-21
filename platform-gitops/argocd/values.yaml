@@ -14,6 +14,13 @@ argo-cd:
 
   global:
     domain: ops.mctl.ai
+    # Chart argo-cd 9.5.22 is the last 9.x chart and ships Argo CD v3.4.4;
+    # argo-helm moved to 3.5 in chart 10.x and never published a chart for
+    # 3.4.5+. v3.4.14 carries argo-cd#30267 (an operation started inside a
+    # sync window and then blocked by it could never be terminated). Drop this
+    # override when the chart is moved to 10.x (step 2 of the 3.3 -> 3.6 plan).
+    image:
+      tag: v3.4.14
     # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR
     # for redis). No imagePullSecret is required. Set explicitly to [] so the
     # value never picks up a stale ghcr-registry secret from a prior release —
