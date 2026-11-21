@@ -348,7 +348,7 @@ def selftest() -> int:
     case("without --client-id an unreadable repository is unknown",
          lambda: resolve_client_id(Target("t", "", "", "", "missing.tf"), "/nonexistent", None), Unknown)
 
-    g = next(x for x in TARGETS if "accounts.google.com" in x.authorize_url)
+    g = next(x for x in TARGETS if urllib.parse.urlparse(x.authorize_url).hostname == "accounts.google.com")
     gid = "830512585668-abc.apps.googleusercontent.com"
     glink = (f"{g.authorize_url}?client_id={gid}&redirect_uri={urllib.parse.quote(CALLBACK, safe='')}"
              "&response_type=code&state=s")
