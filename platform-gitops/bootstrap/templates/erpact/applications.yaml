@@ -1,3 +1,9 @@
+# FINALIZERS DROPPED (step 1 of removing tenant erpact from the cluster): the
+# Applications below no longer carry resources-finalizer, so removing them
+# together with project erpact needs no cascade through the project. Nothing
+# is left to cascade: workloads are at zero, there are no PVCs, and the
+# namespace is deleted with its contents by the tenant removal that follows.
+#
 # erpact-infra REMOVED 2026-11-20. It stayed OutOfSync/Missing for good (its
 # volumes were deleted on purpose) and root-app waits for the health of its
 # child Applications, so one root-app sync sat on it for 12 hours and held back
@@ -79,8 +85,6 @@ kind: Application
 metadata:
   name: erpact-shared
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: erpact
   source:
@@ -115,8 +119,6 @@ kind: Application
 metadata:
   name: erpact-control
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: erpact
   source:
@@ -145,8 +147,6 @@ kind: Application
 metadata:
   name: erpact-deployer
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: erpact
   source:
