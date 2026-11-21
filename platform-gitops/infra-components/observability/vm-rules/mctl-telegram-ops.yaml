@@ -333,8 +333,13 @@ spec:
         # No traffic, no refreshes, no failures, and also no one refused. The
         # pool worker polls every 2s and backs off to at most 60s on errors,
         # so a real outage with any worker running produces at least one
-        # failure a minute. A refresh abandoned by its client (context
-        # Canceled) is not counted; see the runbook for what that hides.
+        # failure a minute. A store that hangs rather than fails is counted
+        # too: each read has its own 5s deadline (RevocationRefreshTimeout,
+        # mctl-telegram#1360), and its expiry is a counted failure. Then a
+        # request costs 5s plus the backoff, about one failure per 65s at
+        # worst, which still leaves at least two in any 3-minute window.
+        # Only a request its client abandons before that deadline (context
+        # Canceled) goes uncounted, and every worker client waits longer.
         #
         # Lookback shorter than the hold, as in MctlBridgeAuthFailing above:
         # a burst (a shared-pg failover with traffic in flight) leaves the
