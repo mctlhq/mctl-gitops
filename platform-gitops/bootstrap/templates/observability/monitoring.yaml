@@ -733,6 +733,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # An MCP client refused at OAuth registration because its
+                  # redirect host is not allowlisted (vm-rules/mctl-telegram-alerts.yaml).
+                  # Telegram only, no ticket: the remedy is a values edit that
+                  # the operator decides on (admit the client or not), and
+                  # mctl-agent must not widen the client allowlist on its own.
+                  # Exact alertname: the MctlTelegram* family has other alerts
+                  # with their own routes.
+                  - receiver: telegram
+                    matchers:
+                      - alertname = "MctlTelegramOAuthClientRejected"
                   # RedLoop synthetic staging (vm-rules/redloop-alerts.yaml).
                   # Telegram only, no ticket, and that is load-bearing: these
                   # alerts are the stop conditions of a DAST window

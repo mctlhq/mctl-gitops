@@ -208,6 +208,10 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      {"alertname": "RedLoopStagingProbeAbsent", "severity": "warning",
       "service": "redloop", "job": "redloop-staging-healthz"},
      ["telegram"]),
+    ("refused MCP client registration pages the operator only",
+     {"alertname": "MctlTelegramOAuthClientRejected", "severity": "warning",
+      "job": "mctl-telegram"},
+     ["telegram"]),
 ]
 
 
