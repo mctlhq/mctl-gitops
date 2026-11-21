@@ -178,6 +178,20 @@ resource "cloudflare_dns_record" "anthropic_domain_verify" {
   zone_id = local.zone_id
 }
 
+# OpenAI Business Profile domain verification (record expires 2026-11-22
+# 11:22, so the value is a one-time proof). A static proof of ownership, kept in
+# Git like the Anthropic one. Created through the API (this root cannot apply,
+# #1111) and pinned by import.
+resource "cloudflare_dns_record" "openai_business_profile_verify" {
+  comment = "OpenAI Business Profile domain verification"
+  content = "\"openai-business-profile=clzceeI-7PS48cDE4AYnm6bxyT6LsAXPG86cWQ7CUk8\""
+  name    = "openai-business-profile.mctl.ai"
+  proxied = false
+  ttl     = 1
+  type    = "TXT"
+  zone_id = local.zone_id
+}
+
 # Yandex Webmaster ownership proof for alice.mctl.ai, the one Russian-language
 # property (mctlhq/.github#349, D1). Any record at a name stops the wildcard
 # from answering for that name (RFC 4592), so the TXT alone would leave
