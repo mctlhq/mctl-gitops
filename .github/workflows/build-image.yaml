@@ -123,6 +123,62 @@ jobs:
       # and the mctl-api repository-binding check in "Check source repository".
       id-token: write
     steps:
+      # --- Input hygiene, before any other step reads an input ---
+      # release-deploy.yaml validates its inputs before it calls this
+      # workflow, but a direct dispatch (Argo deploy-service, preview-deploy,
+      # a hand-run platform image) reaches this file unchecked, and git_ref,
+      # image_name and image_tag land in places a newline or control
+      # character changes meaning: the multi-line `build-args` and `tags`
+      # values below, `docker buildx imagetools inspect`, the step summary
+      # (mctlhq/mctl-gitops#1029 item 3).
+      #
+      # It also classifies the ref. A pull-request ref (refs/pull/N/head,
+      # pull/N/merge) names code its author wrote, usually from a fork, so a
+      # build of one must not receive the GH_PACKAGES_TOKEN BuildKit secret
+      # nor a freshly minted App token: the Dockerfile that runs is the
+      # attacker's (#1029 item 1, #764). The build itself still runs, without
+      # either credential; a repo that needs one to build will fail on that
+      # ref, which is the intended outcome. A bare commit SHA that happens to
+      # be a PR head cannot be recognised from its name and is not covered.
+      - name: Validate inputs
+        id: validate
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+          INPUT_BUILD_ID: ${{ inputs.build_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::invalid $1"; exit 1; }
+          # Newline, carriage return and every other control character
+          # (tab, NUL-adjacent bytes, DEL). A grep anchored with ^...$ is
+          # per line, so this check is separate and runs first.
+          for name in REPO GIT_REF IMAGE_NAME IMAGE_TAG DOCKERFILE_PATH TEAM_NAME COMPONENT_NAME BUILD_ID; do
+            v="INPUT_${name}"
+            if [[ "${!v}" =~ [[:cntrl:]] ]]; then
+              fail "${name}: contains a control character"
+            fi
+          done
+          [[ "$INPUT_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] || fail "image_tag"
+          [[ "$INPUT_IMAGE_NAME" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]] || fail "image_name"
+          # A git ref cannot hold whitespace, and a leading dash would read as
+          # an option. The charset is otherwise left open: tenant branch names
+          # reach this workflow and are not restricted to release-deploy's set.
+          if [[ -z "$INPUT_GIT_REF" || ${#INPUT_GIT_REF} -gt 255 || "$INPUT_GIT_REF" == -* \
+                || "$INPUT_GIT_REF" =~ [[:space:]] ]]; then
+            fail "git_ref"
+          fi
+          untrusted=false
+          if printf '%s' "$INPUT_GIT_REF" | grep -Eiq '^(refs/)?((remotes/)?origin/)?pull(-requests?)?/|/pull/[0-9]+/(head|merge)$'; then
+            untrusted=true
+          fi
+          echo "untrusted_ref=${untrusted}" >> "$GITHUB_OUTPUT"
+          echo "git_ref is a pull-request ref: ${untrusted}"
+
       # --- Image name: build only names owned by the requesting team ---
       # A direct dispatch is how tenant builds arrive (Argo's deploy-service
       # and preview-deploy) and how platform images under
@@ -456,7 +512,8 @@ jobs:
       # ever widened again, and so the intent is legible at the call site.
       - name: Generate GitHub App token
         id: app_token
-        if: steps.vault_pat.outputs.has_pat != 'true'
+        # Not minted for a pull-request ref: see "Validate inputs".
+        if: steps.vault_pat.outputs.has_pat != 'true' && steps.validate.outputs.untrusted_ref != 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         continue-on-error: true
         with:
@@ -644,9 +701,10 @@ jobs:
           # repo's own Dockerfile: a caller cannot both name a trusted repo
           # here AND run an attacker-controlled Dockerfile. Other repos get an
           # empty value, so a malicious Dockerfile elsewhere never receives
-          # the PAT.
+          # the PAT. A pull-request ref gets an empty value too, whatever the
+          # repo: its Dockerfile is the PR author's (#1029).
           secrets: |
-            github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
+            github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && steps.validate.outputs.untrusted_ref != 'true' && secrets.GH_PACKAGES_TOKEN || '' }}
           # Overrides any LABEL of the same name in the source Dockerfile.
           labels: |
             org.opencontainers.image.revision=${{ steps.source_rev.outputs.revision }}
