@@ -735,7 +735,7 @@ mctlGlovo:
   # Fresh sign-in on the link routes (the link audience and the maximum login
   # age, two optional variables of the service). Off: both stay unset and the
   # link preview and upload routes refuse every request. Needs c2.
-  linkLogin: false
+  linkLogin: true
   # The public route to the service: an Ingress object, a Traefik source in
   # the server policy and the trusted-proxies variable. Needs c2, host,
   # trustedProxies and the host's reservedPlatformHosts owner. Rollback: false.
