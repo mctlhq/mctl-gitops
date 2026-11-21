@@ -29,7 +29,8 @@ VALUES = CHART / "values.yaml"
 # The committed values move as the chain is lit (enabled, killSwitch). The dark
 # cases pin the switches off explicitly so they stay a test of the dark render.
 DARK = ["--set", "apiC2Control.enabled=false", "--set", "apiC2Control.killSwitch=false"]
-LIT = ["--set", "apiC2Control.enabled=true", "--set", "apiC2Control.chartSlots=true",
+LIT = ["--set", "apiC2Control.enabled=true", "--set", "apiC2Control.killSwitch=false",
+       "--set", "apiC2Control.chartSlots=true",
        "--set", "apiC2Control.refresherImage.tag=1.2.3",
        "--set", "apiC2Control.refresherImage.command={/refresher,control}"]
 
@@ -140,7 +141,7 @@ def main():
              "--set", "apiC2Control.refresherImage.tag=1.2.3", *P_CMD], "refresherImage.command")
 
     # The committed values themselves: the wiring is lit with the released refresher and the
-    # kill switch route still dark (apiC2Control.killSwitch is its own PR).
+    # kill switch route mounted (apiC2Control.killSwitch was its own PR and GO).
     live = helm()
     check(live.returncode == 0, f"committed render failed: {live.stderr[-300:]}")
     if live.returncode == 0:
@@ -149,7 +150,7 @@ def main():
         check(side.get("name") == "c2-control-token-refresher", "committed: the refresher sidecar is not rendered")
         check(side.get("image") == "ghcr.io/mctlhq/mctl-glovo:0.3.2", f"committed: refresher image {side.get('image')!r}")
         check(side.get("command") == ["token-refresher"], f"committed: refresher command {side.get('command')!r}")
-        check("GLOVO_C2_KILLSWITCH_ENABLED" not in lv["env"], "committed: the kill switch route is on")
+        check(lv["env"].get("GLOVO_C2_KILLSWITCH_ENABLED") == "true", "committed: the kill switch route flag is missing")
 
     lit = helm(*LIT)
     check(lit.returncode == 0, f"lit render failed: {lit.stderr[-300:]}")
@@ -218,7 +219,7 @@ def main():
                 check(d["spec"]["secretStoreRef"].get("kind") == "SecretStore",
                       f"lit: {d['metadata']['name']} reads the prefix through a cluster store")
 
-    on = helm(*LIT, "--set", "apiC2Control.killSwitch=true")
+    on = helm(*LIT, "--set", "apiC2Control.killSwitch=true")  # later --set wins over the pinned false
     check(on.returncode == 0 and api_values(on.stdout)["env"].get("GLOVO_C2_KILLSWITCH_ENABLED") == "true",
           "killSwitch: the route flag is missing")
 
