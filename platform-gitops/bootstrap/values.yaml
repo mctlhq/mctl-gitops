@@ -722,7 +722,7 @@ mctlGlovo:
   deploy: true
   c2: true
   allowlist: true
-  consent: false
+  consent: true
   control: false
   # mctl-api's side of the consent read (the consent routes, their cap and the
   # reader identity). Independent of the switches above so it can be lit
