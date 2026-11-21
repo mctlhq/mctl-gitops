@@ -689,6 +689,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/image-digest"
           printf '%s@%s\n' "${IMAGE_NAME}" "${DIGEST}" > "$RUNNER_TEMP/image-digest/image-ref.txt"
 
+      # trivy does not create parent directories for --output, so the scan
+      # would fail on every build without this.
+      - name: Prepare image scan directory
+        run: mkdir -p "$RUNNER_TEMP/image-scan"
+
       # Trivy scan of the image just pushed, by digest. Warn-only unless
       # IMAGE_SCAN_BLOCKING is "true" (see the env block). The SARIF goes up as
       # a run artifact rather than to code scanning: this workflow is also

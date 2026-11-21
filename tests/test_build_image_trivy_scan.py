@@ -62,6 +62,11 @@ def judge(text):
     w = scan.get("with", {})
     out.append(("scan targets name@digest", "steps.digest.outputs.digest" in w.get("image-ref", "") and "@" in w.get("image-ref", ""), w.get("image-ref")))
     out.append(("scan output is SARIF", w.get("format") == "sarif" and str(w.get("output", "")).endswith(".sarif"), w))
+    prep = step("Prepare image scan directory")
+    out.append(("scan output directory is created before the scan",
+                bool(prep and 'mkdir -p "$RUNNER_TEMP/image-scan"' in prep.get("run", ""))
+                and "image-scan/" in str(w.get("output", ""))
+                and names.index("Prepare image scan directory") < names.index("Scan image (Trivy)"), names))
     out.append(("switch defaults to warn-only", doc["env"].get("IMAGE_SCAN_BLOCKING") == "false", doc.get("env")))
     out.append(("continue-on-error follows the switch", "env.IMAGE_SCAN_BLOCKING" in str(scan.get("continue-on-error")) and "!= 'true'" in str(scan.get("continue-on-error")), scan.get("continue-on-error")))
     out.append(("exit-code follows the switch", "env.IMAGE_SCAN_BLOCKING == 'true'" in str(w.get("exit-code")) and "'1'" in str(w.get("exit-code")) and "'0'" in str(w.get("exit-code")), w.get("exit-code")))
@@ -95,6 +100,7 @@ MUTANTS = [
     ("scan by tag, not digest", "image-ref: ${{ inputs.image_name }}@${{ steps.digest.outputs.digest }}", "image-ref: ${{ inputs.image_name }}:${{ inputs.image_tag }}"),
     ("failed scan reported silently", 'if [ "${SCAN_OUTCOME}" != "success" ]; then', 'if false; then'),
     ("unreadable report treated as clean", 'unreadable:*|"")', 'NEVER)'),
+    ("scan output directory not created", 'run: mkdir -p "$RUNNER_TEMP/image-scan"', 'run: "true"'),
     ("security-events permission added", "      id-token: write\n    steps:", "      id-token: write\n      security-events: write\n    steps:"),
 ]
 
