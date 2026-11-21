@@ -192,6 +192,10 @@ argo-cd:
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
+        # ... and read AppProjects, only for the admin-only sync windows tool
+        # (mctl_get_sync_windows, GET /api/v1/projects/{name}/syncwindows).
+        # Read only: windows are written by a gitops PR, never through the API.
+        p, mctl-api, projects, get, */*, allow
         # argocd-freshness workflow: list applications and their revisions
         p, ci-freshness, applications, get, */*, allow
 
