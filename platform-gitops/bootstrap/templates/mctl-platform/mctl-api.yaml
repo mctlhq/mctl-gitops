@@ -501,11 +501,8 @@ spec:
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
-          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
-          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret applied by
-          # hand in 2026-03 and created by nothing in this repository or in
-          # Vault; it is described in mctl-api-secrets.yaml now.
-          # mctlhq/mctl-gitops#1229, step 2 of 2.
+          # One secret, not two. The hand-applied `mctl-api-gitops-token`
+          # extra Secret is gone (mctlhq/mctl-gitops#1229).
           envFromSecret: mctl-api-secrets
           # Event producer credentials, in their own ExternalSecret so a
           # missing key cannot take DB_PASSWORD down with it
@@ -546,11 +543,10 @@ spec:
           # a restart -- envFrom would capture it at container start and serve
           # an expired value within the hour.
           #
-          # From here GITOPS_REPO_TOKEN and GITOPS_ACTIONS_TOKEN in
-          # mctl-api-secrets become the fallback only: the file wins. They stay
-          # for now so this change is reversible by deleting one line, and are
-          # removed in a follow-up once the pod is observed running on the
-          # file.
+          # The file is the only GitHub credential for the mctl-gitops clone
+          # and the workflow dispatch. The static GITOPS_REPO_TOKEN and
+          # GITOPS_ACTIONS_TOKEN fallbacks were removed from mctl-api-secrets
+          # (mctlhq/mctl-gitops#1240).
           #
           # What this token is, measured rather than assumed
           # (mctlhq/mctl-api#307): one repository (mctl-gitops), contents
