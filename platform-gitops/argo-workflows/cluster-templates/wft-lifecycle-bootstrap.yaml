@@ -139,10 +139,6 @@ spec:
     - name: workdir
       emptyDir:
         sizeLimit: 1Gi
-    - name: deploy-key
-      secret:
-        secretName: mctl-gitops-deploy-key
-        defaultMode: 0600
 
   templates:
     - name: bootstrap
@@ -159,7 +155,7 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
-          # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off.
+          # Root on purpose: chown -R 1000:1000 /workdir hand-off.
           # Escalation is off and every capability except the file-ownership
           # ones is dropped (mctl-gitops#1717).
           securityContext:
@@ -174,31 +170,17 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
-              mkdir -p ~/.ssh
-              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-              chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-              # GitHub's published SSH host keys, PINNED rather than trusted on
-              # first use — same list and same reasoning as the shepherd CWFT.
-              # StrictHostKeyChecking=no would accept whatever key answered on
-              # a connection carrying a write-capable deploy key.
-              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-              GITHUB_HOST_KEYS
-              chmod 600 ~/.ssh/known_hosts
-              chmod 600 ~/.ssh/config
+              # Anonymous HTTPS: mctl-gitops is public and this step only reads
+              # it, so it carries no credential and needs no ssh client.
               # Read-only: this workflow never commits. The gitops checkout is
-              # an INPUT — .status.yaml is where the proposals and their PR
-              # urls live — so there is no push step and no write mutex.
+              # an INPUT -- .status.yaml is where the proposals and their PR
+              # urls live -- so there is no push step and no write mutex.
               # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
               # sessions right after the handshake (proxy tunnels were 200), every
               # clone exited 128 and each failed run fanned out into an incident.
-              # Same key and URL on every try; git prints its own stderr.
+              # Same URL on every try; git prints its own stderr.
               for attempt in 1 2 3; do
-                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                if git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
                   break
                 fi
                 rm -rf /workdir/mctl-gitops
@@ -219,8 +201,6 @@ spec:
           volumeMounts:
             - name: workdir
               mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
       container:
         image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
