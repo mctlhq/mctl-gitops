@@ -6,7 +6,7 @@ an auditor needed ssh/kubectl exec on the control-plane node. Pins, on the
 bootstrap render of loki.yaml:
   - promtail mounts the directory of kube.tf's audit-log-path, read-only;
   - a scrape job labelled job=kube-apiserver-audit globs the audit log under
-    that mount (live file and rotated copies);
+    that mount (the live file only);
   - the audit policy never records Secret or token bodies, which is what makes
     shipping the file to Loki acceptable: Secrets and token objects stay at
     Metadata, and the only Request/RequestResponse rules are authorization
@@ -78,7 +78,8 @@ def check_mount_and_scrape(pt, log):
     check(fnmatch.fnmatch(live, glob), f"glob {glob!r} does not match the live file {live}")
     # lumberjack rotates to audit-<timestamp>.log
     rotated = str(mount / (log.stem + "-2026-11-21T10-00-00.000" + log.suffix))
-    check(fnmatch.fnmatch(rotated, glob), f"glob {glob!r} does not match rotated copies like {rotated}")
+    # promtail keys positions by path: a rotated copy would be re-read from 0
+    check(not fnmatch.fnmatch(rotated, glob), f"glob {glob!r} matches rotated copies like {rotated}; events ship twice")
 
 
 def check_policy(doc):

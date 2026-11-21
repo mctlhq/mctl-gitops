@@ -178,8 +178,10 @@ spec:
             snippets:
               # The audit log is JSON lines, not CRI, so it gets no pipeline
               # stages: the pod pipeline below is not applied to extra jobs.
-              # The glob covers the live file and lumberjack's rotated
-              # copies (audit-<timestamp>.log, maxbackup=10).
+              # The glob is the live file only. lumberjack renames it to
+              # audit-<timestamp>.log on rotation; promtail keys positions
+              # by path, so matching those copies would re-ship every event
+              # from offset 0 under a new filename label.
               extraScrapeConfigs: |
                 - job_name: kube-apiserver-audit
                   static_configs:
@@ -187,7 +189,7 @@ spec:
                       labels:
                         job: kube-apiserver-audit
                         app: kube-apiserver
-                        __path__: /var/log/k3s-audit/audit*.log
+                        __path__: /var/log/k3s-audit/audit.log
               pipelineStages:
                 # k3s writes CRI-format logs; the old block said `docker: {}`,
                 # which would have mangled every line had it ever been applied.
