@@ -424,16 +424,16 @@ apiC2Control:
   killSwitch: false
   # Must be set true in the same PR that moves the mctl-api chart pin to a
   # revision with the three slots above; the render refuses enabled without it.
-  chartSlots: false
+  chartSlots: true
   refresherImage:
     repository: ghcr.io/mctlhq/mctl-glovo
     # Placeholder: the release flow does NOT bump this line yet (its
     # values_path is the C2 service template). Set it by hand to the released
     # tag, or extend the flow; enabled refuses the placeholder.
-    tag: "0.0.0-unreleased"
+    tag: "0.3.2"
     # TODO(refresher): the command of the control-caller refresher; empty
     # until that image exists (enabled refuses it).
-    command: []
+    command: ["token-refresher"]
 
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline

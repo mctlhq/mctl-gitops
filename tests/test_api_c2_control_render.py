@@ -126,10 +126,15 @@ def main():
         check(k not in v, f"dark: {k} rendered")
 
     refused(["--set", "apiC2Control.killSwitch=true"], "killSwitch requires apiC2Control.enabled")
-    refused(["--set", "apiC2Control.enabled=true"], "chartSlots")
-    refused(["--set", "apiC2Control.enabled=true", "--set", "apiC2Control.chartSlots=true"], "placeholder")
+    # The refusals are pinned against explicit placeholder values, not the live
+    # ones: the live values move as the chain is lit (chartSlots, tag, command).
+    P_SLOTS = ["--set", "apiC2Control.chartSlots=false"]
+    P_TAG = ["--set", "apiC2Control.refresherImage.tag=0.0.0-unreleased"]
+    P_CMD = ["--set", "apiC2Control.refresherImage.command=null"]
+    refused(["--set", "apiC2Control.enabled=true", *P_SLOTS, *P_TAG, *P_CMD], "chartSlots")
+    refused(["--set", "apiC2Control.enabled=true", "--set", "apiC2Control.chartSlots=true", *P_TAG, *P_CMD], "placeholder")
     refused(["--set", "apiC2Control.enabled=true", "--set", "apiC2Control.chartSlots=true",
-             "--set", "apiC2Control.refresherImage.tag=1.2.3"], "refresherImage.command")
+             "--set", "apiC2Control.refresherImage.tag=1.2.3", *P_CMD], "refresherImage.command")
 
     lit = helm(*LIT)
     check(lit.returncode == 0, f"lit render failed: {lit.stderr[-300:]}")

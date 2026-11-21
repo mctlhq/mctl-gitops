@@ -10,13 +10,17 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. c5e5d6f9 is the 4.164.0 release commit. With the
-      # current bootstrap values it renders the same objects as 9895c76f (the
-      # 4.159.0 pin; helm template, the only diff is one YAML comment); its
-      # chart changes are the optional releaseApprovalUISecret slot
-      # (mctlhq/mctl-api#1095), unset here, and that comment. Move this pin
-      # in a reviewed PR, at a release commit whose image is deployed.
-      targetRevision: c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361
+      # a GitOps change. a91f7fb4 is the 4.171.0 release commit (image live).
+      # With the current bootstrap values it renders the same objects as
+      # c5e5d6f9 (the 4.164.0 pin) except two things (helm template diff of
+      # the chart at the two commits): a new DEVLOOP_BEARER_APPROVE_ENABLED
+      # env with an empty value (the chart default; empty parses as off, so
+      # the live break-glass-off behaviour is unchanged) and one YAML comment.
+      # The chart also gains the extraContainers / extraVolumes /
+      # extraVolumeMounts slots (mctlhq/mctl-api bf7b27c, since 4.169.0) that
+      # apiC2Control needs, empty here. Move this pin in a reviewed PR, at a
+      # release commit whose image is deployed.
+      targetRevision: a91f7fb4a92e835f5f562f2cbab3ac2e2519c530
       path: helm
       helm:
         releaseName: mctl-api
