@@ -358,10 +358,13 @@ spec:
         # minutes after refusals begin.
         #
         # Absent series. The gauge exists only from the mctl-telegram
-        # release that ships #1360 (0.140.0, also the first release that
-        # refuses tokens). On older binaries the rule has no data and is
-        # silent: it cannot page falsely, and it cannot page at all, which is
-        # harmless because those binaries fail open. A server that is down or
+        # release containing #1360, the first one after 0.140.0. 0.140.0
+        # itself already refuses tokens (#1347) but exports no gauge, so
+        # while it runs a shared-pg outage stops every agent worker and this
+        # rule pages nothing; that gap closes only when the release
+        # containing #1360 is deployed. Releases before 0.140.0 fail open.
+        # On any release without the gauge the rule has no data and is
+        # silent, so it never pages falsely. A server that is down or
         # unscraped yields no data either; ServiceUnavailable (/healthz probe)
         # and its absent() twin in blackbox-alerts.yaml cover that, and no
         # absent() is added here (gitops#2277). The preview scrape keeps only

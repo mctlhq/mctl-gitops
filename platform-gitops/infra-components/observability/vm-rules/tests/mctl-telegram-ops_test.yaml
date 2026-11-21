@@ -503,8 +503,8 @@ tests:
         alertname: MctlWorkerTokenRevocationRefreshFailing
         exp_alerts: []
 
-  # Binaries before #1360 export no age gauge: no data, no alert, so the
-  # rule cannot page falsely while the old release is still running.
+  # Releases without #1360 (0.140.0 and earlier) export no age gauge: no
+  # data, no alert, so the rule cannot page falsely while they still run.
   - interval: 30s
     name: no snapshot age series (binary without the refresher) does not page
     input_series:
