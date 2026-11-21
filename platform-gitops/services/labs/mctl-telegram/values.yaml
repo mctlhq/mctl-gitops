@@ -127,7 +127,7 @@ env:
   # Google Cloud projects (which cannot contain underscores).
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,grok.com,app.notion.com,ray.run,emmanuel-5aa41c-pod.agentspodium.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,grok.com,app.notion.com,ray.run,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1"
   # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
   # client whose client_id is an https URL on a listed host gets its redirect
   # URIs from the document at that URL instead of registering. ADVERTISE
