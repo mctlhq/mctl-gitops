@@ -132,12 +132,16 @@ spec:
                 # this landed. Same shape as cwft-mctl-agents-reconcile.
                 - name: status-update
                   from: "{{steps.flip.outputs.artifacts.status-update}}"
-            # Skip the mutex-holding commit entirely when flip-status found
-            # the proposal already accepted (idempotent retry / rebase race).
-            when: "{{steps.flip.outputs.result}} == flipped"
+            # Skip the mutex-holding commit entirely when flip-status had
+            # nothing to write (idempotent retry / rebase race). Compared
+            # against `noop` rather than `== flipped` because there are two
+            # writing outcomes: `flipped` (proposed -> accepted) and
+            # `recorded` (an approver written onto an already-accepted
+            # proposal that demands one; mctl-agents#349, gitops#1206).
+            when: "{{steps.flip.outputs.result}} != noop"
 
     # ── 2. Flip proposed → accepted ───────────────────────────────────────
-    # stdout is EXACTLY "flipped" or "noop" — Argo captures the script's
+    # stdout is EXACTLY "flipped", "recorded" or "noop" — Argo captures the script's
     # whole stdout as outputs.result, and the step-list `when` compares it
     # verbatim, so every log line here goes to stderr instead.
     - name: flip-status
@@ -348,6 +352,29 @@ spec:
             *)
               refuse approval_content_digest_malformed "expected_content_digest is not sha256:<64 hex>" ;;
           esac
+          # Does the top-level `control:` block demand a human approval?
+          # Prints yes or no. Scoped to that block, so a same-named key
+          # elsewhere is not read. No control block, or an explicitly falsey
+          # value, means "never asked" (no). Any other value, including one
+          # this does not recognise, demands approval: an unreadable gate
+          # must never waive the approval.
+          approval_demanded() {
+            RAWV=$(awk '
+              /^control:/ { c = 1; next }
+              c && /^[^ \t#]/ { c = 0 }
+              c && /^[ \t]+requires_human_approval:/ {
+                sub(/^[^:]*:[ \t]*/, ""); print "set:" $0; exit
+              }' "$1")
+            case "$RAWV" in
+              set:*) ;;
+              *) echo no; return 0 ;;
+            esac
+            RAWV=$(printf '%s' "${RAWV#set:}" | sed 's/[[:space:]]#.*$//' | tr -d "\"' \t" | tr 'A-Z' 'a-z')
+            case "$RAWV" in
+              false|no|off|0|null|"~"|"") echo no ;;
+              *) echo yes ;;
+            esac
+          }
           STATUS_FILE="/workdir/mctl-gitops/platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
           if [ ! -f "$STATUS_FILE" ]; then
             echo "❌ No .status.yaml at agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/ — nothing to approve" >&2
@@ -361,22 +388,36 @@ spec:
             exit 1
           fi
           CURRENT=$(sed -n 's/^status:[[:space:]]*//p' "$STATUS_FILE" | head -1)
+          # MODE decides what the tail writes: a status flip, or only the
+          # approval record on a proposal that is already accepted.
+          MODE=flip
           if [ "$CURRENT" = "accepted" ]; then
-            # Idempotent path: a Temporal retry of submit_and_wait, or a
-            # manual approve racing the automated one. Exit 0 so the loop
-            # proceeds to implement instead of failing on a double-approve.
-            # Not when this approval was decided for other content: an
-            # accepted record carrying another digest was approved by someone
-            # else for something else, and this decision does not cover it.
             RECORDED=$(sed -n "s/^  content_digest:[[:space:]]*'\{0,1\}\([^']*\)'\{0,1\}[[:space:]]*$/\1/p" "$STATUS_FILE" | head -1)
-            if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
-              refuse approval_content_mismatch "${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" "${RECORDED:--}"
+            # A proposal committed straight to `accepted` while its control
+            # block demands a human approval, with no approval block at all,
+            # can never run: this step is the only writer of the approval
+            # record and used to decline (gitops#1206). Record it, but only
+            # for that exact shape, and only after the same digest checks
+            # below. An existing approval block is never edited here.
+            if [ -z "$RECORDED" ] && ! grep -q '^approval:' "$STATUS_FILE" \
+               && [ "$(approval_demanded "$STATUS_FILE")" = "yes" ]; then
+              MODE=record
+            else
+              # Idempotent path: a Temporal retry of submit_and_wait, or a
+              # manual approve racing the automated one. Exit 0 so the loop
+              # proceeds to implement instead of failing on a double-approve.
+              # Not when this approval was decided for other content: an
+              # accepted record carrying another digest was approved by
+              # someone else for something else, and this decision does not
+              # cover it.
+              if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+                refuse approval_content_mismatch "${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" "${RECORDED:--}"
+              fi
+              echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
+              echo -n "noop"
+              exit 0
             fi
-            echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
-            echo -n "noop"
-            exit 0
-          fi
-          if [ "$CURRENT" != "proposed" ]; then
+          elif [ "$CURRENT" != "proposed" ]; then
             echo "❌ ${WORKFLOW_SLUG} has status '${CURRENT:-<missing>}' — only proposed → accepted is a valid approve" >&2
             exit 1
           fi
@@ -384,6 +425,15 @@ spec:
           # conservative charset rather than trying to quote arbitrary input.
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
+          # An anonymous approver would commit a record that looks approved
+          # and still leaves the proposal blocked, so refuse it before any
+          # edit. Only on the record path: the flip path is unchanged.
+          if [ "$MODE" = "record" ]; then
+            case "$(printf '%s' "$APPROVER_SAFE" | tr 'A-Z' 'a-z')" in
+              unknown|none|null)
+                refuse approval_approver_anonymous "${WORKFLOW_SLUG} is accepted and demands an approval, but the approver is '${APPROVER_SAFE}'; refusing to record an anonymous approval" ;;
+            esac
+          fi
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # Bind the approval to the content it approves (mctl-agents#658):
           # the implementer recomputes this digest before it starts and
@@ -442,7 +492,9 @@ spec:
           fi
           # The CURRENT read above already proved a top-level `status:` line
           # exists (it parsed to "proposed"), so this sed always matches.
-          sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
+          if [ "$MODE" = "flip" ]; then
+            sed -i "s/^status:[[:space:]].*$/status: accepted/" "$STATUS_FILE"
+          fi
           # updated_at/updated_by may be absent on a hand-written or partial
           # file — sed on a missing line is a silent no-op, so insert-or-
           # replace explicitly instead of assuming the investigator's shape.
@@ -475,6 +527,11 @@ spec:
             echo "❌ Post-edit check failed: ${STATUS_FILE} does not read 'status: accepted'" >&2
             exit 1
           fi
+          if ! grep -q "^  approved_by: '${APPROVER_SAFE}'\$" "$STATUS_FILE" \
+             || ! grep -q "^  content_digest: '${WORKFLOW_EXPECTED_DIGEST}'\$" "$STATUS_FILE"; then
+            echo "❌ Post-edit check failed: ${STATUS_FILE} does not carry the approval record" >&2
+            exit 1
+          fi
           # Hand the flipped file to commit-and-push, at its repo-relative
           # path. Built only here, on the verified-flipped path, so a `noop`
           # run leaves /tmp/status-out absent and the `optional: true` output
@@ -489,8 +546,13 @@ spec:
           mkdir -p "/tmp/status-out/$(dirname "$REL")"
           cp -a "$STATUS_FILE" "/tmp/status-out/$REL"
 
-          echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
-          echo -n "flipped"
+          if [ "$MODE" = "record" ]; then
+            echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: already accepted, approver recorded (${APPROVER_SAFE})" >&2
+            echo -n "recorded"
+          else
+            echo "✅ ${WORKFLOW_SERVICE}/${WORKFLOW_SLUG}: proposed → accepted (by ${APPROVER_SAFE})" >&2
+            echo -n "flipped"
+          fi
         resources:
           requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 1Gi }
           limits:   { cpu: 200m, memory: 256Mi, ephemeral-storage: 2Gi }
@@ -744,11 +806,16 @@ spec:
               # no-op the flip step grants, instead of failing the loop.
               git rebase --abort || true
               git fetch origin main
-              if git show "origin/main:${STATUS_PATH}" 2>/dev/null | grep -q '^status: accepted$'; then
-                echo "ℹ️  ${WORKFLOW_SLUG} already accepted on main (concurrent approve) — no-op."
+              # Accepted alone is not enough: a `recorded` run lands on a file
+              # that is ALREADY accepted, so only an approval record on main
+              # shows that someone else's approve landed instead of ours.
+              MAIN_STATUS=$(git show "origin/main:${STATUS_PATH}" 2>/dev/null || true)
+              if printf '%s\n' "$MAIN_STATUS" | grep -q '^status: accepted$' \
+                 && printf '%s\n' "$MAIN_STATUS" | grep -q "^  approved_by: "; then
+                echo "ℹ️  ${WORKFLOW_SLUG} already accepted with an approval on main (concurrent approve) — no-op."
                 exit 0
               fi
-              echo "❌ Rebase conflict and main does not read 'status: accepted' — needs a human look" >&2
+              echo "❌ Rebase conflict and main has no accepted proposal with an approval — needs a human look" >&2
               exit 1
             fi
           done

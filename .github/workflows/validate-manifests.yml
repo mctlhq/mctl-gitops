@@ -874,6 +874,16 @@ jobs:
         # with kubectl, curl and sleep stubbed.
         run: python3 tests/test_cwft_shepherd_verify_gate.py
 
+      - name: Unit-test the agents notify-telegram deadline and implement fallback gates
+        # #568: every cwft-mctl-agents-* notify-telegram onExit template must
+        # carry activeDeadlineSeconds, or a hung Telegram call pins the
+        # workflow. #1053/#1206: implement-fallback is skipped for the
+        # structured no-commits refusal (exit 64) and EXIT_BLOCKED_ONLY (45),
+        # and assert-attempt names the real cause instead of blaming quota.
+        run: |
+          python3 tests/test_cwft_notify_telegram_deadline.py
+          python3 tests/test_cwft_implement_no_commits_skips_fallback.py
+
       - name: Unit-test the portal tool catalogue drift detector
         # Its sibling above. The portal never refreshes a manual-OAuth server's
         # tool snapshot, so a tool added upstream stays invisible and a changed

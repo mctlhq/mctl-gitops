@@ -1442,6 +1442,9 @@ spec:
     # exposed during the 2026-05-07 ESO triage. See plan
     # ~/.claude/plans/mctl-agents-daily-cron-visibility.md (G3).
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that
