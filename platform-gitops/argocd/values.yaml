@@ -21,8 +21,8 @@ argo-cd:
     domain: ops.mctl.ai
     # Chart 10.x creates its own NetworkPolicies by default. They are additive
     # to ours and the chart's argocd-server policy allows ingress from ANY
-    # source, which would cancel allow-argocd-server-clients (Traefik and the
-    # erpact deployer only). Keep ours as the single source of truth.
+    # source, which would cancel allow-argocd-server-clients (Traefik
+    # only). Keep ours as the single source of truth.
     networkPolicy:
       create: false
     # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR

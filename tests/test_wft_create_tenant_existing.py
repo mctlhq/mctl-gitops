@@ -215,7 +215,7 @@ MUST_REJECT = [
 ]
 # Existing tenants must stay accepted: the guard also runs when create-tenant
 # re-provisions them and when delete-tenant removes them.
-LIVE_TENANTS = ["admins", "erpact", "karabu", "labs", "mctl", "ovk"]
+LIVE_TENANTS = ["admins", "karabu", "labs", "mctl", "ovk"]
 MUST_ACCEPT = sorted(set(TENANTS + LIVE_TENANTS)) + [
     "team1", "my-team", "dev-platform", "fresh", "rooted", "sharedx", "lokis",
     "external2", "my-tenant", "otelx", "reflectors"]

@@ -538,38 +538,8 @@ surfaceTelegramToken:
 #
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.
-externalManifestNamespaces:
-  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets will live in this
-  # chart, templates/erpact/externalsecrets.yaml, added by the erpact wiring
-  # (#1516) together with project erpact; never in that repository.
-  erpact:
-    secrets:
-      - clo-s3
-      - deployer-git
-      - deployer-secret
-      # R2 token for the copy's backups (bucket erpact-backups only).
-      - erpact-backup-r2
-      # OIDC client of the sites in ZITADEL, filled by the zitadel-iac Job;
-      # declared in infra-components/erpact/oidc-zitadel.yaml (#1501).
-      - erpact-oidc-zitadel
-      # Tenant users each Frappe site must have (e-mail, names, sites,
-      # roles; only users opted in with "frappe"), also from zitadel-iac.
-      - erpact-frappe-users
-      - mariadb-root
-    # No RBAC is bound to default in erpact. Project erpact (#1516) admits
-    # no Secret and no RBAC kind from the tenant's repository, so that
-    # repository can neither bind a Role to default nor mint a
-    # service-account-token Secret under an allowed name.
-    serviceAccounts:
-      - default
-    # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
-    # policy anchors it), so the repository cannot claim another tenant's
-    # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
-    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
-    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
-    # The apex erpact.online is not matched.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
+# None today: the only entry, tenant erpact, was removed with its namespace.
+externalManifestNamespaces: {}
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
