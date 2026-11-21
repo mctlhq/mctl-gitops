@@ -215,8 +215,28 @@ spec:
           git add "${VALUES}"
           git diff --staged --quiet && echo "No changes needed (already at ${TAG})" && exit 0
           git commit -m "chore: rollback ${TEAM}/${COMPONENT} to ${TAG}"
-          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
-          git push
+          PUSHED=false
+          for i in $(seq 1 5); do
+            sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+            if git push; then
+              PUSHED=true
+              break
+            fi
+            # A concurrent writer moved main. `git pull --rebase` must not run bare
+            # under `set -e`: a conflict would abort mid-rebase and skip the retry.
+            # Abort it so the next attempt starts from a clean worktree, and re-run
+            # the outgoing guard on the rebased commits (gitops#988, #999).
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "Rebase failed (attempt ${i}); retrying" >&2
+            fi
+          done
+          # Wrapping the rebase removed the `set -e` abort that used to stop an
+          # exhausted loop; without this check it would fall through as if pushed.
+          if [ "$PUSHED" != "true" ]; then
+            echo "git push failed after 5 attempts" >&2
+            exit 1
+          fi
           echo "Rolled back ${TEAM}/${COMPONENT} to tag ${TAG}${DIGEST:+ (digest ${DIGEST})}"
       volumes:
         - name: deploy-key

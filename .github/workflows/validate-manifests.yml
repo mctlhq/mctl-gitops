@@ -83,10 +83,16 @@ jobs:
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
+          # From the release's sha256sums.txt for the linux-amd64 tarball;
+          # update together with PROMETHEUS_VERSION (gitops#999).
+          PROMETHEUS_SHA256: "e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a"
         run: |
           set -euo pipefail
-          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
-            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSfL -o "${tarball}" "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "${tarball}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          rm -f "${tarball}"
           sudo mv promtool /usr/local/bin/
 
       - name: Release gate holds a bootstrap-embedded version
@@ -151,10 +157,16 @@ jobs:
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
+          # From the release's sha256sums.txt for the linux-amd64 tarball;
+          # update together with PROMETHEUS_VERSION (gitops#999).
+          PROMETHEUS_SHA256: "e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a"
         run: |
           set -euo pipefail
-          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
-            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSfL -o "${tarball}" "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "${tarball}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          rm -f "${tarball}"
           sudo mv promtool /usr/local/bin/
 
       - name: Helm lint internal charts
@@ -610,10 +622,16 @@ jobs:
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
+          # From the release's sha256sums.txt for the linux-amd64 tarball;
+          # update together with PROMETHEUS_VERSION (gitops#999).
+          PROMETHEUS_SHA256: "e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a"
         run: |
           set -euo pipefail
-          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
-            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSfL -o "${tarball}" "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "${tarball}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          rm -f "${tarball}"
           sudo mv promtool /usr/local/bin/
 
       - name: Render and validate bootstrap and argocd charts
@@ -1018,10 +1036,16 @@ jobs:
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
+          # From the release's sha256sums.txt for the linux-amd64 tarball;
+          # update together with PROMETHEUS_VERSION (gitops#999).
+          PROMETHEUS_SHA256: "e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a"
         run: |
           set -euo pipefail
-          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
-            | tar xz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSfL -o "${tarball}" "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "${tarball}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          rm -f "${tarball}"
           sudo mv promtool /usr/local/bin/
 
       # Validate project scope for generated applications: expand the `apps`
@@ -1273,6 +1297,13 @@ jobs:
         # The step edits only .autoscaling (#2413). Its own script runs against
         # fixtures with real yq, with git, ssh, kubectl and argo shimmed to fail.
         run: python3 tests/test_wft_deploy_service_autoscaling_values.py
+
+      - name: Unit-test the git push retry in rollback and deploy-service
+        # Retries a rejected push and fails after the last attempt (#999).
+        run: python3 tests/test_wft_push_retry.py
+
+      - name: Unit-test the creator_user_id guard of create-tenant
+        run: python3 tests/test_wft_create_tenant_creator_user_id.py
 
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py

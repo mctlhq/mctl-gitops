@@ -33,6 +33,9 @@ RELEASE_LAG_HOURS="${RELEASE_LAG_HOURS:-24}"
 # How long a published release may wait for the gitops bump. release-deploy
 # builds and bumps in ~10 min; two hours absorbs a retry.
 DEPLOY_LAG_HOURS="${DEPLOY_LAG_HOURS:-2}"
+# How far ahead of the runner clock a GitHub timestamp may be before it is
+# reported as FUTURE_DATED_* instead of being read as "not late yet".
+FUTURE_SKEW_SECONDS="${FUTURE_SKEW_SECONDS:-300}"
 
 now_epoch() { date -u +%s; }
 to_epoch() {
@@ -170,14 +173,23 @@ version_gt() {
 # "<tag>\t<date>" of the newest release of <repo>: the GitHub release when
 # the repo publishes them (release-please does), otherwise the newest
 # semver tag with its commit date, for repos that only tag. Fails when the
-# repo is unreachable or has no release-shaped tag at all.
+# repo has no release-shaped tag at all.
+#
+# Exit status keeps "absent" and "could not read" apart (gitops#1062): 0 = found,
+# 1 = the repo was read and genuinely has no release-shaped tag, 2 = the API
+# did not answer (rate limit, network, auth) or answered with something
+# unusable. Only 1 may be reported as a skip; 2 is its own non-skip verdict,
+# because a rate limit tends to hit several repos at once and a sweep that
+# reads every failure as "no release" goes quiet while reporting green.
 latest_release() {
-  local repo="$1" rel tags
+  local repo="$1" rel tags out
   if rel=$(gh api "repos/$ORG/$repo/releases/latest" 2>/dev/null); then
-    jq -r '[.tag_name, .published_at] | @tsv' <<<"$rel"
+    out=$(jq -r '[.tag_name, .published_at] | @tsv' <<<"$rel") || return 2
+    case "$out" in ''|null$'\t'*|*$'\t'null|*$'\t') return 2 ;; esac
+    printf '%s\n' "$out"
     return 0
   fi
-  tags=$(gh api --paginate "repos/$ORG/$repo/tags?per_page=100" --jq '.[].name' 2>/dev/null) || return 1
+  tags=$(gh api --paginate "repos/$ORG/$repo/tags?per_page=100" --jq '.[].name' 2>/dev/null) || return 2
   # Newest version wins, pre-release or not: a repo that only ever cuts
   # pre-releases is "released" at its newest one, and a stable tag ranks
   # above the pre-releases of the same version (version_gt).
@@ -190,7 +202,8 @@ latest_release() {
   done <<<"$tags"
   [ -n "$best" ] || return 1
   local date
-  date=$(gh api "repos/$ORG/$repo/commits/$best" --jq '.commit.committer.date' 2>/dev/null) || return 1
+  date=$(gh api "repos/$ORG/$repo/commits/$best" --jq '.commit.committer.date' 2>/dev/null) || return 2
+  [ -n "$date" ] && [ "$date" != "null" ] || return 2
   printf '%s\t%s\n' "$best" "$date"
 }
 
@@ -210,11 +223,21 @@ check_image() {
     printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tskip: release-drift: ignore\n' "$path" "$repo" "$deployed"
     return
   fi
-  local released released_at
-  if ! IFS=$'\t' read -r released released_at < <(latest_release "$repo"); then
-    printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tskip: no release tag under %s/%s\n' "$path" "$repo" "$deployed" "$ORG" "$repo"
-    return
-  fi
+  # Capture the status: `read < <(latest_release)` would drop it and turn an
+  # unreadable API into the same "no release tag" skip as a repo with none.
+  local released released_at lr lr_rc=0
+  lr=$(latest_release "$repo") || lr_rc=$?
+  case "$lr_rc" in
+    0) IFS=$'\t' read -r released released_at <<<"$lr" ;;
+    1)
+      printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tskip: no release tag under %s/%s\n' "$path" "$repo" "$deployed" "$ORG" "$repo"
+      return
+      ;;
+    *)
+      printf '%s\t%s\t%s\t-\t-\t-\t-\t-\tTAGS_UNREADABLE_%s/%s\n' "$path" "$repo" "$deployed" "$ORG" "$repo"
+      return
+      ;;
+  esac
 
   # A compare that cannot be read is a verdict of its own, never an "ok":
   # defaulting to zero commits would turn a rate limit or a renamed default
@@ -239,19 +262,38 @@ check_image() {
   if [ "$rp_run" = "failure" ]; then
     verdict="RELEASE_PLEASE_FAILED"
   fi
-  if [ "$count" -gt 0 ] && [ $((now - $(to_epoch "$oldest"))) -gt $((RELEASE_LAG_HOURS * 3600)) ]; then
-    if is_metadata_only_diff <<<"$cmp"; then
-      metadata_note="ok: metadata-only changes (${count} commits since ${oldest})"
-    else
-      verdict="${verdict:+$verdict,}UNRELEASED_${count}_commits_since_${oldest}"
+  # A timestamp ahead of now makes the lag negative, which never exceeds a
+  # threshold: a skewed runner clock or a forged committer date would hide
+  # the drift for good. Beyond a small skew allowance that is a failure of
+  # its own, and it also surfaces the skew (gitops#1062).
+  local age
+  if [ "$count" -gt 0 ]; then
+    age=$((now - $(to_epoch "$oldest")))
+    if [ "$age" -lt "-$FUTURE_SKEW_SECONDS" ]; then
+      verdict="${verdict:+$verdict,}FUTURE_DATED_COMMIT_${oldest}"
+    elif [ "$age" -gt $((RELEASE_LAG_HOURS * 3600)) ]; then
+      if is_metadata_only_diff <<<"$cmp"; then
+        metadata_note="ok: metadata-only changes (${count} commits since ${oldest})"
+      else
+        verdict="${verdict:+$verdict,}UNRELEASED_${count}_commits_since_${oldest}"
+      fi
     fi
   fi
-  if [ "$(strip_v "$deployed")" != "$(strip_v "$released")" ] \
-     && [ $((now - $(to_epoch "$released_at"))) -gt $((DEPLOY_LAG_HOURS * 3600)) ]; then
-    verdict="${verdict:+$verdict,}NOT_DEPLOYED_released_${released}_pinned_${deployed}"
+  if [ "$(strip_v "$deployed")" != "$(strip_v "$released")" ]; then
+    age=$((now - $(to_epoch "$released_at")))
+    if [ "$age" -lt "-$FUTURE_SKEW_SECONDS" ]; then
+      verdict="${verdict:+$verdict,}FUTURE_DATED_RELEASE_${released_at}"
+    elif [ "$age" -gt $((DEPLOY_LAG_HOURS * 3600)) ]; then
+      verdict="${verdict:+$verdict,}NOT_DEPLOYED_released_${released}_pinned_${deployed}"
+    fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$path" "$repo" "$deployed" "$released" "$released_at" "$count" "${oldest:--}" "$rp_run" "${verdict:-${metadata_note:-ok}}"
+}
+
+# Success iff a verdict does not fail the run. TAGS_UNREADABLE_* is not a skip.
+verdict_ok() {
+  case "$1" in ok|ok:*|skip:*) return 0 ;; *) return 1 ;; esac
 }
 
 report() {
@@ -263,7 +305,7 @@ report() {
   while IFS=$'\t' read -r path repo deployed released released_at count oldest rp verdict; do
     line="| \`${path#$SERVICES_DIR/}\` | $repo | $deployed | $released | $count | $rp | $verdict |"
     echo "$line" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-    case "$verdict" in ok|ok:*|skip:*) ;; *) failed=1; echo "::error::$repo: $verdict ($path)";; esac
+    verdict_ok "$verdict" || { failed=1; echo "::error::$repo: $verdict ($path)"; }
   done < <(pinned_images | while IFS=$'\t' read -r p r t; do check_image "$p" "$r" "$t"; done)
   return $failed
 }
@@ -400,6 +442,61 @@ GHSTUB
   out=$(PATH="$ghstub:$PATH" latest_release "paginated-fixture") || out="<failed>"
   rm -rf "$ghstub"
   [ "$out" = $'9.9.9\t2026-08-01T00:00:00Z' ] || { echo "self-test: paginated tag lookup got '$out'"; return 1; }
+  # Absent vs unreadable (gitops#1062). A repo that was read and has no
+  # release-shaped tag is exit 1 (a skip); an API that did not answer is exit
+  # 2 and a verdict that fails the run, never a skip.
+  local rc
+  ghstub=$(mktemp -d)
+  cat >"$ghstub/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+# Env-driven: STUB_RELEASE ("fail" or JSON), STUB_TAGS ("fail" or lines),
+# STUB_COMMIT_DATE ("fail" or a date), STUB_COMPARE ("fail" or JSON).
+argstr="$*"
+jqexpr=""; prev=""
+for a in "$@"; do [ "$prev" = "--jq" ] && jqexpr="$a"; prev="$a"; done
+emit() {
+  if [ "$1" = "fail" ]; then exit 1; fi
+  if [ -n "$jqexpr" ]; then printf '%s' "$1" | jq -r "$jqexpr"; else printf '%s\n' "$1"; fi
+}
+case "$argstr" in
+  *"releases/latest"*) emit "${STUB_RELEASE:-fail}" ;;
+  *"/tags?"*) if [ "${STUB_TAGS:-fail}" = "fail" ]; then exit 1; fi; printf '%s\n' "${STUB_TAGS}" ;;
+  *"/commits/"*) [ "${STUB_COMMIT_DATE:-fail}" = "fail" ] && exit 1; emit "$(jq -nc --arg d "${STUB_COMMIT_DATE:-fail}" '{commit:{committer:{date:$d}}}')" ;;
+  *"/compare/"*) emit "${STUB_COMPARE:-fail}" ;;
+  *"release-please.yml/runs"*) emit '{"workflow_runs":[{"conclusion":"success"}]}' ;;
+  *) exit 1 ;;
+esac
+GHSTUB
+  chmod +x "$ghstub/gh"
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=fail latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: unreadable tags should exit 2, got $rc"; rm -rf "$ghstub"; return 1; }
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=$'main\nlatest' latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 1 ] || { echo "self-test: a repo with no release tag should exit 1, got $rc"; rm -rf "$ghstub"; return 1; }
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=1.0.0 STUB_COMMIT_DATE=fail latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: an unreadable tag date should exit 2, got $rc"; rm -rf "$ghstub"; return 1; }
+  rc=0; (PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":null,"published_at":null}' latest_release r >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] || { echo "self-test: a malformed release should exit 2, got $rc"; rm -rf "$ghstub"; return 1; }
+  local vf verdict
+  vf=$(mktemp)
+  printf 'image:\n  repository: ghcr.io/mctlhq/svc\n  tag: "1.0.0"\n' >"$vf"
+  verdict=$(PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=fail check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  case "$verdict" in TAGS_UNREADABLE_*) ;; *) echo "self-test: unreadable tags should give TAGS_UNREADABLE, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
+  verdict_ok "$verdict" && { echo "self-test: TAGS_UNREADABLE must fail the run"; rm -rf "$ghstub" "$vf"; return 1; }
+  verdict=$(PATH="$ghstub:$PATH" STUB_RELEASE=fail STUB_TAGS=main check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  verdict_ok "$verdict" || { echo "self-test: a repo with no release tag should still skip, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1; }
+  # Future-dated timestamps (gitops#1062): a negative lag must fail, not pass.
+  # Clock fixed at 2026-09-10T00:00:00Z.
+  local rel_ok='{"tag_name":"1.0.0","published_at":"2026-09-01T00:00:00Z"}' cmp_future cmp_recent
+  cmp_future='{"commits":[{"commit":{"committer":{"date":"2030-01-01T00:00:00Z"},"message":"feat: x"}}],"files":[{"filename":"src/a.go"}]}'
+  cmp_recent='{"commits":[{"commit":{"committer":{"date":"2026-09-09T23:55:00Z"},"message":"feat: x"}}],"files":[{"filename":"src/a.go"}]}'
+  verdict=$(now_epoch() { to_epoch 2026-09-10T00:00:00Z; }; PATH="$ghstub:$PATH" STUB_RELEASE="$rel_ok" STUB_COMPARE="$cmp_future" check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  case "$verdict" in *FUTURE_DATED_COMMIT_2030-01-01T00:00:00Z*) ;; *) echo "self-test: a future-dated commit should be reported, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
+  verdict_ok "$verdict" && { echo "self-test: FUTURE_DATED_COMMIT must fail the run"; rm -rf "$ghstub" "$vf"; return 1; }
+  verdict=$(now_epoch() { to_epoch 2026-09-10T00:00:00Z; }; PATH="$ghstub:$PATH" STUB_RELEASE="$rel_ok" STUB_COMPARE="$cmp_recent" check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  [ "$verdict" = "ok" ] || { echo "self-test: a recent commit inside the lag window should be ok, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1; }
+  verdict=$(now_epoch() { to_epoch 2026-09-10T00:00:00Z; }; PATH="$ghstub:$PATH" STUB_RELEASE='{"tag_name":"1.1.0","published_at":"2030-01-01T00:00:00Z"}' STUB_COMPARE='{"commits":[]}' check_image "$vf" svc 1.0.0 | awk -F'\t' '{print $NF}')
+  case "$verdict" in *FUTURE_DATED_RELEASE_*) ;; *) echo "self-test: a future-dated release should be reported, got '$verdict'"; rm -rf "$ghstub" "$vf"; return 1 ;; esac
+  rm -rf "$ghstub" "$vf"
   echo "self-test: ok"
 }
 

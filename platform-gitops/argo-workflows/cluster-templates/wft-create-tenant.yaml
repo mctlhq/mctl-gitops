@@ -794,6 +794,13 @@ spec:
           # prose, so it gets a grammar rather than a character ban.
           if [ -n "$CREATOR_USER_ID" ]; then
             case "$CREATOR_USER_ID" in
+              [!A-Za-z0-9_]* )
+                # `@` and `-` are YAML indicators at the start of a plain
+                # scalar; a leading one makes the tenant values.yaml
+                # unparseable (gitops#999).
+                echo "❌ creator_user_id must start with a letter, digit or underscore; got: ${CREATOR_USER_ID}" >&2
+                exit 1
+                ;;
               *[!A-Za-z0-9._@-]* )
                 echo "❌ creator_user_id must match [A-Za-z0-9._@-]; got: ${CREATOR_USER_ID}" >&2
                 exit 1

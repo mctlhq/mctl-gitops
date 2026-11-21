@@ -122,6 +122,15 @@ spec:
         # explicit image tag override (empty = derived from git_tag)
       - name: autoscaling_enabled
         value: "false"
+      # Opt-in switch-off (gitops#1218). `autoscaling_enabled` cannot carry
+      # it: its default is "false" and every existing caller passes "false"
+      # on an ordinary deploy, so honouring it as "turn autoscaling off"
+      # would silently disable HPAs that were enabled earlier. "true" here
+      # sets autoscaling.enabled=false; with min_replicas=0 it also sets
+      # replicaCount=0 (stop the service). Conflicts with
+      # autoscaling_enabled=true and is rejected.
+      - name: autoscaling_disable
+        value: "false"
       - name: min_replicas
         value: "1"
       - name: max_replicas
@@ -347,7 +356,7 @@ spec:
           # Step 5: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
             dependencies: [commit]
-            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\""
+            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\" || \"{{workflow.parameters.autoscaling_disable}}\" == \"true\""
             template: patch-autoscaling-values
 
           - name: refresh-apps-appset
@@ -390,6 +399,10 @@ spec:
             value: "{{workflow.parameters.team_name}}"
           - name: PARAM_COMPONENT_NAME
             value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_AUTOSCALING_ENABLED
+            value: "{{workflow.parameters.autoscaling_enabled}}"
+          - name: PARAM_AUTOSCALING_DISABLE
+            value: "{{workflow.parameters.autoscaling_disable}}"
           - name: PARAM_MIN_REPLICAS
             value: "{{workflow.parameters.min_replicas}}"
           - name: PARAM_MAX_REPLICAS
@@ -438,6 +451,8 @@ spec:
           MIN="$PARAM_MIN_REPLICAS"
           MAX="$PARAM_MAX_REPLICAS"
           CPU="$PARAM_CPU_THRESHOLD"
+          ENABLED_PARAM="$PARAM_AUTOSCALING_ENABLED"
+          DISABLE_PARAM="$PARAM_AUTOSCALING_DISABLE"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
@@ -457,6 +472,19 @@ spec:
                 ;;
             esac
           done
+
+          # Exactly one direction per run (gitops#1218). Both asked for is a
+          # contradiction, not something to resolve by picking one.
+          case "${DISABLE_PARAM}" in
+            true)
+              if [ "${ENABLED_PARAM}" = "true" ]; then
+                echo "❌ autoscaling_enabled=true and autoscaling_disable=true contradict each other" >&2
+                exit 1
+              fi
+              MODE=disable
+              ;;
+            *) MODE=enable ;;
+          esac
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
@@ -485,20 +513,66 @@ spec:
           MAX="$(strip_zeros "$MAX")"
           CPU="$(strip_zeros "$CPU")"
           export MIN MAX CPU
-          yq eval -i '
-            .autoscaling.enabled = true |
-            .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
-            .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
-            .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
-          ' "${VALUES}"
+          if [ "$MODE" = "disable" ]; then
+            # Turn the HPA off without creating a block that was never there.
+            if [ "$(yq eval '.autoscaling | tag' "${VALUES}")" != "!!null" ]; then
+              yq eval -i '.autoscaling.enabled = false' "${VALUES}"
+            fi
+            # min_replicas=0 with autoscaling off is the supported way to
+            # stop a service: the Deployment renders replicas from
+            # replicaCount, which the HPA bounds never touched. Any other
+            # min_replicas leaves replicaCount alone.
+            if [ "$MIN" = "0" ]; then
+              yq eval -i '.replicaCount = 0' "${VALUES}"
+            fi
+          else
+            # An HPA cannot take minReplicas 0 (the API server rejects it
+            # without the HPAScaleToZero gate). Rejected here, after the
+            # leading-zero strip so "00" cannot slip past, rather than
+            # committed and left to fail at sync.
+            if [ "$MIN" = "0" ]; then
+              echo "❌ min_replicas=0 is not valid with autoscaling enabled; to stop the service set autoscaling_disable=true with min_replicas=0" >&2
+              exit 1
+            fi
+            yq eval -i '
+              .autoscaling.enabled = true |
+              .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
+              .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
+              .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
+            ' "${VALUES}"
+          fi
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-deploy"
           git add "${VALUES}"
           git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
-          git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
-          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
-          git push
+          if [ "$MODE" = "disable" ]; then
+            git commit -m "chore: disable autoscaling for ${TEAM}/${COMPONENT} (min_replicas=${MIN})"
+          else
+            git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          fi
+          PUSHED=false
+          for i in $(seq 1 5); do
+            sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+            if git push; then
+              PUSHED=true
+              break
+            fi
+            # A concurrent writer moved main. `git pull --rebase` must not run bare
+            # under `set -e`: a conflict would abort mid-rebase and skip the retry.
+            # Abort it so the next attempt starts from a clean worktree, and re-run
+            # the outgoing guard on the rebased commits (gitops#988, #999).
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "Rebase failed (attempt ${i}); retrying" >&2
+            fi
+          done
+          # Wrapping the rebase removed the `set -e` abort that used to stop an
+          # exhausted loop; without this check it would fall through as if pushed.
+          if [ "$PUSHED" != "true" ]; then
+            echo "git push failed after 5 attempts" >&2
+            exit 1
+          fi
       volumes:
         - name: deploy-key
           secret:
@@ -793,7 +867,7 @@ spec:
           for attempt in range(30):
               time.sleep(10)
               runs = api_request("GET",
-                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=5")
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=100")
               for run in runs.get("workflow_runs", []):
                   if run.get("name", "") == run_name or build_id in run.get("name", ""):
                       run_id = run["id"]
