@@ -83,6 +83,7 @@ def judge(text):
         ("scan failed, no report -> warning, not clean", "failure", None, lambda rc, so, sm: rc == 0 and "did not complete" in so and "NOT known to be clean" in so),
         ("scan failed with findings (blocking mode) -> reported as findings", "failure", sarif(2), lambda rc, so, sm: "::warning::Trivy found 2" in so and "did not complete" not in so),
         ("scan failed, zero findings -> crash, not clean", "failure", sarif(0), lambda rc, so, sm: "failed without findings" in so and "NOT known to be clean" in so and "no fixable" not in sm),
+        ("scan skipped but a stale empty report exists -> not clean", "skipped", sarif(0), lambda rc, so, sm: "did not complete" in so and "no fixable" not in sm),
         ("scan skipped -> warning, not clean", "skipped", None, lambda rc, so, sm: "did not complete" in so and "NOT known to be clean" in so),
         ("success but report missing -> warning", "success", None, lambda rc, so, sm: "missing or unreadable" in so and "finding(s)" not in so),
         ("success but report garbage -> warning", "success", "not json", lambda rc, so, sm: "missing or unreadable" in so and "finding(s)" not in so),
