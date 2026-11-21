@@ -2,6 +2,8 @@
 
 ## Context
 
+> **2026-11-19 scope refinement — necessity before implementation.** The existing [Codex/MCTL Bridge](https://github.com/mctlhq/mctl-claude-remote/blob/main/docs/chatgpt-orchestrator-bridge.md) already resumes a durable Codex thread, starts turns and returns answers to Claude slots. This spike must first demonstrate whether SIWC adds meaningful *incremental* value versus that running baseline. Preserve the primary #891 end-user BYOS hypothesis; a private-bridge NO-GO does not automatically imply a BYOS NO-GO. Do not equate a new Responses conversation with waking a particular standard ChatGPT web chat.
+
 Issue mctlhq/mctl-agents#891 asks a spike question. Can a normal MCTL user attach their own eligible ChatGPT subscription to the existing Go CLI (`mctlhq/mctl-gitops/cli/mctl`) through Sign in with ChatGPT (SIWC), so that MCTL can run eligible inference on that user's own plan with no API key? MCTL governance (tool policy, approvals, capability scope, evidence) must stay authoritative. The design must not depend on owner-only identity or infrastructure. The owner account may be used only for a manual live dogfood measurement. The spike ends with exactly one of these recommendations: `ADOPT_SIWC_MCTL_CLI`, `ADOPT_SIWC_CLI_PLUS_CODEX`, `ADOPT_SIWC_CLI_PLUS_THIN_ADAPTER`, `DEFER_COMMERCIAL_HOSTED_ACCESS`, `REJECT_SIWC_FOR_MCTL`.
 
 This matters for three reasons. The CLI already has a vetted browser OAuth flow: dynamic client registration, loopback redirect, PKCE S256, state and nonce checks, owner-only credential files, and lock-serialized rotation of refresh tokens (`cli/mctl/internal/auth/api.go`, `internal/auth/zitadel.go`). So SIWC can probably reuse proven patterns rather than add a new runtime. The only provider seam in mctl-agents (#824, `config/model_policy.py`) accepts `api: anthropic-messages` only, and it runs inside the shared `admins` cluster workers. So the spike has to settle where an OpenAI Responses credential belongs, and where it must never go. The deliverable is evidence plus a recommendation: a spike report, an isolated experiment and a fake-auth CI fixture. Production code changes to `cli/mctl` are follow-ups that the owner gates on the verdict.
@@ -27,6 +29,15 @@ Report and decision
 - WHEN the report compares the integration options THE SYSTEM SHALL score the 7 use cases in the issue on user experience, MCTL identity, inference identity, credential owner, runtime owner, quota owner, policy fit, operational burden and failure UX.
 - IF neither the direct-CLI path nor the CLI-plus-Codex path demonstrates a concrete need for a long-lived local process THEN THE SYSTEM SHALL record `NO_ADAPTER_NEEDED_FOR_SIWC` and shall not exercise the #746 thin adapter.
 
+Necessity and baseline gate (before an expensive SIWC prototype)
+- WHEN the investigation starts THE SYSTEM SHALL pin the existing Codex/MCTL Bridge source/release and record proven `thread/resume`, `turn/start`, response, correlation, recovery and credential boundaries using [bridge design](https://github.com/mctlhq/mctl-claude-remote/blob/main/docs/chatgpt-orchestrator-bridge.md), [bridge README](https://github.com/mctlhq/mctl-claude-remote/blob/main/plugin/mctl-bridge/README.md), and current code.
+- WHEN comparing options THE SYSTEM SHALL distinguish (A) the **already working authenticated Codex app-server + MCTL Bridge**, (B) user-controlled SIWC → direct Responses as a proposed thin RPC/BYOS path, and (C) ordinary billed API-key Responses as policy/cost reference only. An external SIWC token handoff to a *newly spawned* Codex process is a distinct optional test, not the existing Codex baseline.
+- THE SYSTEM SHALL score review/investigation, structured output, MCTL CLI BYOS and personal bridge against latency, correctness/tool-allowlist, history ownership, process/RSS overhead, credentials/refresh complexity, quota contention and supported deployment conditions. Measure using the same bounded fixtures, pin observed model/effort, and label non-equivalent models (no fabricated apples-to-apples claims).
+- THE SYSTEM SHALL capture dated primary evidence for SIWC plan-usage scope, five-hour/weekly/app limits where documented, relationship to Codex quota, paid credit risk, and eligibility for local/user-hosted vs shared/remote/commercial automation. Record unresolved items as `UNSOURCED` or `UNMEASURED`, never infer independent quota from OAuth.
+- THE SYSTEM SHALL report `bridge_incremental_value: YES | NO | UNPROVEN` **separately** from the existing issue-level SIWC outcomes, with concrete evidence, and explicitly label existing ChatGPT web-chat wake capability `SUPPORTED` only with documented, reproducible proof; otherwise `EXISTING_CHAT_WAKE_UNSUPPORTED`.
+- IF a supported policy path or differentiated benefit cannot be established at the initial gate THEN the research may deliver a defensible `REJECT_SIWC_FOR_MCTL` / `DEFER_COMMERCIAL_HOSTED_ACCESS` recommendation without exercising paid/live inference or building optional execution adapters. Mark omitted live/prototype evidence `UNMEASURED` and explain the gate that stopped it. **Do not** mistake a lack of private-bridge benefit for rejection of end-user BYOS without evaluating that primary hypothesis.
+- No login, live quota consumption, merge/deploy or downstream implementation approval is granted by this proposal update.
+
 Auth proof (experiment `experiments/siwc-cli-891/`)
 - WHEN a user runs the experiment's `auth openai login` THE SYSTEM SHALL perform documented dynamic client registration, run a loopback (127.0.0.1) authorization-code flow with PKCE S256, validate state before the code exchange, validate the ID-token nonce, and send a persisted opaque `ext_agent_host_id`.
 - WHEN the token exchange succeeds THE SYSTEM SHALL verify the ID token and confirm that the granted scopes include ChatGPT plan usage before storing anything.
@@ -51,6 +62,9 @@ CI
 - WHEN the spike's CI runs THE SYSTEM SHALL use fake OAuth, model-discovery and Responses servers only, and shall need no secrets.
 
 ## Out of scope
+
+- Calling an arbitrary existing standard ChatGPT web conversation through undocumented RPC, browser/cookie/token extraction or session impersonation. SIWC Responses creates a separate client-managed context.
+- Building a duplicate Codex bridge or reusing the platform owner's OAuth grant for shared tenant work.
 
 - Changing `mctlhq/mctl-gitops/cli/mctl` itself. That is a follow-up after the owner records the verdict.
 - An owner-only inference path, or using the owner's plan for tenant or user work.
