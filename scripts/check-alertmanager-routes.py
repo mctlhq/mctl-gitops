@@ -45,8 +45,8 @@ an explicit CASES entry.
 
 Run with --selftest to prove the checks still fail on a broken tree: it removes
 the critical route, the dedupe exclusion, the trailing mctl-agent route, an
-alerting-path route and a paged twin, and buries the trailing route, asserting
-each is caught.
+alerting-path route, a paged twin and the mctl_agent_self route (#1288), and
+buries the trailing route, asserting each is caught.
 
 Run: python3 scripts/check-alertmanager-routes.py [--selftest] [--config FILE]
   --config FILE  test an already-rendered Alertmanager config instead of
@@ -196,6 +196,30 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      {"alertname": "ServiceDown", "severity": "warning",
       "job": "vmsingle-monitoring-victoria-metrics-k8s-stack"},
      ["mctl-agent"]),
+    ("ADR-008 worker alert MctlAgentsWorkerMetricsMissing pages the operator only (#1288)",
+     {"alertname": "MctlAgentsWorkerMetricsMissing", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram"]),
+    ("ADR-008 worker alert MctlAgentsWorkerActivitySlotsExhausted pages the operator only (#1288)",
+     {"alertname": "MctlAgentsWorkerActivitySlotsExhausted", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram"]),
+    ("ADR-008 worker alert MctlAgentsControlQueueScheduleToStartHigh pages the operator only (#1288)",
+     {"alertname": "MctlAgentsControlQueueScheduleToStartHigh", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram"]),
+    ("ADR-008 worker alert MctlAgentsExecWorkerMetricsMissing pages the operator only (#1288)",
+     {"alertname": "MctlAgentsExecWorkerMetricsMissing", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram"]),
+    ("a future alert carrying mctl_agent_self pages the operator only (#1288)",
+     {"alertname": "MctlAgentSomethingNew", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram"]),
+    ("self-labelled alert with an explicit route keeps it (#1288)",
+     {"alertname": "MctlAgentMetricsAbsent", "severity": "warning",
+      "mctl_agent_self": "true"},
+     ["telegram", "mctl-agent-paged"]),
     # RedLoop alerts are DAST stop conditions (docs/runbooks/redloop-gate4-roe.md).
     # They must reach the operator and must NOT reach mctl-agent, which would
     # try to remediate the very target under test. Both directions are
@@ -401,6 +425,9 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
     def drop_meta(cfg):
         del routes(cfg)[matcher_index(cfg, "MctlAgentMetricsAbsent")]
 
+    def drop_self_route(cfg):
+        del routes(cfg)[matcher_index(cfg, "mctl_agent_self")]
+
     def drop_paged_twin(cfg):
         del routes(cfg)[matcher_index(cfg, 'alertname =~ "SharedPg.*"',
                                       "mctl-agent-paged")]
@@ -420,6 +447,8 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
          "last child route"),
         ("alerting-path route removed", drop_meta, "MctlAgentMetricsAbsent"),
         ("paged twin removed", drop_paged_twin, "plain mctl-agent receiver"),
+        ("mctl_agent_self route removed", drop_self_route,
+         "MctlAgentsWorkerMetricsMissing"),
     ]:
         cfg = copy.deepcopy(config)
         mutate(cfg)
@@ -429,7 +458,7 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
                   f"{expect!r}. Got: {got}", file=sys.stderr)
             failed = 1
     if not failed:
-        print("check-alertmanager-routes.py self-test: all 6 mutations caught")
+        print("check-alertmanager-routes.py self-test: all 7 mutations caught")
     return failed
 
 

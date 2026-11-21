@@ -20,14 +20,12 @@
 #    them: mctl-dev-loop (control), mctl-dev-loop-exec (execution),
 #    mctl-dev-loop-implement (admission, mctl-agents#395).
 #
-# Routing, stated honestly (corrected 2026-09-19). The four ADR-008 rules
-# carry mctl_agent_self="true"; an earlier version of this comment claimed
-# the AlertManager route drops that label so mctl-agent does not ticket
-# itself. No route in bootstrap/templates/observability/monitoring.yaml
-# matches that label — those four fall through to the root mctl-agent
-# receiver. Re-routing them is tracked separately. The admission rules
-# below (MctlAgentsImplement*) are routed to a human by an explicit
-# alertname matcher in monitoring.yaml, because the remedy for each is a
+# Routing (#1288). The four ADR-008 rules carry mctl_agent_self="true", and
+# bootstrap/templates/observability/monitoring.yaml has a route on that label:
+# those alerts go to Telegram only, with no mctl-agent ticket, because the
+# loop that serves incidents cannot fix its own worker. The route sits after
+# the alertname routes, so the admission rules below (MctlAgentsImplement*),
+# which have an explicit alertname matcher, keep that one. Their remedy is a
 # values edit (N, or the pod) that only a person can make.
 #
 # The scheduled-dispatch group (mctl-agents#559/#560/#561, issue #1593) is

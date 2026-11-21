@@ -1148,6 +1148,21 @@ spec:
                       - alertname = "ServiceDown"
                       - job =~ ".*(vmalert|alertmanager).*"
                       - severity != "critical"
+                  # Self-referential alerts (#1288). Rules about mctl-agent's
+                  # own pipeline (the mctl-agents Temporal workers, the
+                  # cleanup loop, the OTel collector) carry
+                  # mctl_agent_self="true". The loop that serves incidents
+                  # cannot fix its own outage, so these page a human and open
+                  # no ticket. Until now no route matched the label, so it was
+                  # inert and a stopped worker went to mctl-agent only.
+                  # Placed after every alertname route on purpose: an alert
+                  # that already has an explicit route (the Lifecycle.* and
+                  # MctlAgentsImplement.* ones, MctlAgentMetricsAbsent with
+                  # its paged twin) keeps it, and this one catches the rest,
+                  # including the next self-labelled alert.
+                  - receiver: telegram
+                    matchers:
+                      - mctl_agent_self = "true"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"

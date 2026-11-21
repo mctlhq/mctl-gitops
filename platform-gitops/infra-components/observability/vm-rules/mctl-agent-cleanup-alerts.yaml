@@ -9,8 +9,8 @@
 # tickets that mctl-agent then attempts to self-heal. To prevent the
 # self-loop these rules use severity=info plus the `mctl_agent_self`
 # label which the AlertManager route at
-# bootstrap/templates/observability/monitoring.yaml drops (or routes to a
-# dedicated channel — see TODO at the bottom of this file).
+# bootstrap/templates/observability/monitoring.yaml sends to the telegram
+# receiver, never to the mctl-agent webhook.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -140,9 +140,3 @@ spec:
               update in `(*Poller).poll()` is failing (check for
               "poller: open-ticket breakdown failed" log lines). Without
               this metric the cleanup-track dashboard is blind.
-
-# TODO once the `mctl_agent_self: "true"` AlertManager route is wired in
-# bootstrap/templates/observability/monitoring.yaml: these alerts should
-# bypass the route that fires `POST /api/v1/alerts` back to mctl-agent,
-# either dropping them entirely (since they are about mctl-agent itself)
-# or routing them to a separate Telegram channel for the operator.

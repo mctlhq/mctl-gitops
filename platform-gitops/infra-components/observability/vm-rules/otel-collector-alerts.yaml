@@ -8,9 +8,9 @@
 # configured.
 #
 # Every rule carries mctl_agent_self: "true" so the AlertManager route in
-# bootstrap/templates/observability/monitoring.yaml drops it before it reaches
-# the mctl-agent webhook receiver -- without that label these alerts would open
-# incidents against the platform's own collector.
+# bootstrap/templates/observability/monitoring.yaml routes it to the telegram
+# receiver instead of the mctl-agent webhook receiver -- without that label
+# these alerts would open incidents against the platform's own collector.
 #
 # INVARIANT: an `increase(...[W])` lookback must be SHORTER than the rule's
 # `for: H`, never longer. With W > H a single scrape's worth of increase keeps
