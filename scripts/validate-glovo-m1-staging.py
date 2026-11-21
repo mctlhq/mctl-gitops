@@ -88,6 +88,13 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         "  name: glovo-c2-migrator-db-creds",
         "    name: glovo-c2-migrator-db-creds",
         "        key: platform/mctl-glovo/database-migrator",
+        # Their namespaced store in platform-db (mctlhq/mctl-gitops#2759).
+        "    name: glovo-db-creds",
+    }),
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml": frozenset({
+        "  name: glovo-db-creds",
+        '          role: "glovo-db-creds"',
+        "            name: glovo-db-creds",
     }),
     # Step Z: the approval page client in zitadel-iac.
     "platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf": frozenset({
@@ -140,11 +147,34 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '              - /glovo',
         '            GLOVO_BASKET_UI_ENABLED: "true"',
         '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # C2 kill switch caller (mctlhq/mctl-glovo#11): the dark env of the
+        # control-caller credential wiring, gated by apiC2Control.
+        '            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"',
+        '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"',
+        '            GLOVO_C2_KILLSWITCH_ENABLED: "true"',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): mctl-api's
+        # consent routes and the shared cohort size, behind apiConsent.
+        '            {{- if .Values.mctlGlovo.apiConsent }}',
+        '            GLOVO_CONSENT_ENABLED: "true"',
+        '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
+        '            - mctl-api-glovo-consent',
     }),
     # The host stays reserved with no owner: since 2026-11-15 it is served
     # outside the cluster, and mctl-api no longer routes it.
+    # C2 kill switch caller: the refresher image repository (the tag is a
+    # separate line and never matches).
     "platform-gitops/bootstrap/values.yaml": frozenset({
         '  glovo.mctl.ai: []',
+        '    repository: ghcr.io/mctlhq/mctl-glovo',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the public host
+        # of the route (an owner decision) behind the ingress switch.
+        '  host: glovo.mctl.ai',
+        # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+        "mctlGlovo:",
+    }),
+    # C2 kill switch caller: the ExternalSecret of the control-caller key.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml": frozenset({
+        '        key: platform/mctl-glovo/control-caller',
     }),
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
         '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
@@ -152,6 +182,16 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '        key: platform/mctl-api/glovo-runtime-database',
         '    name: mctl-api-glovo-runtime-db',
         '  name: mctl-api-glovo-runtime-db',
+    }),
+    # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the consent
+    # reader identity of mctl-api, behind apiConsent.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-consent.yaml": frozenset({
+        '{{- if .Values.mctlGlovo.apiConsent }}',
+        '  name: mctl-api-glovo-consent',
+        '    name: mctl-api-glovo-consent',
+        '        GLOVO_CONSENT_SERVICE_PROVIDER: "{{ `{{ .service_provider }}` }}"',
+        '        GLOVO_CONSENT_SERVICE_SUBJECT: "{{ `{{ .service_subject }}` }}"',
+        '        key: platform/mctl-api/glovo-consent',
     }),
     # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
     "platform-gitops/argo-workflows/config/image-names.txt": frozenset({
@@ -182,6 +222,38 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
     "platform-gitops/release-bindings.yaml": frozenset({
         "  ghcr.io/mctlhq/mctl-glovo: mctlhq/mctl-glovo",
     }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml": frozenset({
+        "This file is the ONLY path the leak guard (scripts/validate-glovo-m1-staging.py,",
+        '{{- $app := "mctl-glovo" }}',
+        "{{- $v := .Values.mctlGlovo }}",
+        '{{- $rt := "glovo_c2_runtime" }}',
+        '{{- $tsTag := "tag:glovo-egress" }}',
+        "  repository: ghcr.io/mctlhq/mctl-glovo",
+        '        GLOVO_MIGRATE_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_C2_AUDIT_KEY: "{{ `{{ .audit_key }}` }}"',
+        '        GLOVO_C2_ALLOWED_PRINCIPALS: "{{ `{{ .allowed_principals }}` }}"',
+        '        GLOVO_C2_CONTROL_SUBJECTS: "{{ `{{ .subjects }}` }}"',
+        '        GLOVO_C2_CONTROL_AUDIENCE: "{{ `{{ .audience }}` }}"',
+        '          command: ["glovo-migrate"]',
+        '            - {name: GLOVO_C2_ENABLED, value: "true"}',
+        '            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}',
+        '            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}',
+        '            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}',
+        '            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}',
+        '            - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}',
+        "            - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}",
+        '            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}',
+        '            - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}',
+        '            - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}',
+        '            - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}',
+        '            - {name: GLOVO_C2_CONTROL_JWKS_URL, value: "https://auth.mctl.ai/oauth/v2/keys"}',
+    }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml": frozenset({
+        '      "mctl-glovo"',
+    }),
 }
 
 # Exact files whose PATH may match LEAK (the name check only). This is not an
@@ -196,6 +268,14 @@ ALLOWED_PATHS: frozenset[str] = frozenset({
 })
 
 
+# Files whose ALLOWED_LINES entries belong to the mctl-api control-caller
+# wiring (the C2 kill switch client), so the self-test can prove each of them.
+C2_API_CONTROL_FILES: tuple[str, ...] = (
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+    "platform-gitops/bootstrap/values.yaml",
+)
+
 # Files whose ALLOWED_LINES entries belong to the C2 cluster service, so the
 # self-test can prove each of them (mctlhq/mctl-glovo#11). Part 1: the
 # database, the peer policies and the release wiring.
@@ -203,11 +283,16 @@ C2_SERVICE_FILES: tuple[str, ...] = (
     "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/databases.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml",
     "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml",
     "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml",
     "platform-gitops/argo-workflows/config/image-names.txt",
     "platform-gitops/release-bindings.yaml",
+    # Part 2: the namespace template, its AppProject destination and switches.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml",
+    "platform-gitops/bootstrap/values.yaml",
 )
 
 
@@ -579,6 +664,41 @@ def selftest() -> int:
     ):
         add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
 
+    # The control-caller entries, proven on the real ALLOWED_LINES one file at
+    # a time and both ways (listed line passes in its own file only; an
+    # unlisted sibling, a whitespace change and the same line elsewhere refuse).
+    unlisted_api_files: list[str] = []
+    for rel in C2_API_CONTROL_FILES:
+        listed = sorted(x for x in ALLOWED_LINES.get(rel, frozenset()) if LEAK.search(x))
+        if not listed:
+            unlisted_api_files.append(rel)
+            continue
+        for one in listed:
+            add(f"api control entries: {rel}: {one.strip()[:40]}: a listed line passes", 0,
+                put(rel, f"x: 1\n{one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: an unlisted sibling refuses", REFUSED,
+                put(rel, f"{one}\n  glovo_unlisted_sibling: 1\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: changed whitespace refuses", REFUSED,
+                put(rel, f" {one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: the same line in another file refuses", REFUSED,
+                put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
+
+    # The exact lines the wiring needs are pinned, so dropping one (or the
+    # whole entry) fails here and not only on the real tree.
+    api_pins = (
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_KILLSWITCH_ENABLED: "true"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+         '        key: platform/mctl-glovo/control-caller'),
+    )
+    missing_pins = [(f, ln) for f, ln in api_pins if ln not in ALLOWED_LINES.get(f, frozenset())]
+    for f, ln in missing_pins:
+        print(f"FAIL api control pin: {f}: {ln.strip()} is not in ALLOWED_LINES", file=sys.stderr)
+    failed = len(unlisted_api_files) + len(missing_pins)
+    for rel in unlisted_api_files:
+        print(f"FAIL api control entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
     # The C2 cluster service entries (mctlhq/mctl-glovo#11), proven on the real
     # ALLOWED_LINES, one file at a time and both ways: the listed line passes
     # in its own file only, and an unlisted sibling, a whitespace change and
@@ -597,7 +717,7 @@ def selftest() -> int:
         add(f"c2 entries: {rel}: the same line in another file refuses", REFUSED,
             put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
 
-    failed = len(unlisted_c2_files)
+    failed += len(unlisted_c2_files)
     for rel in unlisted_c2_files:
         print(f"FAIL c2 entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
     pinned = ALLOWED_PATHS == {svc}

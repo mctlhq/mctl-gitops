@@ -40,8 +40,40 @@ version_holds:
     issue: mctlhq/mctl-gitops#2528
     file: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
     repository: ghcr.io/mctlhq/mctl-api
-    # 4.155.0 carries unapproved defaults (mctlhq/mctl-api#934, owner hold).
+    # Standing policy, not a one-off incident hold: every mctl-api version
+    # reaches production only on an owner GO for that exact version. It is
+    # enforced here because gitops-bump and release-deploy write the tag
+    # without a PR, so this check is the only one on that path. It was set at
+    # 4.155.0 (mctlhq/mctl-gitops#2528), which carried defaults the owner had
+    # not approved (mctlhq/mctl-api#934). That reason has been resolved, but
+    # the hold stays. While ledger.mode is shadow the GO is an allow record
+    # (agent-written text, not proof of a human decision), written when the
+    # GO is given and before the release PR merges; in enforce mode the GO is
+    # the MFA-backed release-ledger decision (mctlhq/mctl-api#1022 S4) and
+    # allow records are no longer read.
     held_from: "4.155.0"
+    # Release ledger (mctlhq/mctl-api#1022 S4). release-deploy's ledger-gate
+    # job reads the MFA-backed decisions mctl-api keeps for exactly the image
+    # it built.
+    #   shadow:  the allow records below decide; the ledger verdict is only
+    #            reported in the run summary.
+    #   enforce: the ledger decides. A bump needs an approved decision for the
+    #            exact digest (the job waits up to wait_minutes for it), the
+    #            allow records are no longer read, gitops-bump.yaml cannot
+    #            bump this image at all, and a pull request may change its tag
+    #            only as bump_pr_author from a bump_pr_branch_prefix branch.
+    # Enforced since 2026-11-18 (owner decision), after both prerequisites
+    # held: (1) a live run showed ledger=allow for an approved release
+    # (4.167.0, release-deploy run 44195491155, release-gate-watch run
+    # 44198826314) and (2) release-gate-watch reads the ledger after each
+    # push, in its own push-only job (S4b, #2774 and #2778). To fall back,
+    # set mode: shadow in a reviewed PR; the allow records below are then
+    # read again, so add one for the version being released.
+    ledger:
+      mode: enforce
+      wait_minutes: 60
+      bump_pr_author: mctl-gitops-pr[bot]
+      bump_pr_branch_prefix: release-bump/
     # Record shape, added in a reviewed PR once the owner grants the release:
     #   - version: "4.155.0"
     #     grant: mctlhq/mctl-gitops#NNNN   # where the GO was given
@@ -317,6 +349,32 @@ version_holds:
       # mctlhq/mctl-api#1103.
       - version: "4.166.0"
         grant: mctlhq/mctl-gitops#2753
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Owner GO in chat (2026-11-17) for 4.167.0: rollback_deployment behind
+      # an owner grant (mctl-api ea0632f, 8780f98) and the rollback apply fix
+      # (46694e8). Also the first live run of the release ledger in shadow
+      # mode (mctlhq/mctl-api#1022 S4). Covers only the 4.167.0 tag of release
+      # PR mctlhq/mctl-api#1107.
+      - version: "4.167.0"
+        grant: mctlhq/mctl-gitops#2776
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Owner GO in chat (2026-11-18) for 4.168.0: deploy approval page only
+      # (links for commits and preview host mctl-api#1109, wide card and
+      # correct target wording mctl-api#1115, release page says the ledger is
+      # enforced mctl-api#1117). No API or workflow behaviour changes. Covers
+      # only the 4.168.0 tag of release PR mctlhq/mctl-api#1113.
+      - version: "4.168.0"
+        grant: mctlhq/mctl-gitops#2787
+        approved_by: mashkovd
+        expires: 2026-12-01
+      # Owner GO in chat (2026-11-18) for 4.169.1: Google sign-in fix
+      # (mctl-api#1114, reads the Google userinfo under rawInformation.User) and
+      # the strict decide-link binding (mctl-api#1122). Covers only the 4.169.1
+      # tag of release PR mctlhq/mctl-api#1123.
+      - version: "4.169.1"
+        grant: mctlhq/mctl-gitops#2807
         approved_by: mashkovd
         expires: 2026-12-01
 

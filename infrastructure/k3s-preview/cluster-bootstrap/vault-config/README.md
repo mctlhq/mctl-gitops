@@ -242,51 +242,6 @@ work here, as it only fires from the default branch.
 `vault policy delete github-actions-repo-pat`. No workflow change is needed —
 `build-image.yaml` falls back to the GitHub App token on its own, which is
 exactly what it did for the whole period this role did not exist.
-`auth/jwt` also carries `erpact-images` (below), which has no fallback:
-disabling the mount stops those builds.
-
-### erpact-images (GitHub OIDC JWT)
-
-`erpact-images.yaml` builds the ERPact copy's images and pushes them to the
-Forgejo registry `git.mctl.ai/erpact/*`. It logs into `auth/jwt` as role
-`erpact-images` and can read exactly `secret/platform/forgejo/erpact-images`:
-
-| Key | Content |
-|---|---|
-| `user` | the Forgejo bot account (`erpact-ci`) |
-| `source-token` | its token with scope `read:repository`; the only credential the build sees |
-| `registry-token` | its token with scope `write:package`; used by the push step only |
-
-The role is bound to the workflow file **on main** (`@refs/heads/main`, not
-`@*` as `github-actions` is): a modified copy of the workflow dispatched from
-another branch gets no token. The workflow has no fallback, so a failed
-login is a failed run. The account and its teams are declared in the Forgejo
-reconcile manifest (docs/runbooks/forgejo.md, "Container registry").
-
-One-time apply (Vault admin token):
-
-```bash
-vault policy write github-actions-erpact-images \
-  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-github-actions-erpact-images.hcl
-
-vault write auth/jwt/role/erpact-images -<<'EOF'
-{
-  "role_type": "jwt",
-  "user_claim": "sub",
-  "bound_audiences": "https://github.com/mctlhq",
-  "bound_claims_type": "string",
-  "bound_claims": {
-    "repository": "mctlhq/mctl-gitops",
-    "job_workflow_ref": "mctlhq/mctl-gitops/.github/workflows/erpact-images.yaml@refs/heads/main"
-  },
-  "policies": ["github-actions-erpact-images"],
-  "ttl": "10m"
-}
-EOF
-```
-
-**Rollback:** `vault delete auth/jwt/role/erpact-images` plus
-`vault policy delete github-actions-erpact-images`.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
@@ -453,6 +408,7 @@ naming another tenant's `remoteRef.key` is enough to read it.
 | `vault-backend` | ClusterSecretStore | `external-secrets` | `secret/data/platform/*` only |
 | `tenant-store` (per tenant ns) | SecretStore | `eso-tenant-{name}` | `secret/data/teams/{name}/*` |
 | `cnpg-db-creds` (platform-db) | SecretStore | `cnpg-db-creds` | `secret/data/teams/+/+/database` |
+| `glovo-db-creds` (platform-db) | SecretStore | `glovo-db-creds` | `secret/data/platform/mctl-glovo/database-*` |
 
 **Never add `teams/*` back to `external-secrets-read`** — that single line is
 what made every tenant's secrets readable from every other tenant namespace.
@@ -487,6 +443,173 @@ Verify a tenant cannot reach another tenant's prefix:
 ```bash
 vault token capabilities <tenant-token> secret/data/teams/<other-tenant>/x  # → deny
 ```
+
+### Glovo C2 ESO roles
+
+The Glovo C2 service's keys under `secret/platform/mctl-glovo/*` are read through
+namespaced SecretStores with their own Vault roles, never through `vault-backend`
+(mctlhq/mctl-gitops#2759). `vault-backend` and `argo-workflow-teams-rw` both deny
+the prefix once the last step below is done.
+
+| Store | Kind | Vault role | Policy | Scope |
+|---|---|---|---|---|
+| `mctl-glovo-vault` (mctl-glovo ns) | SecretStore | `eso-mctl-glovo` (SA `mctl-glovo-eso`) | `eso-mctl-glovo` | `secret/data/platform/mctl-glovo/*` |
+| `glovo-db-creds` (platform-db ns) | SecretStore | `glovo-db-creds` (SA `glovo-db-creds`) | `glovo-db-creds-read` | `secret/data/platform/mctl-glovo/database-*` |
+| `mctl-api-control-vault` (mctl-api ns) | SecretStore | `eso-mctl-api-control` (SA `mctl-api-control-eso`) | `eso-mctl-api-control` | `secret/data/platform/mctl-glovo/control-caller` only |
+
+The second store exists because the CNPG managed-role passwords are synced into
+platform-db (`glovo-c2-runtime-db-creds`, `glovo-c2-migrator-db-creds` in
+`infra-components/data/cnpg/shared/secrets.yaml`), so the service's own namespace
+store cannot serve them. It follows the `cnpg-db-creds` pattern exactly; the policy
+grants only the two `database-*` keys, not the signing keys or the control-caller.
+
+Policy files: `vault-policy-eso-mctl-glovo.hcl`, `vault-policy-glovo-db-creds-read.hcl`,
+`vault-policy-eso-mctl-api-control.hcl` (read on `secret/data/...`, read and list on
+`secret/metadata/...`).
+
+```bash
+vault policy write eso-mctl-glovo vault-policy-eso-mctl-glovo.hcl
+vault write auth/kubernetes/role/eso-mctl-glovo \
+  bound_service_account_names=mctl-glovo-eso \
+  bound_service_account_namespaces=mctl-glovo \
+  policies=eso-mctl-glovo ttl=1h
+
+vault policy write glovo-db-creds-read vault-policy-glovo-db-creds-read.hcl
+vault write auth/kubernetes/role/glovo-db-creds \
+  bound_service_account_names=glovo-db-creds \
+  bound_service_account_namespaces=platform-db \
+  policies=glovo-db-creds-read ttl=1h
+
+vault policy write eso-mctl-api-control vault-policy-eso-mctl-api-control.hcl
+vault write auth/kubernetes/role/eso-mctl-api-control \
+  bound_service_account_names=mctl-api-control-eso \
+  bound_service_account_namespaces=mctl-api \
+  policies=eso-mctl-api-control ttl=1h
+```
+
+No `audience` is set, same as the `eso-tenant-*` roles. Whoever runs these writes
+should first compare any existing live policy or role with the repo file and not
+overwrite a different one blindly.
+
+**Order matters.** Two policies deny the prefix: `external-secrets-read` (the
+`vault-backend` identity) and `argo-workflow-teams-rw` (identity `argo-workflow`).
+Applying either early cuts off every consumer still on `vault-backend`. Order:
+
+1. Create both policies and both roles (above).
+2. Merge this PR and the namespace PR (mctlhq/mctl-gitops#2736); Argo CD syncs the
+   platform-db SecretStore and the switched ExternalSecrets. The `mctl-glovo`
+   namespace, SecretStore and ExternalSecrets render only while Glovo is deployed
+   (`deploy=true`); while it is dark they do not exist.
+3. Verify every ExternalSecret that reads the prefix is `Ready` through the new
+   stores (`kubectl get externalsecret -A`, status only, never Secret data):
+   `platform-db` -> `glovo-db-creds` always, and `mctl-glovo` -> `mctl-glovo-vault`
+   whenever that namespace exists.
+4. Write BOTH `external-secrets-read` and `argo-workflow-teams-rw` from the repo
+   files with `glovo-eso-vault-setup.sh deny` (operator script, kept outside the
+   repo). Its read-only pre-flight observes the namespace explicitly:
+   - `mctl-glovo` observed `NotFound` (Glovo dark): it requires only the two C2
+     ExternalSecrets in platform-db (`glovo-c2-runtime-db-creds`,
+     `glovo-c2-migrator-db-creds`), both on `glovo-db-creds` and `Ready`;
+   - `mctl-glovo` exists: its ExternalSecrets must also be present, on
+     `mctl-glovo-vault` and `Ready`;
+   - any other failure to observe (timeout, forbidden, unreachable) aborts.
+   In both states no ExternalSecret or ClusterExternalSecret anywhere may read the
+   prefix through a ClusterSecretStore. The drift guard compares each live policy
+   with its repo file per path block (path to capability set, through the parser in
+   `scripts/check-vault-policy-capabilities.py`): the only differences allowed are
+   added `deny` blocks (the prefix denies; the `writers/*` denies that the live
+   `external-secrets-read` still lacks); a live block absent from the repo file, or
+   present with different capabilities, aborts. The structural diff is printed
+   before anything is written, and the write needs `CONFIRM=yes` or an interactive
+   `yes` on a tty (no tty and no `CONFIRM=yes` refuses).
+
+The deny may be applied while Glovo is dark, and applying it BEFORE Glovo's own
+deploy flips is the intended safe order: the deny then lands while no consumer of
+the prefix exists outside the two new stores. The `mctl-glovo` role and store are
+validated at the first deploy.
+
+Pre-deploy checklist (before flipping `deploy=true` for Glovo): the `eso-mctl-glovo`
+role and policy exist (`glovo-eso-vault-setup.sh verify`); after the sync, confirm the
+`mctl-glovo` ExternalSecrets go `Ready` through `mctl-glovo-vault`. If they do not,
+fix the role or store before anything depends on them; the deny is already in place,
+so there is no fallback to `vault-backend`.
+
+`tests/test_no_glovo_prefix_on_vault_backend.py` (CI, `vault-policy-check`) fails if
+any ExternalSecret in the repository, plain YAML or Helm template, reads the prefix
+through a ClusterSecretStore, so the deny cannot silently break a consumer again.
+
+**The `argo-workflow-teams-rw` deny and what it does not do.** The live role
+`argo-workflow` (SA `argo-workflow-sa` in `argo-workflows`) carries three policies:
+`argo-workflow-platform-rotator`, `argo-workflow-provisioner` and
+`argo-workflow-teams-rw`. The last one's `platform/*` grant could read, overwrite and
+delete the prefix; the explicit deny removes that. The other platform-path policies do
+not reach the prefix directly (`github-actions-repo-pat`: `teams/+/+/repo-pat`; `argo-workflow-platform-rotator`:
+`github-app`, `mctl-agent/tokens`; `backstage-teams-rw` and `provisioning`:
+`platform/teams/*` only).
+
+An earlier note here said tenant SSO users can write WorkflowTemplates. A live check
+does not corroborate it: `kubectl auth can-i create workflows`, `workflowtemplates`,
+`clusterworkflowtemplates` and `cronworkflows` in `argo-workflows` is `no` for a
+tenant SSO user and for the `sso-team-*` ServiceAccounts, which are bound to a
+view role. The claim was withdrawn (mctlhq/mctl-gitops#2759).
+
+**Platform trust boundary (open, accepted until the owner decides otherwise).** The
+prefix is unreadable outside Glovo's stores except for the platform-admin-equivalent
+identities listed here:
+
+- Vault role `argo-workflow` (SA `argo-workflow-sa`, ns `argo-workflows`):
+  `argo-workflow-provisioner` can create and update `sys/policies/acl/tenant-*` and
+  `eso-tenant-*`, and `auth/kubernetes/role/eso-tenant-*` and `argo-workflow-tenant-*`.
+  A holder can mint a policy that reads `platform/mctl-glovo/*`, bind a role to a
+  ServiceAccount it controls and read the prefix; the deny in
+  `argo-workflow-teams-rw` does not stop that, because the policy is new. In practice
+  `argo-workflow == Vault admin-equivalent`. Platform actors that can run as that SA:
+  SSO group admins (`argo-workflows-admin`), the `mctl-api` ServiceAccount through
+  RoleBinding `mctl-api-workflow-submitter` (create workflows in `argo-workflows`),
+  and cluster-admin. Narrowing `argo-workflow-provisioner` is an owner decision and is
+  not done here.
+- `vault-human-auth-iac`: admin-equivalent, platform-only.
+- The ESO controller: its ClusterRole `external-secrets-controller` can create
+  `serviceaccounts/token` cluster-wide with no `resourceNames`. Anyone who can create
+  a SecretStore in `mctl-glovo` or `platform-db` that names the SA reads the prefix.
+  The gate is review of PRs to mctl-gitops, and tenant values must never choose the
+  destination namespace `mctl-glovo` or `platform-db`.
+
+**mctl-api control-caller store.** `platform/mctl-glovo/control-caller` is read by
+mctl-api for the kill switch (mctlhq/mctl-gitops#2742) through its own namespaced
+store, `mctl-api-control-vault` in the `mctl-api` namespace, and not through
+`vault-backend` (denied) and not through the service's `mctl-glovo-vault` (a
+different namespace). Its identity is separate from everything above: ServiceAccount
+`mctl-api-control-eso` (used only by ESO token requests, `automountServiceAccountToken:
+false`, no pod runs as it) bound to Vault role `eso-mctl-api-control`, whose policy
+`eso-mctl-api-control` reads exactly `secret/data/platform/mctl-glovo/control-caller`
+and read,list on its metadata path: no wildcard, so the service's signing keys,
+database passwords and tailnet key stay out of reach of a compromised mctl-api
+namespace. `tests/test_vault_glovo_eso_policy.py` pins the one-key shape (a glob, the
+prefix wildcard, an extra capability or a missing rule each fail it) and the
+expectations table pins the denied neighbours.
+
+Ordering for #2742: the template renders nothing until `apiC2Control.enabled` (which
+itself needs the released chart slots, see mctlhq/mctl-api's extra* values). Create
+the role and policy first (`glovo-eso-vault-setup.sh verify` checks all three roles);
+after the sync the ExternalSecret `mctl-api-c2-control-caller` must go `Ready` on
+`mctl-api-control-vault`. Do not write the control-caller value into Vault before the
+deny is in place; the deny may be applied first, as the consumer does not exist until
+the switch is lit.
+
+**Identity caveats.** A pod creator in a namespace can set `serviceAccountName` to any
+ServiceAccount there, so `mctl-glovo-eso` (and `glovo-db-creds` in platform-db, and `mctl-api-control-eso` in mctl-api) is only
+as private as the namespace's RBAC: keep pod creation in `mctl-glovo` and `platform-db`
+platform-only (no tenant RoleBindings there; the mctl-api namespace is platform-owned, created and synced by Argo CD only). `automountServiceAccountToken: false` on
+the SA does not stop a pod spec that opts in. ESO obtains tokens for these SAs through
+its ClusterRole `external-secrets-controller` (`serviceaccounts/token` `create`,
+cluster-wide, no `resourceNames`).
+
+Verify the split: a token from the `eso-mctl-glovo` role must not read
+`secret/data/platform/argocd/*` (nothing outside its prefix is granted), and a token
+from the `external-secrets` role or the `argo-workflow` role must get `deny` on
+`secret/data/platform/mctl-glovo/x`
+(`vault token capabilities <token> secret/data/platform/mctl-glovo/x`).
 
 ## Vault Secret Structure
 

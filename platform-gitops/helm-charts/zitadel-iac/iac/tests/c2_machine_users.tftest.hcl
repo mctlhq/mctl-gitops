@@ -103,6 +103,12 @@ run "mctl_api_accepts_the_consent_reader_audience_for_that_subject_only" {
     condition     = !contains(keys(nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0]), "subject_audiences")
     error_message = "The entry must not carry subject_audiences alongside service_subjects (mctl-api refuses to boot)."
   }
+  # The entry keeps its customers_org_id: the reader is a per-subject
+  # exception inside it, not a replacement of the customers enforcement.
+  assert {
+    condition     = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"]))[0].customers_org_id != ""
+    error_message = "The zitadel entry must keep customers_org_id next to service_subjects."
+  }
 }
 
 run "consumer_ids_are_published_without_a_credential_and_audiences_differ" {

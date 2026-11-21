@@ -1,0 +1,184 @@
+# RedLoop Gate 4 egress probe (docs/runbooks/redloop-egress-probe.md).
+#
+# NOT synced by ArgoCD: nothing under docs/ is an Application source. The
+# operator applies this by hand, once, after a separate GO, and deletes it
+# afterwards. See the runbook for the exact commands and expected outcomes.
+#
+# The pod is shaped to pass Pod Security "restricted", which redloop
+# enforces, and to stay inside the redloop quota and LimitRange. It carries
+# none of the labels any redloop NetworkPolicy selects on (in particular no
+# workflows.argoproj.io/workflow, which allow-workflow-internet-egress keys on
+# and the mctl-deny-forged-workflow-labels policy rejects). It is therefore
+# subject only to default-deny-all, the same as the synthetic-staging pod.
+#
+# The TARGET_* values are placeholders. The runbook fills them in at apply
+# time from read-only lookups, so no cluster address is committed to this
+# public repository.
+#
+# The run has two results, and only the second one is steady-state
+# isolation. A check taken at container start does not show steady-state
+# policy, so the probe reports it as a separate `startup` line first, then
+# waits (bounded by WAIT_MAX) until it observes enforcement, holds for HOLD
+# seconds so the operator can read the node's rules, runs the steady-state
+# checks, holds again, and prints the steady-state result last.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: redloop-egress-probe
+  namespace: redloop
+  labels:
+    app.kubernetes.io/name: redloop-egress-probe
+    app.kubernetes.io/part-of: redloop-gate4
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 300  # startup 8 + wait <=60 + 2 holds 40 + checks <=80
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      # curl 8.11.1, multi-arch index digest, resolved 2026-11-17.
+      image: docker.io/curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      env:
+        - name: TARGET_KUBE_API
+          value: "__KUBE_API_CLUSTER_IP__"
+        - name: TARGET_KUBE_DNS
+          value: "__KUBE_DNS_CLUSTER_IP__"
+        - name: TARGET_CROSS_NS
+          value: "__BLACKBOX_CLUSTER_IP__:9115"
+        - name: TARGET_SAME_NS
+          value: "__REDLOOP_SVC_CLUSTER_IP__:80"
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Output, in order:
+          #   probe phase=startup ...      one check at once, reported only
+          #   probe startup=OPEN|CLOSED|UNKNOWN
+          #   probe enforcement-wait=<s> observed=yes|no
+          #   probe hold=start             operator reads node rules (read-only)
+          #   probe phase=steady ...       the 9 steady-state checks
+          #   probe hold=end               operator reads node rules again
+          #   probe checks=9 result=PASS|FAIL|UNKNOWN   (always the last line)
+          # The exit code (0 PASS, 1 FAIL, 2 UNKNOWN) reflects the steady-state
+          # result only. The startup line never changes it, and a steady-state
+          # PASS is never a Gate 4 approval on its own (see the runbook).
+          #
+          # Default-deny: a verdict is UNKNOWN unless a rule below positively
+          # explains it.
+          #   REACHABLE  a TCP connection completed (time_connect > 0), or
+          #              DNS answered. FAIL.
+          #   BLOCKED    curl timed out before any connection completed
+          #              (rc 28, time_connect 0), or DNS timed out.
+          #   REFUSED    rc 7 with no connection. A reject on the path, a
+          #              closed port and an unreachable network all look like
+          #              this from inside the pod, so the runbook accepts it
+          #              only together with node-side enforcement evidence.
+          #   NO_DNS     rc 6. Acceptable only for external-name.
+          #   UNKNOWN    anything else.
+          WAIT_MAX="${WAIT_MAX:-60}"; HOLD="${HOLD:-20}"
+          fail=0; unknown=0; v=""; PHASE=startup
+          classify() {
+            allow_nodns="$1"; shift
+            out=$(curl -sS -o /dev/null -w 'tc=%{time_connect}' "$@" 2>&1)
+            rc=$?
+            tc=$(printf '%s' "$out" | sed -n 's/.*tc=\([0-9.]*\).*/\1/p')
+            [ -n "$tc" ] || tc=missing
+            if [ "$tc" != missing ] && [ "$tc" != "0.000000" ] && [ "$tc" != "0" ]; then v=REACHABLE
+            elif [ "$tc" = missing ]; then v=UNKNOWN
+            elif [ "$rc" = 28 ]; then v=BLOCKED
+            elif [ "$rc" = 7 ]; then v=REFUSED
+            elif [ "$rc" = 6 ] && [ "$allow_nodns" = nodns-ok ]; then v=NO_DNS
+            else v=UNKNOWN; fi
+          }
+          check() {
+            name="$1"; allow_nodns="$2"; shift 2
+            classify "$allow_nodns" --connect-timeout 5 --max-time 8 "$@"
+            echo "probe phase=$PHASE name=$name rc=$rc connect=$tc verdict=$v"
+            if [ "$PHASE" = steady ]; then
+              case "$v" in REACHABLE) fail=1 ;; UNKNOWN) unknown=1 ;; esac
+            fi
+          }
+          finish() {  # $1 = PASS|FAIL|UNKNOWN; prints the last line and exits
+            echo "probe checks=$CHECKS result=$1"
+            case "$1" in PASS) exit 0 ;; FAIL) exit 1 ;; *) exit 2 ;; esac
+          }
+          CHECKS=0
+          # Targets come from read-only lookups at apply time. An empty or
+          # unrendered one would make curl fail fast and look like a block.
+          for t in "$TARGET_KUBE_API" "$TARGET_KUBE_DNS" "$TARGET_CROSS_NS" "$TARGET_SAME_NS"; do
+            if ! printf '%s' "$t" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?$'; then
+              echo "probe bad-target value='$t'"; finish UNKNOWN
+            fi
+          done
+          case "$WAIT_MAX$HOLD" in *[!0-9]*|'') echo "probe bad-config"; finish UNKNOWN ;; esac
+
+          # 1. Startup: one external check at once, before enforcement may
+          # exist. OPEN here is reported to the operator only, never as a
+          # steady-state result.
+          check external-ip-https - https://1.1.1.1/
+          case "$v" in REACHABLE) s=OPEN ;; BLOCKED|REFUSED) s=CLOSED ;; *) s=UNKNOWN ;; esac
+          echo "probe startup=$s"
+
+          # 2. Wait, bounded, until the same check stops connecting.
+          PHASE=wait; t0=$(date +%s); observed=no
+          while :; do
+            el=$(( $(date +%s) - t0 ))
+            [ "$el" -lt "$WAIT_MAX" ] || break
+            classify - --connect-timeout 2 --max-time 3 https://1.1.1.1/
+            case "$v" in BLOCKED|REFUSED) observed=yes; break ;; esac
+            sleep 1
+          done
+          el=$(( $(date +%s) - t0 ))
+          echo "probe enforcement-wait=${el}s observed=$observed last=$v"
+          if [ "$observed" = no ]; then
+            # Still connecting after WAIT_MAX: egress is open.
+            echo "probe hold=start seconds=$HOLD"; sleep "$HOLD"
+            if [ "$v" = REACHABLE ]; then finish FAIL; else finish UNKNOWN; fi
+          fi
+
+          # 3. Hold, then the steady-state checks, then hold again. The
+          # operator reads the node's rules during both holds.
+          echo "probe hold=start seconds=$HOLD"; sleep "$HOLD"
+          PHASE=steady
+          # Control: nothing listens on loopback port 1, so this must be a
+          # fast REFUSED. Anything else means the exit codes cannot be
+          # trusted, and the run is UNKNOWN.
+          check loopback-control - http://127.0.0.1:1/
+          case "$v" in REFUSED) ;; *) unknown=1 ;; esac
+          check external-ip-https - https://1.1.1.1/
+          check external-ip-http - http://1.1.1.1/
+          check external-name nodns-ok https://example.com/
+          check kube-api - -k "https://${TARGET_KUBE_API}:443/version"
+          check cross-namespace - "http://${TARGET_CROSS_NS}/"
+          check same-namespace - "http://${TARGET_SAME_NS}/healthz"
+          check metadata-169 - http://169.254.169.254/
+          # DNS over UDP to kube-dns. Any reply, even NXDOMAIN or SERVFAIL,
+          # proves a packet reached a resolver and back.
+          out=$(timeout 15 nslookup -timeout=3 kubernetes.default.svc.cluster.local "$TARGET_KUBE_DNS" 2>&1)
+          rc=$?
+          if printf '%s' "$out" | grep -Eq 'Name:|Address:? .*#53|NXDOMAIN|SERVFAIL|REFUSED|can.t find|Non-authoritative'; then v=REACHABLE
+          elif printf '%s' "$out" | grep -q 'connection timed out'; then v=BLOCKED
+          else v=UNKNOWN; fi
+          echo "probe phase=steady name=kube-dns-udp rc=$rc connect=- verdict=$v"
+          case "$v" in REACHABLE) fail=1 ;; UNKNOWN) unknown=1 ;; esac
+          CHECKS=9
+          echo "probe hold=end seconds=$HOLD"; sleep "$HOLD"
+          if [ "$fail" = 1 ]; then finish FAIL; elif [ "$unknown" = 1 ]; then finish UNKNOWN; else finish PASS; fi

@@ -148,6 +148,16 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      {"alertname": "ArgoCDApplicationDegraded", "severity": "warning",
       "project": "apps"},
      ["mctl-agent"]),
+    # Unknown (the controller cannot diff) is routed like Degraded and
+    # OutOfSyncLong: a platform app pages once, a tenant app stays agent-only.
+    ("warning platform ArgoCD sync-Unknown app pages once",
+     {"alertname": "ArgoCDApplicationSyncUnknown", "severity": "warning",
+      "project": "platform"},
+     ["telegram", "mctl-agent-paged"]),
+    ("warning tenant ArgoCD sync-Unknown app stays agent-only",
+     {"alertname": "ArgoCDApplicationSyncUnknown", "severity": "warning",
+      "project": "tenant"},
+     ["mctl-agent"]),
     # The alerting path pages regardless of severity.
     ("critical Alertmanager alert pages once",
      {"alertname": "AlertmanagerClusterDown", "severity": "critical"},
@@ -186,6 +196,18 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      {"alertname": "ServiceDown", "severity": "warning",
       "job": "vmsingle-monitoring-victoria-metrics-k8s-stack"},
      ["mctl-agent"]),
+    # RedLoop alerts are DAST stop conditions (docs/runbooks/redloop-gate4-roe.md).
+    # They must reach the operator and must NOT reach mctl-agent, which would
+    # try to remediate the very target under test. Both directions are
+    # load-bearing, so both are pinned: telegram present, agent absent.
+    ("RedLoop stop condition pages the operator only",
+     {"alertname": "RedLoopStagingDown", "severity": "warning",
+      "service": "redloop"},
+     ["telegram"]),
+    ("RedLoop absent-probe alert pages the operator only",
+     {"alertname": "RedLoopStagingProbeAbsent", "severity": "warning",
+      "service": "redloop", "job": "redloop-staging-healthz"},
+     ["telegram"]),
 ]
 
 

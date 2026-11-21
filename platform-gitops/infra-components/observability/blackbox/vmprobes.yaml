@@ -227,3 +227,40 @@ spec:
     staticConfig:
       targets:
         - https://alice.mctl.ai/healthz
+---
+# RedLoop synthetic staging (platform-gitops/services/redloop/
+# redloop-synthetic-staging), for the RedLoop* alerts in
+# vm-rules/redloop-alerts.yaml. This is a Gate 4 prerequisite: DAST may only run
+# while the fixture is watched, and these alerts are its stop conditions
+# (docs/runbooks/redloop-gate4-roe.md).
+#
+# The target is the in-cluster Service, not staging-redloop.mctl.ai, because
+# ingress.enabled is false. Every *.mctl.ai name resolves through the wildcard
+# record, so the public URL would answer Traefik's 404 today and page for a
+# fixture that is not exposed on purpose. redloop's allow-ingress-from-monitoring
+# NetworkPolicy admits the monitoring namespace, so blackbox-exporter can reach
+# the pod. Port 80 is service.port; the pod listens on 8080.
+#
+# Keep this the only target, even while the ingress is enabled for GO-2 (RoE
+# section 12). An edge target would fail while the certificate is issued and
+# again during the revert, and RedLoopStagingDown fires per instance after 2m,
+# so it would trip a stop condition on every activation and rollback. The GO-2
+# script watches the edge /healthz itself during the window.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: redloop-staging-healthz
+  namespace: monitoring
+spec:
+  jobName: redloop-staging-healthz
+  # 30s rather than 60s: during a DAST window this is the stop signal, and
+  # a 30s interval gives the 2m `for:` of RedLoopStagingDown about five
+  # samples to decide on instead of two or three.
+  interval: 30s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - http://redloop-redloop-synthetic-staging-base-service.redloop.svc.cluster.local/healthz

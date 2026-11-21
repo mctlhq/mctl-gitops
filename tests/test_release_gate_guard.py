@@ -89,6 +89,9 @@ class Box:
                     "platform-gitops/helm-charts/base-service"):
             shutil.copytree(ROOT / rel, work / rel)
         (work / GUARD_REL).write_text(guard)
+        # wft-rollback-service restores tag and digest through this script.
+        (work / "scripts").mkdir()
+        shutil.copy(ROOT / "scripts/rollback-image-ref.py", work / "scripts/rollback-image-ref.py")
         if gate is not None:
             (work / GATE_REL).write_text(gate)
         for w in WORKERS:
@@ -544,7 +547,7 @@ for w in WORKERS:
 for name in WRITERS:
     check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
     # provision-database uses GNU/busybox sed syntax, so it cannot finish on macOS.
-    if name in ("database", "rollback") and sys.platform == "darwin":
+    if name == "database" and sys.platform == "darwin":
         print(f"SKIP  {name}: another service still pushes (needs Linux sed)")
     else:
         check(f"{name}: another service still pushes", writer_other_pushes(name))
@@ -736,7 +739,7 @@ check("retire: Vault secrets wait for the git step that can refuse",
       "delete-from-git" in tasks["delete-vault-secrets"]["dependencies"])
 _rb = TEMPLATES["rollback"]["script"]["source"]
 check("rollback calls the shared guard before and after the edit",
-      TARGET_CALL in _rb and OUTGOING_CALL in _rb and _rb.find(TARGET_CALL) < _rb.find("sed -i") < _rb.find(OUTGOING_CALL))
+      TARGET_CALL in _rb and OUTGOING_CALL in _rb and _rb.find(TARGET_CALL) < _rb.find("python3 scripts/rollback-image-ref.py") < _rb.find(OUTGOING_CALL))
 check("rollback has no reader of the gate file of its own",
       "release-gates.yaml" not in _rb and "GATED_PATHS" not in _rb)
 
@@ -758,13 +761,45 @@ def rollback_refuses_unreadable_gate(gate, mutate=None):
     return boxed(body, gate=gate)
 
 
-if sys.platform == "darwin":
-    print("SKIP  rollback of another service still pushes (needs GNU/busybox sed -i)")
-else:
-    check("rollback of another service still pushes", rollback_with_gate(GATE_TEXT))
+check("rollback of another service still pushes", rollback_with_gate(GATE_TEXT))
 check("rollback refuses when the gate file is missing", rollback_refuses_unreadable_gate(None))
 check("rollback refuses when the gate names no values file", rollback_refuses_unreadable_gate("gates: []\n"))
 check("rollback refuses when the gate file cannot be parsed", rollback_refuses_unreadable_gate("gates: [\n"))
+
+
+# A values file that pins a digest: the chart renders repository:tag@digest, so a tag-only
+# rollback would leave the new image running and still report success.
+PIN_NEW = "sha256:" + "a" * 64
+PIN_OLD = "sha256:" + "b" * 64
+
+
+def pinned_seed(work):
+    (work / SVC / "labs/app/values.yaml").write_text(
+        f'image:\n  repository: ghcr.io/mctlhq/app\n  tag: "1.0.0"\n  digest: "{PIN_NEW}"\n')
+
+
+def rollback_pinned(digest, want_push):
+    def body(b):
+        before = b.head()
+        params = rollback_params("labs", "app")
+        if digest is not None:
+            params["PARAM_TARGET_DIGEST"] = digest
+        rc, out = b.run("rollback", params)
+        pushed = rc == 0 and b.head() != before
+        if want_push:
+            text = b.read(f"{SVC}/labs/app/values.yaml") or ""
+            return pushed and 'tag: "1.100.0"' in text and f'digest: "{digest}"' in text and PIN_NEW not in text
+        return not pushed and b.head() == before and "digest" in out
+    return boxed(body, seed=pinned_seed)
+
+
+check("rollback of a pinned service moves tag and digest together", rollback_pinned(PIN_OLD, True))
+check("rollback of a pinned service without a known digest is refused, not a silent no-op",
+      rollback_pinned(None, False))
+check("rollback refuses a malformed target_digest", rollback_pinned("sha256:xyz", False))
+check("rollback refuses a short target_digest", rollback_pinned("sha256:" + "a" * 63, False))
+check("rollback refuses an uppercase target_digest", rollback_pinned("sha256:" + "A" * 64, False))
+check("rollback refuses a target_digest without the algorithm prefix", rollback_pinned("a" * 64, False))
 check("preview's image-name step carries the target check",
       TARGET_CALL in TEMPLATES["preview"]["script"]["source"])
 check("preview's target check runs before the image-name check",

@@ -10,13 +10,17 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. c5e5d6f9 is the 4.164.0 release commit. With the
-      # current bootstrap values it renders the same objects as 9895c76f (the
-      # 4.159.0 pin; helm template, the only diff is one YAML comment); its
-      # chart changes are the optional releaseApprovalUISecret slot
-      # (mctlhq/mctl-api#1095), unset here, and that comment. Move this pin
-      # in a reviewed PR, at a release commit whose image is deployed.
-      targetRevision: c5e5d6f9ae9d0cf84fdf9a60527396d8574a8361
+      # a GitOps change. a91f7fb4 is the 4.171.0 release commit (image live).
+      # With the current bootstrap values it renders the same objects as
+      # c5e5d6f9 (the 4.164.0 pin) except two things (helm template diff of
+      # the chart at the two commits): a new DEVLOOP_BEARER_APPROVE_ENABLED
+      # env with an empty value (the chart default; empty parses as off, so
+      # the live break-glass-off behaviour is unchanged) and one YAML comment.
+      # The chart also gains the extraContainers / extraVolumes /
+      # extraVolumeMounts slots (mctlhq/mctl-api bf7b27c, since 4.169.0) that
+      # apiC2Control needs, empty here. Move this pin in a reviewed PR, at a
+      # release commit whose image is deployed.
+      targetRevision: a91f7fb4a92e835f5f562f2cbab3ac2e2519c530
       path: helm
       helm:
         releaseName: mctl-api
@@ -50,7 +54,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.165.1"
+            tag: "4.171.0"
 
           ingress:
             enabled: true
@@ -89,7 +93,7 @@ spec:
             # its client id and secret come from mctl-api-oidc-zitadel
             # (mctl-gitops#2730) and the decider list from mctl-api-secrets,
             # both read only at container start.
-            ROLLOUT_MARKER: "2026-11-17-release-approval-ui"
+            ROLLOUT_MARKER: "2026-11-21-link-consent-routes-on"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -449,6 +453,23 @@ spec:
             # page disabled" at Error level; the boot is not refused.
             # Rollback: delete this line and the /deploy extra path.
             DEPLOY_APPROVAL_UI_ENABLED: "true"
+            {{- $c2 := default dict .Values.apiC2Control }}
+            {{- if $c2.enabled }}
+            # Kill switch caller (mctl-api >= 4.164.0, the kill switch client):
+            # the control endpoint of the C2 service and the file the token
+            # refresher sidecar below keeps fresh. The client re-reads the file
+            # on every call and a missing file only makes the call answer
+            # "unknown", so these two lines cannot fail a boot. Without the
+            # switch below they change nothing: the route stays dark.
+            # Rollback: set apiC2Control.enabled to false.
+            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"
+            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"
+            {{- end }}
+            {{- if and $c2.enabled $c2.killSwitch }}
+            # Turns the kill switch route on. Needs the two lines above, or the
+            # boot is refused. Rollback: set apiC2Control.killSwitch to false.
+            GLOVO_C2_KILLSWITCH_ENABLED: "true"
+            {{- end }}
             # Release grants (mctlhq/mctl-api#1022 S1): the release.grant
             # ledger kind and its routes. An admin requests a grant for a
             # version; mctl-api verifies the tag and the GHCR image itself
@@ -467,14 +488,25 @@ spec:
             # and the pod logs "release approval page disabled" at Error
             # level. Rollback: delete this line and the /release extra path.
             RELEASE_APPROVAL_UI_ENABLED: "true"
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # Link consent routes and the consent read of the C2 service (its
+            # epic 11, C2-1c). The reader identity (service provider and
+            # subject) comes from the optional Secret below, so no identifier
+            # lives in this public repository. The cap is the one value the
+            # C2 service reads too (the capacity value in bootstrap/values.yaml).
+            # The store uses AUDIT_DB_URL. Read at container start: bump
+            # ROLLOUT_MARKER in the PR that flips this.
+            # Rollback: set the apiConsent switch back to false.
+            GLOVO_CONSENT_ENABLED: "true"
+            # Quoted: the release gate parses this block as YAML, and an
+            # unquoted inline directive is not a scalar there.
+            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
+            {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
-          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
-          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret applied by
-          # hand in 2026-03 and created by nothing in this repository or in
-          # Vault; it is described in mctl-api-secrets.yaml now.
-          # mctlhq/mctl-gitops#1229, step 2 of 2.
+          # One secret, not two. The hand-applied `mctl-api-gitops-token`
+          # extra Secret is gone (mctlhq/mctl-gitops#1229).
           envFromSecret: mctl-api-secrets
           # Event producer credentials, in their own ExternalSecret so a
           # missing key cannot take DB_PASSWORD down with it
@@ -499,6 +531,12 @@ spec:
             # ROLLOUT_MARKER.
             - mctl-api-glovo-runtime-db
             - mctl-api-workitems-db
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # The consent reader identity (mctl-api-secrets.yaml). Optional
+            # like its neighbours; with the switch on and the Secret missing
+            # the config guard refuses the release.
+            - mctl-api-glovo-consent
+            {{- end }}
             {{- if (default dict .Values.securityCodeScanning).receiver }}
             - mctl-api-security-code-scanning
             {{- end }}
@@ -509,11 +547,10 @@ spec:
           # a restart -- envFrom would capture it at container start and serve
           # an expired value within the hour.
           #
-          # From here GITOPS_REPO_TOKEN and GITOPS_ACTIONS_TOKEN in
-          # mctl-api-secrets become the fallback only: the file wins. They stay
-          # for now so this change is reversible by deleting one line, and are
-          # removed in a follow-up once the pod is observed running on the
-          # file.
+          # The file is the only GitHub credential for the mctl-gitops clone
+          # and the workflow dispatch. The static GITOPS_REPO_TOKEN and
+          # GITOPS_ACTIONS_TOKEN fallbacks were removed from mctl-api-secrets
+          # (mctlhq/mctl-gitops#1240).
           #
           # What this token is, measured rather than assumed
           # (mctlhq/mctl-api#307): one repository (mctl-gitops), contents
@@ -566,6 +603,17 @@ spec:
           # that one does need the keys: mctl-api refuses to start in those
           # modes without them. Rollback: delete this line.
           oauthZitadelSecret: mctl-api-oidc-zitadel
+
+          # DEVLOOP_DECIDE_CLIENT_ID / DEVLOOP_DECIDE_CLIENT_SECRET for the
+          # DevLoop decide page (mctlhq/mctl-api#964): the confidential
+          # `mctl-api-decide` client that zitadel-iac already writes into the
+          # same Secret (helm-charts/zitadel-iac/iac/mctl-api.tf). With them
+          # set, /devloop/decide/{workflow_id} serves instead of answering
+          # 503: the owner opens the link an MCP client hands out, signs in
+          # fresh with a second factor, and approves or rejects the bound
+          # grant. Optional refs: a Secret without the keys leaves the page
+          # off. Rollback: delete this line.
+          devLoopDecideSecret: mctl-api-oidc-zitadel
 
           # Client id and secret of the approval page (mctlhq/mctl-api#1007):
           # the confidential ZITADEL client that zitadel-iac writes into the
@@ -688,6 +736,75 @@ spec:
               - reopened_by_user
               - fixed
               - closed_by_user
+          {{- end }}
+          {{- if $c2.enabled }}
+
+          # Token refresher for the kill switch caller. TODO(chart): the chart
+          # at the pinned revision has no extraContainers / extraVolumes /
+          # extraVolumeMounts slots (it ignores them silently). They are a
+          # separate mctl-api change; the render fails unless
+          # apiC2Control.chartSlots confirms the pin carries them.
+          #
+          # Contract (mctl-gitops#2736 consent refresher, same image, other
+          # command): signs a JWT-profile assertion (RFC 7523, iss = sub =
+          # user id, kid = key id) with KEY_FILE, exchanges it at
+          # ZITADEL_ISSUER/oauth/v2/token for ZITADEL_SCOPE, writes the access
+          # token atomically to TOKEN_FILE (mode 0644), renews at half of
+          # expires_in (the instance lifetime is 12 h) and exits non-zero if it
+          # cannot renew before expiry.
+          # The key is mounted 0444 because the chart sets no fsGroup and the
+          # kubelet writes secret files as root. Only the sidecar mounts the
+          # key volume; the main container mounts the c2-control-token volume
+          # alone, read-only, and never sees the key (mctl-gitops#2737).
+          extraContainers:
+            - name: c2-control-token-refresher
+              image: "{{ $c2.refresherImage.repository }}:{{ $c2.refresherImage.tag }}"
+              # The release gate strips whole-line directives and parses this
+              # block as YAML. An unquoted inline directive (toJson, or a bare
+              # list item) reads as a flow mapping, and as a mapping key it
+              # is unhashable: image.tag becomes unreadable and the gate
+              # answers UNKNOWN. Keep inline directives inside quotes. Command
+              # words must therefore not contain a double quote or backslash.
+              command:
+              {{- range $c2.refresherImage.command }}
+                - "{{ . }}"
+              {{- end }}
+              env:
+                - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
+                - {name: TOKEN_FILE, value: "/var/run/secrets/c2-control/token"}
+                - {name: KEY_FILE, value: "/var/run/secrets/c2-control-key/key"}
+                - name: ZITADEL_USER_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: user_id}}
+                - name: ZITADEL_KEY_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: key_id}}
+                - name: ZITADEL_SCOPE
+                  valueFrom: {configMapKeyRef: {name: mctl-api-c2-machine-ids, key: control_scope}}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 64Mi}
+              volumeMounts:
+                - {name: c2-control-token, mountPath: /var/run/secrets/c2-control}
+                - {name: c2-control-key, mountPath: /var/run/secrets/c2-control-key, readOnly: true}
+          extraVolumes:
+            - name: c2-control-token
+              emptyDir: {medium: Memory, sizeLimit: 1Mi}
+            - name: c2-control-key
+              secret:
+                secretName: mctl-api-c2-control-caller
+                defaultMode: 0444
+                items:
+                  - {key: key, path: key}
+          extraVolumeMounts:
+            - {name: c2-control-token, mountPath: /var/run/secrets/c2-control, readOnly: true}
           {{- end }}
 
           resources:

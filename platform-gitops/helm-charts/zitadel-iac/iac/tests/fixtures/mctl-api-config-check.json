@@ -1,0 +1,18 @@
+{
+  "MCTL_OIDC_PROVIDERS": [
+    {
+      "name": "zitadel",
+      "issuer": "https://auth.mctl.ai",
+      "audiences": [
+        "100000000000000003"
+      ],
+      "customers_org_id": "100000000000000001",
+      "service_subjects": {
+        "100000000000000005": "100000000000000006"
+      }
+    }
+  ],
+  "ZITADEL_HOOK_CUSTOMERS_ORG_ID": "100000000000000001",
+  "ZITADEL_HOOK_GITHUB_IDP_ID": "100000000000000002",
+  "ZITADEL_HOOK_GOOGLE_IDP_ID": "100000000000000004"
+}

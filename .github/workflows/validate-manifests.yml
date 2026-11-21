@@ -43,7 +43,7 @@ jobs:
   # listed in `needs`, so a shard added later cannot be left out of the gate.
   validate:
     if: always()
-    needs: [validate-1, validate-2, validate-3, validate-4]
+    needs: [validate-1, validate-2, validate-3, validate-4, zitadel-iac]
     runs-on: ubuntu-latest
     steps:
       - name: Every validate shard succeeded
@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           # A missing, skipped or cancelled shard is not a pass.
-          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null
+          echo "$NEEDS" | jq -e 'length == 5 and all(.[]; .result == "success")' > /dev/null
 
   validate-1:
     runs-on: ubuntu-latest
@@ -93,6 +93,35 @@ jobs:
         # mctl-api keeps its tag in a values block scalar; a held version needs
         # a recorded allow. Cases, wiring and mutants (mctl-gitops#2528).
         run: python3 tests/test_release_gate_bootstrap_hold.py
+
+      - name: Release gate ledger mode (shadow / enforce)
+        # mctlhq/mctl-api#1022 S4: cases and mutants for the ledger block.
+        run: python3 tests/test_release_gate_ledger_hold.py
+
+      # With a hold's ledger enforced, pull-request CI cannot read the release
+      # ledger (mctl-api admits only workflows on refs/heads/main as its
+      # reader), so it checks who proposes a change of the held tag instead:
+      # only the release bot's bump PR, which release-deploy opens after its
+      # ledger-gate job saw the approval. The policy is read from the base
+      # (HEAD^1 of the merge ref), never from the pull request. The event
+      # sender must be the bot too: a human push onto the bot's branch keeps
+      # the bot as PR author but makes the sender that human. A no-op while
+      # every ledger hold is in shadow mode. Not run on merge_group: the queue
+      # payload carries no author, and the PR passed this on its own head.
+      - name: Release ledger holds - who may change a held tag
+        if: github.event_name == 'pull_request'
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          # Who caused this run: the pusher on synchronize. A re-run keeps it.
+          PUSHER: ${{ github.event.sender.login }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          # A fork's branch name proves nothing; treat it as no branch at all.
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || BRANCH="fork:$HEAD_REPO:$BRANCH"
+          python3 scripts/release-gate.py pr-identity --base HEAD^1 --head HEAD \
+            --author "$AUTHOR" --branch "$BRANCH" --pusher "$PUSHER"
 
   validate-2:
     runs-on: ubuntu-latest
@@ -194,6 +223,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 scripts/validate-usage-pricing-catalog.py --selftest
           python3 scripts/validate-usage-pricing-catalog.py
+
+      # Third-party images mirrored into GHCR by mirror-image.yaml
+      # (mctl-gitops#2744): every entry digest-pinned, immutable tag.
+      - name: Validate image mirrors
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-image-mirrors.py --selftest
+          python3 scripts/validate-image-mirrors.py
 
       - name: Validate agent platform catalog
         run: |
@@ -315,6 +353,12 @@ jobs:
         # refusal must leave it untouched, other services must still deploy and
         # retire, and each guard layer is removed in turn to prove a test fails.
         run: python3 tests/test_release_gate_guard.py
+      - name: Rollback by tag restores tag and digest together
+        # A values file that pins image.digest renders repository:tag@digest, so
+        # a tag-only rollback keeps the new image running. Both image reference
+        # formats, the refusals, and each mutation of the script (gitops#2652
+        # follow-up).
+        run: python3 tests/test_rollback_image_ref.py
       - name: Rollback by revision restores the deploy's values
         # The restore step runs against a local bare repository: every refusal
         # leaves it untouched, and each guard is removed in turn to prove a test fails.
@@ -333,6 +377,7 @@ jobs:
           python3 tests/test_release_bump_route.py
           python3 tests/test_release_bump_diff_guard.py
           python3 tests/test_release_bump_checks_ready.py
+          python3 tests/test_release_bump_enqueue.py
           python3 tests/test_release_bump_digest.py
           python3 tests/test_release_bump_pr_route.py
           python3 tests/test_release_bump_supersede.py
@@ -577,7 +622,12 @@ jobs:
           tmpdir=$(mktemp -d)
           helm template test platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
           helm template test platform-gitops/argocd -f platform-gitops/argocd/values.yaml > "$tmpdir/argocd.yaml"
-          kubeconform -strict -summary -schema-location default \
+          # CustomResourceDefinition is skipped: the argocd chart renders the
+          # three Argo CD CRDs (crds.install: true) and neither the default
+          # schema location nor the CRD catalog ships a schema for the CRD
+          # kind itself ("could not find schema for CustomResourceDefinition").
+          # Every other kind, including the Argo CD resources, is still checked.
+          kubeconform -strict -summary -skip CustomResourceDefinition -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
           # A platform NetworkPolicy placed in a tenant namespace must also be
@@ -754,6 +804,12 @@ jobs:
         # failed or malformed ledger read is unknown, never refuse or allow.
         run: python3 scripts/release-ledger-shadow.py --selftest
 
+      - name: Release ledger watch (S4b cases and mutants)
+        # mctlhq/mctl-api#1022 S4b: release-gate-watch judges every write of
+        # a ledger-held image on main against the ledger; enforce fails on a
+        # missing approval (6) or an unreadable read (7), shadow only reports.
+        run: python3 tests/test_release_ledger_watch.py
+
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
 
@@ -871,6 +927,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_pod_security_level.py
 
+      - name: Unit-test the health gate in preview-deploy
+        # A preview used to end green when helm returned, and its DeployRecord
+        # never showed health, so it could never be promoted
+        # (mctl-api#1049). This runs the gate against stubbed kubectl and curl
+        # for each failure shape and checks the workflow exposes its verdict.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_deploy_health_gate.py
+
       - name: Unit-test the post-sync health gate in deploy-service
         # deploy-service used to end green once its commit was pushed, even
         # when the new version crashed on start (gitops#2653). This runs
@@ -974,6 +1039,22 @@ jobs:
           python3 tests/test_generated_app_scope.py
           scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
 
+      # The C2 service pod with the consent switch on: the refresher runs the
+      # token-refresher command of the server image and its 0440 key file is
+      # readable by uid 10001 (pod fsGroup). Red when either is removed.
+      - name: Unit-test the C2 service consent pod render
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_mctl_glovo_consent_render.py
+
+      # mctl-gitops#2777: the cutover wiring (capacity, link login, ingress,
+      # mctl-api consent) is dark by default and exact when lit. Red when a
+      # default flips, a guard is dropped or a path is exposed.
+      - name: Unit-test the C2 cutover render
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_mctl_glovo_cutover_render.py
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the
@@ -1067,6 +1148,16 @@ jobs:
           # --selftest first, same reason.
           scripts/validate-gha-expression-injection.py --selftest
           scripts/validate-gha-expression-injection.py
+
+      - name: nginx effective-config detector proves itself
+        run: |
+          set -euo pipefail
+          # Detector for features gated by the nginx advisories of 2026-11-18
+          # (docs/security/nginx-2026-11-18-inventory.md). It runs against
+          # `nginx -T` output by hand or by an operator, so CI only proves it
+          # is green on a clean input and red on every mutation, and that an
+          # unreadable or truncated input is UNVERIFIED (exit 2), never clean.
+          scripts/check-nginx-effective-config.py --selftest
 
       - name: Tenant workflow pods pass Pod Security "restricted"
         run: |
@@ -1312,6 +1403,13 @@ jobs:
           done
           python3 tests/test_obi_spike_attribution_e2e.py
 
+      - name: Unit-test the mctl-api control-caller render (C2 kill switch client)
+        # Dark by default: nothing renders until apiC2Control.enabled; the
+        # inconsistent switch combinations must fail the render.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_api_c2_control_render.py
+
   reserved-hosts:
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -1420,6 +1518,43 @@ jobs:
       - name: tofu test (mocked providers)
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
+
+      # The values mctl-api refuses to boot on (MCTL_OIDC_PROVIDERS, the
+      # ZITADEL_HOOK_* cross-checks), run through the DEPLOYED image's own
+      # validator (`mctl-api --check-config`), not a copy of its rules.
+      # gitops#2737 put service_subjects on the customers_org_id entry and the
+      # 4.166.0 rollout crash-looped (2026-11-17). `tofu test` above proves the
+      # fixture equals what the root renders; this step feeds it to the image
+      # pinned in mctl-api.yaml. Fail closed on a missing docker, a failed pull
+      # or an image without the ok line; the only skip is a pin older than the
+      # first release with the flag (MIN_CHECKER_VERSION in the script), with a
+      # visible warning. --selftest first: a detector never seen to fire is not
+      # known to work.
+      # --readyz adds stage 2 (gitops#2830): --check-config opens no store, so a
+      # store-init failure (mctl-api#1136, found on the first apiConsent flip,
+      # gitops#2827) passed it. The image is booted with the same rendered env on
+      # a throwaway Postgres on an internal network and /readyz must report
+      # stores ok; no answer in time is a failure, never a pass.
+      - name: mctl-api accepts the rendered OIDC configuration (deployed image's own validator)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/check-mctl-api-oidc-config.py --selftest
+          scripts/check-mctl-api-oidc-config.py --readyz
+
+      # The same check for the NEW image on the release path (bump job of
+      # release-deploy.yaml and gitops-bump.yaml): wiring, the 4.166.0 shape
+      # with a stub docker, and mutants of each. Stub only: no network.
+      - name: release config preflight blocks a bump the new image would crash on
+        run: python3 tests/test_release_config_preflight.py
+
+      # Both branches at the SHIPPED MIN_CHECKER_VERSION and the real rendered
+      # config: live flagless images are skipped safely, a below-MIN tag with
+      # service_subjects is refused, a candidate that rejects the config or
+      # lacks the flag is blocked before the bump, unreadable states are errors.
+      # Each case is re-run against mutants of the scripts (must turn red).
+      - name: mctl-api guard branches at the shipped MIN_CHECKER_VERSION
+        run: python3 tests/test_mctl_api_guard_branches.py
 
       # Customers rollout phase 3: every Actions v2 execution is
       # instance-wide and lives behind a toggle in customers_executions.tf

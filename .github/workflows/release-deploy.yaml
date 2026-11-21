@@ -191,25 +191,32 @@ jobs:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
-  # Release ledger, SHADOW MODE (mctlhq/mctl-api#1022 S3). Reads the MFA-backed
-  # release decisions mctl-api keeps and reports what a ledger-based gate would
-  # decide for exactly the image just built (repository, version, tag commit,
-  # digest), next to what the YAML allow records decide. It enforces nothing:
-  # continue-on-error, and no job needs it, so the release never waits on it.
-  # The verdict (allow / refuse / unknown) lands in the job summary; collect
-  # agreement here before the ledger replaces the YAML (S4).
-  # id-token: write is the whole credential: mctl-api accepts this workflow's
-  # GitHub OIDC token as the read-only release gate reader, only from
-  # mctlhq/mctl-gitops on refs/heads/main. No secrets, no environment.
-  ledger-shadow:
+  # Release ledger gate (mctlhq/mctl-api#1022 S3 shadow, S4 enforce). Reads
+  # the MFA-backed release decisions mctl-api keeps for exactly the image just
+  # built (repository, version, tag commit, digest). What it does is read from
+  # the image's version hold in release-gates.yaml on main (`ledger.mode`):
+  #   no ledger block: nothing, the job succeeds at once (every other image);
+  #   shadow:  reports the ledger verdict next to the YAML allow records and
+  #            always succeeds; the YAML records still decide in the bump;
+  #   enforce: waits up to ledger.wait_minutes for an approval of exactly this
+  #            digest and hands the digest to the bump, whose release-gate.py
+  #            check refuses the held image without it. A rejection, the
+  #            deadline or an unreadable ledger fails this job, so nothing is
+  #            bumped; re-run the workflow after the decision.
+  # It runs for every image because bump needs it, and a skipped need would
+  # skip the bump. id-token: write is the whole credential: mctl-api accepts
+  # this workflow's GitHub OIDC token as the read-only release gate reader,
+  # only from mctlhq/mctl-gitops on refs/heads/main. No secrets, no environment.
+  ledger-gate:
     needs: build
-    if: inputs.repo == 'mctlhq/mctl-api'
     runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 5
+    # ledger.wait_minutes is at most 180 (release-gate.py validates it).
+    timeout-minutes: 200
     permissions:
       contents: read
       id-token: write
+    outputs:
+      approved_digest: ${{ steps.gate.outputs.approved_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -219,7 +226,8 @@ jobs:
       - name: Install PyYAML
         run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
-      - name: Release ledger verdict (shadow)
+      - name: Release ledger decision
+        id: gate
         env:
           REPO: ${{ inputs.repo }}
           IMAGE_NAME: ${{ inputs.image_name }}
@@ -227,7 +235,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
           REVISION: ${{ needs.build.outputs.revision }}
         run: |
-          python3 scripts/release-ledger-shadow.py check --repository "$REPO" --version "$IMAGE_TAG" \
+          python3 scripts/release-ledger-shadow.py gate --repository "$REPO" --version "$IMAGE_TAG" \
             --digest "$IMAGE_DIGEST" --commit "$REVISION" --image "$IMAGE_NAME"
 
   # The bump is prepared here and published by exactly one of two jobs below.
@@ -236,7 +244,7 @@ jobs:
   # The publishing jobs apply that patch to a fresh checkout of main, run the
   # release gate on the tree that would result, and only then write.
   bump:
-    needs: build
+    needs: [build, ledger-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -272,6 +280,22 @@ jobs:
           echo "route=${route}" >> "$GITHUB_OUTPUT"
           echo "::notice::bump route for ${IMAGE_NAME}: ${route}"
 
+      # An image's own validator, run on the configuration main renders today,
+      # BEFORE the tag is edited: a rule that is stricter in the NEW mctl-api
+      # image than in the pinned one is otherwise only seen after Argo rolls it
+      # (4.166.0, gitops#2737/#2762). Not applicable to other images. Fails
+      # closed: no job step after this one runs on a failure.
+      - name: Install Helm (config preflight renders the bootstrap chart)
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: New image accepts the rendered configuration (config preflight)
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: python3 scripts/release-config-preflight.py
+
       - name: Bump image tag(s)
         env:
           TEAM: ${{ inputs.team_name }}
@@ -280,6 +304,9 @@ jobs:
           VALUES_GLOB: ${{ inputs.values_glob }}
           IMAGE_NAME: ${{ inputs.image_name }}
           NEW_TAG: ${{ inputs.image_tag }}
+          # Only an enforced ledger hold reads these (release-gate.py check).
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          LEDGER_APPROVED_DIGEST: ${{ needs.ledger-gate.outputs.approved_digest }}
         run: |
           set -euo pipefail
           python3 <<'PYEOF'
@@ -397,7 +424,9 @@ jobs:
           _gate = subprocess.run(
               [sys.executable, "scripts/release-gate.py", "check",
                "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag,
-               "--policy-rev", "origin/main", "--image", image_name]
+               "--policy-rev", "origin/main", "--image", image_name,
+               "--new-digest", os.environ.get("IMAGE_DIGEST", ""),
+               "--ledger-approved-digest", os.environ.get("LEDGER_APPROVED_DIGEST", "")]
           )
           if _gate.returncode != 0:
               print("ERROR: release gate refused this bump", file=sys.stderr)
@@ -712,10 +741,10 @@ jobs:
           exit 1
 
   # PR route: the mctl-gitops-pr App opens a release-bump/* pull request. It is
-  # not a ruleset bypass actor, so it cannot write main; auto-merge.yml merges
-  # the PR after the review and the required checks (including `validate`, which
-  # runs the release gate on the PR). The key is a secret of the main-only
-  # `app-gitops-pr` environment.
+  # not a ruleset bypass actor, so it cannot write main; enqueue-bump puts the
+  # PR in the merge queue after the review and the required checks (including
+  # `validate`, which runs the release gate on the PR). The key is a secret of
+  # the main-only `app-gitops-pr` environment.
   publish-pr:
     needs: bump
     if: needs.bump.outputs.has_change == 'true' && needs.bump.outputs.route == 'pr'
@@ -804,7 +833,7 @@ jobs:
             "Opened by release-deploy.yaml: ${RUN_URL}" \
             "Base: \`$(git rev-parse origin/main)\`. Head: \`$(git rev-parse HEAD)\`." \
             "" \
-            "The only change is an image tag. auto-merge.yml merges this PR after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
+            "The only change is an image tag. The enqueue-bump job of this workflow puts this PR in the merge queue after an approving review and the required checks (validate runs the release gate), pinned to the head above.")
           if [[ -n "${create_pr:-}" ]]; then
             pr_url=$(gh pr create --repo "$REPO" --base main --head "$branch" \
               --title "chore: bump ${SERVICE} to ${NEW_TAG}" --body "$body")
@@ -854,6 +883,75 @@ jobs:
               echo "::warning::cannot order ${NEW_TAG} against #${n} (${other_tag}); closing nothing"
             fi
           done <<< "$others"
+
+  # Enqueue the bump once it is approved and green on its exact head, with the
+  # mctl-gitops-pr App token, never GITHUB_TOKEN: events caused by GITHUB_TOKEN
+  # start no workflow run, merge_group included, so such a queue entry sits in
+  # AWAITING_CHECKS (#2780, #2792; Refs #2793). Not from auto-merge.yml, whose
+  # code a pull request controls. A plain job here, not a reusable workflow: the
+  # `app-gitops-pr` environment secret arrived empty in a workflow_call job
+  # (#2798), while this shape is what publish-pr already uses. The wait runs
+  # first with the read-only GITHUB_TOKEN (scripts/release-bump-enqueue-wait.sh
+  # holds the guards); the App token is minted only after ready=true and used for
+  # the one enqueue, pinned with expectedHeadOid. Outside any concurrency group.
+  # release-deploy.yaml and gitops-bump.yaml carry the same job;
+  # tests/test_release_bump_enqueue.py keeps them identical.
+  enqueue-bump:
+    needs: publish-pr
+    if: needs.publish-pr.result == 'success'
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # The wait gives up after 45 minutes; await-bump is the red signal for a
+    # bump that does not merge.
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval and the required checks on the bump head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.publish-pr.outputs.pr }}
+        run: bash scripts/release-bump-enqueue-wait.sh
+
+      - name: Generate the App token for the enqueue
+        id: token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # expectedHeadOid: the queue refuses the entry if the head is no longer
+      # the one the wait judged and the approval covers.
+      - name: Enqueue the judged head with the App token
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.publish-pr.outputs.pr }}
+          PR_ID: ${{ steps.ready.outputs.pr_id }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+          if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+                -f id="$PR_ID" -f h="$HEAD_SHA" 2>&1); then
+            echo "::error::enqueue of #${PR} was refused: ${out}"
+            exit 1
+          fi
+          echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"
 
   # A stuck bump must be a red release run, not a silent open PR. The wait lives
   # in its own job with no environment, no secret and read-only access, and

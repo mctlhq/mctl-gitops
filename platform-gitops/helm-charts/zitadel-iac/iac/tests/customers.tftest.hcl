@@ -384,6 +384,43 @@ run "customer_login_error_explains_invitation_entry" {
   }
 }
 
+# With the Google IdP on, the shared failure page must name both IdPs: a
+# GitHub-only hint sent the first Google sign-in (2026-11-17) to check a
+# GitHub email. With it off, Google must not be mentioned.
+run "customer_login_error_names_enabled_idps" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  variables {
+    customers_google_idp_enabled = true
+  }
+  assert {
+    condition = (
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "GitHub or Google account") &&
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.accountNotFound.description, "GitHub or Google")
+    )
+    error_message = "With the Google IdP on, idp.loginError and idp.accountNotFound must name GitHub and Google."
+  }
+}
+
+run "customer_login_error_github_only_when_google_off" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  variables {
+    customers_google_idp_enabled = false
+  }
+  assert {
+    condition = (
+      !strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "Google") &&
+      !strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.accountNotFound.description, "Google")
+    )
+    error_message = "With the Google IdP off, the failure pages must not mention Google."
+  }
+}
+
 run "customers_get_authentication_without_project_roles" {
   command = plan
   plan_options {

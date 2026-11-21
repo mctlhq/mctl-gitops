@@ -149,7 +149,9 @@ allowedActions: "no-op read update create"
 # that needs it, and empty the list once it has applied.
 #   (#1533 listed zitadel_email_provider_smtp.resend for the SMTP port move;
 #   applied 2026-10-04, emptied again here.)
-allowedDeletes: ""
+#   The ERPact Frappe sign-in removal listed eight addresses; applied
+#   2026-11-21, emptied again here.
+allowedDeletes: ''
 
 # The CronJob's schedule. Users come from Vault, which no sync observes, so
 # this is how a user added there reaches ZITADEL.

@@ -8,8 +8,10 @@ must turn at least one check red. Plain script:
 What is held: the PR route writes only to a release-bump/* ref, never to main;
 the release gate and the tag-only guard run before that push; the job that
 prepares the bump holds no credential; the deploy-key push stays confined to the
-direct route; auto-merge merges a release-bump PR only for the App author, after
-the diff guard, pinned to the judged head.
+direct route; the PR is enqueued by the enqueue-bump job of both workflows
+(after publish-pr, in the app-gitops-pr environment), and auto-merge.yml no
+longer handles release-bump PRs. The enqueue job's wiring and its guards are
+tested in tests/test_release_bump_enqueue.py.
 """
 import copy
 import pathlib
@@ -133,32 +135,22 @@ def judge(files):
                         and "needs.publish-pr.outputs.pr" in str(wt.get("env")) and "github.token" in str(wt.get("env"))))
             out.append((f"{label}: only a superseded-by comment from the App turns a closed bump into a notice",
                         "Superseded by #" in wtxt and "mctl-gitops-pr(\\\\[bot\\\\])?$" in wtxt and '-gt 0' in wtxt))
+        # the enqueue: a plain job after publish-pr (details: test_release_bump_enqueue.py)
+        eq = jobs.get("enqueue-bump")
+        out.append((f"{label}: enqueue-bump follows publish-pr and reads the PR number from it",
+                    eq is not None and eq.get("needs") == "publish-pr" and eq.get("if") == "needs.publish-pr.result == 'success'"
+                    and "uses" not in eq and "needs.publish-pr.outputs.pr" in str(eq.get("steps"))))
+        out.append((f"{label}: enqueue-bump is in no concurrency group", eq is not None and "concurrency" not in eq))
         # nothing but the two publishing jobs names an environment
         envs = {n: j.get("environment") for n, j in jobs.items() if "environment" in j}
-        out.append((f"{label}: only the two publishing jobs have an environment", set(envs) == {"publish-direct", "publish-pr"}, envs))
+        out.append((f"{label}: only the publishing jobs and enqueue-bump have an environment",
+                    set(envs) == {"publish-direct", "publish-pr", "enqueue-bump"} and envs.get("enqueue-bump") == "app-gitops-pr", envs))
 
     am = files["auto-merge.yml"]
     amdoc = load(am)
     job = amdoc["jobs"]["auto-merge"]
-    atxt = steps_text(job)
-    out.append(("auto-merge: release-bump/ heads reach the job", "startsWith(github.event.pull_request.head.ref, 'release-bump/')" in job["if"]))
-    out.append(("auto-merge: the App author is required", '"$PR_AUTHOR" != "mctl-gitops-pr[bot]"' in atxt and "PR_AUTHOR: ${{ github.event.pull_request.user.login }}" in am))
-    out.append(("auto-merge: the head must be in this repository", '"$HEAD_REPO" != "$REPO"' in atxt))
-    out.append(("auto-merge: the diff is read at the judged head and run through the guard",
-                'compare/main...${head_sha}' in atxt and "release-bump-diff-guard.py < " in atxt))
-    out.append(("auto-merge: a failed diff read or guard refusal becomes a human merge",
-                'bump_problem' in atxt and 'protected=$(printf' in atxt))
-    ck = step(job, "Check out the guard scripts")
-    out.append(("auto-merge: the guard script comes from the default branch, not the PR",
-                ck is not None and "default_branch" in str(ck.get("with")) and ck["with"].get("persist-credentials") is False))
-    plain = step(job, "Merge PR")
-    out.append(("auto-merge: the plain merge step is not taken by release-bump PRs", plain is not None and "!startsWith(github.event.pull_request.head.ref, 'release-bump/')" in plain["if"]))
-    rb = step(job, "Enqueue release-bump PR")
-    rbtxt = rb["run"] if rb else ""
-    out.append(("auto-merge: release-bump merge is pinned to the judged head", "expectedHeadOid" in rbtxt and '-f h="$HEAD_SHA"' in rbtxt and "steps.guard.outputs.head_sha" in str(rb.get("env"))))
-    out.append(("auto-merge: release-bump merge waits for the other checks and stops when the head moved",
-                "release-bump-checks-ready.py" in rbtxt and '"$cur" != "$HEAD_SHA"' in rbtxt and "enqueuePullRequest" in rbtxt and "gh pr merge" not in rbtxt and "--squash" not in rbtxt))
-    out.append(("auto-merge: an unreadable PR state is a refusal", "could not read #" in rbtxt))
+    out.append(("auto-merge: release-bump/ heads no longer reach the job", "release-bump/" not in job["if"]))
+    out.append(("auto-merge: nothing in auto-merge.yml enqueues", "enqueuePullRequest" not in am))
     out.append(("auto-merge: the claude/ and portal-allowlist/ routes are unchanged",
                 "startsWith(github.event.pull_request.head.ref, 'claude/')" in job["if"] and "portal-allowlist/" in job["if"]))
     cr = files["claude-review.yml"]
@@ -178,27 +170,23 @@ MUT = [
     ("branch guard dropped", "release-deploy.yaml", 'case "$branch" in release-bump/?*) ;;', 'case "$branch" in *) ;;'),
     ("gate dropped from publish-pr", "release-deploy.yaml", "          python3 scripts/release-gate.py verify --policy-rev origin/main\n          git push --force", "          git push --force"),
     ("guard dropped from publish-pr", "gitops-bump.yaml", "run: git diff origin/main..HEAD | python3 scripts/release-bump-diff-guard.py", "run: 'true'"),
-    ("deploy key in publish-pr", "release-deploy.yaml", "          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}", "          ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}\n          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}"),
+    ("deploy key in publish-pr", "release-deploy.yaml", "for the bump pull request\n        id: token\n        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0\n        with:\n", "for the bump pull request\n        id: token\n        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0\n        with:\n          ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}\n"),
     ("App token widened", "release-deploy.yaml", "          permission-pull-requests: write\n\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n        with:\n          ref: main\n          token:", "          permission-pull-requests: write\n          permission-workflows: write\n\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n        with:\n          ref: main\n          token:"),
     ("bump job gets the environment back", "gitops-bump.yaml", "  bump:\n    needs: [validate-inputs, check-digest]\n    runs-on: ubuntu-latest\n", "  bump:\n    needs: [validate-inputs, check-digest]\n    runs-on: ubuntu-latest\n    environment: gitops-bump\n"),
     ("bump job pushes", "release-deploy.yaml", '          git format-patch -1 --stdout > "$RUNNER_TEMP/bump-patch/bump.patch"', '          git push\n          git format-patch -1 --stdout > "$RUNNER_TEMP/bump-patch/bump.patch"'),
     ("both publish jobs run for pr", "gitops-bump.yaml", "needs.bump.outputs.route == 'direct'", "needs.bump.outputs.route != 'x'"),
     ("route interpolated into the shell", "release-deploy.yaml", 'route=$(python3 scripts/release-bump-route.py --image "$IMAGE_NAME")', 'route=$(python3 scripts/release-bump-route.py --image "${{ inputs.image_name }}")'),
     ("direct route loses its gate", "gitops-bump.yaml", "          python3 scripts/release-gate.py verify --policy-rev origin/main\n          git push\n", "          git push\n"),
-    ("auto-merge: author check dropped", "auto-merge.yml", 'if [ "$PR_AUTHOR" != "mctl-gitops-pr[bot]" ]; then', 'if false; then'),
-    ("auto-merge: fork head accepted", "auto-merge.yml", 'elif [ "$HEAD_REPO" != "$REPO" ]; then', "elif false; then"),
-    ("auto-merge: guard bypassed", "auto-merge.yml", "elif ! python3 scripts/release-bump-diff-guard.py < \"$RUNNER_TEMP/pr.diff\"; then", "elif false; then"),
-    ("auto-merge: diff read at a moving ref", "auto-merge.yml", "compare/main...${head_sha}", "compare/main...${HEAD_REF}"),
-    ("auto-merge: enqueue not pinned", "auto-merge.yml", '-f h="$HEAD_SHA"', '-f h=""'),
-    ("auto-merge: enqueues without the readiness script", "auto-merge.yml", "python3 scripts/release-bump-checks-ready.py", "python3 scripts/other.py"),
-    ("auto-merge: guard scripts from the PR merge commit", "auto-merge.yml", "          ref: ${{ github.event.repository.default_branch }}\n", "          ref: ${{ github.sha }}\n"),
-    ("auto-merge: plain step also takes release-bump", "auto-merge.yml", " && !startsWith(github.event.pull_request.head.ref, 'release-bump/')", ""),
+    ("auto-merge: takes release-bump again", "auto-merge.yml", "startsWith(github.event.pull_request.head.ref, 'portal-allowlist/'))", "startsWith(github.event.pull_request.head.ref, 'portal-allowlist/') || startsWith(github.event.pull_request.head.ref, 'release-bump/'))"),
+    ("enqueue-bump renamed away", "release-deploy.yaml", "  enqueue-bump:\n    needs: publish-pr\n", "  enqueue-other:\n    needs: publish-pr\n"),
+    ("enqueue-bump joins the publish concurrency group", "gitops-bump.yaml", "  enqueue-bump:\n    needs: publish-pr\n", "  enqueue-bump:\n    needs: publish-pr\n    concurrency:\n      group: gitops-bump\n"),
+    ("enqueue-bump in the deploy-key environment", "release-deploy.yaml", "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n    environment: app-gitops-pr\n", "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n    environment: gitops-bump\n"),
     ("wait: closed unmerged is success", "release-deploy.yaml", 'echo "::error::release-bump pull request #${PR} was closed without merging"; exit 1', 'exit 0'),
     ("wait: timeout is success", "gitops-bump.yaml", 'did not merge within 50 minutes"\n          exit 1', 'did not merge within 50 minutes"\n          exit 0'),
     ("wait: any closed bump counts as superseded", "release-deploy.yaml", 'if [[ "$sup" -gt 0 ]]; then', 'if true; then'),
     ("wait step removed", "gitops-bump.yaml", "      - name: Wait for the bump to merge\n", "      - name: Something else\n"),
     ("wait moved back into publish-pr", "gitops-bump.yaml", "  await-bump:\n    needs: publish-pr\n", "  await-bump:\n    needs: publish-pr\n    concurrency:\n      group: gitops-bump\n"),
-    ("await-bump takes a secret", "release-deploy.yaml", "          GH_TOKEN: ${{ github.token }}\n          REPO: ${{ github.repository }}\n          PR: ${{ needs.publish-pr.outputs.pr }}", "          GH_TOKEN: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n          REPO: ${{ github.repository }}\n          PR: ${{ needs.publish-pr.outputs.pr }}"),
+    ("await-bump takes a secret", "release-deploy.yaml", "      - name: Wait for the bump to merge\n        env:\n          GH_TOKEN: ${{ github.token }}\n", "      - name: Wait for the bump to merge\n        env:\n          GH_TOKEN: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
     ("await-bump gets write access", "gitops-bump.yaml", "    permissions:\n      pull-requests: read\n", "    permissions:\n      pull-requests: write\n"),
     ("workflow-wide concurrency back", "gitops-bump.yaml", "# a queued bump of another service would be cancelled behind it.\njobs:\n", "# a queued bump of another service would be cancelled behind it.\nconcurrency:\n  group: gitops-bump\n  cancel-in-progress: false\njobs:\n"),
     ("newer bump no longer stops this run", "release-deploy.yaml", 'is not newer"\n              exit 1', 'is not newer"\n              true'),

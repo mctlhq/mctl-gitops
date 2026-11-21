@@ -403,6 +403,38 @@ securityCodeScanning:
   externalSecret: true
   receiver: true
 
+# The control-caller credential of the C2 kill switch (C2 epic):
+# lets mctl-api call the C2 service's kill switch endpoint with a ZITADEL
+# machine-user token that a refresher sidecar keeps fresh in a file
+# (mctl-api >= 4.164.0 ships the route dark). All false: nothing renders.
+# Order, each its own reviewed PR, rollback is flipping it back:
+#   0. Prerequisites: mctlhq/mctl-gitops#2737 applied (machine user and the
+#      ConfigMap mctl-api-c2-machine-ids with control_scope exist); owner wrote
+#      Vault platform/<c2 service>/control-caller with user_id, key_id and key;
+#      the refresher image is released and its tag set below; the mctl-api chart
+#      pin carries extraContainers / extraVolumes / extraVolumeMounts.
+#   1. enabled: true (ExternalSecret, sidecar, URL and token file; the route
+#      stays dark). Confirm the Secret synced and the token file appears.
+#   2. Bump ROLLOUT_MARKER in its own PR if the pods did not roll.
+#   3. killSwitch: true (turns the route on).
+# A pod with enabled while the Secret or the ConfigMap is missing cannot start
+# the sidecar and stays NotReady: do not flip enabled before step 0 is checked.
+apiC2Control:
+  enabled: false
+  killSwitch: false
+  # Must be set true in the same PR that moves the mctl-api chart pin to a
+  # revision with the three slots above; the render refuses enabled without it.
+  chartSlots: true
+  refresherImage:
+    repository: ghcr.io/mctlhq/mctl-glovo
+    # Placeholder: the release flow does NOT bump this line yet (its
+    # values_path is the C2 service template). Set it by hand to the released
+    # tag, or extend the flow; enabled refuses the placeholder.
+    tag: "0.3.2"
+    # TODO(refresher): the command of the control-caller refresher; empty
+    # until that image exists (enabled refuses it).
+    command: ["token-refresher"]
+
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
 # publishes and promotes agent versions with it instead of the admin service
@@ -506,38 +538,8 @@ surfaceTelegramToken:
 #
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.
-externalManifestNamespaces:
-  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets will live in this
-  # chart, templates/erpact/externalsecrets.yaml, added by the erpact wiring
-  # (#1516) together with project erpact; never in that repository.
-  erpact:
-    secrets:
-      - clo-s3
-      - deployer-git
-      - deployer-secret
-      # R2 token for the copy's backups (bucket erpact-backups only).
-      - erpact-backup-r2
-      # OIDC client of the sites in ZITADEL, filled by the zitadel-iac Job;
-      # declared in infra-components/erpact/oidc-zitadel.yaml (#1501).
-      - erpact-oidc-zitadel
-      # Tenant users each Frappe site must have (e-mail, names, sites,
-      # roles; only users opted in with "frappe"), also from zitadel-iac.
-      - erpact-frappe-users
-      - mariadb-root
-    # No RBAC is bound to default in erpact. Project erpact (#1516) admits
-    # no Secret and no RBAC kind from the tenant's repository, so that
-    # repository can neither bind a Role to default nor mint a
-    # service-account-token Secret under an allowed name.
-    serviceAccounts:
-      - default
-    # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
-    # policy anchors it), so the repository cannot claim another tenant's
-    # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
-    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
-    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
-    # The apex erpact.online is not matched.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
+# None today: the only entry, tenant erpact, was removed with its namespace.
+externalManifestNamespaces: {}
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
@@ -712,3 +714,37 @@ obiSpike:
     limits.cpu: "3"
     limits.memory: "3Gi"
     pods: "10"
+
+# C2 cluster service switches (the service's bootstrap template documents
+# each one). All false: only the namespace and its NetworkPolicies
+# render. Each flip is its own reviewed PR; rollback is flipping it back.
+mctlGlovo:
+  deploy: true
+  c2: true
+  allowlist: true
+  consent: true
+  control: true
+  # mctl-api's side of the consent read (the consent routes, their cap and the
+  # reader identity). Independent of the switches above so it can be lit
+  # first. The cutover runbook (docs/runbooks, C2 cutover) holds the order.
+  apiConsent: true
+  # Fresh sign-in on the link routes (the link audience and the maximum login
+  # age, two optional variables of the service). Off: both stay unset and the
+  # link preview and upload routes refuse every request. Needs c2.
+  linkLogin: false
+  # The public route to the service: an Ingress object, a Traefik source in
+  # the server policy and the trusted-proxies variable. Needs c2, host,
+  # trustedProxies and the host's reservedPlatformHosts owner. Rollback: false.
+  ingress: false
+  host: glovo.mctl.ai
+  # CIDRs of the Traefik pods (the same set as mctl-api's TRUSTED_PROXY_CIDRS).
+  # Required while ingress is on: the service keys its per-IP link limits on
+  # the address behind these proxies.
+  trustedProxies: ""
+  # Longest age of the sign-in behind a link preview or upload (a Go duration,
+  # at most 15m). Read only while linkLogin is on.
+  linkMaxAuthAge: 5m
+  # The cohort size, read by BOTH the service and mctl-api's consent slots: one
+  # value so the two cannot drift. A whole number, 1..20. Raising it is an
+  # owner decision with its own reviewed PR, never a rider on another change.
+  capacity: 1

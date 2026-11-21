@@ -249,8 +249,9 @@ A pod stuck in `CreateContainerConfigError` means the Vault secret is missing.
 
 Forgejo's built-in registry serves `git.mctl.ai/<org>/<image>:<tag>`. It is
 used for images that must not be in `ghcr.io/mctlhq` (one org-wide pull
-credential): today the ERPact copy, built by
-`.github/workflows/erpact-images.yaml`.
+credential). The ERPact copy was the only user: its build workflow
+(`erpact-images.yaml`) was removed in 2026-11 with the copy, and the images
+already pushed stay in `git.mctl.ai/erpact/`.
 
 Who can pull and push. Forgejo decides package access for an org by the
 **highest team permission** the account holds in that org, regardless of the
@@ -280,12 +281,11 @@ layer, 15 chunks). 50 MB chunks hit Traefik's 60 s from a slow uplink.
 Space. Packages live on `forgejo-data` with the repositories.
 `[packages] LIMIT_TOTAL_OWNER_SIZE = 4G` caps each owner (org or user); a push
 over the cap is refused, and the fix is deleting old versions, not raising
-the cap past what the volume holds. `erpact-images.yaml` keeps the newest 10
-semver tags per image and deletes older ones after each successful push.
-That is a workflow step because Forgejo's own cleanup rules exist only in the
-web UI, with no API, so they could not be declared. A deleted version is
-unlinked at once; its blobs are removed by the `cleanup_packages` cron at
-midnight, once they are over 24 hours old.
+the cap past what the volume holds. Forgejo's own cleanup rules exist only in
+the web UI, with no API, so they cannot be declared; a deleted version is
+unlinked at once and its blobs are removed by the `cleanup_packages` cron at
+midnight, once they are over 24 hours old. (`erpact-images.yaml` used to keep
+the newest 10 semver tags per image; with it gone, nothing prunes.)
 
 Known behaviour: org members with write (Owners, Developers, write teams)
 can push and delete every package of the org, not only the CI account. For

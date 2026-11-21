@@ -58,22 +58,34 @@ a normal GitOps PR that moves exactly one proposal back to `accepted`.
 
 **How `accepted` gets written (changed 2026-08-29).** For a proposal driven by
 a Temporal `DevLoopWorkflow`, the operator no longer edits `.status.yaml` by
-hand. The approve signal
-(`POST /api/v1/agents/dev-loop/{workflow_id}/approve`) makes the workflow run
-the `mctl-agents-approve` CWFT, which flips `proposed → accepted` as its own
-gitops commit and records the approver in the `approval` block
+hand. The owner's approval of the DevLoop's pending grant makes the workflow
+run the `mctl-agents-approve` CWFT, which flips `proposed → accepted` as its
+own gitops commit and records the approver in the `approval` block
 (mctl-agents#150; `cwft-mctl-agents-approve.yaml`; the stage is gated on the
 `atomic-approve` patch marker in `dev_loop.py`, so loops started before
-mctl-agents 1.30.0 still take the legacy manual-flip path). The same flip is
-available directly as the `mctl-agents-approve` operation
-(`service`, `slug`, `approver`), and it is idempotent on an already-accepted
-proposal.
+mctl-agents 1.30.0 still take the legacy manual-flip path).
+
+The owner decides on the **DevLoop decide page** (owner decision
+2026-11-18): a fresh ZITADEL sign-in with a second factor. Its link is the
+`decide_url` field of `mctl_get_dev_loop_approval`
+(`GET /api/v1/agents/dev-loop/{workflow_id}/approval`), set while a grant is
+pending. Agents and CLIs hand that link to the owner on its own line; if a
+terminal wraps it, copy the whole link. From mctl-api 4.170.0,
+`POST /api/v1/agents/dev-loop/{workflow_id}/approve` (`mctl_approve_dev_loop`)
+refuses a pending grant with 403 `decide_page_required` and returns the same
+`decide_url`; re-sending an already-approved grant still works. The
+`mctl-agents-approve` operation (`mctl_trigger_approve`) is refused for direct
+use the same way. The break-glass `DEVLOOP_BEARER_APPROVE_ENABLED=true` is off
+by default and is the owner's call. The flip itself is idempotent on an
+already-accepted proposal.
 
 So a decisions-only GitOps PR that appends operator decisions to `tasks.md`
 and leaves `.status.yaml` at `proposed` is **correct, not an oversight** —
 flipping the status in that PR would only race the CWFT. Manual flips remain
 the affordance for proposals with no live workflow (a cron-driven proposal, or
-re-arming a `needs-triage` one).
+re-arming a `needs-triage` one); from mctl-api 4.170.0 a direct flip through
+the operation is break-glass only
+(`docs/runbooks/proposal-approval-content-digest.md`).
 
 Trigger for Tier 3 is `status` in `{implemented, review-fixing, in-progress}`;
 missing PR URLs are recovered from `feat/agents-<slug>`.

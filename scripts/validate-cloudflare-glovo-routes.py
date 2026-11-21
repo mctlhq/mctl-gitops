@@ -9,8 +9,8 @@ https://developers.cloudflare.com/workers/configuration/routing/routes/
 
 Checks, by simulating that matching over the declared routes:
   - the root, with or without a query string, is served by glovo-landing;
-  - /mcp and /.well-known/* are never served by a Worker (they stay on the
-    tunnel origin);
+  - /mcp, /link* and /.well-known/* are never served by a Worker (they stay
+    on the tunnel origin);
   - no pattern contains a query parameter (the API rejects it).
 
   validate-cloudflare-glovo-routes.py            check the repository tree
@@ -36,6 +36,12 @@ CASES = [
     ("/.well-known/oauth-protected-resource", None),
     ("/.well-known/oauth-protected-resource/mcp", None),
     ("/.well-known/oauth-protected-resource?x=1", None),
+    ("/link", None),
+    ("/link?x=1", None),
+    ("/link/code", None),
+    ("/link/preview", None),
+    ("/link/upload", None),
+    ("/link/unlink", None),
 ]
 
 RESOURCE = re.compile(r'resource\s+"cloudflare_workers_route"\s+"[^"]+"\s*\{(.*?)\n\}', re.S)
@@ -92,7 +98,7 @@ def selftest():
     def drop(name, text):
         return re.sub(r'resource\s+"cloudflare_workers_route"\s+"%s"\s*\{.*?\n\}\n' % name, "", text, flags=re.S)
 
-    for name in ("glovo_landing_query", "glovo_origin_mcp", "glovo_origin_well_known"):
+    for name in ("glovo_landing_query", "glovo_origin_mcp", "glovo_origin_well_known", "glovo_origin_link"):
         assert check(drop(name, good)), f"removing {name} must fail"
     assert check(good.replace('"glovo.mctl.ai/*"', '"glovo.mctl.ai/?*"')), "query pattern must fail"
     wide = good + '\nresource "cloudflare_workers_route" "w" {\n  pattern = "glovo.mctl.ai/*mcp*"\n  script  = "glovo-landing"\n}\n'

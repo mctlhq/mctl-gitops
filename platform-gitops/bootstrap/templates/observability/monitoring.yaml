@@ -733,6 +733,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # RedLoop synthetic staging (vm-rules/redloop-alerts.yaml).
+                  # Telegram only, no ticket, and that is load-bearing: these
+                  # alerts are the stop conditions of a DAST window
+                  # (docs/runbooks/redloop-gate4-roe.md). The remedy is a human
+                  # halting the scanner. If mctl-agent got them, it would try to
+                  # remediate the very target under test. Prefix match, so the
+                  # next RedLoop alert is not agent-only by default.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "RedLoop.*"
                   # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
                   # Telegram only, no ticket: every remedy is a human's -- the
                   # dashboard's "Re-authenticate server", a token, or a sync
@@ -810,12 +820,12 @@ spec:
                   - receiver: telegram
                     continue: true
                     matchers:
-                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
+                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|ArgoCDApplicationSyncUnknown"
                       - project =~ "default|platform"
                   # paged twin (see the canary route above)
                   - receiver: mctl-agent-paged
                     matchers:
-                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
+                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|ArgoCDApplicationSyncUnknown"
                       - project =~ "default|platform"
                   # A stalled GitOps loop needs a human: nothing deploys until
                   # someone restarts or hard-refreshes (#970). No project
@@ -1134,7 +1144,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*|SharedPg.*"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|ArgoCDApplicationSyncUnknown|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*|SharedPg.*"
                   # Restores the root default for everything that got this far.
                   # The root receiver fires only when NO child route matched,
                   # and the continue: true direct-paging routes above count as
@@ -1302,13 +1312,6 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/grafana-access
-
-    # Per-tenant metrics access for Grafana tenant orgs (#1601, step 2): a
-    # vmauth that adds each tenant's namespace filter to every query, and its
-    # VMUsers. Nothing reads through it until the tenant orgs exist (step 4).
-    - repoURL: https://github.com/mctlhq/mctl-gitops.git
-      targetRevision: main
-      path: platform-gitops/infra-components/observability/grafana-tenants
 
     # VMSingle's NetworkPolicy: only the inventoried clients reach it, so a
     # tenant cannot query it around vmauth (#1601).
