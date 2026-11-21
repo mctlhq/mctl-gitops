@@ -431,37 +431,16 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates socat
-              mkdir -p ~/.ssh
-              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-              chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-              # GitHub's published SSH host keys, PINNED rather than trusted on
-              # first use. Source: https://api.github.com/meta (.ssh_keys),
-              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
-              # which accepted whatever key answered on a connection that
-              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
-              # ssh.github.com was handed that key with no complaint.
-              #
-              # Keyed on [ssh.github.com]:443, not github.com. The Host block
-              # above rewrites hostname and port, and ssh looks up what it
-              # actually connects to — a github.com entry would silently miss.
-              #
-              # If GitHub rotates a host key these lines must be updated; it
-              # last happened in March 2023, when the RSA key was replaced.
-              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-              GITHUB_HOST_KEYS
-              chmod 600 ~/.ssh/known_hosts
-              chmod 600 ~/.ssh/config
-              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              apk add --no-cache ca-certificates
+              # Anonymous https clone: the repository is public and this step
+              # only reads it, so it holds no credential. The step that
+              # pushes sets up its own ssh remote.
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped
               # sessions right after the handshake (proxy tunnels were 200), every
               # clone exited 128 and each failed run fanned out into an incident.
-              # Same key and URL on every try; git prints its own stderr.
+              # Same URL on every try; git prints its own stderr.
               for attempt in 1 2 3; do
-                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                if git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git" /workdir/mctl-gitops; then
                   break
                 fi
                 rm -rf /workdir/mctl-gitops
@@ -491,8 +470,6 @@ spec:
           volumeMounts:
             - name: workdir
               mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
       inputs:
         parameters:
           # Which Vault key under mctl-agents-secrets holds the OAuth token
@@ -1029,37 +1006,16 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates socat
-              mkdir -p ~/.ssh
-              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-              chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
-              # GitHub's published SSH host keys, PINNED rather than trusted on
-              # first use. Source: https://api.github.com/meta (.ssh_keys),
-              # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
-              # which accepted whatever key answered on a connection that
-              # carries a WRITE-capable deploy key: a MITM or a DNS-poison of
-              # ssh.github.com was handed that key with no complaint.
-              #
-              # Keyed on [ssh.github.com]:443, not github.com. The Host block
-              # above rewrites hostname and port, and ssh looks up what it
-              # actually connects to — a github.com entry would silently miss.
-              #
-              # If GitHub rotates a host key these lines must be updated; it
-              # last happened in March 2023, when the RSA key was replaced.
-              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-              GITHUB_HOST_KEYS
-              chmod 600 ~/.ssh/known_hosts
-              chmod 600 ~/.ssh/config
-              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              apk add --no-cache ca-certificates
+              # Anonymous https clone: the repository is public and this step
+              # only reads it, so it holds no credential. The step that
+              # pushes sets up its own ssh remote.
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped
               # sessions right after the handshake (proxy tunnels were 200), every
               # clone exited 128 and each failed run fanned out into an incident.
-              # Same key and URL on every try; git prints its own stderr.
+              # Same URL on every try; git prints its own stderr.
               for attempt in 1 2 3; do
-                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                if git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git" /workdir/mctl-gitops; then
                   break
                 fi
                 rm -rf /workdir/mctl-gitops
@@ -1078,8 +1034,6 @@ spec:
           volumeMounts:
             - name: workdir
               mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
       # mctl-gitops-main-writes was hoisted to template-level here
       # (down from spec-level) so the rest of the shepherd run —
       # clone, run-shepherd, the 5-min post-deploy-verify sleep —
@@ -1164,6 +1118,9 @@ spec:
           cd /workdir/mctl-gitops
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
+          # The init container cloned over anonymous https, so point origin at
+          # the ssh remote for the fetch and push below.
+          git remote set-url origin git@github.com:mctlhq/mctl-gitops.git
 
           # The two pathspecs this step will ever stage or exclude, plus the
           # equivalent regex for validating a handoff's file list — kept as
