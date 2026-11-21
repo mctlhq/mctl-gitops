@@ -45,7 +45,12 @@ containers:
         GRAFANA_AUTH="$(cat /grafana-admin/admin-user):$(cat /grafana-admin/admin-password)"
         case "$GRAFANA_AUTH" in :*|*:) echo "grafana-iac: the admin credential is empty; refusing"; exit 1 ;; esac
         export GRAFANA_AUTH
-        cp /iac-root/*.tf /iac-root/*.json /work/
+        cp /iac-root/*.tf /work/
+        # Dashboards (*.json) are optional: with none in iac/ the glob stays
+        # literal and a bare cp would abort the run under set -e.
+        for f in /iac-root/*.json; do
+          if [ -e "$f" ]; then cp "$f" /work/; fi
+        done
         cp /iac-root/terraform.lock.hcl /work/.terraform.lock.hcl
         cd /work
         tofu init -lockfile=readonly -no-color

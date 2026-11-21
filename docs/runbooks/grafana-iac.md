@@ -7,7 +7,7 @@ in-cluster Job, not clicked in the UI.
 
 | Piece | Where |
 | --- | --- |
-| OpenTofu root (folder ACLs, tenant orgs, their dashboards as `*.json`) | `platform-gitops/helm-charts/grafana-iac/iac/` |
+| OpenTofu root (folder ACLs; tenant orgs and dashboards (`*.json`) when present) | `platform-gitops/helm-charts/grafana-iac/iac/` |
 | Job, CronJob, guard | `platform-gitops/helm-charts/grafana-iac/` |
 | Argo CD Application, namespace `grafana-iac` | `platform-gitops/bootstrap/templates/observability/grafana-iac.yaml` |
 | Admin credential, tenant metrics passwords and pull secret (ExternalSecrets), the Job's NetworkPolicies | `platform-gitops/infra-components/observability/grafana-iac/` |
