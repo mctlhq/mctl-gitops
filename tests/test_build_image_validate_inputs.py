@@ -78,11 +78,15 @@ for ref, want in [("feature/x-1", "false"), ("1.2.3", "false"), ("0123456789abcd
 
 # The credentials are gated on that output.
 app = by_id["app_token"]
-check("steps.validate.outputs.untrusted_ref != 'true'" in app["if"], f"app_token if: {app['if']}")
+# Exact expressions: a substring check passes for logically wrong gates
+# (e.g. `||` instead of `&&`), so pin the whole expression.
+check(app["if"] == "steps.vault_pat.outputs.has_pat != 'true' && steps.validate.outputs.untrusted_ref != 'true'",
+      f"app_token if: {app['if']!r}")
 push = by_id["push"]
-check("steps.validate.outputs.untrusted_ref != 'true'" in push["with"]["secrets"]
-      and "GH_PACKAGES_TOKEN" in push["with"]["secrets"], f"github_token secret: {push['with']['secrets']}")
-check("inputs.repo" in push["with"]["secrets"], "github_token must stay gated on the repo allow-list")
+check(push["with"]["secrets"] == (
+    "github_token=${{ contains(fromJSON('[\"mctlhq/mctl-web\",\"mctlhq/mctl-docs\",\"mctlhq/mctl-academy\"]'), "
+    "inputs.repo) && steps.validate.outputs.untrusted_ref != 'true' && secrets.GH_PACKAGES_TOKEN || '' }}\n"),
+    f"github_token secret: {push['with']['secrets']!r}")
 
 if failures:
     for f in failures:
