@@ -88,7 +88,7 @@ def fails(show, *args, why, extra_values=None):
 # the LIVE state (deploy turns on at the start of the cutover), and this proves what
 # "all off" renders, not what is live. c2 and allowlist are set explicitly
 # for the same reason: they turn on with the cutover.
-r = helm(SVC, "--set", "mctlGlovo.deploy=false", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false")
+r = helm(SVC, "--set", "mctlGlovo.deploy=false", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false")
 check(r.returncode == 0, f"default render failed: {r.stderr[-200:]}")
 kinds = {d["kind"] for d in docs(r)}
 check(kinds <= {"Namespace", "ServiceAccount", "NetworkPolicy"}, f"default render has extra kinds {kinds}")
@@ -128,14 +128,14 @@ check(r.returncode == 0, f"linkLogin render failed: {r.stderr[-200:]}")
 check(env.get("GLOVO_LINK_RESOURCE") == "https://glovo.mctl.ai/link", f"link resource {env.get('GLOVO_LINK_RESOURCE')!r}")
 check(env.get("GLOVO_LINK_RESOURCE") != "https://glovo.mctl.ai/mcp", "link audience equals the MCP resource")
 check(env.get("GLOVO_LINK_MAX_AUTH_AGE") == "5m", f"link max age {env.get('GLOVO_LINK_MAX_AUTH_AGE')!r}")
-fails(SVC, "--set", "mctlGlovo.linkLogin=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", why="linkLogin switch requires the c2 switch")
+fails(SVC, "--set", "mctlGlovo.linkLogin=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", why="linkLogin switch requires the c2 switch")
 for bad in ("16m", "901s", "0m", "5h", "1.5m", "5"):
     fails(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true", "--set", f"mctlGlovo.linkMaxAuthAge={bad}", why="linkMaxAuthAge value")
 r = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true", "--set", "mctlGlovo.linkMaxAuthAge=15m")
 check(r.returncode == 0, "15m is the allowed maximum")
 
 # 5. ingress
-fails(SVC, "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", why="ingress switch requires the c2 switch")
+fails(SVC, "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", why="ingress switch requires the c2 switch")
 fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values=None)
 fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", why="trustedProxies", extra_values=HOSTS)
 r = helm(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, extra_values=HOSTS)
