@@ -33,6 +33,12 @@ HELM_STUB = """#!/bin/sh
 echo "helm $*" >> "$CALLS"
 if [ "$1" = status ]; then
   [ "$4" = "$HELM_PRESENT_NS" ] && exit 0
+  # HELM_ERROR_NS: a failure that is NOT "not found" (API down, RBAC, ...).
+  if [ "$4" = "${HELM_ERROR_NS:-}" ]; then
+    echo "Error: Kubernetes cluster unreachable: connection refused" >&2
+    exit 1
+  fi
+  echo "Error: release: not found" >&2
   exit 1
 fi
 exit 0
@@ -105,6 +111,16 @@ class PreviewDeleteTLSSecret(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         # Not vacuous: the failure must come from the kubectl call.
         self.assertEqual(calls[-1], self.WANT)
+
+    def test_helm_status_error_is_not_read_as_absent(self):
+        # gitops#999: a transient API/RBAC error used to read as "release
+        # absent", skipping the uninstall and leaking the preview namespace.
+        for ns in ("labs-preview", "labs"):
+            proc, calls = self.run_script(HELM_PRESENT_NS="none", HELM_ERROR_NS=ns)
+            self.assertNotEqual(proc.returncode, 0, ns)
+            self.assertIn("unreachable", proc.stderr)
+            self.assertFalse([c for c in calls if c.startswith("helm uninstall")], ns)
+            self.assertFalse([c for c in calls if c.startswith("kubectl")], ns)
 
     def test_image_has_kubectl(self):
         self.assertTrue(self.script["image"].startswith("ghcr.io/mctlhq/mctl-workflow-tools:"),
