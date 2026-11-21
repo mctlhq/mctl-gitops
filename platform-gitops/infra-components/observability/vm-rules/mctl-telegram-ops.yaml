@@ -315,6 +315,82 @@ spec:
               "bridge token: credential refused").
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
 
+    - name: mctl-telegram-worker-auth
+      rules:
+        # mctl-telegram#1346/#1347: the worker-token revocation cache fails
+        # closed. Once its last good snapshot is older than 15s
+        # (localjwt.MaxRevocationSnapshotAge), every token that goes through
+        # that one shared cache (worker, pool, Local Bridge, agent job and PA
+        # job tokens) is refused with 401. A shared-pg outage longer than
+        # that therefore stops every agent worker. The bound is a promise to
+        # the owner; the response to this alert is restoring the database,
+        # never loosening it.
+        #
+        # Why the snapshot age and not the failure counter. Request traffic
+        # cannot carry this alert: an agent worker exits on its first 401
+        # (no credential reload, so retrying is pointless) and comes back
+        # only through CrashLoopBackOff, up to five minutes apart, and the PA
+        # worker stops. One or two crash-looping workers leave a 30-minute
+        # outage with almost no requests, so any rule on request-driven
+        # refresh failures stays silent. mctl-telegram#1360 adds a background
+        # refresher (every 5s, each read bounded by a 5s deadline) and exports
+        # mctl_worker_token_revocation_snapshot_age_seconds, computed at
+        # scrape time from when the served snapshot's read began, the same
+        # measure the 15s bound uses. It answers the question this alert
+        # asks, "are worker tokens being refused right now", without any
+        # traffic and without depending on how failures are counted. A
+        # healthy store keeps it under 10s (interval 5s + read deadline 5s),
+        # however slow the reads are within that deadline. A cache that has
+        # never loaded reports its own age, never 0, so a pod that starts
+        # into the outage pages too. mctl_worker_token_revocation_refresh_failures_total
+        # stays a diagnostic (runbook): with the refresher it rises at least
+        # once per 10s through an outage.
+        #
+        # `> 15` is the bound itself: the server refuses at age > 15s, so an
+        # age of exactly 15 refused nothing yet. max_over_time over [1m] (two
+        # 30s scrapes) holds a store that flaps between failing and healthy:
+        # tokens are refused in every minute, but an instant sample can land
+        # on a fresh snapshot and reset the hold. The window is shorter than
+        # the hold, as in MctlBridgeAuthFailing above, so one stale minute (a
+        # shared-pg failover) leaves the window inside the hold and cannot
+        # page. `max by (job)`: the worst pod; a restart starts a new series
+        # and the outage keeps paging across it. Time to page: about 5.5
+        # minutes after refusals begin.
+        #
+        # Absent series. The gauge exists only from the mctl-telegram
+        # release containing #1360, the first one after 0.140.0. 0.140.0
+        # itself already refuses tokens (#1347) but exports no gauge, so
+        # while it runs a shared-pg outage stops every agent worker and this
+        # rule pages nothing; that gap closes only when the release
+        # containing #1360 is deployed. Releases before 0.140.0 fail open.
+        # On any release without the gauge the rule has no data and is
+        # silent, so it never pages falsely. A server that is down or
+        # unscraped yields no data either; ServiceUnavailable (/healthz probe)
+        # and its absent() twin in blackbox-alerts.yaml cover that, and no
+        # absent() is added here (gitops#2277). The preview scrape keeps only
+        # mctl_agent_.*, so the series is production-only.
+        #
+        # severity critical: the impact is every agent worker refused at
+        # once, the same tier as ServiceUnavailable. Per the severity route
+        # (#1771) every critical alert pages on Telegram, which is not the
+        # path being broken here.
+        - alert: MctlWorkerTokenRevocationRefreshFailing
+          expr: max by (job) (max_over_time(mctl_worker_token_revocation_snapshot_age_seconds[1m])) > 15
+          for: 5m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+            description: >-
+              The worker-token revocation snapshot reached {{ $value | humanizeDuration }}
+              in the last minute and has been past its 15-second bound for five
+              minutes. Past the bound every worker, pool, Local Bridge and job
+              token is refused with 401, so agent workers are stopped. The store
+              is the cause (shared-pg down, unreachable or hung): check the
+              database, not the bound.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
+
     - name: mctl-telegram-agent
       rules:
         - alert: MctlAgentDeadLetter

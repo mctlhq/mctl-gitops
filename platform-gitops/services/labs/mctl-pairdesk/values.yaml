@@ -39,6 +39,7 @@ env:
   MINI_APP_URL: https://labs-mctl-pairdesk.mctl.ai/app
   TELEGRAM_WEBHOOK_URL: https://labs-mctl-pairdesk.mctl.ai/telegram/webhook
   SUPER_ADMIN_TELEGRAM_IDS: "210408407"
+  TRUST_CF_CONNECTING_IP: "true"
 ingress:
   enabled: true
   hosts:
