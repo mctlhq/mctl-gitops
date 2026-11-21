@@ -4,5 +4,5 @@ description: ArgoCD configuration managed by argocd-self-managed Application
 version: 1.0.0
 dependencies:
   - name: argo-cd
-    version: "9.5.22"
+    version: "10.11.7"
     repository: https://argoproj.github.io/argo-helm
