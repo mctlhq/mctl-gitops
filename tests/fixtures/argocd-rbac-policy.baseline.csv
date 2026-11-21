@@ -7,7 +7,7 @@ g, xxxx, role:team-xxxx
 g, yyy, role:team-yyy
 p, ci-freshness, applications, get, */*, allow
 p, mctl-api, applications, get, */*, allow
-p, mctl-api, projects, get, */*, allow
+p, mctl-api, projects, get, *, allow
 p, role:admin, applications, *, */*, allow
 p, role:admin, clusters, get, */*, allow
 p, role:admin, exec, create, */*, allow
