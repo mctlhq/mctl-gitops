@@ -1,8 +1,8 @@
 # Cloudflare — account-scoped root
 
 Holds resources that are not attached to a single zone: R2 buckets, Access
-applications/policies/IdPs and organization settings, Zero Trust gateway and
-device settings, and eventually the MCP Portal and its servers.
+applications/policies and the ZITADEL IdP (organization settings, the other
+IdPs and Zero Trust gateway/device settings are not held yet, see below), and eventually the MCP Portal and its servers.
 
 **What it holds.** The root was empty until `projects.mctl.ai` landed in
 `projects-mcp.tf`, an Access application created here rather than imported.
@@ -30,7 +30,8 @@ are not in this root either.
 
 **Identity providers.** Only ZITADEL is declared (`zitadel-idp.tf`, a public
 PKCE client with no secret). The Google and one-time PIN providers are
-deliberately dashboard-managed, not a tracked Terraform gap: the Google OAuth
+currently dashboard-managed (importing them, or recording that they stay
+there, is an owner decision tracked in #1328): the Google OAuth
 client secret lives in Cloudflare (and its client in Google Cloud), never in
 this repository, and the root only references both providers by id
 (`projects_mcp_google_idp_id`, `projects_mcp_otp_idp_id` in `projects-mcp.tf`).
