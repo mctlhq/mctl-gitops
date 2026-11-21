@@ -194,6 +194,45 @@ for args, label in ((("yes", "succeeded"), "merged=yes"),
     check(f"{label} -> verifies and flags the Degraded app",
           (rc, status, slept) == (1, "degraded", True), (rc, status, slept))
 
+# gitops#1049: the post-grace read decides whether a Degraded app recovered.
+# A failed or empty read must fail the gate as kubectl-failed, never read as
+# "no longer Degraded". The stub serves the Degraded list on the first call
+# and then misbehaves per `mode`; `recover` serves a healthy list instead.
+
+
+def verify_grace(mode):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        env = stubs(tmp, APPS)
+        healthy = {"items": [{"metadata": {"namespace": "argocd", "name": "x"},
+                              "status": {"health": {"status": "Healthy"}}}]}
+        (tmp / "healthy.json").write_text(json.dumps(healthy))
+        body = {"fail": "exit 1", "empty": "exit 0",
+                "recover": f'cat "{tmp}/healthy.json"'}[mode]
+        # Call 1 lists the Degraded app; every later call (the grace re-read
+        # and its retries) takes the `mode` behavior.
+        (tmp / "bin/kubectl").write_text(
+            "#!/bin/sh\n"
+            f'n=$(cat "{tmp}/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "{tmp}/n"\n'
+            f'if [ "$n" -eq 1 ]; then cat "{tmp}/apps.json"; exit 0; fi\n'
+            f"{body}\n")
+        (tmp / "bin/kubectl").chmod(0o755)
+        env["STARTED_AT"] = NOW
+        (tmp / "out").mkdir()
+        r = subprocess.run(["bash", "-c", relocate(VERIFY, tmp)], env=env,
+                           capture_output=True, text=True)
+        calls = int((tmp / "n").read_text())
+        return (r.returncode, (tmp / "out/verify_status").read_text(), calls)
+
+
+for mode in ("fail", "empty"):
+    rc, status, calls = verify_grace(mode)
+    check(f"post-grace read {mode} -> kubectl-failed, exit 1, retried",
+          (rc, status, calls) == (1, "kubectl-failed", 4), (rc, status, calls))
+rc, status, calls = verify_grace("recover")
+check("post-grace read healthy -> still clean (recovered within grace)",
+      (rc, status, calls) == (0, "clean", 2), (rc, status, calls))
+
 # ---------------------------------------------------------------- part 3
 
 

@@ -1587,17 +1587,36 @@ spec:
           if [ -n "$BAD" ]; then
             echo "⚠️  Newly Degraded apps detected: $BAD — waiting 120s to confirm (rolling-update grace)…"
             sleep 120
-            RAW2=$(kubectl get applications.argoproj.io -n argocd -o json 2>/dev/null) || RAW2=""
-            BAD2=""
-            if [ -n "$RAW2" ]; then
-              BAD2=$(printf '%s' "$RAW2" | jq -r --arg ts "$THRESHOLD" '
-                ($ts | fromdateiso8601) as $threshold
-                | .items[]
-                | select(.status.health.status == "Degraded")
-                | select(((.status.health.lastTransitionTime // "1970-01-01T00:00:00Z") | fromdateiso8601) > $threshold)
-                | "\(.metadata.namespace)/\(.metadata.name)"
-              ' | tr '\n' ' ')
+            # The post-grace read decides whether a Degraded app recovered.
+            # A failed or empty read is "could not observe", never "no longer
+            # Degraded" (#1049): retry it like the first read, and fail the
+            # step with kubectl-failed if it never succeeds.
+            RAW2=""
+            RC2=1
+            for attempt in 1 2 3; do
+              set +e
+              RAW2=$(kubectl get applications.argoproj.io -n argocd -o json 2>/dev/null)
+              RC2=$?
+              set -e
+              if [ "$RC2" -eq 0 ] && [ -n "$RAW2" ]; then
+                break
+              fi
+              echo "⚠️  post-grace kubectl get applications attempt ${attempt}/3 failed (rc=$RC2)"
+              [ "$attempt" -lt 3 ] && sleep 5
+            done
+            if [ "$RC2" -ne 0 ] || [ -z "$RAW2" ]; then
+              echo "❌ post-grace kubectl get applications failed 3× — cannot confirm recovery of: $BAD"
+              printf 'kubectl-failed' > /tmp/onexit/verify_status
+              echo "kubectl-failed post-grace (rc=$RC2)" > /tmp/onexit/degraded.txt
+              exit 1
             fi
+            BAD2=$(printf '%s' "$RAW2" | jq -r --arg ts "$THRESHOLD" '
+              ($ts | fromdateiso8601) as $threshold
+              | .items[]
+              | select(.status.health.status == "Degraded")
+              | select(((.status.health.lastTransitionTime // "1970-01-01T00:00:00Z") | fromdateiso8601) > $threshold)
+              | "\(.metadata.namespace)/\(.metadata.name)"
+            ' | tr '\n' ' ')
             if [ -n "$BAD2" ]; then
               echo "❌ Still Degraded after 120s grace: $BAD2"
               echo "Threshold (workflow.creationTimestamp): $THRESHOLD"
@@ -1660,6 +1679,9 @@ spec:
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that
