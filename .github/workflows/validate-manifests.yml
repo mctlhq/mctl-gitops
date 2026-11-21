@@ -622,7 +622,12 @@ jobs:
           tmpdir=$(mktemp -d)
           helm template test platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
           helm template test platform-gitops/argocd -f platform-gitops/argocd/values.yaml > "$tmpdir/argocd.yaml"
-          kubeconform -strict -summary -schema-location default \
+          # CustomResourceDefinition is skipped: the argocd chart renders the
+          # three Argo CD CRDs (crds.install: true) and neither the default
+          # schema location nor the CRD catalog ships a schema for the CRD
+          # kind itself ("could not find schema for CustomResourceDefinition").
+          # Every other kind, including the Argo CD resources, is still checked.
+          kubeconform -strict -summary -skip CustomResourceDefinition -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
           # A platform NetworkPolicy placed in a tenant namespace must also be
