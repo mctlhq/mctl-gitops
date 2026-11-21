@@ -195,7 +195,10 @@ argo-cd:
         # ... and read AppProjects, only for the admin-only sync windows tool
         # (mctl_get_sync_windows, GET /api/v1/projects/{name}/syncwindows).
         # Read only: windows are written by a gitops PR, never through the API.
-        p, mctl-api, projects, get, */*, allow
+        # The object of the projects resource is the bare project name, not
+        # <project>/<app> as for applications: "*/*" matches no project name
+        # (a first version used it and Argo CD answered permission denied).
+        p, mctl-api, projects, get, *, allow
         # argocd-freshness workflow: list applications and their revisions
         p, ci-freshness, applications, get, */*, allow
 
