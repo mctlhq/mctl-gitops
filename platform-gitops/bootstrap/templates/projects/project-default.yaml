@@ -71,6 +71,7 @@
       "backstage"
       "cert-manager"
       "cnpg-system"
+      "erpact"
       "external-secrets"
       "forgejo"
       "grafana-iac"
