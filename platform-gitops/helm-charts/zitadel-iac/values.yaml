@@ -142,19 +142,16 @@ image:
 #   listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
-# "forget" (a removed block with destroy = false) only drops a state entry and
-# touches nothing in ZITADEL; it is here for the ERPact Frappe user grants
-# (iac/erpact-removal.tf, #2841). Drop it with that file.
-allowedActions: "no-op read update create forget"
+allowedActions: "no-op read update create"
 
 # Resource addresses the Job may destroy or replace, space-separated. Any
 # other delete in a plan fails the Job. Name the exact address, in the PR
 # that needs it, and empty the list once it has applied.
 #   (#1533 listed zitadel_email_provider_smtp.resend for the SMTP port move;
 #   applied 2026-10-04, emptied again here.)
-#   The ERPact Frappe sign-in removal lists its eight addresses; empty the list
-#   once the Job has applied it.
-allowedDeletes: 'zitadel_project.erpact_frappe zitadel_project_role.erpact_frappe zitadel_project_grant.erpact_frappe_mctl zitadel_application_oidc.erpact_frappe zitadel_action.erpact_verified_email["erpact"] zitadel_action.erpact_verified_email["MCTL"] kubernetes_secret_v1_data.erpact_oidc kubernetes_secret_v1_data.erpact_frappe_users'
+#   The ERPact Frappe sign-in removal listed eight addresses; applied
+#   2026-11-21, emptied again here.
+allowedDeletes: ''
 
 # The CronJob's schedule. Users come from Vault, which no sync observes, so
 # this is how a user added there reaches ZITADEL.
