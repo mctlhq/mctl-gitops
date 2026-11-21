@@ -695,9 +695,11 @@ jobs:
         run: mkdir -p "$RUNNER_TEMP/image-scan"
 
       # Trivy scan of the image just pushed, by digest. Warn-only unless
-      # IMAGE_SCAN_BLOCKING is "true" (see the env block). The SARIF goes up as
-      # a run artifact rather than to code scanning: this workflow is also
-      # called by release-deploy.yaml, whose permissions do not include
+      # IMAGE_SCAN_BLOCKING is "true" (see the env block). The SARIF is read
+      # in-job for the finding count and is deliberately NOT uploaded: this
+      # repository is public and the workflow also builds tenant images, so a
+      # run artifact would expose their vulnerability details. Code scanning
+      # is not used either: release-deploy.yaml's permissions do not include
       # security-events, and widening them would fail that caller at startup.
       # The scan reads the image through the GHCR login above.
       - name: Scan image (Trivy)
@@ -749,19 +751,10 @@ jobs:
               ;;
             0) echo "Trivy: no fixable CRITICAL/HIGH findings in ${IMAGE_REF}" >> "$GITHUB_STEP_SUMMARY" ;;
             *)
-              echo "::warning::Trivy found ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF} (blocking=${BLOCKING}); see the trivy-image-sarif artifact."
-              echo "Trivy: ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF}; see the trivy-image-sarif artifact." >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::Trivy found ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF} (blocking=${BLOCKING}); re-run Trivy locally on the image for details."
+              echo "Trivy: ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF}; re-run Trivy locally on the image for details." >> "$GITHUB_STEP_SUMMARY"
               ;;
           esac
-
-      - name: Upload image scan report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: trivy-image-sarif
-          path: ${{ runner.temp }}/image-scan/trivy-image.sarif
-          if-no-files-found: warn
-          retention-days: 14
 
       # A dispatched build has no outputs a caller can read, so the digest is
       # also left as a run artifact. preview-deploy (trigger-github-build)

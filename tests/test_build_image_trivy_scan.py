@@ -2,7 +2,7 @@
 
 Properties: the scan runs after the digest is recorded and targets name@digest; the action is
 pinned by commit SHA; one env switch (IMAGE_SCAN_BLOCKING, default "false") drives both
-continue-on-error and exit-code; the SARIF goes up as an artifact and the job gains no
+continue-on-error and exit-code; the SARIF stays in the job (never uploaded: public repo) and the job gains no
 security-events permission (release-deploy.yaml calls this workflow); and the report step never
 turns "could not scan" or "unreadable report" into a clean result. The report step's real script
 runs against fixtures; named mutants of the workflow must turn the suite red.
@@ -53,9 +53,9 @@ def judge(text):
     def step(n):
         return next((s for s in steps if s.get("name") == n), None)
 
-    scan, rep, up, dig = step("Scan image (Trivy)"), step("Report scan outcome"), step("Upload image scan report"), step("Record image digest")
-    out.append(("scan, report and upload steps exist", bool(scan and rep and up), names))
-    if not (scan and rep and up):
+    scan, rep, dig = step("Scan image (Trivy)"), step("Report scan outcome"), step("Record image digest")
+    out.append(("scan and report steps exist", bool(scan and rep), names))
+    if not (scan and rep):
         return out
     out.append(("scan runs after the digest is recorded", names.index("Scan image (Trivy)") > names.index("Record image digest"), names))
     out.append(("scan action pinned by full commit SHA", bool(re.fullmatch(r"aquasecurity/trivy-action@[0-9a-f]{40}", scan["uses"])), scan["uses"]))
@@ -72,7 +72,8 @@ def judge(text):
     out.append(("exit-code follows the switch", "env.IMAGE_SCAN_BLOCKING == 'true'" in str(w.get("exit-code")) and "'1'" in str(w.get("exit-code")) and "'0'" in str(w.get("exit-code")), w.get("exit-code")))
     out.append(("report step runs even when the scan failed", "cancelled" in str(rep.get("if")), rep.get("if")))
     out.append(("report step reads the scan outcome", "steps.scan.outcome" in str(rep["env"].get("SCAN_OUTCOME")), rep["env"]))
-    out.append(("SARIF is uploaded as an artifact", up["uses"].startswith("actions/upload-artifact@") and "cancelled" in str(up.get("if")), up))
+    uploads = [s.get("name") for s in steps if "upload-artifact" in str(s.get("uses")) and "sarif" in str(s.get("with", {}).get("path", "")).lower()]
+    out.append(("SARIF is NOT uploaded (public repo, tenant images)", not uploads, uploads))
     perms = doc["jobs"]["build"].get("permissions", {})
     out.append(("no security-events permission (release-deploy caller)", "security-events" not in perms, perms))
 
