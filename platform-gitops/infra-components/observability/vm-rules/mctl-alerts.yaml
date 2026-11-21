@@ -395,9 +395,23 @@ spec:
     # reference_eso_storedversion_recovery.md for the recovery drill.
     - name: mctl.argocd
       rules:
+        # The three rules below aggregate with `max by (...)` instead of
+        # matching argocd_app_info bare. The gauge carries an `operation`
+        # label ("sync") ONLY while a sync operation is in flight, so during
+        # an auto-sync retry loop the app has two series that differ only in
+        # that label, and the one that is firing is replaced by one that has
+        # to start its `for:` again. The worker was continuously OutOfSync
+        # 2026-11-09..21 and produced 48 separate firing windows with 1h+
+        # gaps instead of one alert (and a fresh ticket each time). The
+        # grouping keeps exactly the labels the annotations and the
+        # Alertmanager routes read (name, project, dest_namespace,
+        # dest_server). sync_status and health_status are dropped on purpose:
+        # each is fixed by the selector, and the one that is not
+        # (health_status for OutOfSync, sync_status for Degraded) flips while
+        # the alert is pending and would reset it the same way.
         - alert: ArgoCDApplicationDegraded
           expr: |
-            argocd_app_info{health_status="Degraded"} == 1
+            max by (name, project, dest_namespace, dest_server) (argocd_app_info{health_status="Degraded"}) == 1
           for: 30m
           labels:
             severity: warning
@@ -421,7 +435,7 @@ spec:
         # operationState for the actual error reason.
         - alert: ArgoCDApplicationOutOfSyncLong
           expr: |
-            argocd_app_info{sync_status="OutOfSync"} == 1
+            max by (name, project, dest_namespace, dest_server) (argocd_app_info{sync_status="OutOfSync"}) == 1
           for: 1h
           labels:
             severity: warning
@@ -435,6 +449,31 @@ spec:
               has unsynced manual changes / ignored differences. Check
               `argocd app get {{ $labels.name }}` and the latest sync
               operationState for the actual cause.
+
+        # sync_status="Unknown" means the controller could not compare the
+        # desired and live state at all. Neither rule above matches it, so an
+        # app in that state is invisible: after the 2026-11-21 Argo CD upgrade
+        # admins-mctl-agents-worker reported Unknown for 450 minutes and
+        # nothing fired. Could-not-observe is not the same as in-sync. The
+        # 30m hold is generous on purpose: a single refresh or a controller
+        # restart shows Unknown for a few minutes (14d of history: three apps,
+        # about 5 minutes each).
+        - alert: ArgoCDApplicationSyncUnknown
+          expr: |
+            max by (name, project, dest_namespace, dest_server) (argocd_app_info{sync_status="Unknown"}) == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              ArgoCD application {{ $labels.name }} sync status Unknown for 30m
+            description: >-
+              {{ $labels.dest_namespace }}/{{ $labels.name }} (project
+              {{ $labels.project }}) has reported sync status Unknown for
+              30m: the controller cannot compute the diff, so drift on this
+              app is not being detected. Check the application conditions
+              (`argocd app get {{ $labels.name }}`) and the application
+              controller log for a comparison error.
 
         # The repo-server resolves `main` of mctl-gitops several times a
         # minute (46 apps on a 3-min poll, 30s refs cache). Zero ls-remote
