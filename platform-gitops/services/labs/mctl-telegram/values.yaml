@@ -99,7 +99,7 @@ env:
   # "https://" (colons); if mctl_deploy_service ever rewrites this file, verify
   # the key survived the yq round-trip (it is known to strip colon-bearing env
   # vars) and hand-edit to restore if dropped.
-  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com
+  ALLOWED_ORIGINS: https://tg.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com,https://grok.com
   # redirect_uri host allowlist for unregistered client_ids and for every
   # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
   # images ignore this key and use the built-in list). Setting it REPLACES the
@@ -127,7 +127,7 @@ env:
   # Google Cloud projects (which cannot contain underscores).
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,grok.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1"
   # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
   # client whose client_id is an https URL on a listed host gets its redirect
   # URIs from the document at that URL instead of registering. ADVERTISE
