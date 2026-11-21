@@ -730,7 +730,10 @@ jobs:
           BLOCKING: ${{ env.IMAGE_SCAN_BLOCKING }}
         run: |
           set -uo pipefail
-          if [ "${SCAN_OUTCOME}" != "success" ]; then
+          # Only a finished scan has a report worth reading: "success", or
+          # "failure" in blocking mode, where Trivy exits 1 BECAUSE it found
+          # something. Anything else (skipped, cancelled, ...) never ran.
+          if [ "${SCAN_OUTCOME}" != "success" ] && [ "${SCAN_OUTCOME}" != "failure" ]; then
             echo "::warning::Trivy image scan did not complete (outcome: ${SCAN_OUTCOME}) for ${IMAGE_REF}; blocking=${BLOCKING}. The image is NOT known to be clean."
             echo "Image scan did not complete (${SCAN_OUTCOME}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -746,10 +749,18 @@ jobs:
           )
           case "$count" in
             unreadable:*|"")
-              echo "::warning::Trivy reported success but its SARIF report is missing or unreadable (${count}) for ${IMAGE_REF}. The image is NOT known to be clean."
-              echo "Image scan report unreadable (${count}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::Trivy image scan did not complete (outcome: ${SCAN_OUTCOME}, report missing or unreadable: ${count}) for ${IMAGE_REF}; blocking=${BLOCKING}. The image is NOT known to be clean."
+              echo "Image scan report unreadable (${SCAN_OUTCOME}, ${count}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
               ;;
-            0) echo "Trivy: no fixable CRITICAL/HIGH findings in ${IMAGE_REF}" >> "$GITHUB_STEP_SUMMARY" ;;
+            0)
+              if [ "${SCAN_OUTCOME}" = "failure" ]; then
+                # Trivy failed yet reported nothing: a crash, not a clean image.
+                echo "::warning::Trivy image scan failed without findings for ${IMAGE_REF}; blocking=${BLOCKING}. The image is NOT known to be clean."
+                echo "Image scan failed without a finding (${SCAN_OUTCOME}); the image is not known to be clean." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "Trivy: no fixable CRITICAL/HIGH findings in ${IMAGE_REF}" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              ;;
             *)
               echo "::warning::Trivy found ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF} (blocking=${BLOCKING}); re-run Trivy locally on the image for details."
               echo "Trivy: ${count} fixable CRITICAL/HIGH finding(s) in ${IMAGE_REF}; re-run Trivy locally on the image for details." >> "$GITHUB_STEP_SUMMARY"

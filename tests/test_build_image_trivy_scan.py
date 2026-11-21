@@ -80,7 +80,9 @@ def judge(text):
     script = rep["run"]
     ref = "sha256:" + "a" * 64
     cases = [
-        ("scan failed -> warning, not clean", "failure", None, lambda rc, so, sm: rc == 0 and "did not complete" in so and "NOT known to be clean" in so),
+        ("scan failed, no report -> warning, not clean", "failure", None, lambda rc, so, sm: rc == 0 and "did not complete" in so and "NOT known to be clean" in so),
+        ("scan failed with findings (blocking mode) -> reported as findings", "failure", sarif(2), lambda rc, so, sm: "::warning::Trivy found 2" in so and "did not complete" not in so),
+        ("scan failed, zero findings -> crash, not clean", "failure", sarif(0), lambda rc, so, sm: "failed without findings" in so and "NOT known to be clean" in so and "no fixable" not in sm),
         ("scan skipped -> warning, not clean", "skipped", None, lambda rc, so, sm: "did not complete" in so and "NOT known to be clean" in so),
         ("success but report missing -> warning", "success", None, lambda rc, so, sm: "missing or unreadable" in so and "finding(s)" not in so),
         ("success but report garbage -> warning", "success", "not json", lambda rc, so, sm: "missing or unreadable" in so and "finding(s)" not in so),
@@ -99,7 +101,8 @@ MUTANTS = [
     ("continue-on-error dropped", "continue-on-error: ${{ env.IMAGE_SCAN_BLOCKING != 'true' }}", "continue-on-error: false"),
     ("action unpinned", "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25", "aquasecurity/trivy-action@v0.36.0"),
     ("scan by tag, not digest", "image-ref: ${{ inputs.image_name }}@${{ steps.digest.outputs.digest }}", "image-ref: ${{ inputs.image_name }}:${{ inputs.image_tag }}"),
-    ("failed scan reported silently", 'if [ "${SCAN_OUTCOME}" != "success" ]; then', 'if false; then'),
+    ("skipped scan reported silently", 'if [ "${SCAN_OUTCOME}" != "success" ] && [ "${SCAN_OUTCOME}" != "failure" ]; then', 'if false; then'),
+    ("blocking-mode findings masked as a scan crash", '[ "${SCAN_OUTCOME}" != "failure" ]; then', '[ "${SCAN_OUTCOME}" != "never" ]; then'),
     ("unreadable report treated as clean", 'unreadable:*|"")', 'NEVER)'),
     ("scan output directory not created", 'run: mkdir -p "$RUNNER_TEMP/image-scan"', 'run: "true"'),
     ("security-events permission added", "      id-token: write\n    steps:", "      id-token: write\n      security-events: write\n    steps:"),
