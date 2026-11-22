@@ -7,7 +7,9 @@
 # agent-worker-managed-preview, started with AGENT_WORKER_PA=true, so it runs
 # only the PA loop (cmd/agent-worker/pa_mode.go): it claims PA jobs from
 # /api/pa/v1/jobs/* on labs-mctl-telegram-preview and calls an
-# OpenAI-compatible model in-process with no tools. It never polls the agent
+# OpenAI-compatible model in-process. The model is offered only the claim's
+# signed tool set, and every tool call is executed server-side by
+# mctl-telegram, never in this pod (mctl-telegram#1400). It never polls the agent
 # job queue, so it does not compete with agent-worker-managed-preview.
 #
 # Staged rollout. This lands inert: replicaCount 0 and no pool token. The
