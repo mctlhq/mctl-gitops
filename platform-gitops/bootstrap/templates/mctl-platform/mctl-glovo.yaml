@@ -36,6 +36,9 @@ a reviewed PR:
   ingress    the public route: an Ingress object, the Traefik source in the
              server policy and the trusted-proxies variable.
   capacity   a value, not a switch: the cohort size (default 1, owner decision 18.11: owner-only first stage).
+  linkAttemptsPerHour  a value, not a switch: the service-wide cap on link attempts per hour
+             (code, preview and upload each count one). 0 or unset leaves the
+             service's own default, 5 x capacity; otherwise a whole number 1..300.
   apiConsent mctl-api's side of the consent read (rendered in mctl-api.yaml and
              mctl-api-secrets.yaml, not here).
 Rollback of any switch: set it back to false.
@@ -69,6 +72,8 @@ and must exist first.
 {{- if and $v.ingress (not $v.c2) }}{{ fail "the ingress switch requires the c2 switch" }}{{ end }}
 {{- $capacity := int $v.capacity }}
 {{- if or (lt $capacity 1) (gt $capacity 20) (ne (toString $v.capacity) (toString $capacity)) }}{{ fail "the capacity value must be a whole number from 1 to 20 (the service refuses anything else at boot)" }}{{ end }}
+{{- $linkAttempts := int ($v.linkAttemptsPerHour | default 0) }}
+{{- if or (lt $linkAttempts 0) (gt $linkAttempts 300) (ne (toString ($v.linkAttemptsPerHour | default 0)) (toString $linkAttempts)) }}{{ fail "the linkAttemptsPerHour value must be a whole number from 1 to 300, or 0 for the service default (the service refuses anything else at boot)" }}{{ end }}
 {{- if $v.linkLogin }}
 {{- if not (regexMatch "^[1-9][0-9]*[sm]$" (toString $v.linkMaxAuthAge)) }}{{ fail "the linkMaxAuthAge value must be a whole number of seconds or minutes, like 300s or 5m" }}{{ end }}
 {{- $ageSecs := int (trimSuffix "m" (trimSuffix "s" (toString $v.linkMaxAuthAge))) }}
@@ -635,6 +640,9 @@ spec:
             {{- if $v.c2 }}
             - {name: GLOVO_C2_ENABLED, value: "true"}
             - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}
+            {{- if $linkAttempts }}
+            - {name: GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR, value: {{ $linkAttempts | quote }}}
+            {{- end }}
             - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}
             - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}
             # The sidecar forwarder below, loopback only (http://host:port is

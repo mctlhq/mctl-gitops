@@ -38,7 +38,7 @@ BASE = ["--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set",
         "--set", "mctlGlovo.consent=true", "--set", "mctlGlovo.control=true",
         # The committed values move as the cutover is lit; pin the switch these cases
         # build on, so a flip of linkLogin or ingress does not change what they prove.
-        "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false"]
+        "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false", "--set", "mctlGlovo.linkAttemptsPerHour=0"]
 HOSTS = "reservedPlatformHosts:\n  glovo.mctl.ai: [mctl-glovo]\n"
 PROXIES = ["--set", "mctlGlovo.trustedProxies=10.42.0.0/16"]
 failures: list[str] = []
@@ -123,6 +123,22 @@ for cap in ("1", "3", "20"):
 for bad in ("0", "21", "-1", "10.5", "abc"):
     fails(SVC, "--set", f"mctlGlovo.capacity={bad}", why="capacity value must be a whole number")
     fails(API, "--set", "mctlGlovo.apiConsent=true", "--set", f"mctlGlovo.capacity={bad}", why="capacity value must be a whole number")
+
+# 3b. link attempts per hour: unset keeps the service default (no variable), a
+# bounded whole number is rendered, anything else is refused at render time.
+check("GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR" not in server_env(docs(helm(SVC, *BASE))), "cap variable set with the value at 0")
+for n in ("1", "15", "300"):
+    r = helm(SVC, *BASE, "--set", f"mctlGlovo.linkAttemptsPerHour={n}")
+    check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR") == n, f"link attempts {n} not rendered")
+for bad in ("-1", "301", "2.5", "abc"):
+    fails(SVC, *BASE, "--set", f"mctlGlovo.linkAttemptsPerHour={bad}", why="linkAttemptsPerHour value must be a whole number")
+r = helm(SVC, "--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
+if r.returncode == 0:
+    check("GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR" not in server_env(docs(r)), "cap variable set with c2 off")
+committed_attempts = yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "values.yaml").read_text())["mctlGlovo"].get("linkAttemptsPerHour")
+check(committed_attempts == 15, f"committed link attempts per hour is {committed_attempts!r}, want 15")
+r = helm(SVC, "--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
+check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR") == "15", "committed render does not carry the 15 an hour cap")
 
 # 4. link login
 r = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true")
