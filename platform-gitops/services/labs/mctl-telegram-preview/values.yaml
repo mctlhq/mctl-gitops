@@ -298,6 +298,59 @@ env:
   MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
+  # Personal Assistant bot (mctlhq/mctl-telegram#1318), preview only. Step G1:
+  # the plain values land with PA_ENABLED "false", so nothing PA runs and the
+  # server reads none of the PA settings below (config.loadPA returns before
+  # reading anything when the flag is off). The bot token, webhook secret,
+  # local KEK and principal allowlist come from Vault through an
+  # ExternalSecret added in its own change once the owner has written the
+  # Vault path (an ExternalSecret on a missing path marks the app Degraded).
+  # PA_ENABLED goes "true" after the owner's GO, once that Secret reports
+  # synced: config.Load refuses PA_ENABLED=true without the bot token and
+  # webhook secret, and strategy is Recreate, so the order matters.
+  # Production keeps every PA flag off.
+  #
+  # ENV is the deployment tier the local KEK checks (PA_KEK_MODE=local is
+  # accepted only on preview or a local tier; production must use transit).
+  # "preview" is not a local tier. The test-DC check treats it as it treats
+  # ENV unset; the boot guard counts an unset ENV as local, but this pod
+  # listens on the default :8080, so it is already treated as exposed and
+  # nothing changes.
+  ENV: preview
+  PA_ENABLED: "false"
+  PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
+  PA_KEK_MODE: local
+  # Each capability flag is explicit, so turning PA_ENABLED on later turns
+  # on chat only. Tools and the tg server go on together in a later step;
+  # writes and the alice server stay off on preview.
+  PA_EXTERNAL_TOOLS_ENABLED: "false"
+  PA_WRITES_ENABLED: "false"
+  PA_SERVER_TG_ENABLED: "false"
+  PA_SERVER_ALICE_ENABLED: "false"
+  # The tg server is this instance's own authorization server and MCP
+  # endpoint; the values are its published metadata
+  # (/.well-known/oauth-authorization-server and
+  # /.well-known/oauth-protected-resource/mcp). PA_BOT_USERNAME and
+  # PA_MINI_APP_NAME are added with the tg-server step: they exist only once
+  # the bot is created, and nothing reads them before then.
+  PA_APP_URL: https://tg-preview.mctl.ai/pa/link/app
+  PA_SERVER_TG_CLIENT_ID: pa-preview
+  PA_SERVER_TG_ISSUER: https://tg-preview.mctl.ai
+  PA_SERVER_TG_AUTHORIZATION_ENDPOINT: https://tg-preview.mctl.ai/oauth/authorize
+  PA_SERVER_TG_TOKEN_ENDPOINT: https://tg-preview.mctl.ai/oauth/token
+  PA_SERVER_TG_REVOCATION_ENDPOINT: https://tg-preview.mctl.ai/oauth/revoke
+  PA_SERVER_TG_MCP_URL: https://tg-preview.mctl.ai/mcp
+  PA_SERVER_TG_RESOURCE: https://tg-preview.mctl.ai/mcp
+  PA_SERVER_TG_ALLOWED_HOSTS: tg-preview.mctl.ai
+  # The PA's OAuth client on this authorization server: a public PKCE client
+  # with one exact callback, seeded at startup. Its callback host is on
+  # neither OAUTH_ALLOWED_IMPLICIT_HOSTS nor loopback, and the client is bound
+  # to the core-readonly profile with a scope ceiling equal to the PA's
+  # Phase 1 tg scope set (internal/pa/connection/scope.go). The client is
+  # registered from this change on, but inert until the tg-server step: its
+  # only callback is the PA route, which is not mounted while PA is off.
+  OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"pa-preview","client_name":"Personal Assistant (preview)","redirect_uris":["https://tg-preview.mctl.ai/pa/oauth/callback/tg"]}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
 ingress:
   enabled: true
   hosts:
