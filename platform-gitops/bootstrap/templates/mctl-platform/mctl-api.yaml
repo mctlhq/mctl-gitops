@@ -502,6 +502,19 @@ spec:
             # unquoted inline directive is not a scalar there.
             GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
             {{- end }}
+            {{- if .Values.mctlGlovo.linkLogin }}
+            # The Glovo account-link RFC 8707 resource (mctl-api >= 4.170.0,
+            # docs/glovo-link-resource.md): mctl-api mints the link token (forced
+            # fresh login, no refresh token) for exactly this audience, and the
+            # C2 service checks the same value (the linkLogin switch sets it on
+            # the service side). Unset, the resource answers invalid_target and no
+            # link token can be issued. It is admitted only while the Glovo
+            # readiness holds, must be an absolute https URL and must differ from
+            # GLOVO_MCP_RESOURCE, or the boot is refused. Read at container
+            # start; the env change itself rolls the pods.
+            # Rollback: set the linkLogin switch back to false.
+            GLOVO_LINK_RESOURCE: "https://{{ .Values.mctlGlovo.host }}/link"
+            {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
