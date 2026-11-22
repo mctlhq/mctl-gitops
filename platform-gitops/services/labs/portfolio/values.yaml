@@ -5,8 +5,8 @@
 
 image:
   repository: ghcr.io/mctlhq/portfolio
-  tag: "0.1.59"
-  digest: "sha256:90827356ccd2c683eea79328e2a00b7c4bc0c29a3a34bba54b37055a6ff0a0b7"
+  tag: "0.1.60"
+  digest: "sha256:1eca7af54230ad71408e4dc16907028668f9092b5177c03e06f043d62f6b7eb8"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
