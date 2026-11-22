@@ -32,6 +32,7 @@ locals {
   # IDs only: Cloudflare renames groups from time to time, and a rename does not
   # change what a token can do.
   pg = {
+    account_analytics_read        = "b89a480218d04ceb98b4fe57ca29dc1f"
     account_api_tokens_read       = "eb56a6953c034b9d97dd838155666f06"
     account_settings_read         = "c1fde68c7bcc44588cbb6ddbc16d6480"
     ai_gateway_read               = "4dc8917b4b40457d88d3035d5dadb054"
@@ -159,6 +160,13 @@ locals {
     {
       name     = "mctl-gitops-portal-read (CF_PORTAL_READ_TOKEN)"
       policies = [{ permission_groups = [local.pg.mcp_portals_read], resources = { (local.account) = "*" } }]
+    },
+    # r2-ops-budget CronJob (infra-components/observability/blackbox/
+    # r2-ops-budget.yaml): reads the GraphQL Analytics API for the cycle's R2
+    # operation counts. Value in Vault at platform/r2-ops-budget (api-token).
+    {
+      name     = "r2-ops-budget (mctl-gitops r2-ops-budget CronJob, read-only analytics)"
+      policies = [{ permission_groups = [local.pg.account_analytics_read], resources = { (local.account) = "*" } }]
     },
     # CF_APPLY_TOKEN_PORTAL (environment cloudflare-apply): apply of ../portal
     # and cloudflare-portal-health's re-snapshot job.
