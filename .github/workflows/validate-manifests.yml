@@ -16,6 +16,26 @@ on:
   merge_group:
     types: [checks_requested]
 
+# Push runs on main share one group and supersede each other (#2931). Every
+# agents-state commit lands directly on main and starts this whole workflow
+# (12 jobs). On 2026-11-22 agents pushed every ~3 minutes, so 19 push runs for
+# already-superseded commits sat queued and held the org's 20 hosted-runner
+# slots (free plan), starving the merge queue and every other repo's CI.
+# Validating the newest main tree covers everything an older push changed;
+# a cancelled run only means a newer commit is being validated instead.
+# Per-commit release-gate reporting does not depend on this: release-gate-watch
+# runs per SHA and is never cancelled.
+#
+# Pull requests and merge groups keep a group per run (no cancellation): a
+# merge-group check must report on exactly the commit the queue tests, and a
+# shared group would cancel the check of position 1 when position 2 starts.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'push'
+        && format('validate-manifests-push-{0}', github.ref)
+        || format('validate-manifests-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 permissions:
   contents: read
 
