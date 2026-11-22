@@ -1,67 +1,134 @@
 # Tasks: issue-376-spike-mcp-apps-write-once-run-across-ai
 
-Scope is the Phase 0 evidence slice in `mctlhq/.github`. Tasks 9-13 are follow-ups in other repositories and are listed for the backlog only. Each one needs its own issue and a separate owner approval, and none is implemented under this proposal.
+Revision 2. design.md opens with the finding-to-change matrix.
 
-- [ ] 0. Conform issue #376 to the current `.github/ISSUE_TEMPLATE/spike.yml` on `main` before approval. Re-fetch the template, then:
-  - set the title to `spike: MCP Apps write once, run across ChatGPT, Antigravity and Claude`;
-  - prepend the template block (`Source: mctlhq/.github#376`, `Question:` as in the SpikeDefinition, `Outcomes: ADOPT_STANDARD_ONLY | ADOPT_WITH_THIN_HOST_ADAPTERS | DEFER`, `Lifecycle: proposed`, `Related: mctlhq/mctl-telegram#569, #650; mctlhq/.github#35, #44, #258, #261, #373, #375`, `Why mctl:`) and keep the existing body after it;
-  - add the labels `spike:scout` and `agents:intake`;
-  - check for an existing spike with the same Source.
-  DoD: re-read issue title, body and labels against the template, record the result in the PR description, and make no workflow restart until it conforms.
-- [ ] 1. Add `roadmap/spikes/mcp-apps-portability.yaml` exactly as in design.md section 1 (`lifecycle: proposed`, no `decision`, no `epic`). DoD: `python3 roadmap/scripts/validate.py roadmap/epics roadmap/spikes` passes, and `roadmap/tests/test_validate_spike.py` still passes.
-- [ ] 2. Write `docs/spikes/mcp-apps-portability/host_matrix.json`, seeded from the sources. Cover every contract point listed in requirements.md for every host column. Set:
-  - `documented` with URL and access date: re-read each vendor page in the issue (ext-apps API and spec `2026-01-26`, OpenAI chatgpt-ui and extensions, Antigravity mcp-apps, Claude getting-started, entry-points, app-tools and the rollout article);
-  - `fixture_tested` only for what the Telegram `mcpprobe` row shows;
-  - `unknown` everywhere else.
-  Every cell names ext-apps `v2.1.0` and spec `2026-01-26`. DoD: no `real_host_verified` cell, and the validator from task 3 passes.
-- [ ] 3. Implement `docs/spikes/mcp-apps-portability/matrix.py`, `bridge_check.py` and `bundle_scan.py`: stdlib only, run with `python3 -I`, rules as in design.md section 1. Pin the allowed View-to-Host method set to spec `2026-01-26`. DoD: each script has `--help`, exits non-zero on violations, and its output is deterministic.
-- [ ] 4. Add fixtures (depends on 3):
-  - `telegram-triage-0.1.0.transcript.json`, reconstructed from mctl-telegram `internal/mcpui/triage.html` at `25e6485`: `ui/initialize {}`, then a View `tools/list`, then `tools/call get_unread_messages`, plus a `tool-result` handled by name;
-  - a conformant minimal transcript;
-  - a copy of the mctl-telegram `triage.html` bytes at `25e6485`, with its SHA-256 recorded;
-  - matrix fixtures (valid, forged verified, mixed bundle hash).
-  DoD: the fixtures carry their source commit and are referenced by tests.
-- [ ] 5. Add `docs/spikes/mcp-apps-portability/tests/` (unittest) covering T1-T6, and wire the folder into `.github/workflows/workflow-tests.yml` paths and a step `python3 -I -m unittest discover -s docs/spikes/mcp-apps-portability/tests -v` (depends on 3, 4). DoD: CI green.
-- [ ] 6. Write `docs/spikes/mcp-apps-portability.md` (depends on 2-4). It contains:
-  - Question and Non-claims ("no real host exercised"), plus Evidence tags;
-  - the matrix rendered by `matrix.py`;
-  - the existing-work inventory with repo@revision and path, from design.md;
-  - the three reading-based Telegram findings, each tied to its failing fixture;
-  - the ADR (options A, B, C, with C recommended);
-  - the PoC plan, security model, gates G1-G6, backlog, P1/P2/P3 risks and the product order;
-  - an empty decision block for the owner.
-  DoD: all three outcomes are described with the evidence that would select each, and no verdict is claimed.
-- [ ] 7. Write the operator runbook as a section of the report: host and account prerequisites, the deployment choice (a throwaway or preview instance with `MCP_APPS_ENABLED=true` and a read-only link set, via an owner-approved mctl-gitops PR), the step-by-step check per gate, the capture format (screenshot sanitisation checklist, devtools transcript, `resources/read` hash, audit lines by `trace_id`), throwaway-account cleanup, and how to record `cause`. Tag it as an extension of mctlhq/mctl-telegram#650, not a parallel run. DoD: each step maps to a matrix cell and a gate.
-- [ ] 8. Add one bullet under `# Spikes` in `AGENTS.md` linking the report (depends on 6). DoD: the link resolves.
+Approval boundary:
+- This investigator run implements nothing.
+- The owner pre-approval check below is done by the owner, not by an implementer.
+- After explicit owner approval, the implementer may do tasks 1-8 only (phase 0, `mctlhq/.github`).
+- Tasks 9-10 are owner decisions.
+- B1-B6 are backlog slices in other repositories. Each needs its own issue and its own explicit approval.
+- No workflow is restarted automatically.
 
-Backlog (separate issues and approvals, not part of this PR):
+Pre-approval owner check (not an implementer task):
 
-- [ ] 9. mctl-telegram: bridge conformance fix plus a read-only UI link set (no `send_message`/`prepare_send_message` in `addToolUI` while read-only), entry tool `get_unread_messages {}`, a `Version` bump, the bundle SHA in `_meta`, and a headless golden test (depends on 5 being merged so the checker exists). Owner: mctlhq/mctl-telegram.
-- [ ] 10. mctl-gitops: an owner-approved flag flip on a non-production or throwaway instance only (depends on 9). Owner: mctlhq/mctl-gitops.
-- [ ] 11. Operator run under #650 that fills the matrix and evaluates G1-G6 (depends on 10). Owner: a human operator.
-- [ ] 12. mctl-api: a read-only DevLoop Run Inspector MCP App on the existing work-item read tools, with no approval tools linked (depends on 11 G1-G4 GO, and #261). Owner: mctlhq/mctl-api.
-- [ ] 13. Owner verdict in `roadmap/spikes/mcp-apps-portability.yaml` (`decided`, follow-ups for Glovo, SeerrSense and Alice), plus a decision on Go helper extraction after measuring the 9/12 duplication (depends on 11, 12).
+- [ ] P0. Re-fetch `.github/ISSUE_TEMPLATE/spike.yml` from `main` and re-read #376. Title and body already conform (re-read 2026-11-22T01:38:57Z), and only one issue carries the Source. The labels show only `spike:scout`. Confirm that `agents:intake` was consumed by intake, or restore it deliberately. DoD: the owner records the conformance result on the issue before approving. If it does not conform, fix the issue and do not approve.
+
+Phase 0 (`mctlhq/.github`, after approval):
+
+- [ ] 1. Add `roadmap/spikes/mcp-apps-portability.yaml` as described in design.md section 1:
+  - `lifecycle: proposed`;
+  - the issue's Question line verbatim;
+  - the three outcomes;
+  - no `decision`, no `epic`.
+  DoD: `python3 roadmap/scripts/validate.py roadmap/epics roadmap/spikes` and `roadmap/tests/test_validate_spike.py` pass.
+- [ ] 2. Vendor `schema/ext-apps-2.1.0.schema.json` from the `v2.1.0` tag, with a `SOURCE` file (repo, tag, path, SHA-256). DoD: a test recomputes the SHA-256 and it matches.
+- [ ] 3. Write `host_matrix.json` using the four-field cell schema (design.md section 2):
+  - Re-read every vendor page and record the access date. Set `claim` from it.
+  - The pages not re-read in revision 2 are the ext-apps spec, the OpenAI extensions page, Claude getting-started, the rollout article, and the Grok overview, approvals and changelog pages.
+  - Leave `transport`, `fixture` and `observed` as `untested`.
+  - Record the MCP protocol revision, the Apps spec revision and the SDK version as separate values.
+  - Add the `grok-bot` column and mark it exploratory.
+  DoD: the file contains no `real_host_verified` cell and `matrix.py` passes.
+- [ ] 4. Implement `matrix.py`, `conformance.py` and `bundle_scan.py` (depends on 2). They are stdlib only and run with `python3 -I`.
+  - The rules are in design.md section 1-2.
+  - `conformance.py` fails closed on any schema keyword it does not support.
+  - `bundle_scan.py` output is advisory and never sets a gate.
+  DoD: each script has `--help`, exits non-zero on violations, and produces deterministic output.
+- [ ] 5. Add fixtures (depends on 4):
+  - valid and invalid matrices: a forged `real_host_verified` cell, a hash mismatch within one (app, release, route), and a "mismatch" across releases that must be accepted;
+  - a sanitisation-violation artifact;
+  - conformant and non-conformant message logs;
+  - the Telegram `static_hypothesis` log reconstructed from `triage.html` at `b11b8a2`.
+  DoD: every fixture names its source commit, and the static log is rejected as evidence.
+- [ ] 6. Add `docs/spikes/mcp-apps-portability/tests/` (unittest, T1-T6) and wire it into the paths and steps of `.github/workflows/workflow-tests.yml` (depends on 4, 5). DoD: CI is green.
+- [ ] 7. Write `docs/spikes/mcp-apps-portability.md` with the operator runbook (depends on 3-5). It must contain:
+  - the inventory with repo@revision and path;
+  - the static findings labelled `static_hypothesis`;
+  - the ADR;
+  - the PoC four-layer isolation and preflight;
+  - the security model;
+  - gates G1-G6, the D1 outcome table, D2, and the stop conditions;
+  - the Grok boundary;
+  - the backlog, risks and product order;
+  - an empty decision block.
+  The runbook extends #650. It does not activate #650 and it does not do Portal work, which belongs to #236. It covers the preflight, the per-gate steps, the capture and sanitisation checklist, pseudonyms, cleanup, and how to record `cause`. DoD: every runbook step maps to a matrix cell and a gate, and the report claims no verdict.
+- [ ] 8. Add one bullet under `# Spikes` in `AGENTS.md` (depends on 7). DoD: the link resolves.
+
+Owner decisions (not implementer work):
+
+- [ ] 9. D1: the first-consumer portability decision. It depends on B4, or on a recorded UNMEASURED state when #650 reaches `reviewBy` without a session. DoD: the outcome comes from the design.md section 6 table, and the SpikeDefinition records a `decision` only when D1 is ADOPT_* or DEFER, with evidence refs.
+- [ ] 10. D2: the shared-extraction decision. It depends on B5 gate evidence. It is recorded as `not_reached` if D1 is DEFER or if B5 never started. DoD: the measured diff between the two consumers is attached.
+
+Backlog (separate issues and approvals; not part of the phase 0 PR):
+
+- [ ] B1. mctl-telegram: an executable browser fixture (design.md section 3), plus a bridge fix that vendors the pinned ext-apps `App` build, or a justified hand-rolled bridge. The fixture must fail on the current bundle before the fix and pass after it. Owner: mctlhq/mctl-telegram. This slice is a hard prerequisite for B4.
+- [ ] B2. mctl-telegram: the `MCP_TOOL_FILTER=core-readonly` allowlist value, accepted by `config.go`, plus default-deny for an unrecognised filter in `toolPassesFilter`. Restrict the App link set to the allowlist subset, use `get_unread_messages {}` as the entry tool, bump `Version` and record the bundle SHA. Also add the headless golden test. Owner: mctlhq/mctl-telegram.
+- [ ] B3. mctl-gitops: an owner-approved isolated PoC deployment (depends on B1, B2). It is not `tg.mctl.ai` and not `tg-preview.mctl.ai`. Its settings:
+  - `MCP_APPS_ENABLED=true`;
+  - `MCP_TOOL_FILTER=core-readonly`;
+  - `ALLOW_SEND=false`;
+  - read-only `MCP_CLIENT_PROFILES` scope ceilings;
+  - a throwaway account.
+  A preflight script checks the configuration and fails closed. Owner: mctlhq/mctl-gitops plus the operator.
+- [ ] B4. Operator session under #650's runbook (depends on B3). It runs only when #650's activation is met, or the owner explicitly scopes a portability-only session with no submission.
+  - Core hosts: ChatGPT, Claude and Antigravity.
+  - Headless: Codex, Claude Code and agy.
+  - Optional: the `cf-portal` route and Grok Bot.
+  - Fill in the `observed` cells and evaluate G1-G6.
+  Owner: a human operator.
+- [ ] B5. mctl-api: a read-only DevLoop Run Inspector App (depends on D1 = ADOPT_*, all of G1-G6 GO, owner review, attached security fixture results, and #261). There is no deployment before its own T7-T11-equivalent fixture results exist. Owner: mctlhq/mctl-api.
+- [ ] B6. Later consumers (Glovo, SeerrSense, Alice), each with its own issue (depends on D2).
 
 ## Tests
 
-- [ ] T1. `matrix.py` rejects a `real_host_verified` cell missing any of date, host_build, plan, endpoint, bundle_sha256, artifact or operator, and rejects a `documented` cell without a URL and access date.
-- [ ] T2. `matrix.py` rejects a matrix whose browser-host cells for one app carry different `bundle_sha256` values (G1), and accepts identical ones.
-- [ ] T3. `bridge_check.py` fails the Telegram 0.1.0 transcript with three distinct findings: missing `appCapabilities`/`protocolVersion`/`appInfo`, View `tools/list`, and `tool-result` correlated by `params.name`. It passes the conformant transcript.
-- [ ] T4. `bridge_check.py` fails a transcript that sends `ui/notifications/initialized` before the `ui/initialize` result, or calls a method outside the pinned allowed set.
-- [ ] T5. `bundle_scan.py` passes the Telegram `triage.html` fixture on escaping (no `innerHTML` and the like) and on network access (no external URL), and fails synthetic bundles containing `innerHTML =`, `eval(`, `navigator.userAgent`, an unguarded `window.openai.` call, or `<script src="https://...">`. It prints a stable SHA-256.
-- [ ] T6. The SpikeDefinition validates. With lifecycle `proposed` it has no `decision`, and the outcomes match the issue's three verdicts.
-- Specified now, implemented in the product repos (tasks 9 and 12):
-  - [ ] T7. With the read-only link set, `tools/list` shows `_meta.ui` only on read tools. A View `tools/call send_message` is refused by the server (scope or registration), whatever the host does with visibility.
-  - [ ] T8. The View never sends `ui/update-model-context` or `ui/message` with Telegram message text (transcript assertion).
-  - [ ] T9. The same read call issued as model-originated and as UI-originated (fixture host on the same session) yields identical authz decisions and audit records apart from an optional untrusted origin annotation.
-  - [ ] T10. A cross-tenant id, missing scope, stale `state_version` and replayed or expired `confirmation_id` are each denied identically for both origins. A cross-tenant id answers the same as not-found.
-  - [ ] T11. Headless golden: `content[].text` is byte-equal with `MCP_APPS_ENABLED` on and off for every App-linked tool.
-  - [ ] T12. Degradation: with a fixture host advertising no display modes and no `ui/message`, the dependent controls are absent and no error is logged.
+Phase 0 (`mctlhq/.github`, unittest):
+
+- [ ] T1. `matrix.py` rejects a matrix with any of these defects:
+  - a `real_host_verified` or `failed` cell missing any evidence field;
+  - a `failed` or `blocked` cell without `cause`;
+  - a `documented` claim without a URL and date;
+  - a `transport` or `fixture` status copied into `observed`.
+- [ ] T2. `matrix.py` rejects different `bundle_sha256` values within one (app, release, route). It accepts different hashes across releases or routes, and it never counts `grok-bot` toward a gate.
+- [ ] T3. `conformance.py` behaves as follows:
+  - It validates messages against the vendored schema and passes the conformant log.
+  - It fails a log with `initialized` sent before the initialize result, a View-to-host `tools/list`, a `tool-result` carrying `name`, or an unknown method.
+  - It treats a host-to-View `tools/list` (app tools) as legal and records it as a separate row.
+- [ ] T4. `conformance.py` rejects any log tagged `static_hypothesis` as evidence, and exits non-zero on a schema keyword it does not support.
+- [ ] T5. The sanitisation scan fails artifacts containing `Bearer `, JWT-shaped strings, `code=`, an email address or a phone number. `bundle_scan.py` flags its patterns, but its result alone never changes a gate.
+- [ ] T6. The SpikeDefinition validates with `proposed`, no `decision`, and the three outcomes.
+
+Specified now, implemented in product repos (B1, B2, B3, B5):
+
+- [ ] T7. Enumeration on the PoC instance with a raw MCP client: `tools/list` equals the `core-readonly` allowlist and `resources/list` equals `{ui://mctl-telegram/triage}`. The test fails if any extra tool appears, whatever its `readOnlyHint`, including `draft_reply`, `get_media` and admin reads.
+- [ ] T8. Raw `tools/call` for every tool in the full server registry that is not in the allowlist, and for unknown method names, is refused. Each call is made both through the App path (fixture host) and directly.
+- [ ] T9. Fail-closed configuration: startup, or the preflight, refuses each of these:
+  - `MCP_TOOL_FILTER=readonly` (a typo), and the preflight additionally refuses an unset filter, because an unset filter defaults to `all`;
+  - an unknown value reaching `toolPassesFilter` directly (unit test);
+  - `ALLOW_SEND=true`;
+  - a scope ceiling wider than read;
+  - an extra resource.
+- [ ] T10. Authorization:
+  - The static resource is refused without authentication and served with it; it carries no user data.
+  - User-data tool calls without the read scope, with a cross-account id (answered like not-found), with a stale or replayed request, or after `revoke_session` are denied.
+  - Each case runs for both model-originated and UI-originated calls.
+  - Revocation latency is asserted against the measured current bound, not assumed to be immediate.
+- [ ] T11. Audit for the same read is identical for both origins apart from an untrusted origin annotation, and a forged origin hint does not change the decision.
+- [ ] T12. Browser fixture (B1), on the actual bundle bytes with the SHA-256 asserted:
+  - handshake order;
+  - render on `{}`;
+  - refresh and filter re-call read tools;
+  - `host-context-changed` applies theme and dimensions;
+  - teardown and no-teardown both leave no error;
+  - controls for unadvertised capabilities are absent;
+  - DOM and screenshot assertions.
+- [ ] T13. Malformed, unknown-method, wrong-source and oversized messages, and script-like Telegram text, are inert: nothing is rendered as HTML and no tool is called. The View never puts Telegram text into `ui/message` or `ui/update-model-context`.
+- [ ] T14. Headless golden test: `content[].text` is byte-equal with `MCP_APPS_ENABLED` on and off for every App-linked tool.
 
 ## Rollback
 
-Phase 0 is docs, JSON, stdlib scripts and one CI step in `mctlhq/.github`, so reverting its PR restores the prior state, and no runtime, GitOps or tenant is touched. If the CI step proves flaky, drop only its `workflow-tests.yml` entry. Backlog product slices roll back independently:
-- mctl-telegram by unsetting `MCP_APPS_ENABLED`, which is the env-only drop-back documented in `internal/config/config.go`;
-- the flag flip by reverting the mctl-gitops values PR;
-- mctl-api by its own feature flag, defined in that issue.
-A DEFER verdict leaves the artifacts as the recorded measurement.
+- Phase 0: revert the single PR in `mctlhq/.github`. No runtime, GitOps or tenant is touched. If the CI step is flaky, remove only its `workflow-tests.yml` entry.
+- B1 and B2: revert the mctl-telegram PRs. With `MCP_APPS_ENABLED` unset, the App surface is off (default false in `internal/config/config.go`), and the new filter value is unused unless it is set.
+- B3: revert the mctl-gitops PR, which removes the isolated deployment. Then clean up the throwaway account per the runbook.
+- B5: the mctl-api feature flag defined in that issue.
+- A DEFER or UNMEASURED outcome leaves the artifacts as the recorded measurement.

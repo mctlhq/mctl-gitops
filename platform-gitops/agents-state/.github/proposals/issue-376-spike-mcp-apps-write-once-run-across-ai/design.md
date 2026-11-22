@@ -1,322 +1,358 @@
 # Design: issue-376-spike-mcp-apps-write-once-run-across-ai
 
+Revision 2. It answers the independent review of 2026-11-22
+(REQUEST_CHANGES, review snapshot blobs: requirements `eeff8c4ebf1a`,
+design `9ebebf751996`, tasks `8232543a9e60`, all re-hashed this run and
+matching). The phase 0 boundary is preserved: evidence infrastructure in
+`mctlhq/.github` only, after separate owner approval.
+
+## Finding-to-change matrix
+
+| Finding | Change in revision 2 | Where |
+| --- | --- | --- |
+| P1-01 Read-only isolation is not UI metadata | The PoC instance needs four layers, and a mismatch fails closed: (1) a registration allowlist = `core-readonly` profile, (2) minimum read scope ceilings, (3) `ALLOW_SEND=false` with writes absent, (4) a throwaway account. Raw MCP calls are made to every consequential capability, and `tools/list` is enumerated against the allowlist. This catches mis-annotated tools (evidence: `read-only` filter trusts `readOnlyHint`, which a heuristic grep finds on `draft_reply`, `get_user_audit_log`, `get_acquisition_report`). Tests cover an unknown filter value and the in-package default-to-all (`toolPassesFilter`). Static resource auth is separated from user-data auth. | sec. 5, T7-T11, B2 |
+| P1-02 Verdict rule contradicted G2 | A deterministic outcome table covers 3/3, 2/3, fewer, blocked, unmeasured and adapter-needed cases. A full verdict needs all three core hosts and G1-G6 GO. Grok is exploratory only. | sec. 6 |
+| P1-03 Second consumer gated on G1-G4 only | The second consumer needs D1 = ADOPT_* (all of G1-G6), owner review and attached security fixture results, before any deployment. Revocation is tested against measured current semantics. Origin hints are untrusted. | sec. 6, B5 |
+| P1-04 Task 13 depended on a consumer DEFER prevents | D1 (first-consumer portability) and D2 (shared extraction, only after second-consumer evidence) are split. D2 = `not_reached` under DEFER. Stop conditions and bounded partial results are added. | sec. 6, tasks 9-10, B6 |
+| P1-05 Task 0 was implementer work before approval | Task 0 becomes a pre-approval owner check, already partly satisfied: title and body now conform, the label state needs owner confirmation. "No implementer" is reconciled: the implementer runs only after explicit approval and only for phase 0. There is no automatic restart. | sec. "Pre-approval owner check" |
+| P2-01 Transcript-only checks | An executable browser fixture in the product repo is a hard prerequisite before any real-host run. It loads the actual bundle bytes under a strict reference host, with event injection, handshake, teardown and no-teardown cases, malformed messages, and DOM and screenshot assertions. Messages are validated against the pinned upstream `schema.json`. Reconstructed transcripts are labelled `static_hypothesis`, and regex scans are advisory. | sec. 3, B1, T3-T5, T12-T13 |
+| P2-02 #650 re-scope and Portal ownership | Recorded: #650 is parked on #852 plus an operator session, and Portal moved to #236. #376 does not activate #650 or duplicate Portal work. Offline fixture work is separate from live host tests. | Current state, sec. 4 |
+| P2-03 Stale docs, App Tools, Antigravity CLI and teardown, discovery | Vendor pages were re-fetched 2026-11-22 (below). This revision distinguishes Claude View-registered app tools from server `tools/call` and the host approval UX. It records that Antigravity sends no teardown and that its CLI ignores visibility. It defines safe `_meta` selection without sniffing, and separates protocol and SDK versions. | Current state, sec. 2 |
+| P2-04 Matrix conflated claim, transport, fixture and observation | Four independent fields per cell. Evidence points to immutable sanitized artifacts with exact endpoint, build, route and account pseudonym. Hash scope is (app, release, route). Untested cells are explicit. | sec. 2 |
+| P3-01 Check SDK helpers before choosing a manual bridge | Checked: `mark3labs/mcp-go` offers only the generic `WithExtensions` (already used at `server.go:469`), with no App helper in release notes v1.2.0-v1.6.0. `@modelcontextprotocol/ext-apps` 2.1.0 exports `.`, `./app-with-deps`, `./app-bridge`, `./server`, `./schema.json`. Default: vendor the pinned official `App` browser build, and record a justification for any deviation. | sec. 4 |
+
 ## Current state
 
 ### In this repository (`mctlhq/.github` at `7a0659c`)
 
-- `roadmap/epics/enterprise-mcp.yaml` (lifecycle `paused`) already carries
-  MCP Apps as phase `extensions`:
-  - work item `mcp-apps` is bound to mctlhq/mctl-telegram#569;
-  - `mcp-apps-validation` is bound to mctlhq/mctl-telegram#650 and depends on `mcp-apps`;
-  - `enterprise-endpoint-decision` (#128) depends on `mcp-apps`;
-  - success criterion: "MCP Tasks and Apps are accepted only after
-    end-to-end Portal compatibility is measured".
-- `roadmap/spikes/tg-mcp-app-live-validation.yaml` is the SpikeDefinition for
-  #650. It is `parked` with outcomes `SUBMIT_READY | SUBMIT_WITH_LIMITATIONS | NOT_READY`.
-  Its activation trigger is mctl-telegram#852 plus a scheduled operator session
-  with a throwaway identity (`reviewBy: 2026-11-30`). It asks a submission
-  question. #376 asks a portability question, so the two must not merge, but
-  #376's real-host run must reuse #650's execution.
-- `docs/spikes/agent-ui-ag-ui.md` Q8 separates MCP Apps (UI inside an MCP
-  host) from AG-UI (run/event projection in mctl-portal). #261 (open,
-  "PHASE B GO") builds the AG-UI DevLoop Run Inspector from canonical
-  mctl-api facts.
-- `docs/spikes/agent-client-compatibility.md` and
-  `docs/spikes/agent-client-compatibility/` (`probe.py`, `agents.json`,
-  `tests/fake_server.py`) set the house pattern this spike reuses:
-  - evidence tags (`[DOC]`, `[OBSERVED date, commit]`, `UNTESTED`);
-  - "unknown is never evidence of absence";
-  - a stdlib Python reference model with loopback fakes, run by
-    `.github/workflows/workflow-tests.yml` as `python3 -I -m unittest discover -s docs/spikes/<name>/tests -v`.
-- `docs/spikes/web-platform-unification.md` (decided
-  STANDARDIZE_CONTRACTS_KEEP_RUNTIMES) records tg.mctl.ai CSP and the "no CSP
-  is relaxed" rule.
-- `roadmap/schemas/spike-definition.schema.json` plus
-  `roadmap/scripts/validate.py::spike_semantic_errors` validate SpikeDefinitions:
-  - outcome pattern `^[A-Z][A-Z0-9_]*$`;
-  - `decision` only when `decided`;
-  - `parked` requires `activation`.
-- `.github/ISSUE_TEMPLATE/spike.yml` requires the title prefix `spike: `, the
-  labels `spike:scout` and `agents:intake`, and the
-  `Source/Question/Outcomes/Lifecycle/Related/Why mctl` lines.
-  Issue #376 has none of the labels and none of the lines (checked with `gh issue view 376`).
+- `roadmap/epics/enterprise-mcp.yaml` (paused) carries MCP Apps in phase
+  `extensions`:
+  - `mcp-apps` is bound to mctl-telegram#569;
+  - `mcp-apps-validation` is bound to #650;
+  - success criterion: Apps are accepted only after Portal compatibility is measured.
+- `roadmap/spikes/tg-mcp-app-live-validation.yaml`: re-scoped 2026-10-27.
+  - The portal half moved to the mcp-gateway epic (.github#236).
+  - `lifecycle: parked`, outcomes `SUBMIT_READY | SUBMIT_WITH_LIMITATIONS | NOT_READY`.
+  - Activation: mctl-telegram#852 closes with a position that permits submission, and an operator session with a throwaway identity is scheduled. `reviewBy: 2026-11-30`.
+  - GitHub state this run: #650 OPEN, last updated 2026-10-23; #852 OPEN; #236 OPEN.
+  - #376 asks a portability question and #650 a submission question. #376 reuses #650's runbook and session and does not activate it.
+- `docs/spikes/agent-ui-ag-ui.md` separates MCP Apps (in-host UI) from AG-UI
+  (run and event projection). #261 is open.
+- `docs/spikes/agent-client-compatibility/` is the house pattern this spike follows:
+  - stdlib Python run with `python3 -I`;
+  - evidence tags;
+  - "unknown is never absence";
+  - wired into `.github/workflows/workflow-tests.yml`.
+- `roadmap/schemas/spike-definition.schema.json` and
+  `roadmap/scripts/validate.py` validate SpikeDefinitions (`decision` only
+  when `decided`; `parked` requires `activation`).
+- `.github/ISSUE_TEMPLATE/spike.yml`: title `spike: `, labels
+  `spike:scout`, `agents:intake`, and the `Source/Question/Outcomes/Lifecycle/Related/Why mctl` lines.
+  - Issue #376 re-read this run (`gh issue view`, updatedAt 2026-11-22T01:38:57Z).
+  - The title and all six lines conform, with `Source: https://antigravity.google/docs/mcp-apps/`.
+  - `gh search issues` for that Source finds only #376.
+  - Labels: `spike:scout` only.
 
-### The Telegram prototype (mctlhq/mctl-telegram, `main` at `25e6485`; PR #651, merge `2fdf9af`)
+### Telegram prototype (mctlhq/mctl-telegram; PR #651; read at `25e6485`, `main` now `b11b8a2`, 4 commits ahead, none touching `internal/mcp/server.go`, `internal/mcpui/` or `internal/config/config.go`)
 
-- `internal/mcpui/app.go`:
-  - `ExtensionID = "io.modelcontextprotocol/ui"`;
-  - `ResourceURI = "ui://mctl-telegram/triage"` (stable, unversioned);
-  - `MIMEType = "text/html;profile=mcp-app"`, `Version = "0.1.0"`;
-  - `triage.html` is embedded with `go:embed`;
-  - `uiResourceMeta()` declares empty `connectDomains/resourceDomains/frameDomains/baseUriDomains`, no `domain`, and `prefersBorder: true`;
-  - `ToolMeta()` emits `{"ui":{"resourceUri":..., "visibility":["model","app"]}}`.
-  It has no SDK helper: `mark3labs/mcp-go v1.0.0` has none, and the keys are written by hand.
-- `internal/mcp/server.go` gates everything on `Server.AppsEnabled`, which `internal/config/config.go`
-  reads as `envBool("MCP_APPS_ENABLED", false)`. With the flag on, `addToolUI` links
-  `list_dialogs`, `list_folders`, `list_topics`, `get_unread_messages`,
-  `get_messages`, `prepare_get_media`, **`send_message`** and
-  **`prepare_send_message`**. So the prototype as merged is not read-only at
-  the UI-link layer. The send gate (`evaluateSendGate`, `ALLOW_SEND`,
-  per-account `send_enabled`, one-shot `Confirms.Issue` bound to
-  `HashSendPayload`) is the only protection.
-- `internal/mcp/apps.go::toolPrepareSendMessage` calls `requireScope(id, "telegram:messages:send")`
-  and audits through `s.audit`. The comment states that visibility is never consulted server-side.
-- `internal/mcpui/triage.html` hand-rolls a postMessage JSON-RPC bridge and
-  renders with `textContent` (no `innerHTML` match). Compared with ext-apps
-  `specification/2026-01-26/apps.mdx` (fetched this run):
-  1. `callHost("ui/initialize", {})` sends no `protocolVersion`, `appInfo`
-     or `appCapabilities`, but the spec says the View "MUST include its
-     capabilities in the `appCapabilities` field" (section "App Capabilities in `ui/initialize`").
-  2. It then calls `tools/list` from the View. That method is outside the
-     spec's "Standard MCP Messages" subset (`tools/call`, `resources/read`,
-     `notifications/message`, `ping`). Because the initial
-     `get_unread_messages` is chained after it, a conformant host that
-     rejects `tools/list` leaves the App on "Could not connect to host".
-  3. `onToolResultNotification` dispatches on `params.name`. The spec's
-     `ui/notifications/tool-result` params are a plain `CallToolResult`,
-     with no tool name.
-  4. It does not handle `ui/notifications/host-context-changed`, `ui/notifications/tool-input`,
-     `ui/resource-teardown` or display modes. It treats `size-changed` as an
-     inbound no-op, but in the spec that notification is the View reporting its
-     own size.
-  These are reading-based findings. Task 3 turns each into a failing fixture test before any fix.
-- The `docs/reports/mcp-apps-spike.md` host matrix has only the in-process
-  `mcpprobe` row (`protocol_version 2025-06-18`). Claude and ChatGPT are
-  "not measured here", and the matrix is owned by #650.
+- `internal/mcpui/app.go` declares the App surface:
+  - `ExtensionID "io.modelcontextprotocol/ui"`;
+  - `ResourceURI "ui://mctl-telegram/triage"`;
+  - `MIMEType "text/html;profile=mcp-app"`;
+  - `Version "0.1.0"`;
+  - the embedded `triage.html`, whose SHA-256 is identical at both revisions: `390a03383cafc2a0272f5fac87e462306a365a07953f267f0760b999c7a50e88`.
+- `internal/mcp/server.go` registers the App and filters tools:
+  - Line 469 declares the extension via `mcpserver.WithExtensions(mcpui.ExtensionCapability())`.
+  - Line 478 is `AddResource(mcpui.Resource(), s.handleReadAppResource)`.
+  - Lines 332-339 hold `toolPassesFilter`. Any filter other than `"read-only"` registers everything ("An unrecognised filter is treated as all"). `read-only` keeps tools whose `ReadOnlyHint` is true, so it trusts each tool's own annotation.
+  - Lines 343-361: `addTool` and `addToolUI`. Registration does not depend on the UI link. `addToolUI` is used for `list_dialogs`, `list_folders`, `list_topics`, `get_unread_messages`, `get_messages`, `send_message`, `prepare_get_media`, `prepare_send_message` and one more at line 633. About 40 tools are registered in total, including `send_message`, `pin_message`, `delete_messages`, `forward_messages`, `set_access`, `mint_worker_token`, `revoke_session` and `delete_account`.
+  - Lines 364-374, `handleReadAppResource`, checks only `auth.From(ctx) != nil`. The static bundle holds no user data, so authentication-only access to it is acceptable. User data arrives only through tool calls, which carry `requireScope` and account filters.
+- A heuristic grep of `NewTool` and `WithReadOnlyHintAnnotation(true)` adjacency in `internal/mcp/*.go` at `b11b8a2` lists, beyond the core reads, `draft_reply`, `get_media`, `get_user_audit_log`, `get_acquisition_report`, `list_telegram_identities`, `list_assistants`, `list_broadcasts`, `get_broadcast` and `get_my_notification_preferences`. These are grep-derived and must be confirmed by the enumeration test (T7). The point stands: `MCP_TOOL_FILTER=read-only` is not a sufficient PoC boundary.
+- `internal/config/config.go` (at `b11b8a2`) holds the relevant settings:
+  - `MCP_TOOL_FILTER` defaults to `all`, and any value other than `all`/`read-only` is rejected at startup (lines 950-962). So config fails closed, while the in-package default does not.
+  - `MCP_APPS_ENABLED` defaults to false.
+  - `ALLOW_SEND` defaults to false.
+  - `MCP_CLIENT_PROFILES` holds per-`client_id` and per-`redirect_uri` profile bindings plus a `scope_ceiling` (#1326). A malformed table aborts startup. An empty table "restricts no client", so a host whose client id is not bound is not restricted by this layer.
+- `internal/toolprofile/toolprofile.go`: `CoreReadonly = "core-readonly"`.
+  `docs/tool-descriptors.core-readonly.json` lists exactly `get_messages`,
+  `get_my_audit_log`, `get_my_identity`, `get_my_send_status`,
+  `get_unread_messages`, `list_dialogs`, `list_folders`, `list_topics` and
+  `search_messages`. This is the registration allowlist reused in B2.
+- `internal/mcpui/triage.html` (read at `b11b8a2`):
+  - line 595: `callHost("ui/initialize", {})`, with no `protocolVersion`, `appInfo` or `appCapabilities`;
+  - line 598: View `tools/list` to the host;
+  - line 204: dispatches on `params.name`;
+  - line 196: treats `size-changed` as inbound;
+  - lines 408 and 464: a send affordance gated on `tools/list` seeing `prepare_send_message`.
+  These are reading-based `static_hypothesis` findings until the browser fixture (B1) observes them.
+- No Node toolchain in mctl-telegram (no `package.json`). Its CI is Go
+  (`.github/workflows/build.yml`), and it has `cmd/mcpprobe` as an in-process
+  probe.
 
-### Other candidate consumers (repo heads read this run)
+### Other candidate consumers (repo heads from revision 1, not re-read)
 
-| Repo | MCP stack | App resources found |
-| --- | --- | --- |
-| mctl-api `0809fb4` | Go, `mark3labs/mcp-go v1.0.0` (`go.mod`) | none. `resourceUri` appears only in `internal/mcp/prompts_resources_test.go` (plain resources) |
-| mctl-glovo `6620f5b` | Go, `mark3labs/mcp-go v1.0.0` | none found |
-| seerrsense `da0c5a3` | TS, `@modelcontextprotocol/server@^2.0.0` | none found |
-| mctl-alice `cb276d6` | TS, `@modelcontextprotocol/sdk@^1.32.2` | none found |
-| mctl-portal `798fb19`, mctl-web `ec18892` | web | no `ext-apps` dependency in root `package.json` |
+The revision 1 inventory stands:
+- mctl-api `0809fb4` and mctl-glovo `6620f5b`: Go, `mark3labs/mcp-go v1.0.0`;
+- seerrsense `da0c5a3`: TS, `@modelcontextprotocol/server@^2`;
+- mctl-alice `cb276d6`: TS, `@modelcontextprotocol/sdk@^1.32.2`;
+- mctl-portal and mctl-web: no `ext-apps` dependency.
+None has App resources. "Not found by code search" is not proof of absence.
 
-Searches: `gh search code --owner mctlhq` for `"io.modelcontextprotocol/ui"`,
-`resourceUri`, `"profile=mcp-app"` and `"ui://"`. Only mctl-telegram and its
-#569 proposal matched. The code-search index may lag, so "none found" means
-not found by search, not proven absent.
+### Upstream and vendor sources (fetched 2026-11-22 this run)
 
-### Upstream (fetched this run)
-
-- ext-apps releases: `v2.1.0` (2026-11-10), `v2.0.4`, ... The `v2.0.0` notes
-  state that the wire protocol is unchanged: "2.x Views run in 1.x hosts and
-  2.x hosts render 1.x Views", backed by an interop test against 1.7.5. Only
-  the npm dependencies and the TS API break (`@modelcontextprotocol/client@^2`, zod 4.2+).
-  The spec has a `2026-01-26` stable directory and a `draft` directory.
-- The spec says `ui.domain` is **host-dependent** (examples
-  `{hash}.claudemcpcontent.com` and `www-example-com.oaiusercontent.com`) and,
-  when omitted, the host uses its default per-conversation sandbox origin. The
-  host MUST reject View `tools/call` for tools whose `visibility` lacks `"app"`.
-- `mark3labs/mcp-go` latest release is `v1.6.0` (2026-11-19). All three Go
-  consumers pin `v1.0.0`. Whether 1.6 adds MCP Apps helpers was not checked.
+- ext-apps releases: `v2.1.0` (2026-11-10), `v2.0.4`, `v2.0.3`.
+  - The spec directories are `2026-01-26` and `draft`.
+  - The `package.json` (2.1.0) exports `.`, `./app-with-deps`, `./react`, `./react-with-deps`, `./app-bridge`, `./server` and `./schema.json`.
+  - Revision 1 recorded the 2.0.0 note "wire protocol unchanged; 2.x Views run in 1.x hosts".
+- Version vocabulary: four numbers are in play, and they are not interchangeable. The matrix records them separately.
+  - MCP core protocol revision: extensions were formalised in `2026-07-28`, per the `mark3labs/mcp-go` `WithExtensions` doc comment.
+  - Telegram `mcpprobe` negotiated `2025-06-18` (revision 1 reading of `docs/reports/mcp-apps-spike.md`).
+  - Apps spec revision `2026-01-26`.
+  - ext-apps SDK version `2.1.0`.
+- `mark3labs/mcp-go`: latest `v1.6.0` (2026-11-19). Release notes v1.2.0-v1.6.0 do not mention Apps, `ui://`, `resourceUri` or SEP-1865. `server/server.go` has a generic `WithExtensions` only. No App helper was found, and `modelcontextprotocol/go-sdk` was not inspected for helpers (gap).
+- Antigravity (`antigravity.google/docs/mcp-apps/`):
+  - It renders `ui://` only in the App `v2.34.0+`, and needs the client to advertise `capabilities.extensions["io.modelcontextprotocol/ui"]`.
+  - Entry points are `_meta["com.google.antigravity/ui"].entrypoints` of type `aux_pane`, `global` or `file`. File entry tools are hidden from the model.
+  - The CLI renders no iframe, reads plain `content`, and "Ignores `_meta.ui.visibility`".
+  - "Antigravity does not send `ui/resource-teardown` on close".
+  - The iframe CSP is default-deny, with no persistent storage.
+  - Limits: 10 MiB HTML, 1 MiB persisted results, 4 concurrent `tools/call` per view.
+- Claude app tools (`claude.com/docs/connectors/building/mcp-apps/app-tools`):
+  - App tools are View-registered (`app.registerTool`, ext-apps >= 1.7.0). The host calls `tools/list` and `tools/call` on the View, which is the opposite direction to server tools.
+  - Claude prompts for approval before an app tool runs, but "When your view calls your own server's tools with `app.callServerTool`, the user doesn't see the prompt".
+  - App tools are available to a limited set of organizations, need the unified Chat and Cowork experience, and need a remote connector.
+- Claude entry points: global entry is `_meta["openai/ui"].entrypoints: [{type: "global"}]` plus `ui.resourceUri`.
+  - Visibility must include `model`.
+  - Limited organizations; Verified or custom connectors only, never Community.
+  - Up to about two hours to propagate.
+  - The `fullscreen` display mode is used if declared.
+  - Starting from `{}` is required.
+- ChatGPT (`developers.openai.com/plugins/build/chatgpt-ui`):
+  - It "implements the open MCP Apps standard" over a postMessage JSON-RPC bridge (`ui/initialize`, `tool-input`, `tool-result`, `ui/message`, `ui/update-model-context`).
+  - `openai/outputTemplate`, `openai/widgetCSP` and `openai/toolInvocation/*` are compatibility aliases.
+  - Its guidance: "Feature-detect each extension", "Avoid branching on a host or product name".
+  - Display modes: inline card, carousel, fullscreen, PiP.
+  - `openai/ui` is not mentioned on this page (gap).
+- Grok Bot (`docs.x.ai/grok-bot/computer-and-apps`) and Grok connectors (`docs.x.ai/grok/connectors`):
+  - Grok Bot accepts a remote HTTPS custom connector (URL, headers, OAuth client id) or a command MCP server.
+  - "Apps are account-wide. A connected app is available to every Bot you run".
+  - MCP Apps or interactive UI for custom servers is not mentioned on either page, so it is `unknown`.
+  - The connectors page does not name Grok Chat versus Grok Bot.
+  - The Grok Bot overview, approvals and changelog pages were not fetched (gap).
+- Not re-fetched this run: the ext-apps spec text (carried from revision 1), the OpenAI extensions page, Claude getting-started and the rollout article. They stay `claim: documented (issue snapshot 2026-11-22)` until task 3.
 
 Deployed state checked:
 
-- `mctl_get_service_status(labs, mctl-telegram)`: Argo `Synced` and `Healthy`, image `0.141.0`, host `tg.mctl.ai`.
+- `mctl_get_service_status(labs, mctl-telegram)`: Synced and Healthy, image `0.141.0`, host `tg.mctl.ai`.
+- `mctl_get_service_status(labs, mctl-telegram-preview)`: Synced and Healthy, image `main-b11b8a2`, host `tg-preview.mctl.ai`.
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`:
-  - `tag: "0.141.0"`, `ALLOW_SEND: "true"`;
-  - `OAUTH_ALLOWED_IMPLICIT_HOSTS` includes `claude.ai`, `chatgpt.com` and `antigravity.google` plus Google `oauth-redirect` prefixes;
-  - `OAUTH_CIMD_ALLOWED_HOSTS: chatgpt.com,claude.ai,vscode.dev,www.town.com`;
-  - no `OAUTH_PREREGISTERED_CLIENTS` (the Portal uses DCR);
-  - **no `MCP_APPS_ENABLED`**, so the App surface is off in production (default false in `config.go`).
-- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram-preview/values.yaml`: `tag: "main-25e6485"`, host `tg-preview.mctl.ai`, `ALLOW_SEND: "true"`, `AGENT_ENABLED`/`MANAGED_RUNTIME_ENABLED: "true"`, **no `MCP_APPS_ENABLED`**. Antigravity redirect hosts are allowlisted, and CIMD hosts were not read in this file.
-- Neither values file lists ChatGPT, Claude or Antigravity sandbox origins, and none is needed while the App makes no network call.
-- mctl-api is not under `$MCTL_GITOPS_ROOT/services/` (tenants admins, karabu, labs, namax66, redloop). Its deployed revision and MCP tool set were **not observed** by this run (gap; see Open questions in requirements.md).
-- No real host was exercised. Every host cell is `documented` or `unknown` today.
+  - `tag "0.141.0"`, `AUTH_REQUIRED "true"`, `ALLOW_SEND "true"`;
+  - `MCP_CLIENT_PROFILES` binds only `https://www.town.com/.well-known/oauth-client-id` to `core-reply`;
+  - no `MCP_APPS_ENABLED`, no `MCP_TOOL_FILTER` (so `all`).
+- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram-preview/values.yaml`:
+  - `tag "main-b11b8a2"`, `AUTH_REQUIRED "true"`, `ALLOW_SEND "true"`;
+  - no `MCP_APPS_ENABLED` and no `MCP_TOOL_FILTER` matched by grep.
+  - Neither existing instance qualifies as the PoC instance.
+- mctl-api: no `services/*/mctl-api` path under the tenants `admins`, `karabu`, `labs`, `namax66` and `redloop`. Its deployed revision and MCP surface were not observed (gap).
+- No real host was exercised. Every host cell is `claim` or `untested` today.
 
 ## Proposed solution
 
-Phase 0 (this proposal's implementable slice) is evidence infrastructure only, in
-this repository. Product changes are listed as gated follow-ups in other repos.
+### Pre-approval owner check (not implementer work)
 
-### 1. Spike artifacts in `mctlhq/.github`
+Before approving this proposal, the owner re-reads #376 against the
+current `.github/ISSUE_TEMPLATE/spike.yml` on `main`. The title and body
+already conform, and only `spike:scout` is present. The owner either
+confirms that `agents:intake` was consumed by intake, or restores it
+deliberately. No workflow is restarted automatically by this proposal.
+Approval then scopes the implementer to phase 0 (tasks 1-8) in this
+repository only.
 
-- `docs/spikes/mcp-apps-portability.md`: the report, with sections Question,
-  Non-claims, Evidence tags, Host contract matrix (rendered from the JSON
-  below), Existing-work inventory (the table above with revisions), ADR,
-  PoC plan, Security model, Gates, Backlog, Risks.
-- `roadmap/spikes/mcp-apps-portability.yaml` (SpikeDefinition):
+### 1. Phase 0 artifacts in `mctlhq/.github`
 
-  ```yaml
-  apiVersion: roadmap.mctl.ai/v1alpha1
-  kind: SpikeDefinition
-  metadata: {name: mcp-apps-portability, owner: mctlhq/.github}
-  spec:
-    title: MCP Apps write once, run across ChatGPT, Claude and Antigravity
-    question: >-
-      Can one immutable MCP Apps bundle per app, served by the existing
-      product server, render and refresh with identical read semantics in
-      ChatGPT, Claude and Antigravity, with at most server-side metadata
-      adaptation and unchanged plain-text behaviour in headless clients?
-    lifecycle: proposed
-    github: {issue: {repository: mctlhq/.github, number: 376}}
-    outcomes: [ADOPT_STANDARD_ONLY, ADOPT_WITH_THIN_HOST_ADAPTERS, DEFER]
-    execution: {devloop: true}
-    evidence: {report: docs/spikes/mcp-apps-portability.md}
-  ```
+- `docs/spikes/mcp-apps-portability.md`: the report, with these sections:
+  - Question; Non-claims; Evidence model;
+  - the matrix, rendered from JSON;
+  - the existing-work inventory with repo@revision and path;
+  - static findings (labelled `static_hypothesis`);
+  - ADR; PoC plan; security model; outcome table; backlog; risks; operator runbook;
+  - an empty owner decision block.
+- `roadmap/spikes/mcp-apps-portability.yaml`: as in revision 1 (`lifecycle: proposed`,
+  outcomes `ADOPT_STANDARD_ONLY | ADOPT_WITH_THIN_HOST_ADAPTERS | DEFER`, github issue 376,
+  `evidence.report`, no `decision`, no `epic`). The question is the issue's Question line verbatim.
+- `docs/spikes/mcp-apps-portability/` (stdlib Python, `python3 -I`):
+  - `host_matrix.json` (schema in section 2) and `matrix.py`, a validator and renderer;
+  - `schema/ext-apps-2.1.0.schema.json`: the vendored upstream `schema.json` with its SHA-256 and source tag recorded in a sidecar `SOURCE` file;
+  - `conformance.py`: validates a recorded message log against the pinned schema, plus lifecycle ordering rules (initialize result before `initialized`, no View-to-host `tools/list`, allowed method set). It validates JSON Schema with a minimal stdlib subset; unsupported keywords make it fail rather than pass. Its input is a log produced by an executable fixture or a real host's devtools. Logs are tagged `source: fixture|real_host|static_hypothesis`, and only the first two count as evidence.
+  - `bundle_scan.py`: an advisory static scan (`innerHTML`, `eval`, external `src`, `navigator.userAgent`, unguarded `window.openai`, host-name string branches). It prints the SHA-256 and never sets a gate by itself.
+  - `fixtures/`: valid and invalid matrices; a conformant and a non-conformant message log; the Telegram `static_hypothesis` log reconstructed from `triage.html` at `b11b8a2` (expected to fail, labelled as non-evidence); and a sanitisation-violation artifact.
+  - `tests/`: unittest, wired into `workflow-tests.yml` like `agent-client-compatibility`.
+- `AGENTS.md` `# Spikes` gets one bullet.
 
-  No `epic` binding is added. `enterprise-mcp` is paused and its items are
-  already bound to #569 and #650, so linking happens in the report's Related
-  section to avoid a second binding of the same work.
-- `docs/spikes/mcp-apps-portability/` (stdlib Python, run with `-I`):
-  - `host_matrix.json`: rows = contract points, columns = hosts
-    (`chatgpt-web`, `chatgpt-mobile`, `claude-web`, `claude-desktop`,
-    `claude-mobile`, `antigravity-app`, `codex`, `claude-code`, `agy-cli`,
-    `cf-portal-route`). Each cell is
-    `{status, source_url?, accessed?, evidence?{date, host_build, plan, endpoint, bundle_sha256, artifact, operator}, cause?}`,
-    where `status` ∈ {documented, fixture_tested, real_host_verified, unavailable, unknown}
-    and `cause` ∈ {host_gating, server_defect, bundle_defect, portal_limit}.
-  - `matrix.py`: a validator. It refuses a `real_host_verified` cell without
-    a complete `evidence`, refuses `documented` without a URL and date, and
-    refuses mixed bundle hashes within one app column set (gate G1). It also
-    renders the Markdown table.
-  - `bridge_check.py`: a conformance checker for a View's JSON-RPC
-    transcript (a list of messages recorded by a fixture host or a real host's
-    devtools). It checks:
-    - the `ui/initialize` params shape and order;
-    - the allowed View-to-Host method set from the pinned spec revision (`2026-01-26`);
-    - that `tool-result` is handled as a `CallToolResult`;
-    - that no `tools/list` comes from the View;
-    - that `size-changed` is emitted by the View.
-  - `bundle_scan.py`: a static scan of an HTML bundle. It flags `innerHTML`,
-    `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`,
-    `new Function`, any `http(s)://` fetch or `<script src>` outside the
-    declared CSP, host-name/user-agent sniffing (`navigator.userAgent`,
-    `chatgpt`, `claude`, `antigravity` string branches) and `window.openai`
-    use not guarded by feature detection. It prints the SHA-256 of the bundle.
-  - `fixtures/`:
-    - `telegram-triage-0.1.0.transcript.json`, reconstructed from `triage.html` as merged. It is expected to FAIL findings 1-3;
-    - a minimal passing transcript;
-    - matrix fixtures (valid, a forged `real_host_verified`, mixed hashes).
-  - `tests/`: unittest for all three scripts. Wired into `workflow-tests.yml` paths and steps like `agent-client-compatibility`.
-- `AGENTS.md` `# Spikes` gets one bullet linking the report. `README.md` is not touched.
+### 2. Host contract matrix schema
 
-### 2. Host contract model
+`rows` are contract points (the issue's list, plus "View-registered app
+tools" and "teardown" as separate rows). `columns` are `chatgpt-web`,
+`chatgpt-mobile`, `claude-web`, `claude-desktop`, `claude-mobile`,
+`antigravity-app`, `codex`, `claude-code`, `agy-cli` and `grok-bot`
+(exploratory). The route is a separate key: `direct`
+(`https://<poc-host>/mcp`) or `cf-portal`. Each (row, column, route) cell
+holds these fields:
 
-Portability rests on one rule: **the bundle bytes are host-independent, and
-only `_meta` may vary**. The server decides `_meta` from what the host
-negotiates in `initialize` (the `capabilities.extensions["io.modelcontextprotocol/ui"]`
-entry and its `mimeTypes`), never from a host-name string. Concretely:
+```
+claim:    {status: documented|not_documented|unknown, url, accessed, quote?}
+transport:{status: observed|untested, mcp_protocol_revision?, apps_spec_revision?, sdk_version?}
+fixture:  {status: pass|fail|untested, test_id?, repo_commit?}
+observed: {status: real_host_verified|failed|blocked|untested,
+           cause?: host_gating|server_defect|bundle_defect|portal_limit|unknown,
+           evidence?: {artifact_path, artifact_sha256, endpoint, route, host_build, plan,
+                       account_pseudonym, app_id, release, bundle_sha256, date, operator_pseudonym}}
+```
 
-| Concern | Standard-only behaviour | Thin adapter, only if a measured cell requires it |
+`matrix.py` enforces these rules:
+- complete `evidence` for `real_host_verified` and `failed`;
+- `cause` for `failed` and `blocked`;
+- no field derived from another;
+- `bundle_sha256` equal within one (app, release, route) across browser columns, but never compared across releases or routes;
+- a sanitisation scan of `artifact_path` contents for token-shaped strings, `Bearer `, `code=`, email and phone patterns.
+
+Selection of `_meta` without host sniffing:
+- When the client advertised the UI extension in `initialize`, the server always emits the standard `_meta.ui.resourceUri`.
+- Vendor keys (`openai/ui`, `com.google.antigravity/ui`) are additive and namespaced, so other hosts ignore them. If a measured cell needs them, they are emitted statically to every client, with no per-host selection.
+- The only per-host value is `ui.domain`. It is omitted by default. If a measured host requires it, the server selects it from the authenticated OAuth client identity (the CIMD `client_id` host, already validated against `OAUTH_CIMD_ALLOWED_HOSTS`), never from user agent or `clientInfo.name`.
+- Capability negotiation cannot reveal vendor key needs, which is why those keys are static and additive.
+
+### 3. Executable browser fixture (backlog B1, hard prerequisite)
+
+This test runs in the product repository: mctl-telegram first, then each
+consumer. It works as follows:
+- It loads the exact embedded `triage.html` bytes, asserting their SHA-256, into a sandboxed iframe in headless Chromium.
+- The parent page is a strict reference host built on the pinned ext-apps `app-bridge` (2.1.0). It answers `ui/initialize` and refuses `tools/list` and any method outside the pinned schema. It injects `tool-input`, `tool-result` (no `name`), `host-context-changed` (theme, dimensions, display modes) and malformed, unknown-method, wrong-source and oversized messages. It runs `ui/resource-teardown`, and separately closes without teardown, which is the Antigravity case.
+- `tools/call` is served by an in-process fake backed by synthetic dialogs, with no Telegram network access.
+- Assertions cover DOM state (rows rendered with `textContent`, script-like payloads inert, degraded controls absent), the message log (run through `conformance.py`) and a screenshot artifact with its SHA-256.
+
+Recommended toolchain: a test-only Playwright job, because `app-bridge` is the
+upstream reference host. The alternative is Go `chromedp` with the vendored
+schema. Either is CI-only and adds no runtime sidecar. The bridge fix is
+written only after this fixture fails on the static findings.
+
+### 4. ADR (the owner decides; recorded in the report)
+
+- **A. Reuse the Telegram implementation directly** (copy `internal/mcpui`). It copies the bridge defects. It is dropped as a template, but kept as the first consumer.
+- **B. Shared frontend package plus language-native helpers now.** This adds a package or repository before two real consumers exist. Dropped for now, and revisited at D2.
+- **C (recommended). Product-local code against a shared contract.**
+  - The contract is the matrix, the pinned schema, `conformance.py` and the browser fixture pattern.
+  - View: vendor the pinned official `@modelcontextprotocol/ext-apps` `App` browser build (`app-with-deps`, SHA-256 recorded) inline in the bundle, instead of the hand-rolled bridge. If the measured size or CSP cost of the official build is unacceptable, a conformed hand-rolled bridge is allowed with a written justification, and it must pass the same fixture. This also enables View-registered app tools later (ext-apps >= 1.7).
+  - Server: Go products use `mcp-go` `WithExtensions` plus a local `mcpui` package. TS products use ext-apps `./server` `registerAppTool`.
+  - No Node sidecar, no new ingress: the bundle is served by `resources/read` from the existing server.
+
+### 5. Read-only PoC and security model
+
+The PoC instance (backlog B2 and B3) is a separate deployment (for example
+`labs/mctl-telegram-appspoc`, name subject to an owner-approved mctl-gitops
+PR). It is never `tg.mctl.ai` or `tg-preview.mctl.ai`. Four layers, all required:
+
+1. **Registration allowlist.** A product change adds `MCP_TOOL_FILTER=core-readonly`, which registers exactly the `toolprofile.CoreReadonly` names. `config.go` already rejects unknown values, and `toolPassesFilter`'s in-package default-to-all becomes default-deny (refuse to build the server) for any unrecognised value. The App link set is a subset of that allowlist: `list_dialogs`, `list_folders`, `list_topics`, `get_unread_messages` and `get_messages`. The entry tool is `get_unread_messages {}`.
+2. **Scope ceiling.** `MCP_CLIENT_PROFILES` binds each core host's measured client id to `core-readonly`, with a read-only `scope_ceiling`. Because an unbound client is unrestricted by this layer, layer 1 is what covers unknown clients.
+3. **Writes off.** `ALLOW_SEND=false`, and no send, pin, admin or token tool is registered.
+4. **Account.** Only a throwaway or synthetic Telegram identity is linked.
+
+Startup and a preflight script (B3) assert the declared profile:
+- registered tools = the allowlist;
+- resources = `{ui://mctl-telegram/triage}`;
+- `ALLOW_SEND=false`;
+- the scope ceilings.
+Any mismatch aborts before a host connects.
+
+Authorization model:
+- The static App resource requires authentication only, because it contains no user data (`server.go:364-374`). All user data flows through tool calls with `requireScope` and account filtering.
+- UI-originated and model-originated calls share the host's OAuth session. Audit records them identically, and an origin hint is an untrusted annotation that never changes a decision.
+- Correlation uses the existing `trace_id` and work-item id (#306).
+- Revocation and fencing: the tests use mctl-telegram's current `revoke_session` and session-store behaviour as measured. If revocation is eventually consistent, the test records the observed bound and asserts the bound, not immediacy. #375 receives the measured semantics and does not get new assumptions.
+- CSP stays empty. No token is held by the View. Telegram text is rendered via `textContent`, and it never goes into `ui/message` or `ui/update-model-context`.
+- Visibility is never authorization. agy is documented to ignore it.
+- Writes are excluded. A future write spike keeps `prepare_*` with a one-shot `confirmation_id` bound to the payload hash, MFA or fresh sign-in, and idempotency.
+
+Second consumer (B5, gated by D1 below): a read-only mctl-api DevLoop Run
+Inspector on existing tenant-scoped read tools (`mctl_get_work_item`,
+`mctl_list_work_item_executions`, `mctl_list_work_item_snapshots`). No
+approve, decide, abandon or trigger tool is linked or registered on its
+App profile, and it reuses #261's canonical facts.
+
+### 6. Gates, outcome table and decisions
+
+Gates, per core host and route:
+- **G1** Immutable bundle: one `bundle_sha256` per (app, release, route), equal to the release hash.
+- **G2** Render and refresh: launch with `{}` renders, refresh and filter re-call read tools, detail opens, and the result is `real_host_verified`.
+- **G3** Identical read semantics: the `structuredContent` of the same calls is equal after timestamp normalisation.
+- **G4** Headless unchanged: Codex, Claude Code and agy `content[].text` is byte-equal to flag-off.
+- **G5** Degradation: unadvertised capabilities and missing teardown leave no broken UI, shown by the fixture and at least one real host.
+- **G6** Security: T7-T11 pass on the PoC instance, and the audit for a UI-originated call equals that of a model-originated call apart from the untrusted annotation.
+
+Each gate records GO, NO-GO (our defect), BLOCKED_BY_HOST or UNMEASURED.
+
+Outcome table for D1 (first-consumer portability; the owner confirms):
+
+| Core-host result (ChatGPT, Claude, Antigravity) | Adapter need | Recommended D1 |
 | --- | --- | --- |
-| Rendering | `_meta.ui.resourceUri` plus `resources/read` | none |
-| Sandbox origin | omit `ui.domain` (default origin, since the App makes no network calls) | per-host `ui.domain` computed server-side (Claude: documented server-URL SHA-256 prefix) |
-| Global/side/file entry | not used, launched from an entry tool | `openai/ui` global entry (ChatGPT, Claude) and `com.google.antigravity/ui` `aux_pane`/`global`/`file`, as additive `_meta` keys |
-| Host-specific JS API | none, only the standard bridge | `window.openai` only behind feature detection, never required |
-| Headless | `content[].text` semantic equivalent of `structuredContent` | none |
+| 3/3 all G1-G6 GO | none beyond standard `_meta.ui` | ADOPT_STANDARD_ONLY |
+| 3/3 all G1-G6 GO | additive static vendor `_meta` keys and/or client-identity `ui.domain` only, same bundle | ADOPT_WITH_THIN_HOST_ADAPTERS |
+| 3/3 measured but G1 fails (a bundle fork is needed) or G6 NO-GO | any | DEFER (portability or security not achieved) |
+| Any NO-GO (our defect) on G2-G5 | any | not a verdict: fix and re-run, up to 2 re-runs, then DEFER |
+| 2/3 GO, 1 BLOCKED_BY_HOST or UNMEASURED | any | DEFER with a bounded partial result ("portable on X, Y; Z host-gated") and a revisit trigger |
+| 1/3 or 0/3 GO | any | DEFER |
+| No operator session possible (#650 still parked at `reviewBy`) | n/a | stays `proposed`; record UNMEASURED, no verdict |
 
-If the measured matrix shows no row needing the right-hand column, the
-verdict is ADOPT_STANDARD_ONLY. If only additive `_meta` keys are needed,
-the verdict is ADOPT_WITH_THIN_HOST_ADAPTERS. If no two of the three
-browser hosts reach G2, the verdict is DEFER.
+The Grok Bot row is exploratory and never enters this table.
 
-### 3. ADR (recorded in the report; the owner decides)
+Stop conditions:
+- any real-account exposure, write call or token in an artifact (stop the run and record an incident);
+- the PoC preflight mismatches;
+- a host requires a bundle fork (record and stop that host);
+- 2 failed re-runs.
 
-- **Option A: reuse the Telegram implementation directly as the template.**
-  Copy `internal/mcpui` per product. It is cheap, but it copies three spec
-  defects and has no build step for a vendored bundle.
-- **Option B: a small shared frontend package plus language-native helpers now.**
-  Two server languages are in play (Go: telegram, api, glovo; TS: seerrsense, alice).
-  This needs a new package or repository and violates "no generic SDK until two real consumers".
-- **Option C (recommended): product-local code against a shared contract.**
-  - Telegram fixes its bridge in place.
-  - The shared artifact is the *contract* (`bridge_check.py`, `bundle_scan.py`, `host_matrix.json`), not code.
-  - TS consumers use upstream `@modelcontextprotocol/ext-apps` server helpers directly.
-  - Go consumers keep a local `mcpui`-style package.
-  - Extraction of a Go helper (for example `internal/mcpapps` copied into a shared module) is reconsidered only after mctl-api's Run Inspector is the second real consumer and the diff between the two Go packages is measured.
-  - No Node sidecar and no new ingress: the bundle is served by the existing MCP server via `resources/read`.
-
-### 4. Bounded read-only PoC (gated, other repos)
-
-1. **Telegram conformance fix** (mctl-telegram, behind `MCP_APPS_ENABLED`):
-   - `ui/initialize` with `protocolVersion: "2026-01-26"`, `appInfo` and `appCapabilities{availableDisplayModes:["inline"]}`;
-   - remove the View `tools/list` call. Write affordances are not shown at all in the PoC, so there is nothing to detect;
-   - correlate results via `tool-input` / host context;
-   - emit `size-changed` and apply theme CSS variables from host context;
-   - handle teardown.
-   - **Read-only link set**: a new `MCP_APPS_READONLY` default-true check, or reuse of the existing `core-readonly` tool profile (`docs/tool-descriptors.core-readonly.json`). Either way, `send_message` and `prepare_send_message` are not passed to `addToolUI`.
-   - The entry tool is `get_unread_messages` with `{}`.
-   - Bump `Version`, record the bundle SHA-256 in `_meta.ui` under an `mctl.bundleSha256` key and in the content-hash test.
-2. **Fixture proof** (mctl-telegram CI plus this repo's checker):
-   - the transcript from an in-process fixture host passes `bridge_check.py`, and `bundle_scan.py` is clean;
-   - the `mcpprobe` Apps step is unchanged;
-   - headless golden test: `content[].text` is byte-equal with the flag on and off.
-   - The MCP Inspector or a mock host stays `fixture_tested`, never real-host.
-3. **Operator run under #650** (human, throwaway identity, separate deployment or preview with the flag on, approved via a mctl-gitops PR):
-   - ChatGPT, Claude web/desktop and Antigravity on real accounts;
-   - Codex, Claude Code and agy for headless;
-   - optional `cf-portal-route` row.
-   - Captures per host: sanitized screenshot, devtools JSON-RPC transcript (run through `bridge_check.py`), `resources/read` bytes hash, and server audit lines for the same `trace_id`.
-4. **Second consumer (separate issue, after G1-G4 GO): mctl-api DevLoop Run Inspector App.**
-   - Read-only, linking only tenant-scoped read tools that already exist: `mctl_get_work_item`, `mctl_list_work_item_executions` and `mctl_list_work_item_snapshots`, plus `mctl_get_dev_loop` for admins only.
-   - No approval, decide, abandon or trigger tool is linked. It reuses the canonical facts #261 projects, and no new store is added.
-
-### 5. Security model
-
-- The authority is the host's existing OAuth session to the product server
-  (tg.mctl.ai: DCR/CIMD per `OAUTH_CIMD_ALLOWED_HOSTS`; mctl-api: its OAuth).
-  The View holds no token: it only posts JSON-RPC to the host.
-- Every handler keeps `auth.From(ctx)`, `requireScope` and its tenant filter.
-  The UI link changes none of them. Visibility is a host hint only (and is
-  documented as ignored by agy).
-- Origin: UI-originated and model-originated calls arrive on the same session.
-  Audit therefore records them identically, and any origin hint is stored as
-  an untrusted annotation. Correlation uses the existing `trace_id` /
-  work-item id (#306 REUSE_WORK_ITEM_ID) so that #375 revocation and fencing
-  apply to the session, not to the UI.
-- CSP stays empty (`default-src 'none'` baseline). Untrusted Telegram text
-  goes through `textContent` only, enforced by `bundle_scan.py`.
-  `ui/update-model-context` and `ui/message` never carry Telegram text,
-  following the existing comment in `triage.html`, and T8 asserts it.
-- Data minimisation: the App renders the same fields the tools already
-  return. No new field is added for the UI.
-- The write phase is explicitly excluded. When it comes, it reuses
-  `prepare_*` plus the one-shot `confirmation_id` bound to the payload hash,
-  fresh-sign-in/MFA, and idempotency, under its own spike.
-
-### 6. Gates (GO/NO-GO, evaluated in the report)
-
-- **G1 Immutable bundle**: the same SHA-256 of `resources/read` text across all browser hosts, and equal to the release hash.
-- **G2 Render and refresh**: in each of ChatGPT, Claude and Antigravity, launch with `{}` renders, refresh and filter re-call read tools, and detail opens. Each is `real_host_verified`.
-- **G3 Identical read semantics**: per host, the `structuredContent` of the same call against the same throwaway fixture is equal after normalising timestamps.
-- **G4 Headless unchanged**: Codex, Claude Code and agy text output is byte-equal to flag-off.
-- **G5 Graceful degradation**: an unadvertised capability hides its control without a console error or blank frame (fixture plus at least one real host).
-- **G6 Security**: T7-T10 pass, and the audit trace for a UI-originated call matches a model-originated one.
-
-Each gate records GO, NO-GO (our defect) or BLOCKED_BY_HOST (plan, rollout or Portal), with evidence refs.
+D2 (shared extraction): taken only after the second consumer has its own
+gate evidence, by measuring the diff between the two products' App code. It
+is recorded as `not_reached` when D1 is DEFER or B5 never starts.
 
 ### 7. Product order after evidence
 
-Telegram validation (#650), then the DevLoop Run Inspector (mctl-api, Go),
-then Glovo (Go, same SDK, which tests helper extraction), then SeerrSense (TS
-SDK 2, which can use upstream ext-apps helpers), then Alice (TS SDK 1.x, which
-needs an SDK decision first). None of these commits to production or a
-directory submission.
+Telegram validation (#650), then the DevLoop Run Inspector (mctl-api),
+Glovo, SeerrSense and Alice (TS SDK 1.x, which needs an SDK decision
+first). None of these commits to production or a directory submission.
+
+### 8. Optional Grok Bot row
+
+- Bounded isolated test against the PoC instance, from a throwaway Grok account the owner already holds: no new paid spend, no account linking to real services.
+- Steps: initialize and discover, `tools/list`, one harmless read, then check for the extension capability and `ui://` MIME.
+  - If the UI renders, check render and refresh.
+  - Otherwise, record the text fallback.
+- Connectors are account-wide ("available to every Bot you run"), so the test account must have no other bots or team members.
+- The cloud-computer and command-MCP path is out of the boundary.
+- Catalog cards are not taken as evidence.
+- OAuth and personal-assistant interoperability stays in mctl-telegram#1379.
 
 ## Alternatives
 
-- **Fold #376 into #650.** Dropped because #650 answers a submission question (`SUBMIT_*` outcomes), is parked on #852 policy, and covers one product. #376 needs a cross-product portability verdict. #376 therefore reuses #650's operator session instead of duplicating it.
-- **Write a generic MCTL MCP-Apps SDK or Node sidecar that serves bundles for every product.** Dropped: no second consumer exists, there are two server languages, and it adds ingress and a deployment. Upstream ext-apps already supplies the TS side.
-- **Go straight to the real-host matrix with the merged bundle.** Dropped because the three reading-based spec divergences would fail in conformant hosts and be misattributed to host support. A cheap fixture conformance gate must come first.
-- **Host-specific bundles (a ChatGPT build with `window.openai` and a Claude build).** Dropped because they break G1 and the "write once" goal, and multiply review surface.
+- **Fold #376 into #650.** Dropped: #650 answers a submission question for one product and is parked on #852. #376 reuses its runbook and session.
+- **A generic MCTL MCP Apps SDK or Node sidecar now.** Dropped: no second consumer yet, two server languages, extra ingress. Revisited at D2.
+- **Real-host matrix first with the merged bundle.** Dropped: unobserved bridge defects would be misread as host gating. The executable fixture comes first.
+- **Host-specific bundles or host sniffing.** Dropped: they break G1 and contradict vendor guidance ("Avoid branching on a host or product name").
+- **Use `MCP_TOOL_FILTER=read-only` as the PoC boundary.** Dropped: it trusts per-tool `readOnlyHint`, which includes admin and draft tools.
 
 ## Platform impact
 
-- Migrations: none. Phase 0 adds docs, JSON, stdlib Python and CI wiring in this repository only.
-- Backward compatibility: no runtime change anywhere. `MCP_APPS_ENABLED` stays false in `tg.mctl.ai` and `tg-preview.mctl.ai` values, and the tool surface with the flag off is unchanged (existing mctl-telegram tests).
-- Resource impact: CI runs a few extra unittest seconds. The later operator run needs a throwaway Telegram identity and the host plans (ChatGPT, Claude, Antigravity). Their plan and rollout eligibility is itself a measured cell.
-- Cost and maintenance: Option C costs one product-local bridge per product (about 600 lines of HTML/JS today), plus a shared contract checker. Extraction is deferred until measured duplication justifies it.
+- Migrations: none in phase 0 (docs, JSON, stdlib Python, one CI step in `mctlhq/.github`).
+- Backward compatibility: no runtime change. `tg.mctl.ai` and `tg-preview.mctl.ai` are untouched. The B2 `core-readonly` filter value is additive, and changing the in-package default-to-all only affects values `config.go` already rejects.
+- Resources: a few CI seconds in phase 0. B1 adds a test-only headless browser job in mctl-telegram CI. B3 adds one small isolated deployment for the operator window, which is removed afterwards.
+- Cost and maintenance: under option C, each product owns one bundle that embeds a pinned official SDK build, and that build needs an upgrade cadence. One shared contract and schema snapshot lives in this repository.
 - Risks:
-  - P1: the merged App links write tools (`send_message`, `prepare_send_message`) while prod has `ALLOW_SEND: "true"`. Mitigation: the read-only link set is a precondition of any flag flip, and T7 asserts it.
-  - P1: a host-gated rollout (plan, region, allowlist, "preview is not access") is misread as a code defect, or the reverse. Mitigation: the `cause` field and separate fixture evidence.
-  - P1: issue #376 non-conformance to the spike template. Mitigation: task 0 before approval.
-  - P2: a spec or host revision drifts between capture and decision. Mitigation: pin the spec revision `2026-01-26` and ext-apps `2.1.0` in the matrix, and record the access date per cell.
-  - P2: Portal (#44, #35) strips `_meta.ui` or `resources/read`. Mitigation: record it as `portal_limit`, with no workaround.
-  - P2: screenshots leak Telegram data. Mitigation: a throwaway identity, synthetic dialogs and a sanitisation checklist.
-  - P3: `mark3labs/mcp-go` upgrades (v1.0.0 to v1.6.0) change `_meta` serialisation. Mitigation: the existing content-hash and `apps_surface_test.go` guard it.
+  - P1: a mis-annotated tool exposed through the hint-based filter. Mitigation: the allowlist filter, enumeration (T7) and the fail-closed preflight.
+  - P1: host gating (limited organizations, unified experience, Verified or custom only, the two-hour propagation, Antigravity v2.34+) is misread as a defect, or the reverse. Mitigation: the separate `claim`/`observed` fields and `cause`.
+  - P1: a real-account or token leak in screenshots or logs. Mitigation: a throwaway identity, synthetic data, the sanitisation validator and the stop condition.
+  - P2: #650 stays parked past `reviewBy 2026-11-30`. Mitigation: phase 0 and B1-B2 proceed offline, and D1 stays UNMEASURED.
+  - P2: spec or SDK drift between capture and decision. Mitigation: pin spec `2026-01-26`, ext-apps `2.1.0` and the schema hash per cell.
+  - P2: the Portal strips `_meta.ui` or `resources/read`. Mitigation: record `portal_limit`; Portal work stays with #236.
+  - P3: the official SDK build is large or needs CSP changes. Mitigation: a measured, justified hand-rolled fallback.
   - P3: Alice's TS SDK 1.x lags. Mitigation: it is last in product order.
-- Rollback: revert the Phase 0 PR. Product slices roll back by unsetting `MCP_APPS_ENABLED` (already a documented env-only drop-back in `config.go`).
+- Rollback: revert the phase 0 PR. Product slices roll back by unsetting `MCP_APPS_ENABLED` or `MCP_TOOL_FILTER`, and the PoC deployment is removed by reverting its mctl-gitops PR.

@@ -1,92 +1,122 @@
-# MCP Apps portability spike: one standard bundle across ChatGPT, Claude and Antigravity
+# MCP Apps portability spike: one standard bundle across ChatGPT, Claude and Antigravity (revision 2)
 
 ## Context
 
-Issue mctlhq/.github#376 asks whether MCTL can ship MCP-native UI (MCP Apps,
-SEP-1865, `io.modelcontextprotocol/ui`) once per app: one domain
-implementation and one versioned HTML/JS/CSS bundle. The same bundle would
-render in ChatGPT, Claude and Antigravity, and only capability-driven
-server-side metadata would differ between hosts. The issue requires that
-portability is proven with evidence rather than assumed. It also requires
-that existing work is reused first: the merged Telegram prototype
-(mctlhq/mctl-telegram#569, PR #651), its operator validation spike
-(mctlhq/mctl-telegram#650), the Portal boundary (#35, #44) and the AG-UI Run
-Inspector (#258, #261). Authority and audit must also be wired into #373 and
-#375. The run is investigator-only. Nothing is implemented, deployed,
-submitted to a directory or write-enabled without separate owner approval.
+Issue mctlhq/.github#376 asks whether MCTL can ship MCP-native UI once per
+app. That means one domain implementation and one immutable HTML/JS/CSS
+bundle per app release, rendered by ChatGPT, Claude and Antigravity through
+the standard MCP Apps extension (`io.modelcontextprotocol/ui`, ext-apps spec
+`2026-01-26`). Only minimal, capability-driven, server-side `_meta` may
+differ between hosts, and headless clients (Codex, Claude Code, agy) must
+keep equivalent plain text. Portability must be proven, not assumed.
+Existing work comes first:
+- the merged Telegram prototype (mctlhq/mctl-telegram#569, PR #651);
+- the parked operator validation (#650, SpikeDefinition
+  `roadmap/spikes/tg-mcp-app-live-validation.yaml`);
+- the Portal and gateway boundary (#35, #44, #236);
+- the AG-UI Run Inspector (#258, #261);
+- authority and audit (#373, #375);
+- the Grok Bot interoperability evidence (mctl-telegram#1379).
 
-This matters because the shipped prototype has only in-process fixture
-evidence: the `mcpprobe` row in `docs/reports/mcp-apps-spike.md`, Claude and
-ChatGPT "not measured here". Read against the ext-apps specification
-`specification/2026-01-26/apps.mdx`, its View bridge (`internal/mcpui/triage.html`)
-diverges in three places. Each would break initialisation or rendering in a
-conformant host. Running a real-host matrix against that bundle first would
-measure our defects, not host gating. This proposal defines the contract
-matrix, the ADR options, a bounded read-only PoC, security tests, measurable
-GO/NO-GO gates and a phased backlog. Its deliverables stay in this
-repository: a spike report, a SpikeDefinition and a stdlib conformance and
-matrix reference model.
+This is revision 2. It answers the independent review of 2026-11-22
+(REQUEST_CHANGES: 5 P1, 4 P2, 1 P3, against blobs `eeff8c4`, `9ebebf7`,
+`8232543`). The phase 0 boundary is unchanged. Phase 0 is evidence
+infrastructure in `mctlhq/.github` only, and it needs a separate explicit
+owner approval of this proposal. Everything in another repository is a
+backlog slice with its own issue and approval. This run is investigator
+only: nothing is implemented, deployed, submitted, write-enabled or
+restarted. design.md opens with a finding-to-change matrix.
 
 ## User stories
 
-- AS the platform owner I WANT an evidence-tagged host contract matrix SO THAT I can choose ADOPT_STANDARD_ONLY, ADOPT_WITH_THIN_HOST_ADAPTERS or DEFER from measured facts rather than vendor marketing.
-- AS a product engineer (Telegram, mctl-api, Glovo, SeerrSense, Alice) I WANT one conformance contract and fixture host to test my App bundle against SO THAT I find spec defects before an operator spends a real-host session.
-- AS an operator running mctlhq/mctl-telegram#650 I WANT a runbook that produces sanitized screenshots, protocol transcripts and audit traces per host SO THAT host gating and code defects are recorded separately.
-- AS a security reviewer I WANT every UI-originated call to pass the same server-side OAuth, scope, tenant and audit path as a model-originated call SO THAT app-only visibility or a browser token is never a security boundary.
-- AS a headless user (Codex, Claude Code, agy) I WANT the same tools to keep returning equivalent plain text SO THAT the App adds presentation without removing capability.
+- AS the platform owner I WANT a deterministic outcome table over measured gates SO THAT ADOPT_STANDARD_ONLY, ADOPT_WITH_THIN_HOST_ADAPTERS or DEFER follows from evidence, including for partial and host-blocked results.
+- AS a product engineer I WANT an executable browser fixture that runs my actual immutable bundle against a strict reference host SO THAT I find bridge defects before an operator spends a real-host session.
+- AS an operator extending mctl-telegram#650 I WANT a runbook, an isolated read-only instance with a fail-closed preflight, and a capture format SO THAT host gating and code defects are recorded separately and no real account or write path is exposed.
+- AS a security reviewer I WANT read-only isolation enforced at server registration, scope and instance configuration, and verified by raw MCP calls, SO THAT neither UI metadata nor visibility is ever the boundary.
+- AS a headless user (Codex, Claude Code, agy) I WANT App-linked tools to return the same plain text SO THAT the App adds presentation without removing capability.
 
 ## Acceptance criteria (EARS)
 
+Approval boundary
+
+- WHILE this proposal is not approved by the owner THE SYSTEM SHALL run no implementer, no product change, no deployment and no workflow restart. The issue conformance check (design.md, "Pre-approval owner check") SHALL be a pre-approval owner action, not an implementer task.
+- WHEN the owner approves this proposal THE SYSTEM SHALL scope the implementer to the phase 0 tasks in `mctlhq/.github` only. Each backlog slice SHALL need its own issue and explicit approval.
+
 Report and matrix
 
-- WHEN the spike report `docs/spikes/mcp-apps-portability.md` is merged THE SYSTEM SHALL contain a host contract matrix with one row per contract point (discovery and `initialize` extension negotiation, `tools/list` `_meta.ui.resourceUri`, `resources/read` with `text/html;profile=mcp-app`, `ui/initialize` lifecycle, `structuredContent` plus text fallback, View `tools/call`, app-only tools, `ui/update-model-context` and `ui/message`, theme, size and display modes, global/side/file entry points, remote OAuth mode, CSP and `ui.domain`, mobile versus desktop/CLI, packaging and plan/rollout limits) and one column per host (ChatGPT, Claude web/desktop, Antigravity app, Codex, Claude Code, agy headless).
-- THE SYSTEM SHALL tag every matrix cell with exactly one of `documented`, `fixture_tested`, `real_host_verified`, `unavailable`, `unknown`.
-- IF a cell is tagged `real_host_verified` THEN THE SYSTEM SHALL carry an evidence reference: date, host build/plan, endpoint, bundle SHA-256, a sanitized screenshot path or protocol transcript path, and an operator handle. The matrix validator SHALL reject the cell otherwise.
-- IF a cell is tagged `documented` THEN THE SYSTEM SHALL carry the vendor URL and access date, and SHALL NOT be counted toward any gate.
-- WHILE no operator evidence has been captured THE SYSTEM SHALL contain zero `real_host_verified` cells and the spike manifest SHALL stay at `lifecycle: proposed` with no `decision` block.
-- WHEN a host fails a contract point THE SYSTEM SHALL record whether the cause is host gating (plan, rollout, allowlist, Portal), a server defect or a bundle defect. A Portal limitation SHALL be recorded as a measured result and SHALL NOT trigger a workaround.
+- WHEN `docs/spikes/mcp-apps-portability.md` is merged THE SYSTEM SHALL contain the host contract matrix (design.md section 2) covering:
+  - every contract point the issue lists;
+  - the core hosts ChatGPT, Claude and Antigravity;
+  - the headless columns Codex, Claude Code and agy;
+  - an optional exploratory Grok Bot row;
+  - a separate route dimension (`direct`, `cf-portal`).
+- THE SYSTEM SHALL record four independent fields per matrix cell: `claim` (vendor documentation, with URL and access date), `transport` (the MCP route and protocol revision actually used), `fixture` (fixture coverage, with test id and commit) and `observed` (real-host execution). No field SHALL be inferred from another.
+- IF `observed` is `real_host_verified` THEN THE SYSTEM SHALL carry:
+  - an immutable sanitized artifact (path plus SHA-256);
+  - the exact endpoint, route, host build and plan;
+  - a host-account pseudonym (never a real handle or email);
+  - app id, release and bundle SHA-256;
+  - the date and an operator pseudonym.
+  The validator SHALL reject the cell otherwise.
+- THE SYSTEM SHALL scope bundle-hash equality to a single (app, release, route) tuple, never globally, and SHALL mark every untested cell `untested` explicitly.
+- WHILE no operator evidence exists THE SYSTEM SHALL contain zero `real_host_verified` cells, and the SpikeDefinition SHALL stay `lifecycle: proposed` with no `decision`.
+- WHEN a host fails a contract point THE SYSTEM SHALL record `cause` as one of `host_gating`, `server_defect`, `bundle_defect`, `portal_limit` or `unknown`. A Portal limitation SHALL be a measured result and SHALL NOT trigger a workaround.
+- THE SYSTEM SHALL NOT write tokens, cookies, OAuth codes, message text, phone numbers or real chat titles into any artifact. The capture checklist and a validator scan SHALL enforce this.
 
-Bundle conformance (applies to any App bundle, starting with Telegram triage)
+Bundle conformance
 
-- WHEN a View starts THE SYSTEM SHALL send `ui/initialize` carrying `protocolVersion`, `appInfo` and `appCapabilities` (including `availableDisplayModes`) and SHALL send `ui/notifications/initialized` only after the result.
-- THE SYSTEM SHALL issue only the View-to-Host methods the pinned spec permits (`tools/call`, `resources/read`, `notifications/message`, `ping`, and the `ui/*` requests). In particular it SHALL NOT call `tools/list` from the View.
-- WHEN the View receives `ui/notifications/tool-result` THE SYSTEM SHALL treat `params` as a `CallToolResult` and SHALL correlate it to a tool via `ui/notifications/tool-input` or the `toolInfo` in host context, never via a `params.name` field.
-- WHEN host context reports theme, container dimensions or display mode THE SYSTEM SHALL adapt by feature detection, and SHALL NOT branch on host name or user-agent.
-- WHEN the App is launched from an entry tool called with `{}` THE SYSTEM SHALL render a useful default view, and refresh, filter and detail SHALL use only existing read tools.
-- IF a host capability (display mode, model context, `ui/message`, global entry) is not advertised THEN THE SYSTEM SHALL hide the dependent control and keep the remaining view working.
-- THE SYSTEM SHALL render untrusted text only through `textContent` or equivalent escaping. A test SHALL fail if `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` or `eval` appear in the bundle.
-- THE SYSTEM SHALL serve byte-identical resource contents to every host. Host-specific values (for example `ui.domain`, `openai/*` or `com.google.antigravity/ui` keys) SHALL appear only in `_meta`, and the bundle SHA-256 SHALL be recorded per release.
+- WHEN a View starts THE SYSTEM SHALL send `ui/initialize` with `protocolVersion`, `appInfo` and `appCapabilities`, and SHALL send `ui/notifications/initialized` only after the result.
+- THE SYSTEM SHALL validate every View-to-Host and Host-to-View message against the pinned upstream `@modelcontextprotocol/ext-apps` `schema.json`, with version and SHA-256 recorded. Regex scans SHALL be advisory and SHALL NOT be the sole proof of any security property.
+- THE SYSTEM SHALL NOT call `tools/list` from the View to the host. View-registered app tools, where Claude's host calls `tools/list` on the View, are a different direction and SHALL be recorded separately.
+- WHEN the View receives `ui/notifications/tool-result` THE SYSTEM SHALL treat `params` as a `CallToolResult` and SHALL NOT dispatch on `params.name`.
+- WHEN host context reports theme, dimensions or display mode THE SYSTEM SHALL adapt by feature detection only, and SHALL NOT branch on host name or user agent.
+- WHEN the entry tool is called with `{}` THE SYSTEM SHALL render a useful default view. Refresh, filter and detail SHALL use only existing read tools, and app-local actions SHALL affect display only.
+- IF a host capability is not advertised, or a host never sends `ui/resource-teardown` (documented for Antigravity), THEN THE SYSTEM SHALL hide the dependent control and keep the view working without a broken frame.
+- THE SYSTEM SHALL serve byte-identical resource contents to every host for one (app, release). Host-specific values SHALL appear only in tool or resource `_meta`.
 
-Read-only PoC and security
+Executable fixture (hard prerequisite for any real-host run)
 
-- WHILE the PoC is running THE SYSTEM SHALL link `_meta.ui` only to read tools. `send_message`, `prepare_send_message`, pin and any other write tool SHALL NOT be App-linked or App-callable, and the instance SHALL use a throwaway or synthetic Telegram account.
-- WHEN a UI-originated `tools/call` or `resources/read` reaches the server THE SYSTEM SHALL apply the same OAuth token validation, `requireScope` check, tenant isolation and audit record as for a model-originated call.
-- IF a request names another tenant's object, presents a stale `state_version`, replays an expired confirmation, or lacks the scope THEN THE SYSTEM SHALL deny it with the same answer a missing object or missing scope gets. Isolated tests SHALL cover each case for both call origins.
-- THE SYSTEM SHALL NOT place a bearer token, backend credential or tenant selector in the View. The CSP declared in `_meta.ui.csp` SHALL stay empty unless a reviewed origin is required.
-- THE SYSTEM SHALL NOT treat `_meta.ui.visibility` as authorization. Antigravity is documented to ignore it, and the spike must state this.
-- WHEN a headless client (Codex, Claude Code, agy) calls an App-linked tool THE SYSTEM SHALL return the same semantic plain-text content as with `MCP_APPS_ENABLED=false`.
+- WHEN the browser fixture runs THE SYSTEM SHALL load the actual immutable bundle bytes, identified by SHA-256, in a headless browser under a strict reference host. The host SHALL refuse `tools/list` and any method outside the pinned schema, inject `tool-input`, `tool-result` and `host-context-changed`, perform the handshake and the teardown and the no-teardown cases, and capture DOM assertions and a screenshot.
+- IF the View receives a malformed, unknown-method, wrong-origin or oversized message THEN THE SYSTEM SHALL ignore it without rendering its content or calling a tool. The fixture SHALL assert this.
+- THE SYSTEM SHALL label transcripts reconstructed by reading code as `static_hypothesis`, and SHALL never count them as observed runtime.
 
-Gates
+Read-only isolation and security
 
-- WHEN the operator run completes THE SYSTEM SHALL evaluate gates G1-G6 (design.md) and record GO, NO-GO or BLOCKED_BY_HOST per gate. The verdict SHALL be chosen by the owner from `ADOPT_STANDARD_ONLY`, `ADOPT_WITH_THIN_HOST_ADAPTERS`, `DEFER`.
+- WHILE the PoC runs THE SYSTEM SHALL use an isolated instance (not `tg.mctl.ai` and not `tg-preview.mctl.ai`) with all of the following:
+  - an explicit server registration allowlist equal to the `core-readonly` tool profile;
+  - client scope ceilings limited to the minimum read scopes;
+  - `ALLOW_SEND=false`;
+  - a throwaway or synthetic Telegram account only.
+- IF the instance configuration does not match the declared PoC profile (an unknown filter value, an extra registered tool or resource, `ALLOW_SEND` not false, a wider scope ceiling) THEN THE SYSTEM SHALL fail closed: startup refused, or the operator preflight aborts before any host connects.
+- WHEN any raw MCP client, whatever its origin, calls a consequential capability on the PoC instance THE SYSTEM SHALL refuse it. That covers every tool outside the allowlist, including tools whose `readOnlyHint` is wrong, and every unregistered method. The test SHALL enumerate `tools/list` and `resources/list` against the allowlist.
+- THE SYSTEM SHALL authorize the static App resource (no user data, authentication only, as at `server.go:364-374`) separately from user-data tool calls (authentication, `requireScope` and tenant or account filter). Tests SHALL cover both.
+- WHEN a UI-originated or model-originated call reaches the server THE SYSTEM SHALL apply the same OAuth validation, scope check, tenant isolation and audit. Any origin hint SHALL be stored as an untrusted annotation and SHALL never change an authorization decision.
+- IF a request is cross-tenant, stale, replayed or unauthorized, or uses a revoked session THEN THE SYSTEM SHALL deny it. Revocation and fencing tests SHALL assert the measured current semantics of the product (for mctl-telegram, `revoke_session` and the session store) and SHALL NOT assume immediate revocation.
+- THE SYSTEM SHALL place no bearer token, backend credential or tenant selector in the View. CSP SHALL stay empty unless a reviewed origin is required, and `_meta.ui.visibility` SHALL never be treated as authorization.
+- WHEN a headless client calls an App-linked tool THE SYSTEM SHALL return byte-equal `content[].text` with `MCP_APPS_ENABLED` on and off.
+
+Gates and decisions
+
+- WHEN the operator run completes THE SYSTEM SHALL evaluate G1 to G6 per core host and route, and the first-consumer decision D1 SHALL follow the outcome table in design.md section 6. No full portability verdict SHALL be issued unless all three core hosts are `real_host_verified` and G1 to G6 are GO.
+- IF fewer than three core hosts are measured, or any is host-blocked or unmeasured, THEN THE SYSTEM SHALL record a bounded partial result and recommend DEFER with a named revisit trigger. It SHALL NOT recommend ADOPT_*.
+- WHILE D1 is not ADOPT_* and owner-reviewed, with security fixture results attached, THE SYSTEM SHALL NOT start, deploy or link the second consumer.
+- WHEN a second consumer has produced its own gate evidence THE SYSTEM SHALL take the shared-extraction decision D2 separately. If D1 is DEFER, D2 SHALL be recorded as `not_reached`.
+- THE optional Grok Bot row SHALL NOT change any core gate or decision.
 
 ## Out of scope
 
-- Any implementer run, production deployment, `MCP_APPS_ENABLED=true` on `tg.mctl.ai`, or GitOps change without a separate owner approval.
-- Connector or directory submission (Claude, ChatGPT, Antigravity). That remains mctlhq/mctl-telegram#650's positioning and #852's policy question.
-- Write enablement from an App (send, pin, approve DevLoop, deploy). A future write phase needs its own spike and must keep exact-payload confirmation, MFA/fresh-sign-in and idempotency.
-- A generic platform MCP-Apps SDK, a new repository, a Node sidecar or new ingress.
-- Live customer data, and the owner's real Telegram account.
-- Building a Portal (Cloudflare) passthrough workaround.
-- Broad UI redesign of the Telegram triage view.
-- Replacing AG-UI (#261). MCP Apps is in-host presentation, and AG-UI is the run/event projection in mctl-portal.
+- Any implementer run before owner approval. Any production deployment, `MCP_APPS_ENABLED=true` on `tg.mctl.ai` or `tg-preview.mctl.ai`, connector or directory submission, or bypass of the #650 and #852 legal and submission gate.
+- Write enablement from an App. A future write phase needs its own spike, with exact-payload confirmation, MFA or fresh sign-in, and idempotency.
+- A generic platform MCP Apps SDK, a new repository, a Node sidecar, new ingress, or a Portal passthrough workaround (Portal work belongs to #236).
+- Live customer data, the owner's real Telegram account, new paid host plans, account linking on Grok, policy widening.
+- Replacing AG-UI (#261), or a broad redesign of the Telegram triage view.
 
 ## Open questions
 
-- Issue #376 itself does not follow `.github/ISSUE_TEMPLATE/spike.yml`. It has no `Source:`, `Question:`, `Outcomes:` or `Lifecycle:` lines, the title prefix is `spike(mcp-apps):` rather than `spike: `, and the `spike:scout` and `agents:intake` labels are missing. AGENTS.md requires the issue to be conformed before DevLoop. This proposal treats that as task 0 and a precondition for approval. Proposed values: `Source: mctlhq/.github#376 (owner-filed 2026-11-22)`, outcomes as listed above.
-- The Telegram prototype hand-rolls the bridge with no JS build. Should the fix keep the hand-rolled bridge, conformed to the spec, or vendor the pinned `@modelcontextprotocol/ext-apps` App browser build? Proposal: vendor a pinned, hash-recorded build only if the conformance fixture shows the hand-rolled bridge cannot cover the lifecycle cheaply. Decide in task 3.
-- Which instance and account does the operator run use? `tg-preview.mctl.ai` runs the owner's account and agent features, and `tg.mctl.ai` is production with `ALLOW_SEND: "true"`. Proposal: a dedicated preview or throwaway deployment, with the existing read-only tool profile and a throwaway Telegram identity, decided under #650.
-- Claude `ui.domain` (documented as derived from a SHA-256 prefix of the server URL) and ChatGPT's `oaiusercontent` form are host-specific. Proposal: omit `ui.domain`, because the Telegram App makes no network calls and needs no stable origin. Add it only if a host refuses to render without it, which would be a measured G-result.
-- The ChatGPT, Claude and Antigravity documentation pages listed in the issue were not re-fetched by this run. Their claims (Antigravity v2.34+, `com.google.antigravity/ui` `aux_pane`/`global`/`file`, `openai/ui` global entry, the Claude Nov 10 rollout) are carried as `documented (issue snapshot 2026-11-22)` until task 2 re-reads them with access dates.
-- Can the server tell a UI-originated call from a model-originated call? The spec routes both through the host's single MCP session, so the server may not be able to. If it cannot, audit records the call identically and any origin hint stays an untrusted annotation. Measured in T9.
-- mctl-api's deployed revision and its MCP surface were not observed in GitOps by this run (see design.md). They must be confirmed before phase 4.
+- Issue conformance: the title and body now match `.github/ISSUE_TEMPLATE/spike.yml` (re-read at 2026-11-22T01:38:57Z). The labels show `spike:scout` only, and `agents:intake` is absent. That is probably because intake consumes the label on pickup, but this run could not verify it. The owner confirms this before approval. No workflow is restarted automatically.
+- Live-run ownership: #650 is `parked` (activation: #852 resolved plus a scheduled operator session, `reviewBy: 2026-11-30`, last updated 2026-10-23). Should #376 wait for that activation, or may the owner schedule a portability-only operator session under #650's runbook with no submission? Proposal: wait by default. The offline fixture work (phase 0 and the T-series in the product repo) proceeds independently.
+- Browser harness toolchain: mctl-telegram has no Node toolchain. Recommendation: a test-only Playwright job that uses the pinned ext-apps `app-bridge` as the strict reference host. Alternative: Go `chromedp` with the pinned `schema.json`. Either is CI-only, not a runtime sidecar. The owner picks in the backlog slice B1.
+- Bridge implementation: should the hand-rolled bridge be conformed, or should the pinned ext-apps `App` browser build (`app-with-deps` export) be vendored? Default: vendor the official build unless its size or CSP needs are measured as unacceptable (design.md section 4, P3-01).
+- `ui.domain`: it is omitted by default because the Telegram View makes no network calls. If a measured host refuses to render without it, the value is selected by the authenticated OAuth client identity (CIMD `client_id` host), never by user agent. That remains an owner-reviewed adapter.
+- ChatGPT `openai/ui` global entry: the Claude entry-points page documents `_meta["openai/ui"].entrypoints` and attributes it to the OpenAI MCP extensions. The ChatGPT UI page fetched this run does not mention it, so its ChatGPT `claim` is `unknown` until the extensions page is read.
+- mctl-api's deployed revision and MCP surface were not observed in GitOps (no `services/*/mctl-api` path). This must be confirmed before backlog slice B5.
