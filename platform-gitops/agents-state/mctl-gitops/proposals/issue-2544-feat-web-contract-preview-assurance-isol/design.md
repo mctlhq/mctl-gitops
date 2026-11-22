@@ -1,5 +1,40 @@
 # Design: issue-2544-feat-web-contract-preview-assurance-isol
 
+## Refreshed 2026-11-22
+
+Re-baselined against current `main` read from git after `git fetch` (read-only): mctl-gitops `b63db307c6106e520ab94d70fe1b7420adc6fdca`, mctl-design `6d82a6b239365213d6859f2794c2449af7dd4e1f`. Scope and intent are unchanged; only stale facts were corrected.
+
+- **mctl-design pin.** `918d671651f8` (design css `0.20.2`) moved to `6d82a6b239365213d6859f2794c2449af7dd4e1f` (css `0.21.0`). The GitOps image tag for mctl-design is now `6d82a6b23936`, the prefix of that commit. `918d671651f8` is an ancestor of the new pin. The contracts `web-header-a11y` (`1.0.0`) and `web-asset-integrity`, and `nginx.conf`, are byte-identical between the two commits. The contract text is still "written against" css `0.20.2`; whether css `0.21.0` (header context select variant, commit `fb16a55`) changes any HDR case is `unknown (not observed)`.
+- **Sheet integrity, recomputed** from `apps/storybook/public/<version>/` at `6d82a6b23936` (sha256 hex, sha384 base64 for SRI). The `0.20.2` files are unchanged since `918d671651f8` (compared with `cmp`) and are still committed.
+
+| Version | Sheet | sha256 | sha384 |
+| --- | --- | --- | --- |
+| 0.21.0 | `mctl.css` | `5970ec6855048f93812a21342db7ac7e3d37dab4ac15a6738d30ba0f74722e10` | `7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5` |
+| 0.21.0 | `global.css` | `365a64c7998b12879d218da4f2aa1dedc6fc4e606c2cba0f0b575fbca60070c3` | `oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV` |
+| 0.21.0 | `prose.css` | `4e8891f87875514e8f03804619b979802c805065fa030aefbbc64540cf5e4ec1` | `EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W` |
+| 0.21.0 | `site.css` | `a111f5bde21034bb8e2f68f5e4085529cac67a873fd76c896d980b6929819ba2` | `XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr` |
+| 0.20.2 | `mctl.css` | `063ceae822d3b139c670fd2b687a00ff021cf2d75443995c14c3b19145324958` | `3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ` |
+| 0.20.2 | `global.css` | `cd78060bdc83c56508594fe20fd9302951130e8720604c547140c16f1762ff03` | `QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm` |
+| 0.20.2 | `prose.css` | `71536bf86e0d1edc1b9efb6d3fb5cc823826c0826c5790f3f26bdf0cd1a1ee0f` | `iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4` |
+| 0.20.2 | `site.css` | `d184836c17818edbe85923d356da872113f07cb8d088477796f39d0fc01ad31a` | `qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj` |
+
+  The implementer recomputes these from the pinned archive and must treat any difference as a failure, not as a value to copy.
+- **Consumer tags** re-read from `platform-gitops/services/*/values.yaml` on `origin/main` (`b63db307c610`):
+
+| Consumer | Was | Now |
+| --- | --- | --- |
+| mctl-web | `7.21.1` | `7.24.0` |
+| mctl-docs | `0.1.66` | `0.1.73` |
+| mctl-telegram | `0.137.1` | `0.142.0` |
+| mctl-academy | `0.1.76` | `0.1.101` |
+| mctl-alice | `2.13.1` | `2.16.0` |
+| seerrsense | `1.14.1` | `1.14.4` |
+| mctl-telegram-preview (not used) | `main-27c671d` | `main-0ef3857` |
+
+- **Pins are a snapshot.** Every tag above moves with each release. The implementer re-reads `values.yaml` on current `main` when task 8 runs and records the digest then; these values are not copied into `pins.json` unverified.
+- **Not re-verified.** Consumer source, breakpoints, OCI digests, GHCR readability and standalone startup remain `unknown (not observed)`, as before. The Playwright pin `v1.64.1-noble` is unchanged in `scripts/browser-tests-docker.sh` at the new mctl-design main.
+- **Ordering and hardening made explicit** (Isolation, tasks 1, 8 and 9): consumer images are pulled before the `--internal` network starts any container, and the runner UID and internal-network hardening apply.
+
 ## Current state
 
 mctl-gitops has no browser, a11y or web-asset test tooling today. The investigation read the clone at `77d31f8bedc3c43536b428950603d54fe8f170bc` (2026-11-09T13:10:39Z).
@@ -21,15 +56,15 @@ mctl-gitops has no browser, a11y or web-asset test tooling today. The investigat
 
 Deployed state checked:
 
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-design/values.yaml`: `image.tag "918d671651f8"`, hosts `ui.mctl.ai` and `admins-mctl-design.mctl.ai` `[CONFIG]`. This is the PR #212 merge commit `918d671651f8e9d3eb2882f7581a9a0495588929`, so both contracts are in the deployed image.
-- `mctl_get_service_status(admins, mctl-design)`: `Synced`, `Healthy`, imageTag `918d671651f8`, updatedAt `2026-11-09T13:23:12Z`. `revision` is empty, so the deployed digest is `unknown (not observed)`.
-- `services/admins/mctl-web/values.yaml`: `ghcr.io/mctlhq/mctl-web:7.21.1`, hosts `mctl.ru` and `mctl.ai`.
-- `services/admins/mctl-docs/values.yaml`: `ghcr.io/mctlhq/mctl-docs:0.1.66`, `docs.mctl.ai`.
-- `services/labs/mctl-telegram/values.yaml`: `ghcr.io/mctlhq/mctl-telegram:0.137.1`, `tg.mctl.ai`.
-- `services/labs/mctl-telegram-preview/values.yaml`: tag `main-27c671d`, host `tg-preview.mctl.ai`. This is a long-lived preview service, but it is reachable only over the public internet, so this harness does not use it.
-- `services/labs/mctl-academy/values.yaml`: `0.1.76`, `academy.mctl.ai`.
-- `services/labs/mctl-alice/values.yaml`: `2.13.1`, `alice.mctl.ai`.
-- `services/labs/seerrsense/values.yaml`: `1.14.1`, `seerrsense.mctl.ai`.
+- `$MCTL_GITOPS_ROOT/services/admins/mctl-design/values.yaml`: `image.tag "6d82a6b23936"` (refreshed 2026-11-22; was `918d671651f8` at investigation), hosts `ui.mctl.ai` and `admins-mctl-design.mctl.ai` `[CONFIG]`. That is the prefix of mctl-design main `6d82a6b239365213d6859f2794c2449af7dd4e1f`. PR #212 merge commit `918d671651f8e9d3eb2882f7581a9a0495588929` is its ancestor, so both contracts are in the deployed image.
+- `mctl_get_service_status(admins, mctl-design)`, as observed at investigation (2026-11-09, imageTag `918d671651f8`, not re-run in the refresh): `Synced`, `Healthy`, updatedAt `2026-11-09T13:23:12Z`. `revision` was empty, so the deployed digest is `unknown (not observed)`.
+- `services/admins/mctl-web/values.yaml`: `ghcr.io/mctlhq/mctl-web:7.24.0`, hosts `mctl.ru` and `mctl.ai`.
+- `services/admins/mctl-docs/values.yaml`: `ghcr.io/mctlhq/mctl-docs:0.1.73`, `docs.mctl.ai`.
+- `services/labs/mctl-telegram/values.yaml`: `ghcr.io/mctlhq/mctl-telegram:0.142.0`, `tg.mctl.ai`.
+- `services/labs/mctl-telegram-preview/values.yaml`: tag `main-0ef3857`, host `tg-preview.mctl.ai`. This is a long-lived preview service, but it is reachable only over the public internet, so this harness does not use it.
+- `services/labs/mctl-academy/values.yaml`: `0.1.101`, `academy.mctl.ai`.
+- `services/labs/mctl-alice/values.yaml`: `2.16.0`, `alice.mctl.ai`.
+- `services/labs/seerrsense/values.yaml`: `1.14.4`, `seerrsense.mctl.ai`.
 - Not observed in this run:
   - consumer source, header selectors and breakpoints for web, docs and telegram;
   - consumer OCI digests, and whether the GHCR packages can be read from mctl-gitops CI;
@@ -51,7 +86,7 @@ assurance/web-contracts/
   run.sh                    docker orchestration (internal network, no egress)
   fixtures/
     origin/nginx.conf       copy of mctl-design nginx.conf at the pinned commit + test-only CSP/ACAO variants
-    manifest-0.20.2.test-only.json   frozen SHA-256/sha384, labelled test-only, not a published artifact
+    manifest-0.21.0.test-only.json   frozen SHA-256/sha384 for 0.21.0 (0.20.2 kept as a second immutable version), labelled test-only, not a published artifact
     header/reference.html   conformant synthetic header (site.css drawer + minimal behavior script)
     header/checkbox.html    CSS-checkbox equivalent (telegram pattern, no JS)
     broken/                 negative controls: bad-sha, sri-mismatch, no-acao, csp-deny,
@@ -73,10 +108,10 @@ docs/spikes/2544-web-contract-preview-assurance.md
 `pins.json` holds:
 
 - `playwright_image`: `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:<digest>`. The implementer resolves the digest once and records it. The `@playwright/test` version is `1.64.1`, pinned in `assurance/web-contracts/package.json` with a lockfile.
-- `mctl_design`: commit `918d671651f8e9d3eb2882f7581a9a0495588929`; contracts `web-header-a11y@1.0.0` and `web-asset-integrity` at the version recorded in the merged document; design version `0.20.2`.
+- `mctl_design`: commit `6d82a6b239365213d6859f2794c2449af7dd4e1f` (refreshed 2026-11-22; contract commit `918d671651f8e9d3eb2882f7581a9a0495588929` is its ancestor); contracts `web-header-a11y@1.0.0` and `web-asset-integrity` at the version recorded in the merged document at the pin; design version `0.21.0`, with `0.20.2` also verified.
 - `sites[]`: one entry per consumer, holding:
   - `name`;
-  - `gitops_tag` `[CONFIG]`;
+  - `gitops_tag` `[CONFIG]`, re-read from `platform-gitops/services/*/values.yaml` on current `main` when the pins are written;
   - `image` (`ghcr.io/mctlhq/<site>@sha256:...`, or null);
   - `source_commit` (40-hex, or null);
   - `breakpoint` (number, or null);
@@ -92,8 +127,8 @@ docs/spikes/2544-web-contract-preview-assurance.md
 
 1. Run `docker network create --internal wca-<attempt>`, so the network has no egress.
 2. Start the fixture origin: an `nginx` container pinned by digest that serves the mctl-design bytes and fixtures. The mctl-design bytes come from a read-only `git archive` of the pinned commit, fetched before the network is created. The origin answers on stand-in hostnames such as `ui.fixture.test` and `site.fixture.test` (network aliases), never on production names.
-3. For each `mode: image` site, start the consumer image by digest on the same internal network. It gets dummy env only: no Vault, no secrets, and `OAUTH_*`/`TELEGRAM_*` unset or set to dummy values. If the container is not healthy within 60 s, record `NOT-RUN (image did not start: <last log line, sanitized>)`.
-4. Run Playwright in the pinned image on the same network, with `--user` set to the runner UID and the repo mounted read-only.
+3. For each `mode: image` site, start the consumer image by digest on the same internal network. All consumer images, the nginx image and the Playwright image are pulled BEFORE the `--internal` network starts any container (the network has no egress, so a pull after that point cannot work and must not be attempted by loosening isolation); `docker create`/`run` then uses only local images, with `--pull=never`. It gets dummy env only: no Vault, no secrets, and `OAUTH_*`/`TELEGRAM_*` unset or set to dummy values. If the container is not healthy within 60 s, record `NOT-RUN (image did not start: <last log line, sanitized>)`.
+4. Run Playwright in the pinned image on the same network, with `--user` set to the runner UID and the repo mounted read-only. Hardening applies to every container on the internal network: runner UID (never root), `--cap-drop=ALL`, `--security-opt=no-new-privileges`, read-only root filesystem where the image allows it, no published ports, no Docker socket and no host mounts other than the read-only repo and a writable output directory.
 
 `guard.ts` registers `page.route('**/*')` and aborts any request to a host outside the allowlist, recording `guard-blocked` in the results. A case whose route class is `sensitive`, or whose path matches `/(oauth|connect|manage|consent|callback|auth)/`, runs only against `fixtures/` and never against an image.
 
@@ -126,7 +161,7 @@ Two rules keep the results honest:
 
 Test IDs are `WCA-A-G<n>-<case>`.
 
-- **G1 byte equality.** Node `crypto` computes SHA-256 of each `0.20.2` sheet from the pinned archive and compares it with `manifest-0.20.2.test-only.json` and with the body served by the fixture origin.
+- **G1 byte equality.** Node `crypto` computes SHA-256 of each `0.21.0` and `0.20.2` sheet from the pinned archive and compares it with `manifest-0.21.0.test-only.json` and with the body served by the fixture origin.
 - **G2 SRI, in a real browser.**
   - Valid sha384 with crossorigin and ACAO: computed styles change.
   - Mismatch: the sheet is not applied, a console error is captured, and the page text stays readable.

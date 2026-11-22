@@ -6,10 +6,11 @@ Precondition: this proposal is approved through its exact content digest by the 
   - `pins.json` holds:
     - the Playwright `v1.64.1-noble` image by digest;
     - the nginx image by digest;
-    - mctl-design `918d671651f8e9d3eb2882f7581a9a0495588929`;
+    - mctl-design `6d82a6b239365213d6859f2794c2449af7dd4e1f` (css `0.21.0`; refreshed 2026-11-22, was `918d671651f8`);
     - contract IDs and versions read from the merged `docs/contracts/*.md` at that commit;
-    - six `sites[]` entries with GitOps tags from `platform-gitops/services/*/values.yaml`. Each entry starts as `mode: not-run` with a reason, `image: null` and `breakpoint` from the contract (981 for academy and alice, 768 for seerrsense, null for the others).
+    - six `sites[]` entries with GitOps tags re-read from `platform-gitops/services/*/values.yaml` on current `main` at write time (2026-11-22: web `7.24.0`, docs `0.1.73`, telegram `0.142.0`, academy `0.1.101`, alice `2.16.0`, seerrsense `1.14.4`). Each entry starts as `mode: not-run` with a reason, `image: null` and `breakpoint` from the contract (981 for academy and alice, 768 for seerrsense, null for the others).
   - `README.md` gives exact reproduce commands, boundaries and the status vocabulary.
+  - The pin check also verifies the pinned mctl-design commit contains `apps/storybook/public/0.21.0/` and that its recomputed hashes equal the manifest.
   - DoD: the file contains no tag-only or short-SHA pins. The README states "preview assurance only; not production conformance".
 - [ ] 2. Write `assurance/web-contracts/report/build_report.py` (stdlib only) with `--check-pins` and report generation (depends on 1).
   - The report iterates over `cases.json`.
@@ -21,7 +22,7 @@ Precondition: this proposal is approved through its exact content digest by the 
   - DoD: it covers PASS, FAIL, skipped becoming NOT-RUN, a missing testcase becoming NOT-RUN, a negative control that passes (exit 2), exception becoming EXCEPTION-PENDING, an unsanitized URL being stripped, and an unpinned image being rejected.
 - [ ] 4. Build the fixtures under `assurance/web-contracts/fixtures/` (depends on 1).
   - The origin `nginx.conf` is derived from mctl-design `nginx.conf` at the pin, plus test-only CSP allow/deny and ACAO on/off server blocks on stand-in `*.fixture.test` hosts.
-  - `manifest-0.20.2.test-only.json` is labelled test-only and not published.
+  - `manifest-0.21.0.test-only.json` (sha256 and sha384 recomputed from the pinned archive, never copied from this document; `0.20.2` sheets also covered) is labelled test-only and not published.
   - `header/reference.html` and `header/checkbox.html` load `site.css` from the pinned archive.
   - `broken/` holds the eight negative controls: bad-sha, sri-mismatch, no-acao, csp-deny, no-escape, focus-lost, no-aria-expanded, motion-ignored.
   - DoD: no fixture references a production hostname. `grep -r 'mctl\.ai\|mctl\.ru' fixtures/` matches only comments that cite provenance.
@@ -32,7 +33,7 @@ Precondition: this proposal is approved through its exact content digest by the 
 - [ ] 6. Write `assurance/web-contracts/run.sh` (depends on 2, 5).
   - It runs the pin check, then fetches `git archive` of mctl-design at the pin before isolation.
   - It creates the network with `docker network create --internal` and starts the fixture origin and the `mode: image` consumers with dummy env and a 60 s health wait (failure becomes NOT-RUN with a sanitized reason).
-  - It runs Playwright in the pinned image, builds the report, and always removes the containers and network (`trap`).
+  - It runs Playwright in the pinned image as the runner UID (`--user`) with the internal-network hardening, builds the report, and always removes the containers and network (`trap`).
   - DoD: the script runs locally with no outbound request after isolation, verified by guard counters equal to 0 for unexpected hosts.
 - [ ] 7. Add `.github/workflows/web-contract-assurance.yml` (depends on 3, 6).
   - Triggers: `workflow_dispatch` (input `allow_public_probe` default `false`, unused) and `pull_request` filtered to its own paths.
@@ -40,10 +41,11 @@ Precondition: this proposal is approved through its exact content digest by the 
   - It uploads `assurance-out/` with `retention-days: 7`. Not a required check.
   - DoD: `validate-gha-expression-injection.py` and yamllint pass, and `validate-manifests.yml` is unchanged.
 - [ ] 8. Promote consumers from `not-run` to `mode: image`, one at a time, in the same PR (depends on 7).
-  - For each consumer, resolve the digest of the GitOps tag's image. Try it in CI. Keep `mode: image` only if it starts healthy on the internal network with dummy env. Otherwise record the observed reason.
+  - For each consumer, resolve the digest of the GitOps tag's image from current `main`. Pull ALL consumer images first, while the network still has egress and before `docker network create --internal` and before any container starts; nothing is pulled afterwards. Try each in CI with the runner UID and the internal-network hardening from design.md. Keep `mode: image` only if it starts healthy on the internal network with dummy env. Otherwise record the observed reason.
   - DoD: each of the six rows is either backed by an executed case or carries a concrete `not_run_reason`. No consumer repository is modified.
 - [ ] 9. Write `docs/spikes/2544-web-contract-preview-assurance.md` from the first CI run (depends on 8).
-  - It includes the STATUS line, pins, reproduce commands, the six-site matrix with run URL and artifact digest, the contract crosswalk, missing inputs with owners (design#34, design#78, telegram#599, academy#210, gitops#500), pending exceptions (EX-1/2/3), and the decision memo. The memo says rollout readiness for G2/G3 is not a GO.
+  - It includes the STATUS line, pins (mctl-design `6d82a6b2...`, css `0.21.0`), reproduce commands, the six-site matrix with run URL and artifact digest, the contract crosswalk, missing inputs with owners (design#34, design#78, telegram#599, academy#210, gitops#500), pending exceptions (EX-1/2/3), and the decision memo. The memo says rollout readiness for G2/G3 is not a GO.
+  - It also records that consumer images were pulled before isolation and that the runner UID and internal-network hardening applied.
   - DoD: every PASS in the report cites an executed test ID from the linked run. The report contains no PASS without a test.
 
 ## Tests
@@ -51,7 +53,7 @@ Precondition: this proposal is approved through its exact content digest by the 
 - [ ] T1. `python3 tests/test_web_contract_report.py` passes. It covers the fail-closed mapping, pin rejection and URL sanitization.
 - [ ] T2. Negative controls: a run against `fixtures/broken/*` yields FAIL for all eight. Flipping one broken fixture to the conformant one makes the run exit 2, which proves red detection.
 - [ ] T3. Reference fixture: all HDR cases at 375, 767/768 and 980/981 (both breakpoint variants), plus 1280, are PASS on `reference.html`. On `checkbox.html` the cases are PASS or EXCEPTION-PENDING (EX-1/EX-2), and never PASS for HDR-5/6/8/12.
-- [ ] T4. Assets: G1 SHA-256 equal for all four `0.20.2` sheets. SRI valid applies; mismatch and no-ACAO block, with the page readable. CSP deny raises a violation; CSP allow applies. Versioned and floating cache headers match. Origin-down plus no-JS fallback is readable.
+- [ ] T4. Assets: G1 SHA-256 equal for all four `0.21.0` sheets and all four `0.20.2` sheets. SRI valid applies; mismatch and no-ACAO block, with the page readable. CSP deny raises a violation; CSP allow applies. Versioned and floating cache headers match. Origin-down plus no-JS fallback is readable.
 - [ ] T5. Isolation: a test that requests `https://mctl.ai/` and one that requests an `/oauth/` path are aborted by `guard.ts` and reported as `NOT-RUN (sensitive-route guard)` or `guard-blocked`. `docker network inspect` shows `Internal: true`.
 - [ ] T6. The CI workflow runs on the PR with the artifacts uploaded. The job is red if any non-control case FAILs.
 
