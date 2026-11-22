@@ -1,0 +1,529 @@
+# Unit tests for the Personal Assistant groups in mctl-telegram-ops.yaml
+# (mctl-telegram-pa, mctl-telegram-pa-catalog; mctlhq/mctl-telegram#1318).
+# Kept apart from mctl-telegram-ops_test.yaml only for size; it evaluates the
+# same generated rule file.
+#
+# Every alert has a firing case, a non-firing case and a case where the
+# failure is on the PRODUCTION server only and must not fire the preview
+# rule. Where an unscoped expression would mix the two instances (sum, or a
+# join across two clauses), a further case seeds both and pins that they are
+# not combined. Every case was mutation-validated: the expression or its
+# selector was broken, the test was confirmed to fail, and the rule was
+# restored.
+rule_files:
+  - generated/mctl-telegram-ops.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # getWebhookInfo failing every other check averages 0.5: the case `up == 0
+  # for 15m` would miss.
+  - interval: 1m
+    name: webhook info unreadable on every other check fires
+    input_series:
+      - series: 'mctl_pa_webhook_info_up{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              namespace: labs
+              job: labs-mctl-telegram-preview-base-service
+            exp_annotations:
+              summary: 'PA bot getWebhookInfo is often unreadable'
+              description: 'More than a fifth of the getWebhookInfo checks in the last 30 minutes failed, in a row or on and off. The webhook state (URL, allowed_updates, delivery errors) is unknown, not healthy.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookinfounreadable'
+
+  - interval: 1m
+    name: webhook info with one failed check in 30 minutes stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_info_up{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '1x30 0 1x29'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoUnreadable
+        exp_alerts: []
+
+  - interval: 1m
+    name: webhook info unreadable on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_webhook_info_up{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoUnreadable
+        exp_alerts: []
+
+  # The timestamp series is the time of the last readable check. Frozen at 0
+  # it is 2400 s old at 40m.
+  - interval: 1m
+    name: webhook info last success frozen at t=0 fires after 30 minutes
+    input_series:
+      - series: 'mctl_pa_webhook_info_last_success_timestamp_seconds{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              namespace: labs
+              job: labs-mctl-telegram-preview-base-service
+            exp_annotations:
+              summary: 'PA bot webhook not checked successfully for 30 minutes'
+              description: 'The last readable getWebhookInfo check is more than 30 minutes old. Either every read fails or the monitor stopped running.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookinfostale'
+
+  - interval: 1m
+    name: webhook info checked every minute stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_info_last_success_timestamp_seconds{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: stale webhook info on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_webhook_info_last_success_timestamp_seconds{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookInfoStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: two url_changed checks within 20 minutes fire
+    input_series:
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x5 2x20'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x25'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookMisconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              problem: url_changed
+            exp_annotations:
+              summary: 'PA bot webhook url_changed'
+              description: 'getWebhookInfo reports a webhook URL other than PA_WEBHOOK_URL, or allowed_updates other than message and callback_query, at two or more checks within 20 minutes, in a row or on and off. Updates may be going to someone else.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookmisconfigured'
+
+  - interval: 1m
+    name: one url_changed check stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x25'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x25'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookMisconfigured
+        exp_alerts: []
+
+  # The second clause: after a scrape gap increase() may count an old incident
+  # as new; the gauge must also have read 1 in the window.
+  - interval: 1m
+    name: counter increase without the problem gauge set stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x5 2x20'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x35'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookMisconfigured
+        exp_alerts: []
+
+  # Pins the selector on BOTH clauses: unscoped, `max by (problem)` takes the
+  # counter from production and the gauge from preview and fires for a problem
+  # neither instance has twice.
+  - interval: 1m
+    name: production checks plus preview gauge are not combined into one alert
+    input_series:
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",problem="url_changed"}'
+        values: '0x10 1x5 2x20'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",problem="url_changed"}'
+        values: '0x35'
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x35'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x25'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookMisconfigured
+        exp_alerts: []
+
+  # The mirror case: unscoped, production's gauge would satisfy the second
+  # clause for preview's counter.
+  - interval: 1m
+    name: a production problem gauge does not confirm preview checks
+    input_series:
+      - series: 'mctl_pa_webhook_problem_checks_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x10 1x5 2x20'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="url_changed"}'
+        values: '0x35'
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",problem="url_changed"}'
+        values: '0x10 1x25'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookMisconfigured
+        exp_alerts: []
+
+  - interval: 1m
+    name: secret_rejected on preview fires
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="secret_rejected"}'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAWebhookSecretRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+            exp_annotations:
+              summary: 'Telegram''s PA webhook deliveries are rejected for the secret'
+              description: 'getWebhookInfo''s latest delivery error is a 401 from our webhook: the secret_token Telegram sends does not match PA_WEBHOOK_SECRET. No PA update is being processed.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhooksecretrejected'
+
+  - interval: 1m
+    name: no secret_rejected on preview stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="secret_rejected"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAWebhookSecretRejected
+        exp_alerts: []
+
+  - interval: 1m
+    name: secret_rejected on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",problem="secret_rejected"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAWebhookSecretRejected
+        exp_alerts: []
+
+  - interval: 1m
+    name: delivery errors at most checks fire
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="delivery_error"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookDeliveryErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: 'Telegram keeps failing to deliver PA webhook updates'
+              description: 'Most getWebhookInfo checks in the last 30 minutes found a new delivery error. Updates are queuing at Telegram.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookdeliveryerrors'
+
+  - interval: 1m
+    name: delivery errors at a third of checks stay silent
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",problem="delivery_error"}'
+        values: '0x10 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookDeliveryErrors
+        exp_alerts: []
+
+  - interval: 1m
+    name: delivery errors on production only do not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_webhook_problem{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",problem="delivery_error"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlPAWebhookDeliveryErrors
+        exp_alerts: []
+
+  - interval: 1m
+    name: backlog above 100 for 15 minutes fires
+    input_series:
+      - series: 'mctl_pa_webhook_pending_updates{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAWebhookBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              namespace: labs
+              job: labs-mctl-telegram-preview-base-service
+            exp_annotations:
+              summary: 'PA webhook has 150 pending updates at Telegram'
+              description: 'getWebhookInfo pending_update_count has stayed above 100 for 15 minutes: Telegram is not getting its deliveries accepted.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookbacklog'
+
+  - interval: 1m
+    name: backlog at 50 stays silent
+    input_series:
+      - series: 'mctl_pa_webhook_pending_updates{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service"}'
+        values: '50x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAWebhookBacklog
+        exp_alerts: []
+
+  - interval: 1m
+    name: backlog on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_webhook_pending_updates{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAWebhookBacklog
+        exp_alerts: []
+
+  - interval: 1m
+    name: 30 bad_secret requests in 15 minutes fire
+    input_series:
+      - series: 'mctl_pa_updates_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",outcome="bad_secret"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookBadSecretBurst
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: 'PA webhook refused more than 20 requests for the secret in 15 minutes'
+              description: 'Requests to /pa/bot/webhook without the right secret token. A burst is either probing of a public URL or a secret mismatch; MctlPAWebhookSecretRejected tells the two apart.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookbadsecretburst'
+
+  - interval: 1m
+    name: 15 bad_secret requests in 15 minutes stay silent
+    input_series:
+      - series: 'mctl_pa_updates_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",outcome="bad_secret"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookBadSecretBurst
+        exp_alerts: []
+
+  # 15 + 15 in 15 minutes: unscoped, sum() reads 30 and fires for a burst
+  # neither bot saw.
+  - interval: 1m
+    name: production bad_secret requests are not added to preview
+    input_series:
+      - series: 'mctl_pa_updates_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",outcome="bad_secret"}'
+        values: '0+1x30'
+      - series: 'mctl_pa_updates_total{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",outcome="bad_secret"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlPAWebhookBadSecretBurst
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failed outbox delivery fires
+    input_series:
+      - series: 'mctl_pa_outbox_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",outcome="failed"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAOutboxUndelivered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              outcome: failed
+            exp_annotations:
+              summary: 'PA outbox: failed in the last 30 minutes'
+              description: 'A PA reply or notice was not delivered (failed after its retries, or its outcome is unknown and it is not resent), or the outbox could not be read at all.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpaoutboxundelivered'
+
+  # refused is the principal blocking the bot or deleting the chat: not ours
+  # to page on.
+  - interval: 1m
+    name: a refused outbox delivery stays silent
+    input_series:
+      - series: 'mctl_pa_outbox_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",outcome="refused"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAOutboxUndelivered
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failed delivery on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_outbox_total{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",outcome="failed"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlPAOutboxUndelivered
+        exp_alerts: []
+
+  - interval: 1m
+    name: pin drift for 5 minutes fires
+    input_series:
+      - series: 'mctl_pa_pin_drift{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAPinDrift
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              server: alice
+            exp_annotations:
+              summary: 'PA catalog server alice differs from the committed pin'
+              description: 'The live tools/list of alice differs from the committed pin for at least one pinned tool. Those tools are denied to Personal Assistant runs until the listing matches or the pin is updated through a reviewed PR.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapindrift'
+
+  - interval: 1m
+    name: no pin drift stays silent
+    input_series:
+      - series: 'mctl_pa_pin_drift{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAPinDrift
+        exp_alerts: []
+
+  - interval: 1m
+    name: pin drift on production only does not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_pin_drift{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",server="alice"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlPAPinDrift
+        exp_alerts: []
+
+  - interval: 1m
+    name: listing unknown with failed attempts fires
+    input_series:
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '1x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="timeout"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlPAPinListingUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              server: alice
+            exp_annotations:
+              summary: 'PA catalog server alice tools/list cannot be observed'
+              description: 'Personal Assistant calls try to list alice, but no tools/list of it could be read or parsed in the last 5 minutes, so pin drift is unknown and those calls are refused.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapinlistingunknown'
+
+  # Unknown is true but not actionable without failed listing attempts in the
+  # same window.
+  - interval: 1m
+    name: an idle server aged into unknown stays silent
+    input_series:
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '1x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="timeout"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlPAPinListingUnknown
+        exp_alerts: []
+
+  # 401s belong to MctlPAPinListingUnauthorized, not here.
+  - interval: 1m
+    name: unknown with only unauthorized failures stays silent
+    input_series:
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '1x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="unauthorized"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlPAPinListingUnknown
+        exp_alerts: []
+
+  # Pins the selector on the failures clause: unscoped, production's failed
+  # attempts would turn an idle preview server into an alert.
+  - interval: 1m
+    name: production listing failures are not joined to preview unknown
+    input_series:
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '1x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="timeout"}'
+        values: '0x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",server="alice",reason="timeout"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlPAPinListingUnknown
+        exp_alerts: []
+
+  # The mirror case: preview's listing is fresh (unknown 0) and its failures
+  # are transient; production's unknown gauge must not complete the join.
+  - interval: 1m
+    name: a production unknown gauge is not joined to preview failures
+    input_series:
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice"}'
+        values: '0x40'
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="timeout"}'
+        values: '0+1x40'
+      - series: 'mctl_pa_pin_listing_unknown{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",server="alice"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlPAPinListingUnknown
+        exp_alerts: []
+
+  - interval: 1m
+    name: unauthorized listings for 30 minutes fire
+    input_series:
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="unauthorized"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlPAPinListingUnauthorized
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              server: alice
+            exp_annotations:
+              summary: 'PA catalog server alice keeps refusing connection tokens'
+              description: 'tools/list on alice has answered 401 to Personal Assistant connection tokens for 30 minutes. Those calls are refused as server_refused.'
+              runbook_url: 'https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapinlistingunauthorized'
+
+  - interval: 1m
+    name: timeout listings do not fire the unauthorized rule
+    input_series:
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-preview-base-service",job="labs-mctl-telegram-preview-base-service",server="alice",reason="timeout"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlPAPinListingUnauthorized
+        exp_alerts: []
+
+  - interval: 1m
+    name: unauthorized listings on production only do not fire the preview rule
+    input_series:
+      - series: 'mctl_pa_pin_listing_failures_total{namespace="labs",service="labs-mctl-telegram-base-service",job="labs-mctl-telegram-base-service",server="alice",reason="unauthorized"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlPAPinListingUnauthorized
+        exp_alerts: []
