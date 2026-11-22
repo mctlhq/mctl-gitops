@@ -23,8 +23,8 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 120,
-      "tools_enabled": 79,
+      "tools_total": 121,
+      "tools_enabled": 81,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
@@ -54,6 +54,7 @@
         "mctl_get_service_pods",
         "mctl_get_service_status",
         "mctl_get_support_task",
+        "mctl_get_sync_windows",
         "mctl_get_tenant",
         "mctl_get_work_item",
         "mctl_get_workflow_logs",
@@ -80,6 +81,7 @@
         "mctl_list_work_item_snapshots",
         "mctl_list_workflows",
         "mctl_promote_agent",
+        "mctl_propose_release_window",
         "mctl_provision_database",
         "mctl_publish_agent_version",
         "mctl_publish_platform_skill",
