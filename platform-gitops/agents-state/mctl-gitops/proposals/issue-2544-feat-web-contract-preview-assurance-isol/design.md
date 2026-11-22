@@ -9,14 +9,14 @@ Re-baselined against current `main` read from git after `git fetch` (read-only):
 
 | Version | Sheet | sha256 | sha384 |
 | --- | --- | --- | --- |
-| 0.21.0 | `mctl.css` | `17082f31cfe4a621ebfe7c2fe5fe04b6f7a8f174d226ec788ea8588e7a5f6b0e` | `7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5` |
-| 0.21.0 | `global.css` | `a6677c4a0144f0cd0de8b254ac1ff0ec2f72d1a9fd508eb19ffe81e967da61a8` | `oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV` |
-| 0.21.0 | `prose.css` | `d48c5c005e83e93bd7395c2a587fce50ef35efdc9df953fa054fdfc7474e8a82` | `EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W` |
-| 0.21.0 | `site.css` | `cc301dba08aaf75a984dee3df8b0f5fe1a3a43e497e181313dc3c4badfb1b77a` | `XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr` |
-| 0.20.2 | `mctl.css` | `87fc71a0798ab7b1b80c32ed1d392101a91c9cd3302b5b6402aadf9e34f51aa0` | `3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ` |
-| 0.20.2 | `global.css` | `74e8ffaec6c7547baa3094d963e4c356f20a855c40aa7732292684f78c39e7c5` | `QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm` |
-| 0.20.2 | `prose.css` | `1092da0c36d97ed23c05f6e32687d50c9c9bb97b67be8ad0e9bf8bae63dc33ae` | `iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4` |
-| 0.20.2 | `site.css` | `4ed80790ac41dbb58128432c24ef7ff67393142306c057485ea374c50b6d8255` | `qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj` |
+| 0.21.0 | `mctl.css` | `5970ec6855048f93812a21342db7ac7e3d37dab4ac15a6738d30ba0f74722e10` | `7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5` |
+| 0.21.0 | `global.css` | `365a64c7998b12879d218da4f2aa1dedc6fc4e606c2cba0f0b575fbca60070c3` | `oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV` |
+| 0.21.0 | `prose.css` | `4e8891f87875514e8f03804619b979802c805065fa030aefbbc64540cf5e4ec1` | `EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W` |
+| 0.21.0 | `site.css` | `a111f5bde21034bb8e2f68f5e4085529cac67a873fd76c896d980b6929819ba2` | `XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr` |
+| 0.20.2 | `mctl.css` | `063ceae822d3b139c670fd2b687a00ff021cf2d75443995c14c3b19145324958` | `3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ` |
+| 0.20.2 | `global.css` | `cd78060bdc83c56508594fe20fd9302951130e8720604c547140c16f1762ff03` | `QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm` |
+| 0.20.2 | `prose.css` | `71536bf86e0d1edc1b9efb6d3fb5cc823826c0826c5790f3f26bdf0cd1a1ee0f` | `iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4` |
+| 0.20.2 | `site.css` | `d184836c17818edbe85923d356da872113f07cb8d088477796f39d0fc01ad31a` | `qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj` |
 
   The implementer recomputes these from the pinned archive and must treat any difference as a failure, not as a value to copy.
 - **Consumer tags** re-read from `platform-gitops/services/*/values.yaml` on `origin/main` (`b63db307c610`):
