@@ -59,6 +59,13 @@ PROTECTED = [
     "tests/test_gitops_bump_inputs.py",
     "tests/test_wft_deploy_service_autoscaling_values.py",
     "tests/test_auto_merge_protected_paths.py",
+    # AppProject definitions carry sync windows, sourceRepos and roles; the
+    # scripts and the consumer list are what bound where a window may land.
+    "platform-gitops/bootstrap/templates/projects/project-apps.yaml",
+    "platform-gitops/bootstrap/templates/projects/project-platform.yaml",
+    "scripts/validate-argocd-sync-windows.py",
+    "scripts/render-sync-window.py",
+    "scripts/app-project-consumers.json",
 ]
 NOT_PROTECTED = [
     "README.md",
@@ -74,6 +81,9 @@ NOT_PROTECTED = [
     "scripts/release-bump-enqueue-wait.sh.orig",
     "tests/test_other.py",
     "tests/test_release_deploy_validate_inputs.py",
+    "platform-gitops/bootstrap/templates/projects.yaml",
+    "scripts/render-sync-window.py.bak",
+    "scripts/app-project-consumers.json.orig",
 ]
 
 
@@ -171,7 +181,7 @@ def main():
     # The workflow must actually use the variable.
     assert 'grep -E "$protected_re"' in WF.read_text()
     # MUTANTS: removing the release-gate entries must turn rows red.
-    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_"]
+    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers"]
     for needle in gate_alts:
         parts = pat.split("|")
         kept = [a for a in parts if needle not in a]
