@@ -23,22 +23,39 @@ tasks 9-16 are slice S3 (a second PR), per `docs/assistants/adr-forks.md`.
   error and writes nothing. Expired, incomplete and cancelled runs are never
   "scored".
 - [ ] 4. Add the `agent-eval` audience to `internal/auth/localjwt` with
-  claims `EvalRunID` and `EvalTaskAttempt`, and `selectAgentEvalProvider`
-  in `cmd/server/main.go`. — DoD: an `agent-eval` token is refused on every
-  existing `/api/agent/v1` route, and `agent`/`agent-job` tokens are refused
-  on eval routes.
+  claims `EvalRunID` and `EvalTaskAttempt` (not `JobID`), to
+  `derivedAudiences` (`issuer.go:431`), add `hasEvalClaims` refusal in
+  `Provider`, eval-claim refusal in `checkPoolShape` (`pool.go:65`), an
+  `EvalVerifier` modelled on `PAJobVerifier`, and `selectAgentEvalProvider`
+  in `cmd/server/main.go`, chained for the eval routes only. The token
+  inherits the worker credential's `jti`. — DoD: an `agent-eval` token is
+  refused on every existing `/api/agent/v1` and `/api/pa/v1` route and on
+  `Provider`-guarded surfaces, `agent`/`agent-job`/`agent-pool`/`pa-job`
+  tokens are refused on eval routes, and a stale revocation snapshot refuses
+  an eval token. Acceptance check (non-regression): the existing
+  `internal/auth/localjwt`, `internal/agentapi`, `internal/pa` and
+  `cmd/server` suites pass with no test edited, and a table test shows every
+  existing audience gets the same answer on every existing route group as
+  before this task.
 - [ ] 5. (depends on 3, 4) Add `internal/agentapi/eval.go`:
-  `POST /api/agent/v1/eval/claim`, which yields 204 while real jobs are
-  claimable or the flag is off, renders via `lookupFork` and
+  `POST /api/agent/v1/eval/claim`, registered as the one extra route a pool
+  credential may call (`requireNotPool` exception) beside `POST /jobs/claim`,
+  accepting the account `agent` token (own account only) and the pool
+  credential, which yields 204 while real jobs are claimable for the caller's
+  scope or any of the forks, eval or kill-switch flags say off, renders via `lookupFork` and
   `agenteval.Prepare`, and mints a task-bound `agent-eval` token. Serve the
   task routes through `agenteval.NewTask`. Score with `agenteval.Score` on
   the last fixture. Retry an infrastructure failure once, and only before
   any tool call. — DoD: the server-computed verdict is stored, the worker's
-  body never sets the verdict, and only per-fixture metadata is stored.
+  body never sets the verdict, and only per-fixture metadata is stored. An
+  eval task is not counted against a managed account's in-flight cap or daily
+  budget, and `handleClaimJobs`, `handlePoolClaim` and `/api/pa/v1/jobs/claim`
+  are unedited (diff check).
 - [ ] 6. (depends on 5) In `internal/agentworker/worker.go`, poll
   `eval/claim` only after an empty real claim, and run the task through the
-  existing invoker. — DoD: a worker test shows real jobs always take
-  priority.
+  existing invoker. `PAWorker.loop` stays unchanged. — DoD: a worker test
+  shows real jobs always take priority, and the PA worker tests
+  (`parunner_test.go`, `parunner_tools_test.go`) pass unmodified.
 - [ ] 7. (depends on 3) Add `internal/web/manage_forks.go`: a fork list
   section on the manage page and `POST /telegram/connect/manage/fork/eval`,
   restricted to `isBrowserSignIn`. Refuse `ErrNoSuite`/`ErrNothingToPromote`
@@ -87,13 +104,21 @@ tasks 9-16 are slice S3 (a second PR), per `docs/assistants/adr-forks.md`.
 - [ ] 15. (depends on 12) Make the four refusals conditional on
   `ForkPromoted && ASSISTANT_FORK_GUARDED_ENABLED`, where a lookup error
   reads as false:
-  - `checkForkInstall`, including pin moves while guarded;
-  - the claim at `internal/agentapi/events.go:110`;
-  - `policy.Input.ForkPromoted` at `internal/agentapi/actions.go:281,718`;
-  - `internal/agent/executor/executor.go:384,752`.
+  - `checkForkInstall` (`internal/assistantinstall/forks.go:162`), including
+    pin moves while guarded;
+  - the claim in `accountInstructions`
+    (`internal/agentapi/events.go:113-119`), which both `handleClaimJobs` and
+    `handlePoolClaim` use;
+  - `policy.Input.ForkPromoted` at `internal/agentapi/actions.go:304,758`;
+  - `internal/agent/executor/executor.go:397,790`.
 
   Update the `ForkPromoted` comment in `policy.go` and
-  `MsgForkObserveOnly`. — DoD: all four sites share one helper.
+  `MsgForkObserveOnly` (`forks.go:30`). — DoD: all four sites share one
+  helper, and a grep test fails if a fifth site reads `Mode == guarded` for a
+  fork without it. Acceptance check (non-regression): with both flags off the
+  suites for the four packages pass unmodified, and non-fork profiles and
+  PA paths evaluate identically (table test over `policy.Evaluate` inputs with
+  `ForkPromoted` unset).
 - [ ] 16. Update `docs/assistants/spec.md` and mark S2/S3 done in
   `docs/assistants/adr-forks.md`. — DoD: the docs describe both flags, the
   limits, the promote and revoke surfaces, and the absence of an MCP tool.
@@ -132,6 +157,13 @@ tasks 9-16 are slice S3 (a second PR), per `docs/assistants/adr-forks.md`.
   events, and fork deletion cancels open runs.
 - [ ] T12. There is no fixed "N approved drafts" rule: a fork with many
   approved observe drafts and no eval cannot be promoted.
+
+- [ ] T13. Cross-cutting non-regression: the existing localjwt, agentapi,
+  managed-runtime, PA and agentworker suites pass unmodified with both flags
+  off, and an audience-by-route matrix (`agent`, `agent-job`, `agent-pool`,
+  `pa-job`, `bridge`, `agent-eval`) is identical to the pre-change matrix
+  except for the new eval routes. An eval token with a stale revocation
+  snapshot is refused.
 
 ## Rollback
 
