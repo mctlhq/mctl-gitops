@@ -503,8 +503,10 @@ envFrom:
   - secretRef:
       name: "labs-mctl-telegram-preview-events"
   # optional: if the ExternalSecret ever fails to sync, the pod still starts
-  # while PA_ENABLED is "false" (nothing reads these keys); with it "true" a
-  # missing key refuses startup, which is the fail-closed answer.
+  # while PA_ENABLED is "false" (nothing reads these keys). With it "true",
+  # a missing bot token or webhook secret refuses startup, a missing
+  # allowlist admits nobody, and a missing KEK refuses startup once a PA
+  # server is enabled: each fails closed.
   - secretRef:
       name: "labs-mctl-telegram-preview-pa"
       optional: true
