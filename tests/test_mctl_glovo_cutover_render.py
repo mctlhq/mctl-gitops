@@ -37,8 +37,8 @@ API_SECRETS = "templates/mctl-platform/mctl-api-c2-consent.yaml"
 BASE = ["--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true",
         "--set", "mctlGlovo.consent=true", "--set", "mctlGlovo.control=true",
         # The committed values move as the cutover is lit; pin the switch these cases
-        # build on, so a flip of linkLogin does not change what they prove.
-        "--set", "mctlGlovo.linkLogin=false"]
+        # build on, so a flip of linkLogin or ingress does not change what they prove.
+        "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false"]
 HOSTS = "reservedPlatformHosts:\n  glovo.mctl.ai: [mctl-glovo]\n"
 PROXIES = ["--set", "mctlGlovo.trustedProxies=10.42.0.0/16"]
 failures: list[str] = []
@@ -91,7 +91,7 @@ def fails(show, *args, why, extra_values=None):
 # the LIVE state (deploy turns on at the start of the cutover), and this proves what
 # "all off" renders, not what is live. c2 and allowlist are set explicitly
 # for the same reason: they turn on with the cutover.
-r = helm(SVC, "--set", "mctlGlovo.deploy=false", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false")
+r = helm(SVC, "--set", "mctlGlovo.deploy=false", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
 check(r.returncode == 0, f"default render failed: {r.stderr[-200:]}")
 kinds = {d["kind"] for d in docs(r)}
 check(kinds <= {"Namespace", "ServiceAccount", "NetworkPolicy"}, f"default render has extra kinds {kinds}")
@@ -137,15 +137,21 @@ for bad in ("16m", "901s", "0m", "5h", "1.5m", "5"):
 r = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true", "--set", "mctlGlovo.linkMaxAuthAge=15m")
 check(r.returncode == 0, "15m is the allowed maximum")
 
-# The committed values: linkLogin is on, so the two link variables are set (and the
-# audience still differs from the MCP resource).
+# The committed values: linkLogin and ingress are on, so the two link variables, the
+# trusted proxies and exactly one Ingress are set.
 r = helm(SVC)
 check(r.returncode == 0, f"committed render failed: {r.stderr[-200:]}")
 if r.returncode == 0:
     env = server_env(docs(r))
     check(env.get("GLOVO_LINK_RESOURCE") == "https://glovo.mctl.ai/link", f"committed: link resource {env.get('GLOVO_LINK_RESOURCE')!r}")
     check(env.get("GLOVO_LINK_MAX_AUTH_AGE") == "5m", f"committed: link max age {env.get('GLOVO_LINK_MAX_AUTH_AGE')!r}")
-    check("GLOVO_LINK_TRUSTED_PROXIES" not in env, "committed: the ingress variable is set although ingress is its own step")
+    check(env.get("GLOVO_LINK_TRUSTED_PROXIES") == "10.42.0.0/16", f"committed: trusted proxies {env.get('GLOVO_LINK_TRUSTED_PROXIES')!r}")
+    cds = docs(r)
+    cings = [d for d in cds if d["kind"] == "Ingress"]
+    check(len(cings) == 1, f"committed: expected one Ingress, got {len(cings)}")
+    if cings:
+        cpaths = [p["path"] for p in cings[0]["spec"]["rules"][0]["http"]["paths"]]
+        check(cpaths == ["/mcp", "/link", "/.well-known/oauth-protected-resource"], f"committed: ingress paths {cpaths}")
 
 # 4b. mctl-api's side of the link resource: the same switch sets the same audience on
 # mctl-api (it mints the link token) as on the service (it checks it).
@@ -172,7 +178,7 @@ fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in res
 fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values="reservedPlatformHosts:\n  glovo.mctl.ai: [labs]\n")
 committed_owners = (yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "values.yaml").read_text()).get("reservedPlatformHosts") or {}).get("glovo.mctl.ai")
 check(committed_owners == ["mctl-glovo"], f"committed: owners of the host are {committed_owners!r}, want exactly the service namespace")
-fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", why="trustedProxies", extra_values=HOSTS)
+fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.trustedProxies=", why="trustedProxies", extra_values=HOSTS)
 r = helm(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, extra_values=HOSTS)
 check(r.returncode == 0, f"ingress render failed: {r.stderr[-200:]}")
 if r.returncode == 0:

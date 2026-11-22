@@ -741,12 +741,16 @@ mctlGlovo:
   # The public route to the service: an Ingress object, a Traefik source in
   # the server policy and the trusted-proxies variable. Needs c2, host,
   # trustedProxies and the host's reservedPlatformHosts owner. Rollback: false.
-  ingress: false
+  ingress: true
   host: glovo.mctl.ai
-  # CIDRs of the Traefik pods (the same set as mctl-api's TRUSTED_PROXY_CIDRS).
-  # Required while ingress is on: the service keys its per-IP link limits on
-  # the address behind these proxies.
-  trustedProxies: ""
+  # Source CIDRs the service trusts as proxies: the cluster pod CIDR (k3s
+  # default 10.42.0.0/16), not per-pod /32 entries, because Traefik pod IPs
+  # change on every restart and a stale entry silently collapses all clients
+  # into one per-IP bucket. Who can connect at all is decided by the server
+  # NetworkPolicy (the Traefik namespace, plus the control caller on its own
+  # path), not by this list. Required while ingress is on: the service keys
+  # its per-IP link limits on the address behind these proxies.
+  trustedProxies: "10.42.0.0/16"
   # Longest age of the sign-in behind a link preview or upload (a Go duration,
   # at most 15m). Read only while linkLogin is on.
   linkMaxAuthAge: 5m

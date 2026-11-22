@@ -107,7 +107,9 @@ Opening, in this order. Each item is its own PR or action.
 2. DONE (owner-entry PR): `reservedPlatformHosts` for the host lists the service
    namespace, and no other. Without it admission refuses the Ingress (F5); the new render
    guard refuses the flip PR until this is done.
-3. gitops PR: `trustedProxies` set to the Traefik pod CIDRs and `ingress: true`.
+3. gitops PR (the ingress flip): `trustedProxies` set to the cluster pod CIDR
+   (`10.42.0.0/16`; per-pod /32 entries go stale on every Traefik restart) and
+   `ingress: true`.
    Result: an Ingress exists, Traefik can reach the pod on 8080 (the server
    policy adds a Traefik-only source), the kill switch path and health paths
    are never in the Ingress. No traffic moves: the edge still points at the
