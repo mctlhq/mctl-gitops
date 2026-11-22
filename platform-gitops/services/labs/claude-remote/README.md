@@ -71,6 +71,55 @@ After the new pod comes up, claude.ai → Code should list `claude-remote`
 as a connected device. Verify in logs that the welcome banner now shows
 `<email>'s Organization` and 5+ ESTABLISHED outbound sockets exist.
 
+## Resuming after a pause (`replicaCount: 0` back to `1`)
+
+`values.yaml` carries `replicaCount: 0` while the Claude account this pod signs
+in with is on hold (paused 2026-10-29). Nothing in the `s3-sync` sidecar runs
+while it is 0, so a change to that script, such as the 5-minute mirror cadence
+(`MIRROR_EVERY`) added to cut R2 Class A operations, is not exercised until the
+pod comes back. Verify it then, in this order, before leaving the pod alone:
+
+1. **Precondition.** The account question is settled and `claude auth login`
+   works from this pod (see First-time bootstrap). Resuming with a held account
+   restarts the rejected-request loop that caused the pause.
+2. **Resume by PR.** Set `replicaCount: 1`, merge, let Argo sync. Never
+   `kubectl scale`: Argo reverts it.
+3. **The sidecar is up and not refusing.** `restore-state` completed and
+   `s3-sync` is running:
+
+   ```sh
+   kubectl --context mctl-preprod -n labs get pods -l app.kubernetes.io/instance=labs-claude-remote
+   kubectl --context mctl-preprod -n labs logs "$POD" -c s3-sync --tail=50 | grep -c 'cred-guard'   # expect 0
+   ```
+
+   A `[cred-guard] REFUSING` line means the local credentials are empty or
+   expired; stop here and use Mode A below. R2 still holds the last good copy.
+4. **Credentials reach R2 within about a minute.** The credentials file is
+   checked on every 60 s tick and copied only when its content changed, so right
+   after a fresh login both objects must exist and be recent:
+
+   ```sh
+   kubectl --context mctl-preprod -n labs exec "$POD" -c s3-sync -- sh -lc \
+     'mc ls s3/claude-remote-state/labs/claude-remote/.claude/ | grep credentials'
+   # expect .credentials.json and .credentials.json.lastgood, both with a fresh timestamp
+   ```
+
+5. **The rest of `/workspace` follows within about 5 minutes** (full mirror
+   every `MIRROR_EVERY` ticks): a new transcript under
+   `.claude/projects/-workspace/*.jsonl` appears in R2 after one cycle.
+6. **R2 cost stays where the change says it should.** R2 bills Class A
+   operations in whole 1M blocks above a free 1M per cycle (the 22nd to the
+   21st), and this bucket alone produced about 134k of them (~19k a day) in
+   the week of 2026-10-22, before the cadence change. After a day running,
+   `r2_ops_budget_class_a_used` (vm-rules/r2-ops-budget.yaml) should rise far
+   slower than that. If the bucket is back near 19k a day, the cadence did not
+   take effect: check the `s3-sync` args for `MIRROR_EVERY`. An
+   `R2OpsClassANearFreeTier` or `R2OpsClassAProjectedOverFreeTier` alert in the
+   first days after a resume is the same signal.
+
+If any step fails, set `replicaCount` back to 0 by PR rather than debugging with
+the pod running against a possibly held account.
+
 ## Recovery runbook — wedged or disconnected session
 
 Two distinct failure modes drop the device; recovery differs. Identify which
