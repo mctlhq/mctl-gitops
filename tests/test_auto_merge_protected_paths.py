@@ -66,6 +66,11 @@ PROTECTED = [
     "scripts/validate-argocd-sync-windows.py",
     "scripts/render-sync-window.py",
     "scripts/app-project-consumers.json",
+    # The window PR-opener holds the App key flow and decides what a window PR
+    # may contain; a PR that edits it must not be machine-merged either.
+    ".github/workflows/release-window-pr.yml",
+    "scripts/release-window-insert.py",
+    "tests/test_release_window_pr.py",
 ]
 NOT_PROTECTED = [
     "README.md",
@@ -84,6 +89,8 @@ NOT_PROTECTED = [
     "platform-gitops/bootstrap/templates/projects.yaml",
     "scripts/render-sync-window.py.bak",
     "scripts/app-project-consumers.json.orig",
+    ".github/workflows/release-window-pr.yml.orig",
+    "scripts/release-window-insert.py.bak",
 ]
 
 
@@ -181,7 +188,7 @@ def main():
     # The workflow must actually use the variable.
     assert 'grep -E "$protected_re"' in WF.read_text()
     # MUTANTS: removing the release-gate entries must turn rows red.
-    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers"]
+    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers", "release-window-pr", "release-window-insert", "release_window"]
     for needle in gate_alts:
         parts = pat.split("|")
         kept = [a for a in parts if needle not in a]

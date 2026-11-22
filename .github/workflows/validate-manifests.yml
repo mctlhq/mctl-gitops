@@ -380,6 +380,14 @@ jobs:
           python3 tests/test_release_bump_supersede.py
           python3 tests/test_release_bump_apply.py
 
+      - name: Release window PR-opener (wiring, input binding, insert script)
+        # Proposal issue-2828, 8.2: release-window-pr.yml opens a release-window/*
+        # pull request with the App token and nothing else. The test pins its
+        # triggers, environment, input checks before the token, single push
+        # target and absence of enqueue or merge, with mutants for each; the
+        # insert script's selftest runs inside it.
+        run: python3 tests/test_release_window_pr.py
+
       - name: Tenant-class templates and Secret readers, by credential name
         run: |
           python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
