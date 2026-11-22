@@ -658,7 +658,8 @@ jobs:
           helm template argocd platform-gitops/argocd -f platform-gitops/argocd/values.yaml \
             --namespace argocd > "$tmpdir/argocd.yaml"
           python3 -m pip install --quiet pyyaml
-          scripts/validate-argocd-sync-windows.py --selftest "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+          scripts/validate-argocd-sync-windows.py --selftest --expect-project default --expect-project platform \
+            "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
           # Render-only proposal tool (writes nothing): selftest, then two
           # live-data controls. A recovery-chain window must be refused (exit
           # 1); a window on a real apps service must be accepted (exit 0), so
