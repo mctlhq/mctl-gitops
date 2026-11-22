@@ -194,6 +194,17 @@ def main():
         "\n      - name: Merge PR\n        run: |\n"
         "          gh pr merge \"$PR\" \\\n            --merge --delete-branch\n")
     assert merge_calls(pre_fix) == ["Merge PR"], "the pre-fix merge step is not detected"
+    # Least privilege: no `write` on contents anywhere, no workflow-level grant,
+    # and the job that only reads the PR holds no pull-requests write. Proven
+    # both ways: the pre-change block, put back, is caught.
+    def widest(text):
+        d = yaml.safe_load(text)
+        grants = [("workflow", d.get("permissions"))] + [(j, v.get("permissions")) for j, v in d["jobs"].items()]
+        return [(n, g) for n, g in grants if g is None or g.get("contents") == "write"
+                or (n in ("workflow", "auto-merge") and g and g.get("pull-requests") == "write")]
+    assert widest(WF.read_text()) == [], f"auto-merge.yml holds more than it needs: {widest(WF.read_text())}"
+    pre_perms = WF.read_text().replace("permissions: {}", "permissions:\n  contents: write\n  pull-requests: write", 1)
+    assert widest(pre_perms), "the pre-change workflow-level write grant is not detected"
     print("ok")
 
 
