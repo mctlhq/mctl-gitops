@@ -1,50 +1,65 @@
-# Stop mctl-agents agents-state pushes from starving the main merge queue
+# Stop mctl-agents state writes starving GitOps Merge Queue — revision 2
 
-## Context
-`main` merges through a merge queue (ruleset `main-protection`, mctlhq/.github#351). The mctl-agents
-ClusterWorkflowTemplates (`cwft-mctl-agents-{investigate,implement,approve,shepherd,reconcile,run}.yaml`)
-end in a `commit-and-push` step that pushes `platform-gitops/agents-state/**` straight to `main` with the
-bypass deploy key (path P6 in `docs/runbooks/mctl-api-release-hold.md`). Every push from outside the queue
-makes GitHub rebuild every merge group on the new tip, so the queue head's required checks (`validate`
-with 4 shards, `reserved-hosts`, `cloudflare-plan`, `agy-formal-review`) start over. On 2026-11-22, 22
-agent commits landed between 22:00 and 23:14 UTC, 40 s to 5 min apart. The queue head #2923 was rebuilt
-at least four times and never finished. #2924 and #2927 got no merge group at all, and entries are
-dropped after 120 minutes.
+## Decision and problem statement
 
-The issue lists four options and decides none of them. This proposal takes two steps that can ship
-without a cross-repo migration: (a) detection, which alerts when the queue is being starved, and
-(b) a queue-aware deferral of agents-state pushes. While a merge group is building, an agent push waits,
-with a time limit, until that group merges or leaves the queue. Waiting writers then push together right
-after a merge, when a rebuild costs the next group only seconds. Moving agents-state off `main`
-(option 2) is the structural fix and is recorded as a follow-up, not built here.
+**Owner decision (2026-11-23, mctl-gitops#2931): GO_RESEARCH / DESIGN for options 2 + 4.** The target is a separately permissioned repository, provisionally `mctlhq/mctl-agents-state`, for agent-generated proposal and operational state; merge-queue starvation monitoring is required. This is **not** approval to implement, merge or deploy. The separate-repository migration is **in scope**, not a follow-up. Batch commits, increased queue parallelism and queue-aware push deferral are not substitutes.
+
+Observed 2026-11-22: many `chore(agents)` direct commits to `mctl-gitops/main` invalidated merge-group heads (#2923), blocked #2924/#2927, and triggered numerous heavyweight `validate-manifests.yml` push jobs across the organization's shared GitHub-hosted runner quota. See #2931 evidence and follow-up comment on hosted runners, plus in-flight mitigation PR #2935. A red workflow alone is not a reliable page to the operator. We must eliminate direct agent-state pushes to `mctl-gitops/main` and provide actionable alerts, while preserving content-bound human approval.
+
+## Scope and invariants
+
+1. **Canonical target:** migrate agent runtime state and generated proposal artifacts currently under `platform-gitops/agents-state/**` into a **separate** repository. Keep `mctl-gitops/main` only for GitOps desired-state declarations, workflows and migration configuration. No automated agent status write may advance `mctl-gitops/main` after cutover.
+2. **Trust separation:** proposal content (`requirements.md`, `design.md`, `tasks.md` and optional `proposed-content.md`) is reviewable and immutable for a given approved revision; operational `.status.yaml`, attempts, review status and inbox are mutable. The design SHALL explicitly isolate bots that publish runtime status from the protected review/approval source and define its branch/ruleset design. A repository-scoped key alone is not path-scoped.
+3. **Approval invariants:** no agent write is an owner approval; no missing, anonymous, mismatched or stale `approval.approved_by` / `approval.content_digest` may enable implementation. `control.requires_human_approval` stays fail-closed. Review grants bind to exact content digest, proposal identity and immutable Git revision, and are invalidated by amendment or migration drift.
+4. **No automatic authority expansion:** no admin bypass, no Merge Queue bypass, no automatic owner approval, no implementer start from this design authorization. Existing writers remain functioning until explicit phased rollout / evidence / rollback approval.
+5. **No duplicate work:** linked #2543 deploy-key hardening and PR #2935 push-run concurrency cancellation are dependencies or adjacent mitigations, not new implementation issues; `mctl-gitops#2931` owns the migration proposal.
 
 ## User stories
-- AS a platform engineer I WANT a PR in the merge queue to merge within one check cycle even during a DevLoop burst SO THAT human and agent PRs are not blocked for hours.
-- AS an on-call operator I WANT an alert when the merge queue head is rebuilt repeatedly or waits too long SO THAT starvation shows up as an alert, not as a PR "stuck in QUEUED".
-- AS an mctl-agents maintainer I WANT the deferral to be bounded and to fail open SO THAT agent status writes are never lost and a GitHub API outage never stalls the dev loop.
+
+- AS an operator I WANT workflows to record status during a DevLoop burst without writing to `mctl-gitops/main` SO THAT valid queued pull requests can complete checks.
+- AS an approver I WANT review grants bound to exactly the immutable proposal I saw SO THAT migrations, retries, races and amendments cannot cause unreviewed implementation.
+- AS a security maintainer I WANT the runtime writer's credential limited to an isolated repository and branch SO THAT a stolen agent deploy credential cannot advance GitOps desired state.
+- AS an on-call operator I WANT 3-rebuild, 15-minute no-progress and causal push alerts SO THAT I can act before the 120-minute queue eviction.
+- AS a workflow maintainer I WANT measured cutover, idempotent writes, reconciliation and a tested rollback SO THAT operational status is never silently lost or duplicated.
 
 ## Acceptance criteria (EARS)
-- WHEN an mctl-agents workflow reaches its push stage AND the `main` merge queue has an entry in state AWAITING_CHECKS THE SYSTEM SHALL wait before pushing to `main`, polling the queue at a fixed interval (default 15 s).
-- WHEN the queue entry that was the head at the start of the wait leaves the queue (merged or removed), OR the queue has no AWAITING_CHECKS entry THE SYSTEM SHALL end the wait and run the existing `commit-and-push` unchanged.
-- IF the wait reaches its limit (default 900 s; 300 s for `cwft-mctl-agents-reconcile`) THEN THE SYSTEM SHALL log a warning naming the queue head and push anyway.
-- IF the GitHub API call fails, returns malformed data, or no token is available THEN THE SYSTEM SHALL log the error and push without waiting (fail open). A read that failed is never treated as "queue empty".
-- WHILE the gate mode is `shadow` THE SYSTEM SHALL log the decision it would have made and its would-be wait time, and SHALL NOT wait.
-- WHILE the gate mode is `off` THE SYSTEM SHALL skip the gate entirely.
-- THE SYSTEM SHALL NOT apply the gate to `cwft-mctl-agents-approve.yaml`. It is human-triggered, rare and has a 600 s workflow deadline.
-- THE SYSTEM SHALL run the gate outside the `mctl-gitops-main-writes` mutex, so that waiting never holds that lock or triggers `mutex-forensics-watchdog` waiter alerts.
-- WHEN the scheduled starvation watch runs (every 10 minutes) AND the queue head has waited longer than the age threshold (default 45 min) OR its merge group has been rebuilt at least N times (default 3) since it was enqueued THE SYSTEM SHALL fail the run with an `::error::` annotation. The annotation names the head PR, how long it has waited, the rebuild count and the number of direct pushes to `main` since it was enqueued.
-- IF the starvation watch cannot read the merge queue THEN THE SYSTEM SHALL fail the run with an "unknown" error, never pass silently.
-- THE SYSTEM SHALL keep the existing `commit-and-push` path scoping (`git add` limited to agents-state), the 5x push/rebase loop and the deploy-key usage unchanged.
 
-## Out of scope
-- Moving agents-state off `main` to a dedicated branch or repository (option 2). This is the structural fix and needs mctl-api, mctl-agents and approval-digest changes; it is a follow-up issue.
-- Routing agents-state writes through PRs and the queue (option 3).
-- Changing the merge queue ruleset, its required checks or the 120-minute timeout.
-- Changing `gitops-bump.yaml` / `release-deploy.yaml`. Their bumps already go through the queue (`enqueue-bump` job).
-- Shrinking the P6 / #2543 deploy-key bypass surface.
+### Repository and migration
 
-## Open questions
-- Alert channel: this proposal makes the watch run fail (red signal, like `await-bump`). Is a Telegram notification also wanted? If so, which existing notifier and secret should it use?
-- Default thresholds (900 s wait limit, 45 min head age, 3 rebuilds) are estimates. They assume `validate` finishes in under about 10 minutes. The real duration of the `validate` shards on merge_group was not measured.
-- Is a deferral of up to 15 minutes in agents-state status writes acceptable to mctl-api readers (decide page, `mctl_get_dev_loop_approval`) and to the shepherd? Nothing found in this repo depends on sub-minute freshness, but mctl-api and mctl-agents were not inspected.
-- Should option 2 (dedicated agents-state branch or repo) be filed now as its own issue, linked to #2543?
+- R1. WHEN migration is activated THE SYSTEM SHALL use a separately provisioned `mctlhq/mctl-agents-state` repository (or an explicitly owner-approved equivalent); `mctl-gitops/main` SHALL no longer receive writes of `platform-gitops/agents-state/**` by agent workflows. A branch *within mctl-gitops* does **not** satisfy this criterion.
+- R2. BEFORE cutover THE SYSTEM SHALL inventory **every** reader, writer, poller, validator, CLI, API and workflow referring to `agents-state` or its GitHub source/ref, with repository/path/evidence, owner, transition mode and validation test; an unknown consumer blocks GO_CUTOVER.
+- R3. WHEN proposal artifacts are generated or amended THE SYSTEM SHALL publish the immutable review candidate through a protected, independently reviewed path (e.g. a protected `specs` branch in the new repository, with bot-authored PRs) distinct from the runtime-status writer target (e.g. `runtime` branch). No bot credential used for runtime status SHALL be able to directly update protected reviewed proposal content.
+- R4. WHEN a proposal is accepted THE SYSTEM SHALL require the exact audited human authorization referencing the reviewed proposal digest and source commit; missing, changed, anonymous, cross-repo-stale or unbound approvals SHALL fail closed. Retried approvals SHALL be idempotent and SHALL NOT start implementation twice.
+- R5. WHEN any agent workflow writes status THE SYSTEM SHALL use optimistic commit/ref updates (or equivalent CAS), bounded retry/backoff, deterministic idempotency keys and explicit failure outcomes; concurrent investigator, implementer, approve, shepherd and reconcile updates SHALL neither overwrite newer status nor lose unrelated state. The durable commit identity SHALL be logged.
+- R6. WHEN the target repository or credentials are unavailable THE SYSTEM SHALL expose a retriable/unavailable state and never falsely report a persisted approval, status transition or successful implementation. No implicit fallback to direct writes to `mctl-gitops/main` after cutover.
+- R7. BEFORE switching writers THE SYSTEM SHALL complete a checksum/inventory backfill, prove source-to-target parity, run shadow reads and conflict/replay tests, and verify an owner-defined maximum freshness lag. The cutover SHALL be gated by an explicit independent review plus separate owner GO_CUTOVER.
+- R8. DURING migration THE SYSTEM SHALL provide an auditable mapping of old path/commit/SHA to new proposal identity/review ref/status ref; older active DevLoops SHALL continue safely or fail closed rather than approve an unbound record.
+- R9. WHEN rollback is declared THE SYSTEM SHALL support a tested reader/writer rollback or pause with reconciliation and without re-enabling unsafe direct pushes. Rollback SHALL preserve approved digest and attempt/approval history; non-reversible states must cause a fail-closed operator hold.
+
+### Permissions and security
+
+- R10. THE SYSTEM SHALL use separate least-privilege credentials for repo runtime writes, protected proposal publishing, and GitOps configuration reads. A negative authorization test SHALL prove the runtime credential cannot push to `mctl-gitops/main` **or** the new repository's protected reviewed-proposal ref; revoke the old P6 direct-write deploy key after cutover with #2543 evidence.
+- R11. THE SYSTEM SHALL protect force-pushes, branch deletion and unreviewed approval-material edits; map GitHub App / deploy-key repository-level capabilities, ruleset bypass actors, and CI enforcement with tests of effective permissions, not merely template `git add` path guards.
+- R12. THE SYSTEM SHALL maintain audit chain `proposal_id → reviewed content SHA/digest → owner grant → consumed transition → implementer attempt/PR` across all repository boundaries; stale or unresolvable references block execution.
+
+### Queue and CI observability
+
+- R13. WHEN a queue entry is rebuilt at least **3 times** without progressing THE SYSTEM SHALL emit a deduplicated actionable alert naming head PR, affected queued PRs, original and rebuilt merge-group SHA(s), offending push SHA, bot identity and workflow correlation (or explicitly `unknown` when attribution is unavailable).
+- R14. WHEN entries wait but **no meaningful queue progress occurs for 15 minutes** THE SYSTEM SHALL alert; age alone is not equivalent to progress. Monitoring SHALL distinguish healthy long-running checks from repeated invalidation and shall have an explicit false-positive policy.
+- R15. WHEN a bot push to a protected branch invalidates merge-group checks THE SYSTEM SHALL correlate the push with invalidated runs where evidence supports causality and alert, including after the migration; non-causal temporal coincidence must be qualified.
+- R16. WHEN monitoring cannot read API evidence or misses its schedule THE SYSTEM SHALL emit an `unknown/monitoring-degraded` signal, not green; alert routing SHALL notify a named on-call channel rather than rely solely on an unobserved red workflow. Detection target: 5-minute evaluation cadence with a 15-minute no-progress threshold; document API quota and delay assumptions.
+- R17. THE SYSTEM SHALL verify GitHub GraphQL/REST query shapes, API permissions and pagination against live read-only fixtures before implementation; unit tests SHALL pin empty queue, rebuild counting, stale/deleted head, rate limiting, missing permissions, monitoring outages and SHAs/correlation.
+- R18. BEFORE declaring success THE SYSTEM SHALL verify the bot-generated `push` workload drops from GitOps `main`, stale CI runs are canceled or bounded (respect #2935), merge-group jobs finish in at least one representative synthetic DevLoop burst, and unrelated repositories do not suffer the same hosted-runner starvation.
+
+## Exclusions
+
+- No implementation in this revision; these are design and acceptance documents only.
+- No wholesale changes to release image bumps, GitOps desired state or queue-policy bypass.
+- Queue-aware deferral is an optional short-lived mitigation only if separately justified with expiry, risk, proof of no approval latency regression, and its own GO. It cannot satisfy R1 or R10, and is not part of the required end state.
+- Do not change `max_entries_to_build` or queue timeout as the primary repair; settings may be evaluated separately after evidence.
+
+## Evidence and unresolved design gates
+
+- **Verified repo anchors:** `mctl-api/internal/gitops/reader.go` maintains a GitOps mono-repo clone; `mctl-api/internal/api/handlers_devloop_decide.go` binds decisions to approval/context/content digests; `mctl-agents/orchestrator/temporal/activities/gitops_state.py` reads the GitHub tree under the GitOps repo; `mctl-agents/orchestrator/proposal_state.py` defines the 4-file digest; `mctl-gitops/scripts/validate-agents-state-approval.py` directly validates the old tree; the CWFTs commit status into GitOps (`design.md` inventory).
+- **To verify before GO_IMPLEMENT:** exhaustive repository-wide usages beyond those anchors, exact REST/GraphQL scopes, whether GitHub native rulesets can enforce both branch roles with current GitHub plan, real approval/decide workflow compatibility, recovery when an approval is pending across cutover, rollback after a protected proposal revision changes.
+- **Related:** mctl-gitops#2931, #2543, #2935, mctlhq/.github#351, and `docs/runbooks/proposal-approval-content-digest.md`.
