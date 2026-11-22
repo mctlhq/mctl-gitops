@@ -763,6 +763,17 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "CloudflarePortal.*"
+                  # R2 Class A operations against the free million
+                  # (vm-rules/r2-ops-budget.yaml). Telegram only, no ticket:
+                  # the remedy is a values edit (Loki's compaction and resync
+                  # intervals, the claude-remote s3-sync cadence) or a token,
+                  # and the point of the alert is a human deciding before the
+                  # $4.50 block is billed. Left unrouted these would fall
+                  # through to mctl-agent alone. Prefix match so the next R2
+                  # alert is not agent-only by default.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "R2Ops.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:

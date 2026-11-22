@@ -1,0 +1,395 @@
+# Unit tests for r2-ops-budget.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh. A success timestamp written as '0+60xN' equals
+# time() at every step, i.e. a check that reads successfully every time. The
+# count alerts are mutually exclusive, so each case also asserts that the
+# neighbours stay quiet.
+rule_files:
+  - generated/r2-ops-budget.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: well within the free million raises nothing
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '500000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '600000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsBudgetReadFailing
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsBudgetStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: 80 percent of the free million warns, and only that
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '850000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '900000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are at 80% of the free million"
+              description: "This billing cycle has used 80% or more of the free 1M R2 Class A operations. Crossing it costs the full $4.50 for the next block. Cut operations before the cycle ends (the 22nd): the biggest levers are in observability/loki.yaml (compaction_interval, tsdb_shipper.resync_interval) and the s3-sync sidecar in services/labs/claude-remote/values.yaml (MIRROR_EVERY)."
+      - eval_time: 5h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsBudgetStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: exactly 80 percent is already near
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '800000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '850000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are at 80% of the free million"
+              description: "This billing cycle has used 80% or more of the free 1M R2 Class A operations. Crossing it costs the full $4.50 for the next block. Cut operations before the cycle ends (the 22nd): the biggest levers are in observability/loki.yaml (compaction_interval, tsdb_shipper.resync_interval) and the s3-sync sidecar in services/labs/claude-remote/values.yaml (MIRROR_EVERY)."
+
+  - interval: 1m
+    name: just under 80 percent stays quiet
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '799999x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '850000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: past the free million fires Over and only Over
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '1050000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1300000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations passed the free million this cycle"
+              description: "This billing cycle has used 1.05M R2 Class A operations, past the free 1M. The first block above it, $4.50, is billed whether the overage is 1 operation or 999,999, so the rest of the cycle costs nothing more until the next million. Where they come from: the Cloudflare dashboard, Billing, Billable usage; per bucket and action, the GraphQL r2OperationsAdaptiveGroups. Largest sources as of 2026-11: loki (PutObject, ListObjects), then tempo-traces, claude-remote-state and argo-workflows-logs."
+      - eval_time: 5h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: exactly the free million is already over
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations passed the free million this cycle"
+              description: "This billing cycle has used 1M R2 Class A operations, past the free 1M. The first block above it, $4.50, is billed whether the overage is 1 operation or 999,999, so the rest of the cycle costs nothing more until the next million. Where they come from: the Cloudflare dashboard, Billing, Billable usage; per bucket and action, the GraphQL r2OperationsAdaptiveGroups. Largest sources as of 2026-11: loki (PutObject, ListObjects), then tempo-traces, claude-remote-state and argo-workflows-logs."
+
+  - interval: 1m
+    name: on pace to cross while still low fires Projected and only that
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '300000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1200000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 361m
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are on pace to pass the free million"
+              description: "At the pace so far this billing cycle will end at about 1.2M R2 Class A operations, over the free 1M, though the count has not reached it yet. There is time to cut: see R2OpsClassANearFreeTier for where."
+      - eval_time: 8h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: no projection yet (first days of a cycle) raises nothing
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '20000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsBudgetReadFailing
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsBudgetStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failing read fires its own alert and goes stale, without touching the count alerts
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '0x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '500000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '600000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0x1000'
+    alert_rule_test:
+      - eval_time: 419m
+        alertname: R2OpsBudgetReadFailing
+        exp_alerts: []
+      - eval_time: 421m
+        alertname: R2OpsBudgetReadFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "The R2 operations budget check cannot read the count"
+              description: "For 7 hours the check could not read this cycle's R2 operations: the token, the Cloudflare API, or the answer's shape. This says nothing about the count itself, and the alerts above judge the last figure it did read. The r2-ops-budget Job's log in monitoring has the reason."
+      - eval_time: 12h29m
+        alertname: R2OpsBudgetStale
+        exp_alerts: []
+      - eval_time: 12h32m
+        alertname: R2OpsBudgetStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "No successful R2 operations budget check for over 12 hours"
+              description: "Nothing has confirmed this cycle's R2 operation count for more than 12 hours. Check the r2-ops-budget CronJob in monitoring (failed Jobs, CreateContainerConfigError for a missing token Secret, pod logs) and the r2-ops-budget ExternalSecret. Until the Vault path platform/r2-ops-budget (property api-token) exists, this is expected."
+      - eval_time: 12h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failed read keeps the last high count alerting, it never lowers it
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '0x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '1050000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1300000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0x1000'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations passed the free million this cycle"
+              description: "This billing cycle has used 1.05M R2 Class A operations, past the free 1M. The first block above it, $4.50, is billed whether the overage is 1 operation or 999,999, so the rest of the cycle costs nothing more until the next million. Where they come from: the Cloudflare dashboard, Billing, Billable usage; per bucket and action, the GraphQL r2OperationsAdaptiveGroups. Largest sources as of 2026-11: loki (PutObject, ListObjects), then tempo-traces, claude-remote-state and argo-workflows-logs."
+
+  - interval: 1m
+    name: a check that never pushed (no token Secret) is stale, not fine
+    input_series:
+      - series: 'unrelated_metric{job="other"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: R2OpsBudgetStale
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: R2OpsBudgetStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "No successful R2 operations budget check for over 12 hours"
+              description: "Nothing has confirmed this cycle's R2 operation count for more than 12 hours. Check the r2-ops-budget CronJob in monitoring (failed Jobs, CreateContainerConfigError for a missing token Secret, pod logs) and the r2-ops-budget ExternalSecret. Until the Vault path platform/r2-ops-budget (property api-token) exists, this is expected."
+
+  - interval: 1m
+    name: past 80 percent with a pace over the limit fires Near only, not Projected as well
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '850000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1200000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are at 80% of the free million"
+              description: "This billing cycle has used 80% or more of the free 1M R2 Class A operations. Crossing it costs the full $4.50 for the next block. Cut operations before the cycle ends (the 22nd): the biggest levers are in observability/loki.yaml (compaction_interval, tsdb_shipper.resync_interval) and the s3-sync sidecar in services/labs/claude-remote/values.yaml (MIRROR_EVERY)."
+      - eval_time: 8h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: just under 80 percent with a pace over the limit still fires Projected
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '799999x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1200000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 361m
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are on pace to pass the free million"
+              description: "At the pace so far this billing cycle will end at about 1.2M R2 Class A operations, over the free 1M, though the count has not reached it yet. There is time to cut: see R2OpsClassANearFreeTier for where."
+      - eval_time: 8h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+

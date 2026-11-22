@@ -1,0 +1,152 @@
+# Alerts on R2 Class A operations against the free tier.
+#
+# R2 bills Class A operations in whole blocks of one million above a free
+# million per billing cycle (the 22nd to the 21st): one operation over costs
+# the full $4.50. The 2026-10-22..11-21 cycle used 1.08M and was billed that
+# block (invoice IN-90323939). The dashboard's budget alert is a dollar
+# threshold and fires only after the block is billed; these fire while there
+# is still time to cut operations.
+#
+# Fed by the r2-ops-budget CronJob (infra-components/observability/blackbox/
+# r2-ops-budget.yaml), every 3 hours, pushing job="r2_ops_budget" to the
+# Pushgateway:
+#
+#   r2_ops_budget_read_ok                        1 read the cycle's operations, 0 could not
+#   r2_ops_budget_class_a_used                   Class A operations so far this cycle
+#   r2_ops_budget_class_a_free_tier              operations included free (1M)
+#   r2_ops_budget_class_a_projected              end-of-cycle figure at the pace so far
+#                                                (absent in the first two days)
+#   r2_ops_budget_last_read_success_timestamp_seconds
+#
+# A failed read pushes only read_ok=0: it never lowers the count and never
+# advances the success timestamp, so a check that keeps failing trips
+# R2OpsBudgetStale as well, and "could not observe" stays distinct from
+# "within budget".
+#
+# The three count alerts are mutually exclusive on purpose, so one situation
+# sends one message: below 80% nothing; 80% up to the limit, Near; at the
+# limit, Over. Projected covers the case where the pace will cross the limit
+# before the count reaches 80% of it.
+#
+# Alertnames all start with R2Ops, for one alertmanager route (Telegram: every
+# remedy is a values edit or a token, which mctl-agent cannot make).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: r2-ops-budget
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: r2-ops-budget
+spec:
+  groups:
+    - name: r2-ops-budget
+      interval: 60s
+      rules:
+        - alert: R2OpsClassAOverFreeTier
+          expr: |
+            max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+              >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+          for: 30m
+          labels:
+            severity: warning
+            component: r2-ops-budget
+          annotations:
+            summary: "R2 Class A operations passed the free million this cycle"
+            description: >-
+              This billing cycle has used {{ $value | humanize }} R2 Class A
+              operations, past the free 1M. The first block above it, $4.50, is
+              billed whether the overage is 1 operation or 999,999, so the rest
+              of the cycle costs nothing more until the next million. Where they
+              come from: the Cloudflare dashboard, Billing, Billable usage; per
+              bucket and action, the GraphQL r2OperationsAdaptiveGroups. Largest
+              sources as of 2026-11: loki (PutObject, ListObjects), then tempo-traces,
+              claude-remote-state and argo-workflows-logs.
+
+        - alert: R2OpsClassANearFreeTier
+          expr: |
+            (
+              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+                >= 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+            )
+            and
+            (
+              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+                < max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+            )
+          for: 1h
+          labels:
+            severity: warning
+            component: r2-ops-budget
+          annotations:
+            summary: "R2 Class A operations are at 80% of the free million"
+            description: >-
+              This billing cycle has used 80% or more of the free 1M R2 Class A
+              operations. Crossing it costs the full $4.50 for the next block.
+              Cut operations before the cycle ends (the 22nd): the biggest
+              levers are in observability/loki.yaml (compaction_interval,
+              tsdb_shipper.resync_interval) and the s3-sync sidecar in
+              services/labs/claude-remote/values.yaml (MIRROR_EVERY).
+
+        - alert: R2OpsClassAProjectedOverFreeTier
+          # Only while the count is under 80% of the limit: Near and Over take
+          # it from there, so one situation is one message. The projection is
+          # absent in the first two days of a cycle.
+          expr: |
+            (
+              max by (job) (r2_ops_budget_class_a_projected{job="r2_ops_budget"})
+                >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+            )
+            and
+            (
+              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+                < 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+            )
+          for: 6h
+          labels:
+            severity: warning
+            component: r2-ops-budget
+          annotations:
+            summary: "R2 Class A operations are on pace to pass the free million"
+            description: >-
+              At the pace so far this billing cycle will end at about
+              {{ $value | humanize }} R2 Class A operations, over the free 1M,
+              though the count has not reached it yet. There is time to cut:
+              see R2OpsClassANearFreeTier for where.
+
+        - alert: R2OpsBudgetReadFailing
+          expr: max by (job) (r2_ops_budget_read_ok{job="r2_ops_budget"}) == 0
+          for: 7h
+          labels:
+            severity: warning
+            component: r2-ops-budget
+          annotations:
+            summary: "The R2 operations budget check cannot read the count"
+            description: >-
+              For 7 hours the check could not read this cycle's R2 operations:
+              the token, the Cloudflare API, or the answer's shape. This says
+              nothing about the count itself, and the alerts above judge the last
+              figure it did read. The r2-ops-budget Job's log in monitoring has
+              the reason.
+
+        - alert: R2OpsBudgetStale
+          # No successful read in 12h, whatever the reason, including a Job
+          # that cannot start because its token Secret does not exist. The
+          # absent_over_time half covers a success timestamp that never existed.
+          expr: |
+            (time() - max by (job) (r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}) > 43200)
+            or
+            absent_over_time(r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}[12h])
+          for: 30m
+          labels:
+            severity: warning
+            component: r2-ops-budget
+          annotations:
+            summary: "No successful R2 operations budget check for over 12 hours"
+            description: >-
+              Nothing has confirmed this cycle's R2 operation count for more than
+              12 hours. Check the r2-ops-budget CronJob in monitoring (failed
+              Jobs, CreateContainerConfigError for a missing token Secret, pod
+              logs) and the r2-ops-budget ExternalSecret. Until the Vault path
+              platform/r2-ops-budget (property api-token) exists, this is
+              expected.
