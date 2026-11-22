@@ -13,8 +13,8 @@ This is the "new proposal" that section 1 of the #2828 design
 asks for before S1. That design is research-only and authorises nothing, and
 it says any AppProject, window, MCP tool or production change needs a separate
 owner security GO. Steps 1 and 2 below were built on the owner's direction in
-a working session, without a written GO. That GO is still not written down;
-section 5, item 1, stays open.
+a working session. The owner gave the written GO for them as built on
+2026-11-22, in session (section 5, item 1).
 None of them applies a window: every step opens or checks a pull request that
 a person reviews and merges.
 
@@ -153,15 +153,15 @@ generic route.
 
 ## 5. Decisions for the owner
 
-1. **Record a GO for steps 1 and 2 as built** (section 1). Still open. They
-   were built on direction in session; the #2828 text asks for a written
-   security GO.
-2. **Dispatch credential.** Still open. (a) the existing broad token now, the
-   way the portal apply tool does, with the narrow `mctl-gitops-dispatch` App
-   as a follow-up; (b) move to the narrow App first, which needs its key held
-   where mctl-api can read it and a rotation path. The S3 plan assumes (a),
-   because it adds no new secret and the workflow's guards bound what a
-   dispatch can do. No explicit owner answer is recorded for it.
+1. **GO for steps 1 and 2 as built** (section 1). Given by the owner in
+   session on 2026-11-22 as an explicit yes to this exact item, and recorded
+   here at the owner's direction. It covers the two steps as built and
+   released, not a window on `main`.
+2. **Dispatch credential.** Decided 2026-11-22: (a), the existing broad token
+   now, the way the portal apply tool does, with the narrow
+   `mctl-gitops-dispatch` App as a follow-up. The residual risk in section 4,
+   item 1 is accepted for now: the workflow's own guards bound what a dispatch
+   can produce, not who can send it. Revisit when the narrow App is built.
 3. **MFA on the request.** Decided 2026-11-22 (the slices are described as
    agreed with the owner in mctl-api#1153): option (b), a dedicated kind
    `release.window` with an MFA decide page. This replaces the recommendation
@@ -173,7 +173,11 @@ generic route.
 4. **GO to implement the tool.** Given in session on 2026-11-22 for the
    release of S1 to S3 and for the first real run, both done (4.173.0, flag on
    through gitops#2909). Any real window on `main` is a separate decision.
-   Open follow-ups from the S3 review (mctl-api#1155, P3): settle on
-   `context.WithoutCancel` so a client disconnect does not leave the approval
-   `in_flight` for the 10-minute reclaim, and an `in_flight` row past
-   `expires_at` reports `ErrApprovalInFlight` instead of expired.
+   The S3 review follow-ups (settle detached from the request, expired
+   `in_flight` claim reports expired) are merged in mctl-api#1156 and go live
+   with the next mctl-api release.
+5. **Portal exposure.** Decided 2026-11-22: `mctl_get_sync_windows` and
+   `mctl_propose_release_window` are enabled on the Cloudflare MCP portal,
+   because the owner is its only user (mctl-api#1159). The portal switch
+   decides visibility only; the API's role check, the MFA page and the receipt
+   gate stay the access control.
