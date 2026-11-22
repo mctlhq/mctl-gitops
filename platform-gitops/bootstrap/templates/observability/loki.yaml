@@ -61,6 +61,13 @@ spec:
                 active_index_directory: /data/loki/index
                 cache_location: /data/loki/index_cache
                 shared_store: s3
+                # R2 bills Class A operations in whole blocks of 1M above the
+                # free 1M per cycle: the 2026-10-22..11-21 cycle used 1.08M
+                # and was charged $4.50 for the 79.6k over. The default 5m
+                # resync lists every daily index table on each pass. This is
+                # a single-replica Loki, so no other writer's index needs to
+                # be picked up faster than the ingester serves it itself.
+                resync_interval: 15m
               # Migrated 2026-07 from self-hosted MinIO to Cloudflare R2.
               # Bucket recreated on R2 as "loki" with a defensive lifecycle
               # rule, `backstop-expire-after-60-days` (read through the
@@ -118,7 +125,11 @@ spec:
             compactor:
               working_directory: /data/loki/compactor
               shared_store: s3
-              compaction_interval: 10m
+              # 10m -> 1h (same R2 Class A reason as resync_interval above):
+              # every pass walks all ~18 index tables, and retention is
+              # applied on the same cadence by default. Retention only has to
+              # keep up with 336h/720h, so hourly is ample.
+              compaction_interval: 1h
               retention_enabled: true
               retention_delete_delay: 2h
               retention_delete_worker_count: 150
