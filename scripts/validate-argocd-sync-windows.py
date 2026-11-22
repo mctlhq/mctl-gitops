@@ -32,7 +32,11 @@ Rules (each violation carries a code):
 A document that cannot be read or has the wrong shape is exit 2, never a pass.
 
 Usage:
-  validate-argocd-sync-windows.py [--selftest] FILE ...
+  validate-argocd-sync-windows.py [--selftest] [--expect-project P ...] FILE ...
+
+--expect-project P: the render must contain AppProject P. A render with no
+AppProject documents (a broken `helm template`) would otherwise read as
+"found: 0", which is "could not observe" passing as "observed clean".
 Exit: 0 clean, 1 violations, 2 unreadable input or selftest failure.
 """
 
@@ -95,6 +99,11 @@ def check_window(project: str, idx: int, w: object) -> list[str]:
     if not isinstance(d, str) or not DURATION.match(d):
         out.append(f"{where}: BAD_SCHEDULE duration {d!r} is not a duration like 2h or 1h30m")
     return out
+
+
+def projects_seen(docs: list[object]) -> set[str]:
+    return {(d.get("metadata") or {}).get("name") for d in docs
+            if isinstance(d, dict) and d.get("kind") == "AppProject"}
 
 
 def check_docs(docs: list[object]) -> tuple[list[str], int]:
@@ -187,6 +196,11 @@ def selftest() -> int:
     expect("timeZone is red", mut(timeZone="Europe/Berlin"), "TIMEZONE")
     expect("unknown field is red", mut(foo=1), "UNKNOWN_FIELD")
     expect("non-mapping window is red", [_project("apps", ["x"])], "SHAPE")
+    if projects_seen([_project("default", None)]) == {"default"} and not projects_seen([]):
+        print("selftest ok   projects_seen sees default and an empty render sees nothing")
+    else:
+        print("selftest FAIL projects_seen")
+        ok = False
     # Unreadable shape must be exit 2, not clean.
     try:
         check_docs([_project("apps", "oops")])
@@ -200,14 +214,27 @@ def selftest() -> int:
 def main(argv: list[str]) -> int:
     args = argv[1:]
     run_self = "--selftest" in args
-    paths = [a for a in args if a != "--selftest"]
+    expect: list[str] = []
+    paths: list[str] = []
+    it = iter(args)
+    for a in it:
+        if a == "--selftest":
+            continue
+        if a == "--expect-project":
+            expect.append(next(it, ""))
+        else:
+            paths.append(a)
     if run_self and selftest() != 0:
         print("selftest FAILED", file=sys.stderr)
         return 2
     if not paths:
         return 0 if run_self else 2
     try:
-        problems, count = check_docs(load(paths))
+        docs = load(paths)
+        missing = sorted(set(expect) - projects_seen(docs))
+        if missing:
+            raise Unreadable(f"expected AppProject(s) not in the render: {missing}")
+        problems, count = check_docs(docs)
     except Unreadable as e:
         print(f"unreadable: {e}", file=sys.stderr)
         return 2

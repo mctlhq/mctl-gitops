@@ -34,9 +34,11 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import glob
 import importlib.util
 import json
 import os
+import re
 import sys
 
 import yaml
@@ -67,6 +69,26 @@ def load_docs(paths: list[str]) -> list[dict]:
     return docs
 
 
+_SEGMENT = re.compile(r"\{\{\s*index \.path\.segments (\d+)\s*\}\}")
+_BASENAME = re.compile(r"\{\{\s*\.path\.basename\s*\}\}")
+
+
+def _expand(value: str, path: str) -> str:
+    """Resolve the go-template forms the ApplicationSets use; anything else is unreadable."""
+    segs = path.split(os.sep)
+
+    def seg(m: re.Match) -> str:
+        i = int(m.group(1))
+        if i >= len(segs):
+            raise Unreadable(f"template index {i} is outside path {path}")
+        return segs[i]
+
+    out = _BASENAME.sub(segs[-1], _SEGMENT.sub(seg, value))
+    if "{{" in out:
+        raise Unreadable(f"template expression left unresolved: {out!r}")
+    return out
+
+
 def inventory(docs: list[dict], repo_root: str) -> list[dict]:
     """Applications: static ones from the renders plus the two generators."""
     apps: list[dict] = []
@@ -83,31 +105,32 @@ def inventory(docs: list[dict], repo_root: str) -> list[dict]:
                          "dest_name": dest.get("name", "")})
         elif d.get("kind") == "ApplicationSet" and name:
             sets[name] = d
+    server = next((a["server"] for a in apps if a["server"]), "")
     for need, project in (("apps", "apps"), ("tenants", "platform")):
-        s = sets.get(need)
-        if s is None:
+        st = sets.get(need)
+        if st is None:
             raise Unreadable(f"ApplicationSet {need!r} not found in the render")
-        tp = ((s.get("spec") or {}).get("template") or {}).get("spec") or {}
+        spec = st.get("spec") or {}
+        tmpl = (spec.get("template") or {})
+        tp = tmpl.get("spec") or {}
         if tp.get("project") != project:
             raise Unreadable(f"ApplicationSet {need!r} project is {tp.get('project')!r}, expected {project!r}")
-    server = next((a["server"] for a in apps if a["server"]), "")
-    svc_root = os.path.join(repo_root, "platform-gitops", "services")
-    ten_root = os.path.join(repo_root, "platform-gitops", "tenants")
-    for root in (svc_root, ten_root):
-        if not os.path.isdir(root):
-            raise Unreadable(f"{root} is not a directory")
-    for team in sorted(os.listdir(svc_root)):
-        tdir = os.path.join(svc_root, team)
-        if not os.path.isdir(tdir):
-            continue
-        for svc in sorted(os.listdir(tdir)):
-            if os.path.isdir(os.path.join(tdir, svc)):
-                apps.append({"name": f"{team}-{svc}", "project": "apps", "namespace": team,
-                             "server": server, "dest_name": ""})
-    for t in sorted(os.listdir(ten_root)):
-        if os.path.isdir(os.path.join(ten_root, t)):
-            apps.append({"name": f"tenant-{t}", "project": "platform", "namespace": t,
-                         "server": server, "dest_name": ""})
+        name_t = (tmpl.get("metadata") or {}).get("name")
+        ns_t = (tp.get("destination") or {}).get("namespace")
+        srv_t = (tp.get("destination") or {}).get("server", server)
+        patterns = [(g.get("git") or {}).get("directories") or [] for g in spec.get("generators") or []]
+        dirs = [d.get("path") for ds in patterns for d in ds if isinstance(d, dict)]
+        if not name_t or not ns_t or not dirs or not all(isinstance(d, str) for d in dirs):
+            raise Unreadable(f"ApplicationSet {need!r}: name, namespace or directory generator not readable")
+        for pat in dirs:
+            found = sorted(g for g in glob.glob(os.path.join(repo_root, pat)) if os.path.isdir(g))
+            if not found:
+                raise Unreadable(f"ApplicationSet {need!r}: generator path {pat!r} matches no directory")
+            for g in found:
+                rel = os.path.relpath(g, repo_root)
+                apps.append({"name": _expand(name_t, rel), "project": project,
+                             "namespace": _expand(ns_t, rel), "server": _expand(srv_t, rel),
+                             "dest_name": ""})
     names = [a["name"] for a in apps]
     dup = sorted({n for n in names if names.count(n) > 1})
     if dup:
@@ -202,6 +225,43 @@ def selftest() -> int:
         print("selftest FAIL would_hit_if_in_default"); ok = False
     else:
         print("selftest ok   would_hit_if_in_default reports the chain member")
+    # Namespace-only and clusters-only selectors that reach the recovery chain
+    # must be reported as RECOVERY_CHAIN on their own, not only as other rules.
+    case("namespace-only window reaching the chain", "default",
+         {"kind": "deny", "schedule": "0 22 * * 5", "duration": "2h", "namespaces": ["argocd"]},
+         "refuse", "RECOVERY_CHAIN")
+    case("clusters-only window reaching the chain", "default",
+         {"kind": "deny", "schedule": "0 22 * * 5", "duration": "2h", "clusters": ["https://k"]},
+         "refuse", "RECOVERY_CHAIN")
+    if {a["name"] for a in render(_fixture(), "apps", {**good, "applications": ["labs-bot"], "clusters": ["https://k"]})["matched"]} \
+            != {"labs-bot", "labs-web"}:
+        print("selftest FAIL clusters selector OR-match"); ok = False
+    else:
+        print("selftest ok   clusters selector widens the match set")
+    # Names and namespaces follow the ApplicationSet templates, not a built-in pattern.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        for d in ("platform-gitops/services/t1/s1", "platform-gitops/tenants/x1"):
+            os.makedirs(os.path.join(tmp, d))
+        def aset(name, project, path, tname, ns):
+            return {"kind": "ApplicationSet", "metadata": {"name": name}, "spec": {
+                "generators": [{"git": {"directories": [{"path": path}]}}],
+                "template": {"metadata": {"name": tname}, "spec": {"project": project,
+                             "destination": {"server": "https://k", "namespace": ns}}}}}
+        docs = [aset("apps", "apps", "platform-gitops/services/*/*",
+                     "svc-{{ index .path.segments 3 }}-{{ index .path.segments 2 }}", "{{ index .path.segments 2 }}"),
+                aset("tenants", "platform", "platform-gitops/tenants/*", "ten-{{ .path.basename }}", "{{ .path.basename }}")]
+        got = {a["name"]: a["namespace"] for a in inventory(docs, tmp)}
+        if got != {"svc-s1-t1": "t1", "ten-x1": "x1"}:
+            print("selftest FAIL template-derived inventory", got); ok = False
+        else:
+            print("selftest ok   inventory follows the ApplicationSet templates")
+        docs[0]["spec"]["generators"][0]["git"]["directories"][0]["path"] = "platform-gitops/nope/*"
+        try:
+            inventory(docs, tmp)
+            print("selftest FAIL generator matching nothing must be unreadable"); ok = False
+        except Unreadable:
+            print("selftest ok   generator matching no directory is unreadable")
     # Inventory that cannot be built is unreadable, never shorter.
     try:
         inventory([], "/nonexistent")
