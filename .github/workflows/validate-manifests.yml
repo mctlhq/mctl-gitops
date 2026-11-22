@@ -659,6 +659,18 @@ jobs:
             --namespace argocd > "$tmpdir/argocd.yaml"
           python3 -m pip install --quiet pyyaml
           scripts/validate-argocd-sync-windows.py --selftest "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+          # Render-only proposal tool (writes nothing): selftest, then two
+          # live-data controls. A recovery-chain window must be refused (exit
+          # 1); a window on a real apps service must be accepted (exit 0), so
+          # the tool is shown to go red and green on the real inventory.
+          scripts/render-sync-window.py --selftest --repo-root . --project apps \
+            --application labs-mctl-telegram --schedule "0 22 * * 5" --duration 48h \
+            "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml" > /dev/null
+          rc=0
+          scripts/render-sync-window.py --repo-root . --project default --application root-app \
+            --schedule "0 22 * * 5" --duration 2h \
+            "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml" > /dev/null || rc=$?
+          test "$rc" = 1 || { echo "recovery-chain window was not refused (rc=$rc)"; exit 1; }
 
       # .github#50: both flag states are rendered explicitly with --set, so
       # the assertion does not depend on the committed default (enabled
