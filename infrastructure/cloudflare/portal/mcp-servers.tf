@@ -286,3 +286,32 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "api" {
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
+
+# The seventh upstream: a read-only Argo CD MCP server. Registered by dynamic client
+# registration like projects: no auth_credentials and no client_secret (supplying
+# either opts a server into manual mode, whose tool catalogue is captured once and
+# never refreshed). The origin sits behind a Cloudflare Access application with
+# Managed OAuth and DCR (../account/argocd-mcp.tf).
+#
+# It is deliberately NOT in mapping.json / catalogue.json yet. mcp-portal.tf builds
+# servers[] from the mapping and needs the synced catalogue, which exists only after
+# an admin completes the upstream OAuth login once ("Authenticate server") and the
+# first sync runs. Until then the server sits in `waiting` and the portal is unchanged.
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "argocd" {
+  account_id = var.account_id
+  id         = "argocd"
+  name       = "Argo CD, read-only (argocd.mctl.ai)"
+  hostname   = "https://argocd.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Read-only Argo CD: resource tree, events, live resources, logs. Registered by DCR; the origin is behind Access with Managed OAuth. Writes go through GitOps, never through this server."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # mcp-portal.tf writes the mapping; declaring updated_tools here too would give
+    # this root two writers of one mapping.
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}
