@@ -32,7 +32,7 @@ locals {
   # IDs only: Cloudflare renames groups from time to time, and a rename does not
   # change what a token can do.
   pg = {
-    account_analytics_read        = "00000000000000000000000000000000" # PLACEHOLDER: replaced with the live ID once the plan reports it
+    account_analytics_read        = "b89a480218d04ceb98b4fe57ca29dc1f"
     account_api_tokens_read       = "eb56a6953c034b9d97dd838155666f06"
     account_settings_read         = "c1fde68c7bcc44588cbb6ddbc16d6480"
     ai_gateway_read               = "4dc8917b4b40457d88d3035d5dadb054"
