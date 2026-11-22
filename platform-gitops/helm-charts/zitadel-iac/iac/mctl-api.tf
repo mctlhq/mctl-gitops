@@ -296,18 +296,28 @@ resource "zitadel_application_oidc" "mctl_api_deploy_approval" {
 # The aud check is why this is a client of its own and not a redirect on
 # mctl-api-deploy-approval: a token issued for any other page is refused.
 # Same shape as mctl-api-deploy-approval otherwise: client secret plus PKCE,
-# one redirect, opaque (BEARER) access token. Do not switch it to JWT. Not in
+# two redirects, opaque (BEARER) access token. Do not switch it to JWT. Not in
 # ZITADEL_HOOK_CLAIM_CLIENT_IDS (customers.tf).
+#
+# The second redirect is the release-window page (mctl-api S2, sync-window
+# write path): the same decision, the same fresh sign-in with a second factor,
+# for a different kind of request (one Argo CD deny window). It is the same
+# client on purpose: the page's aud/azp check names this client, and the two
+# pages stay apart on the mctl-api side by their own callback path, cookie and
+# flow kinds, not by a second client.
 resource "zitadel_application_oidc" "mctl_api_release_approval" {
   org_id     = local.mctl_org_id
   project_id = zitadel_project.mctl_api.id
   name       = "mctl-api-release-approval"
 
-  app_type                    = "OIDC_APP_TYPE_WEB"
-  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
-  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
-  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
-  redirect_uris               = ["https://api.mctl.ai/release/approvals/callback"]
+  app_type         = "OIDC_APP_TYPE_WEB"
+  auth_method_type = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types      = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types   = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris = [
+    "https://api.mctl.ai/release/approvals/callback",
+    "https://api.mctl.ai/release/window-approvals/callback",
+  ]
   access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
   dev_mode                    = false
   id_token_userinfo_assertion = true
