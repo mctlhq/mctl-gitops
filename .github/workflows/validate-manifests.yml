@@ -645,6 +645,21 @@ jobs:
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
+      # AppProject spec.syncWindows guard (proposal issue-2828, 2.1/3.2/8.2).
+      # No windows exist today; this keeps a hand-written or tool-authored one
+      # from locking root-app (project default), emitting an allow, opening
+      # manualSync, or selecting by glob. --selftest first: green on a correct
+      # window, red on each mutation.
+      - name: AppProject sync windows stay deny-only and out of default
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          helm template argocd platform-gitops/argocd -f platform-gitops/argocd/values.yaml \
+            --namespace argocd > "$tmpdir/argocd.yaml"
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-argocd-sync-windows.py --selftest "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+
       # .github#50: both flag states are rendered explicitly with --set, so
       # the assertion does not depend on the committed default (enabled
       # since the owner-approved rollout). On: the usage-writer ExternalSecret
