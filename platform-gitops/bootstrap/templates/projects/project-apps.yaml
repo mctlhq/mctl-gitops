@@ -54,3 +54,11 @@ spec:
       - kind: ServiceAccount
       - group: networking.k8s.io
         kind: NetworkPolicy
+
+  # Sync windows (proposal issue-2828): deny-only, never in project default.
+  syncWindows:
+    - kind: deny
+      schedule: 0 3 1 1 *
+      duration: 1h
+      applications:
+        - labs-portfolio
