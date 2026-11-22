@@ -1,19 +1,73 @@
 # Design: issue-900-feat-governance-slice-2-action-semantics
 
+## Refreshed 2026-11-22
+
+Re-baselined against mctl-api `main` at `80f7a011c975422a6bb632022f5538d59772928f`
+(release 4.173.0 merge) and mctl-gitops `main` at
+`b63db307c6106e520ab94d70fe1b7420adc6fdca`, both read from git after a fetch.
+
+What changed, and nothing else:
+
+- Current state, `/approve`: rewritten from "decides with `DecideActionApproval`
+  from an admin bearer call" to the decide-page-only model in force since
+  mctl-api 4.170.0 (PRs #1127 and #1130, 2026-11-18). A bearer or operations
+  call no longer decides a DevLoop approval; only the decide page, after a
+  fresh sign-in that reports a second factor, does. `DEVLOOP_BEARER_APPROVE_ENABLED`
+  is a break-glass and is OFF.
+- New section "Relation to the decide page" (cancel, request-changes and defer
+  are never `aar_` decisions and must not become a bearer-callable decision
+  path).
+- Tasks T3-T5 (`tasks.md`) and tests T3-T5 updated to match; section 5 and the
+  Platform impact risks gained the matching constraints. Scope, route shape,
+  store schema and cancel semantics are unchanged.
+- Superseded: any earlier approval of this proposal was bound to the digest of
+  the text before this edit. The digest of the three documents changes with this
+  refresh, so that earlier digest/grant binding no longer matches and does not
+  carry over; a new decision on the new digest is the owner's, through its own
+  PR. `.status.yaml` is deliberately untouched here.
+- Not re-verified in this refresh: the deployed env values in "Deployed state"
+  (`MCTL_AGENTS_APPROVE_LEGACY_APPROVER`, `MCTL_APPROVAL_BINDING`) are carried
+  over from the earlier baseline.
+
 ## Current state
 
 Routes (`internal/api/router.go`, write group around lines 742-750):
 
 - `POST /api/v1/agents/dev-loop/{workflow_id}/approve` -> `ApproveDevLoopWorkflow`
   (`internal/api/handlers_dev_loop.go`). Gated by `requireTemporalAdmin`, then
-  `isHumanAdmin` (refusal `approval_decider_forbidden`). `decideDevLoopApproval`
-  resolves the workflow to its one open `we_` execution via
+  `isHumanAdmin` (refusal `approval_decider_forbidden`). Since 4.170.0 this
+  route no longer decides for a bearer caller: `mayDecideDevLoop` is true only
+  under `withDecidePage` (the decide page calls the handler in-process) or when
+  the break-glass `DEVLOOP_BEARER_APPROVE_ENABLED` is on (OFF in production).
+  Any other call that would decide a pending grant, or record a legacy approval
+  with no grant, is refused 403 `decide_page_required`, audited as denied
+  (`refuseDevLoopBearerDecision`), carrying the grant's `decide_url` when the
+  page is enabled. A grant already approved on the page is still re-sent as its
+  `approval_ref`: that call decides nothing and only re-delivers a lost signal.
+  When it does decide (page or break-glass), `decideDevLoopApproval` resolves
+  the workflow to its one open `we_` execution via
   `WorkItems.OpenExecutionsOfEngineRun(EngineTemporal, workflowID)`, reads the
   newest `mctl-agents-approve` grant via `WorkItems.ActionApprovals`, applies
   the Slice 1 binding (`bindingGate`, `bindingMatches`, 409
   `approval_context_changed` with `current_approval_ref`) and decides a pending
   grant with `DecideActionApproval`. Closed states map through
   `closedApprovalCodes`.
+- The generic `POST /api/v1/action-approvals/{id}/decision`
+  (`DecideActionApproval`, `handlers_action_approvals.go`) refuses an
+  `approve` of a pending `mctl-agents-approve` grant the same way (403
+  `decide_page_required`) unless `mayDecideDevLoop`. A `deny` stays open: the
+  decide page's Reject is a `deny` through this handler, and refusing a DevLoop
+  needs no proof of a person. A direct `mctl-agents-approve` operation is
+  likewise refused without the page (`mayDirectApproveProposal`, #1130).
+- The decide page (`internal/api/handlers_devloop_decide.go`, mctl-api#964,
+  `/devloop/decide/{workflow_id}`): public routes; the person signs in to the
+  identity provider fresh (`prompt=login`, `max_age=0`), the ID token's `amr`
+  must contain `mfa`, only a human admin is offered a decision, and the link's
+  binding must match the grant's current context. Its only two decisions are
+  Approve (in-process `ApproveDevLoopWorkflow`) and Reject (`deny`). It offers
+  no cancel, request-changes or defer. Covered by
+  `handlers_devloop_decide_test.go`, `handlers_approval_grant_decide_page_test.go`
+  and the bearer-refusal cases in `handlers_dev_loop_test.go`.
 - `POST /api/v1/agents/dev-loop/{workflow_id}/abandon` -> `AbandonDevLoopWorkflow`.
   Gated by `requireTemporalAdmin` only (any admin, including the service
   principal). Body `{"reason": <free text, required>}` with
@@ -89,6 +143,37 @@ group as `/abandon` (same rate-limit bucket), plus reads
 any other key that does not belong to the action.
 
 Decoded with `refuseIdentityFields` and `DisallowUnknownFields`; no free text.
+
+### 1a. Relation to the decide page
+
+Approving a DevLoop is decided on the decide page only; this slice must not
+reopen a bearer path to that decision.
+
+- `request_changes`, `defer` and `request_cancel` are never `aar_` decisions.
+  None of them calls `DecideActionApproval`, `ApproveDevLoopWorkflow` or the
+  decide page's approve, and none sets `approved_by`/`decided_by` or moves a
+  grant to a decided state. They are owner-triage records and one abandon
+  signal, nothing more.
+- They must not become a bearer-callable owner decision path. A bearer token is
+  also held by AI clients, so a call that carries only a token cannot prove a
+  person acted. The owner-action route therefore never approves, and its
+  `request_cancel` is the only action that has an effect on the run: it ends a
+  run (never implements one) through the one abandon signal path, is
+  idempotent, and is refused for relayed, surface and service callers. A
+  cancel can only stop work, never start or authorize it, which is why it does
+  not need the decide page's second factor; a future action that would
+  authorize work (approve, or anything that spends a grant) belongs on the
+  decide page and in no case on this route.
+- The route never returns `decide_url` as a way to act, and its refusals never
+  suggest approving by bearer. When a card needs the person to approve, it
+  hands them `decide_url` from `GET /api/v1/agents/dev-loop/{workflow_id}/approval`
+  and does not open it on their behalf.
+- Reject on the decide page stays a `deny` of the grant and is not an owner
+  action. `request_changes` is deliberately not a deny: the grant stays
+  `pending`.
+- The observe-mode `bindingGate` audit and the `decide_page_required` refusal
+  are independent: setting `DEVLOOP_BEARER_APPROVE_ENABLED` changes nothing on
+  this route, and a test pins that.
 
 ### 2. Authority
 
@@ -292,3 +377,7 @@ Add the three routes to `internal/openapi/openapi.yaml` and `embed_test.go`.
     always signalling the stored `run_id`.
   - Relayed humans cannot use these controls; the Telegram renderer must
     deep-link to a direct session. Recorded as an open question.
+  - A later change could be tempted to let `request_changes`/`defer` or an
+    "approve" action ride on this bearer-callable route. Mitigation: section 1a
+    and tests T3/T5 pin that no owner action decides an `aar_`, with and
+    without `DEVLOOP_BEARER_APPROVE_ENABLED`.
