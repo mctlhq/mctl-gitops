@@ -38,7 +38,7 @@ BASE = ["--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set",
         "--set", "mctlGlovo.consent=true", "--set", "mctlGlovo.control=true",
         # The committed values move as the cutover is lit; pin the switch these cases
         # build on, so a flip of linkLogin or ingress does not change what they prove.
-        "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false", "--set", "mctlGlovo.linkAttemptsPerHour=0"]
+        "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false", "--set", "mctlGlovo.linkAttemptsPerHour=0", "--set", "mctlGlovo.keepaliveInterval="]
 HOSTS = "reservedPlatformHosts:\n  glovo.mctl.ai: [mctl-glovo]\n"
 PROXIES = ["--set", "mctlGlovo.trustedProxies=10.42.0.0/16"]
 failures: list[str] = []
@@ -139,6 +139,19 @@ committed_attempts = yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "v
 check(committed_attempts == 15, f"committed link attempts per hour is {committed_attempts!r}, want 15")
 r = helm(SVC, "--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
 check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR") == "15", "committed render does not carry the 15 an hour cap")
+
+# 3c. hosted keepalive: empty keeps it off (no variable), whole hours 1h..24h are
+# rendered, anything else is refused at render time.
+check("GLOVO_C2_KEEPALIVE_INTERVAL" not in server_env(docs(helm(SVC, *BASE))), "keepalive variable set with the value empty")
+for n in ("1h", "12h", "24h"):
+    r = helm(SVC, *BASE, "--set", f"mctlGlovo.keepaliveInterval={n}")
+    check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_KEEPALIVE_INTERVAL") == n, f"keepalive {n} not rendered")
+for bad in ("0h", "25h", "30m", "12", "1.5h", "abc"):
+    fails(SVC, *BASE, "--set", f"mctlGlovo.keepaliveInterval={bad}", why="keepaliveInterval value must be empty")
+committed_ka = yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "values.yaml").read_text())["mctlGlovo"].get("keepaliveInterval")
+check(committed_ka == "12h", f"committed keepalive interval is {committed_ka!r}, want 12h")
+r = helm(SVC, "--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
+check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_KEEPALIVE_INTERVAL") == "12h", "committed render does not carry the 12h keepalive")
 
 # 4. link login
 r = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true")
