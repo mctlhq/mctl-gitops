@@ -139,6 +139,20 @@ def run_guard(files, regex=None):
         return r.returncode, out.read_text()
 
 
+def merge_calls(text):
+    """Steps of the auto-merge job whose script runs `gh pr merge`.
+
+    main has a merge queue. `gh pr merge --delete-branch` is refused under one,
+    and without the flag it enqueues with GITHUB_TOKEN, an entry that starts no
+    merge_group run and so sits in AWAITING_CHECKS (#2780, #2792). The job must
+    not merge; the queue entry is made with the App token, on main
+    (scripts/release-bump-enqueue-wait.sh, tools/merge-gitops-pr.sh).
+    """
+    doc = yaml.safe_load(text)
+    return [st.get("name", "?") for st in doc["jobs"]["auto-merge"]["steps"]
+            if re.search(r"gh\s+pr\s+merge", st.get("run", ""))]
+
+
 def main():
     pat = pattern()
     bad = failures(pat)
@@ -170,6 +184,16 @@ def main():
     # scripts/release-bump-enqueue-wait.sh (tests/test_release_bump_enqueue.py).
     doc = yaml.safe_load(WF.read_text())
     assert "release-bump/" not in doc["jobs"]["auto-merge"]["if"], "release-bump PRs reach auto-merge again"
+    # The job does not merge (merge queue on main). Proven both ways: the real
+    # workflow has no `gh pr merge` step, and the pre-fix step, put back, is
+    # caught. Without the second half this would also pass on a broken matcher.
+    assert merge_calls(WF.read_text()) == [], f"auto-merge merges again: {merge_calls(WF.read_text())}"
+    runs = [st.get("run", "") for st in doc["jobs"]["auto-merge"]["steps"]]
+    assert not [r for r in runs if "--delete-branch" in r], "--delete-branch is back in a step of the auto-merge job"
+    pre_fix = WF.read_text().rstrip("\n") + (
+        "\n      - name: Merge PR\n        run: |\n"
+        "          gh pr merge \"$PR\" \\\n            --merge --delete-branch\n")
+    assert merge_calls(pre_fix) == ["Merge PR"], "the pre-fix merge step is not detected"
     print("ok")
 
 

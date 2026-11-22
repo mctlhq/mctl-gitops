@@ -337,9 +337,9 @@ WIRING_MUTANTS = [
     ("the enqueue reads a non-App step output", RD,
      "          GH_TOKEN: ${{ steps.token.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}", "          GH_TOKEN: ${{ steps.ready.outputs.token }}\n          PR: ${{ needs.publish-pr.outputs.pr }}"),
     ("enqueue back in auto-merge.yml with GITHUB_TOKEN", "auto-merge.yml",
-     "      - name: Merge PR\n",
+     "      - name: Report that the merge is left to the queue\n",
      "      - name: Enqueue\n        run: gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'\n"
-     "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      - name: Merge PR\n"),
+     "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      - name: Report that the merge is left to the queue\n"),
     ("App key minted in a workflow_call file", "release-bump-enqueue.yml", None, REUSABLE),
     ("release workflow made callable", RD, "on:\n  workflow_dispatch:\n", "on:\n  workflow_call:\n  workflow_dispatch:\n"),
     ("enqueue-bump turned back into a reusable-workflow call", GB,
