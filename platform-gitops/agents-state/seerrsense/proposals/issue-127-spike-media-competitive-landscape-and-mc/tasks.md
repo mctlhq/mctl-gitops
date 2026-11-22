@@ -1,40 +1,91 @@
 # Tasks: issue-127-spike-media-competitive-landscape-and-mc
 
-Tasks 1-8 are RESEARCH: read-only, with isolated local fixtures at most. Tasks F1-F4 are FUTURE implementation. They are listed so that the scope is explicit, and they may start only after independent review and an explicit owner GO. No task deploys, touches household media or production data, creates a repo, or starts the implementer.
+The tasks fall into three groups:
+- RESEARCH (R1-R9): delivered in this revision and marked done, with a pointer to the design section that holds the result.
+- EXPERIMENT (X1-X3): proposed next. Each is isolated, uses fixtures only, and needs owner authorisation before it runs.
+- FUTURE (F1-F5): implementation, and only after an independent review and an explicit owner GO.
 
-## Research
-- [ ] 1. Verify the competitor matrix (design.md section 1) at the primary source. For each project, record the canonical repo, the latest tag and its date, the commit SHA inspected, the SPDX in its LICENSE file, CLA presence, release cadence (last 5 releases), open security advisories, and whether MCP is released, gated or planned, with the file or setting that proves it. Resolve the HolyArrs version inconsistency (1.1.0/1.1.3/1.1.4/1.2.0) and the Reelix canonical repo. Ask the owner for URLs for Streamline, MediaStack MCP and Mediabox MCP. Do a search pass for stronger alternatives. — DoD: every matrix cell is backed by a link with a tag/commit/date or marked U, and no "secondary" label remains on a material claim.
-- [ ] 2. Analyse license obligations (depends on 1). Cover AGPL-3.0 section 13 for B (network use, unmodified) vs C (fork), the MovieClaw commercial restriction, the GPL-3.0 Reelix, the HolyArrs CLA, and the seerrsense MIT (`LICENSE`) vs ISC (`package.json`) inconsistency. — DoD: a short table of permitted options per license, flagged "not legal advice", with a recommendation for fixing the seerrsense metadata.
-- [ ] 3. Collect the owner hardware baseline. With the owner's help, record the Mac mini RAM, macOS version, container runtime (Colima/Docker Desktop/native), the services running today with their versions, and idle RSS. If this cannot be observed, record it as unknown. — DoD: a baseline record with method and date, or an explicit "not observed" entry.
-- [ ] 4. Write the benchmark harness and run it in isolation, if the environment permits (depends on 3). Build compose projects for the current stack vs HolyArrs on a synthetic library, following the methodology in design.md section 7. — DoD: raw outputs committed to the evidence report, each number labelled measured or upstream claim. If it cannot run, the harness and its commands are documented as a follow-up.
-- [ ] 5. Probe the HolyArrs API and MCP in isolation (depends on 1, 4). Using fixture data only, enumerate the MCP tools and API endpoints, the auth model (API key vs OAuth), the scope granularity, and the Seerr-compatibility claims. Check whether the metadata server is required and what it receives. — DoD: a capability and security note that feeds back into B's scores.
-- [ ] 6. Rescore the decision matrix (depends on 1-5). Update the scores in design.md section 2, rerun sensitivity scenarios s1-s3, and finalise GO/NO-GO/CONDITIONAL per strategy. — DoD: a matrix with final scores, the deltas against the provisional scores, and their causes.
-- [ ] 7. Review MCP security and UX for the future write model (design.md section 5) against the existing code. Check `src/auth/store-pg.ts` grants storage, `src/auth/config.ts` additive scopes, `guard.ts` reuse for indexer/downloader URLs, prompt-injection handling of release titles, rate limits, and audit fields. Confirm compatibility with #120. — DoD: a reviewed threat list with a mitigation for each threat, and confirmation that no existing tool, schema or scope changes.
-- [ ] 8. Assemble the evidence report and the owner decision brief (depends on 6, 7). — DoD: one report linked from this proposal containing the matrix, benchmark, license note, risks, P1-P3 gaps, PDLC metrics, early-user questions and the mctl-media repo recommendation. The proposal stays status=proposed.
+No task deploys anything, touches household media, volumes or production data, creates a repo, contacts users, starts the implementer, or approves this proposal. The proposal stays status=proposed.
 
-## Future implementation (only after owner GO)
-- [ ] F1. Option A: add read-only status adapters (queue, disk, library) behind a `MediaBackend` port in `src/providers/`. `SeerrClient` stays behaviour-identical. — DoD: existing tests pass unchanged, and the new tools are read-only and additive.
-- [ ] F2. Add the plan/grant model (depends on F1): the `plan_acquisition`, `execute_plan` and `get_acquisition_status` tools; additive scopes; a hashed single-use grant table. — DoD: tests T1-T12 pass.
-- [ ] F3. Build the fixture vertical slice (depends on F2): a synthetic Torznab server, mock qBittorrent and mock Jellyfin, and a hardlink import into a temp dir. — DoD: the end-to-end fixture test passes in CI with no network egress.
-- [ ] F4. Decide whether a standalone execution agent or engine and the `mctlhq/mctl-media` repo are warranted (depends on 6 and F3 results). — DoD: an owner decision recorded. No repo is created without it.
+## Research (delivered)
+- [x] R1. Competitor matrix for all nine candidates at tag, with SHA, date, SPDX, contributors, releases, CI/security and MCP class. Ambiguous names (MediaStack MCP, Mediabox MCP, Reelix) are resolved, each with its alternative listed. — DoD: design.md section 1 and Evidence annex E1-E14. Met.
+- [x] R2. HolyArrs MCP re-assessment against tag 1.2.0 code. Covers: `ai_apps` gate, PKCE S256, DCR, single `mcp` scope, no refresh grant, confirm token (5 min), tools vs permission groups reconciled, the Seerr-compat meaning, metadata egress and opt-out. — DoD: design.md section 1 (E2-E6). Met. Live interoperability remains unverified and goes to X1.
+- [x] R3. Auditable weighted matrix for Baseline, A, B, C, D and the hybrid H. Per-cell rationale, low/high ranges, three weight scenarios, sampled first-place share and single-cell rank reversals. — DoD: design.md section 2. Met.
+- [x] R4. Experiment and business verdicts given separately. Gates G1-G6 are demonstrable and replace the age and maintainer thresholds. — DoD: design.md section 2. Met.
+- [x] R5. Native replacement scope and complexity, including Russian release labels and the macOS path-mapping risk. — DoD: design.md section 3. Met.
+- [x] R6. Data-plane security model: preview vs trusted approval, binding, atomic consume, outbox, TOCTOU, revocation, local agent enrollment, paths, offline behaviour. — DoD: design.md section 5. Met. No write tools added.
+- [x] R7. Identity compatibility tests I1-I6 for the #120 two-door model. — DoD: design.md section 6. Met. No identity change.
+- [x] R8. Effort by subsystem with ranges, DevLoop cost assumptions, parallel vs sequential work, and risk-ranked findings. — DoD: design.md section 8. Met.
+- [x] R9. Licensing triage per integration boundary (not legal advice). The seerrsense MIT/ISC mismatch is verified. — DoD: design.md section 9. Met.
+
+## Experiments (proposed; each needs owner authorisation)
+- [ ] X0. Owner host baseline, read-only, done by or with the owner. Record:
+  - Mac mini RAM, macOS version, container runtime and VM size;
+  - services and versions running today;
+  - `docker stats --no-stream` and `ps -o rss,comm` per service, VM RSS from Activity Monitor or `top -l 1`, swap.
+
+  DoD: a dated baseline record, or an explicit "not observed".
+- [ ] X1. Isolated benchmark and security probe (depends on X0).
+  - Setup:
+    - Separate compose projects, each on a network with `internal: true` (no egress), with digests pinned: current stack (Seerr, Radarr, Sonarr, Prowlarr, qBittorrent mock), HolyArrs 1.2.0, Streamline v3.4.0, and optionally Mediarium v4.1.0.
+    - Volumes are fresh temp dirs only; no household volume is ever mounted.
+    - HolyArrs `HOLYARRS_METADATA_URL` points at a local stub that records every request.
+    - Fixtures: a synthetic library (500 movies, 50 series of tiny files) and the synthetic Torznab server from section 7.
+  - Commands, recorded verbatim:
+    - `docker image inspect -f '{{.Size}}'` and `docker manifest inspect -v`, for uncompressed and compressed size;
+    - `docker stats --no-stream` at idle (10 minutes after start) and during a scripted 30-minute search+import loop, sampled every 5 s;
+    - VM RSS measured separately;
+    - search latency p50/p95 with `hyperfine` against each REST or MCP endpoint;
+    - G1 runs of the vertical slice;
+    - G2 `kill -9` drills and a disk-full drill (a small loop-mounted volume);
+    - G3 OAuth/PKCE conformance and confirm-token replay checks;
+    - G4 upgrade across two tags;
+    - capture of the stub's requests for G6.
+
+  DoD: raw outputs in the evidence report, each number labelled "measured (host, date, version)". Results are compared to E4 upstream claims. If the environment does not permit a run, the harness is committed to the evidence report and its outcomes are marked unknown.
+- [ ] X2. Parser corpus. Write a synthetic corpus of about 150 release names covering:
+  - Cyrillic and Latin titles, Dub/MVO/DVO/AVO/Rus+Eng labels, editions;
+  - size and quality tokens, season packs vs single episodes.
+
+  Run it through the parser tests at tag of HolyArrs `internal/core/releasename`, Streamline `internal/library`, Mediarium `internal/parser` and Reelix `crates/reelix-parser`, in isolated containers. DoD: a per-parser accuracy table with an error taxonomy, and a recommendation on whether D can borrow a design (Go) or must start clean.
+- [ ] X3. Rescore (depends on X1, X2). Update the section 2 cells from measured data, rerun s0-s3 and the sampling, and report score deltas with causes. Turn the verdicts into a business recommendation for the owner. DoD: an updated matrix with a delta table, and the proposal still status=proposed.
+
+## Future implementation (only after owner GO; each also gated on #120 settling)
+- [ ] F1. Option A, read-only: add a `MediaBackend` port in `src/providers/` and read-only queue, disk and library adapters. `SeerrClient` stays behaviour-identical. DoD: existing tests pass unmodified, and the new tools are read-only and additive.
+- [ ] F2. Preview/approval/execute model (depends on F1). Adds `plan_acquisition`, a first-party approval page, `execute_plan(approval_id)`, `get_acquisition_status`, the additive tables (`plans`, `approvals`, `executions`, `outbox`, `agents`) and additive scopes. DoD: T1-T14 and I1-I6 pass.
+- [ ] F3. Local agent, T1 topology (depends on F2): enrollment, signed outbound channel, closed job schema, path validation, offline expiry. DoD: T15-T17 pass.
+- [ ] F4. Engine adapter for the option chosen in X3 (`HolyArrsBackend`, `StreamlineBackend`, or the D/H engine). DoD: the vertical slice passes against it in CI with no egress, and gates G1-G6 pass.
+- [ ] F5. Decide on `mctlhq/mctl-media` (depends on X3, and on F3 if needed). DoD: an owner decision is recorded. No repo is created without it.
+- [ ] F6. Follow-up hygiene, independent of the strategy: align the seerrsense `package.json` license with `LICENSE` (MIT). DoD: a separate PR, reviewed by the owner.
 
 ## Tests
 Research verification:
-- [ ] T0. Every material claim in the evidence report has a primary link with a tag/commit/date, and a spot check of 5 random claims by a reviewer matches its source.
+- [ ] T0. A reviewer spot-checks 5 random claims in design.md section 1 against the cited tag/SHA/path. All 5 match, or the mismatches are recorded as corrections.
 
-Future vertical slice (fixtures only):
-- [ ] T1. Happy path: a lawful test title is resolved, found absent from the library, a release is selected from the synthetic indexer, the plan is previewed and confirmed, the mock download runs, the import happens, and the library shows the item.
-- [ ] T2. Duplicate: a title already in the library or already requested yields no plan, with a refusal (mirrors `requestMediaSafely`).
-- [ ] T3. Missing episode: a season request where the fixture indexer lacks one episode yields a plan listing the gap, with no silent partial success.
-- [ ] T4. Failed download: the mock client reports an error, the retry is bounded, and the final status is `failed` and observable.
-- [ ] T5. Insufficient space: the preflight refuses before any grab.
-- [ ] T6. Wrong language/quality: the fixture release labelled with the wrong audio language (for example a Russian "DUB" vs a required original track) or below the cutoff is never selected.
-- [ ] T7. Expired grant: execute is refused after expiry.
-- [ ] T8. Revoked grant or session: execute is refused after `/oauth/revoke` or subject revocation.
-- [ ] T9. Cross-tenant: subject B cannot plan against, execute or read status for subject A's plan or backend.
-- [ ] T10. Replay: a second execute with the same grant returns the original result and performs no second grab. A grant with a mismatched plan digest is refused.
-- [ ] T11. Prompt injection: a release title containing instructions is returned as inert, capped data and never alters tool behaviour or descriptions.
-- [ ] T12. Compatibility: the existing `whoami`, `search_media`, `resolve_media`, `get_media` and `request_media` tests in `tests/integration.test.ts` and `tests/oauth.test.ts` pass unmodified.
+Future vertical slice (fixtures only; the same fixtures for every option):
+- [ ] T1. Happy path: the public-domain title is resolved, found absent, the correct release is chosen from 5 synthetic releases, previewed, approved by a human, mock-downloaded, hardlink-imported, and shown in the Jellyfin mock as `imported`.
+- [ ] T2. Duplicate: a title already in the library or already requested produces a refusal and no plan (mirrors `requestMediaSafely`).
+- [ ] T3. Missing episode: a season where the fixture lacks one episode produces a plan that lists the gap. No silent partial success.
+- [ ] T4. Failed download: the mock reports an error, retries are bounded, and the final status `failed` is observable.
+- [ ] T5. Insufficient space: the preflight refuses before any grab. A space change between approval and dispatch yields `needs_reapproval`.
+- [ ] T6. Wrong language/quality: a release labelled with the wrong audio track, or below the cutoff, is never selected.
+- [ ] T7. Expired approval: execute is refused after expiry.
+- [ ] T8. Revoked session, subject or principal: execute and agent dispatch are both refused after revocation, including for an already-approved plan.
+- [ ] T9. Cross-tenant and cross-door: subject B cannot read, approve or execute subject A's plan. A door-2 principal cannot touch a door-1 plan, and the reverse also holds.
+- [ ] T10. Replay: a second execute with the same approval returns the original execution and performs no second grab. A mismatched digest, backend or agent is refused.
+- [ ] T11. Preview is not consent: `execute_plan` called with a `preview_id`, or with an approval not created by a human first-party action, is refused.
+- [ ] T12. Concurrency: two simultaneous executes on one approval result in exactly one execution (atomic consume).
+- [ ] T13. Crash: `kill -9` between consume and outbox delivery, and again mid-import, reconciles to a consistent state with no duplicate grab.
+- [ ] T14. Prompt injection: a release title containing instructions is returned as capped, inert data, and tool descriptions are unchanged.
+- [ ] T15. Agent least privilege: an agent cannot fetch another agent's jobs, and a job containing a raw URL or a host from the control plane is rejected.
+- [ ] T16. Path validation: `..`, a symlink escape, and a cross-filesystem hardlink target are each refused, or the cross-filesystem case falls back to a verified copy.
+- [ ] T17. Offline agent: jobs that expire while the agent is offline never run on reconnect.
+- [ ] T18. Compatibility: the existing `whoami`, `search_media`, `resolve_media`, `get_media` and `request_media` tests in `tests/integration.test.ts` and `tests/oauth.test.ts` pass unmodified. Identity tests I1-I6 (design.md section 6) pass.
 
 ## Rollback
-The research tasks change nothing deployed. Rolling back means discarding the proposal and its evidence report. The deployed `labs/seerrsense` 1.14.4 and its gitops values are untouched. For the future tasks: each is additive (new tools, scopes and tables) behind the `MediaBackend` port. Rollback means reverting the release, which the image digest pin in `services/labs/seerrsense/values.yaml` makes a one-line gitops revert. The additive tables can stay in place harmlessly. Any isolated benchmark environment is removed with `docker compose down -v` on its own project, with no household volumes ever mounted.
+- Research: changes nothing deployed. Rolling back means discarding this proposal revision. `labs/seerrsense` 1.14.4 and its gitops values are untouched.
+- Experiments: each runs in its own compose project. Remove it with `docker compose -p <project> down -v`. No household volume is ever mounted, and the networks are `internal: true`, so there is nothing external to undo.
+- Future tasks:
+  - Each is additive (new tools, scopes and tables) behind the `MediaBackend` port. Rollback means reverting the release, which is a one-line gitops revert of the digest-pinned image in `services/labs/seerrsense/values.yaml`. The additive tables can stay in place harmlessly.
+  - The local agent is revoked from `/account` and uninstalled.
+  - Engine adoption (B/C/D/H) runs in parallel with the existing stack until the gates pass. Rollback means pointing the household back at Seerr/Radarr/Sonarr, which are kept running and unmodified throughout. Option H rolls back movies only.
