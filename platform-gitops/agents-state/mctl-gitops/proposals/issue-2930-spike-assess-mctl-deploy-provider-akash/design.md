@@ -7,8 +7,9 @@ negative cases and an estimate format, so the owner can later decide between
 path C (thin SDL adapter) and path D (documentation only) on evidence.
 `REJECT` is not chosen because a no-secret, stateless GPU worker is a real
 gap in the current platform; `ADOPT_MINIMAL_ADAPTER` is not chosen because
-no governed signing boundary exists and the core tool versions are not yet
-pinnable from the observed sources.
+no governed signing boundary exists and no offline harness has yet verified a
+checksum-pinned `akt` binary. Upstream **v1.1.2 is published**, but the
+actual artifact and checksum have not been verified by this project.
 
 ## Current state
 
@@ -88,8 +89,8 @@ pinnable from the observed sources.
 
 | # | Source | What it showed |
 |---|--------|----------------|
-| S1 | akash.network/docs/developers/deployment/akt/deployments/ | `akt sdl init web --image ...` and `akt sdl validate deploy.yaml` run "entirely locally, with no context, no key, and no RPC endpoint"; scaffolds `web`, `gpu`, `multi-service`, `ip-lease`; validate rejects unpinned images and warns on `uakt`. `akt deploy` does create / wait-for-bids / select-bid / create-lease / send-manifest; flags `--deposit`, `--bid-select`, `--yes`, `--dry-run`, `--no-wait-active`; `-o jsonl` emits one object per step. `akt update <sdl> <dseq>`, `akt close <dseq>` (irreversible). No current version stated. |
-| S2 | .../akash-sdl/syntax-reference/ | `version: "2.0"`; sections `services`, `profiles.compute`, `profiles.placement`, `deployment`, optional `endpoints`; example `denom: uact` but comments say uakt per block (inconsistent); daily cost = amount x 14,400 / 1,000,000; cpu 0.01-384, memory 1Mi-2Ti, storage 5Mi-32Ti, one ephemeral volume required; `expose` with `port`, `as`, `proto`, `accept`, `to`, `global: true`. |
+| S1 | akash.network/docs/developers/deployment/akt/deployments/ | `akt sdl init web --image ...` and `akt sdl validate deploy.yaml` run "entirely locally, with no context, no key, and no RPC endpoint"; scaffolds `web`, `gpu`, `multi-service`, `ip-lease`; validate rejects untagged/`:latest` images but **allows version tags**; MCTL must enforce digests independently. It warns on `uakt`. `akt deploy` does create / wait-for-bids / select-bid / create-lease / send-manifest; flags `--deposit`, `--bid-select`, `--yes`, `--dry-run`, `--no-wait-active`; `-o jsonl` emits one object per step. `akt update <sdl> <dseq>`, `akt close <dseq>` (irreversible). No release pinned on this page; upstream GitHub releases list v1.1.2 (reviewed 2026-11-23). |
+| S2 | .../akash-sdl/syntax-reference/ | `version: "2.0"`; sections `services`, `profiles.compute`, `profiles.placement`, `deployment`, optional `endpoints`; example `denom: uact` but legacy comments say uakt/AKT (incorrect); daily cost = amount x 14,400 / 1,000,000 **ACT** (nominally 1:1 USD per current akt guide); cpu 0.01-384, memory 1Mi-2Ti, storage 5Mi-32Ti, one ephemeral volume required; `expose` with `port`, `as`, `proto`, `accept`, `to`, `global: true`. |
 | S3 | .../learn/core-concepts/environment-secrets/ | SDL env is not encrypted; values reach the provider in the manifest and the container; not on-chain; recommends external secret store fetched at runtime. |
 | S4 | .../learn/core-concepts/persistent-storage/ | Provider-local; data lost on lease close, not migrated across providers, may be lost on provider failure; back up externally. |
 | S5 | .../learn/core-concepts/providers-leases/ | Lease states active / insufficient_funds (stopped, cannot restart without new deployment) / closed (permanent); escrow monitored by tenant; per-block (~6 s) billing; gas on updates; audited providers via `signedBy`; tier heuristics; providers can close leases. |
@@ -128,10 +129,12 @@ and spend ceiling.
 - Adds: on-demand GPU capacity (S7) that MCTL does not have at all (no GPU
   pool in `infrastructure/`); per-block billing suited to short-lived
   stateless jobs; no cluster to operate for disposable workers.
-- Lacks for multi-tenant services: no Kubernetes API (no Argo CD, no
-  ExternalSecrets/Vault, no NetworkPolicy, no `base-service` chart); ingress
-  is provider-assigned unless `accept` hosts plus DNS are managed outside
-  MCTL; no Loki/Prometheus scrape path (logs only via provider lease logs);
+- Lacks for direct MCTL cluster management: no access to Akash provider's
+  Kubernetes API for Argo CD reconciliation, MCTL ExternalSecrets/Vault,
+  NetworkPolicy or the existing `base-service` chart. Stable ingress needs
+  separately managed provider/DNS/TLS. Akash supports logs and optional
+  log-forwarding sidecars, but **not** existing MCTL Loki/Prometheus
+  integration out of the box;
   data custody is the provider's (S3, S4); provider may close a lease (S5);
   no identity-bound workflow surface comparable to mctl-api grants.
 
@@ -148,12 +151,12 @@ stays unchanged and gains no provider flag.
 | `--image-tag` | Rejected; replaced by `--image <ref>@sha256:<digest>` | Tags are mutable; S1 validate rejects unpinned images |
 | `--port/-p` | Mapped to `expose.port`; only one HTTP port in Phase 1 | Limited exposure |
 | `--host` | Rejected in Phase 1 | `accept` hosts need DNS/TLS outside MCTL; stable ingress not provided |
-| `--env` | Mapped to SDL `env` only after secret-pattern scan; refusal names the key only | S3: SDL env is plaintext to author and provider |
+| `--env` | Fixture allowlist (`LOG_LEVEL`, `PORT`) only; pattern scanner is defense-in-depth | SDL env reaches third-party provider |
 | `--secret` | Hard error before render, value never echoed | No vetted mechanism; Vault is not reachable |
 | `--pat` | Hard error | No private repo build path; avoids Vault write side effect from `runDeploy` |
 | `--wait/-w` | Rejected | Offline command has nothing to wait for |
-| New `--max-monthly <amount> <unit>` | Required for `estimate` | User-configured cap |
-| New `--region`, `--signed-by` | Mapped to `placement.attributes.region` / `signedBy` | Selection policy |
+| New `--max-monthly <amount> <unit>` | Required for `estimate`; **advisory only** | No signing/lease monitor; cannot enforce spend |
+| New `--region`, `--signed-by` | Deferred; exclude placeholders from validator-valid fixture | Provider selection is separate research |
 
 ### CLI UX (proposal only, not to be implemented under this issue)
 
@@ -161,14 +164,13 @@ stays unchanged and gains no provider flag.
 mctl akash sdl render   -t labs -n echo-fixture \
   --image ghcr.io/mctlhq/akash-fixture-http@sha256:<64-hex> \
   --port 8080 --cpu 0.5 --memory 512Mi --storage 1Gi \
-  --region <region> --signed-by <auditor-address> \
-  --price-amount 1000 --price-denom uact  > deploy.yaml
+  --price-amount 10 --price-denom uact  > deploy.yaml
 mctl akash sdl validate deploy.yaml      # wraps pinned `akt sdl validate`
 mctl akash estimate deploy.yaml --max-monthly 20 ACT
 ```
 
-Sample non-secret SDL (fixture; digest and auditor address are
-placeholders until Phase 0 publishes a real fixture image):
+Sample non-secret SDL (illustrative; the image digest is a placeholder,
+not an actual validator-passing fixture until Phase 0):
 
 ```yaml
 ---
@@ -197,15 +199,10 @@ profiles:
           - size: 1Gi
   placement:
     dcloud:
-      attributes:
-        region: <region>
-      signedBy:
-        anyOf:
-          - <auditor-address>
       pricing:
         echo-fixture:
           denom: uact
-          amount: 1000
+          amount: 10
 deployment:
   echo-fixture:
     dcloud:
@@ -218,13 +215,12 @@ Sample `estimate` output (format only; every number is model arithmetic):
 ```
 PLAN (read-only, offline) -- NOT an MCTL governed deployment
 team: labs   service: echo-fixture   sdl-digest: sha256:...
-price ceiling: 1000 uact per block  (block ~6 s, 14,400 blocks/day)
-  = 14.4 ACT/day = ~432 ACT/30d   [model-arithmetic, S2 formula]
-ACT -> fiat: NOT CONVERTED (rate not observed; check before funding)
-deposit/escrow: required by chain context, refundable remainder on close
-                (amount not modelled)                       [not-observed]
-gas: per create/update/close tx                              [not-observed]
-monthly cap: 20 ACT  -> ceiling EXCEEDS cap: would refuse to proceed
+price ceiling: 10 uact per block  (block ~6 s, 14,400 blocks/day)
+  = 0.144 ACT/day = ~4.32 ACT/30d [model-arithmetic, NOT a bid]
+ACT nominal 1:1 USD per upstream; actual payment/fees need verification
+keyring: deposit/escrow + chain gas                       [not-observed]
+console-api: Console credits, no deposit                  [not-observed]
+monthly cap: 20 ACT -> BELOW cap; ADVISORY ONLY, not enforced
 providers/bids: none queried; no provider availability is implied
 ```
 
@@ -310,11 +306,62 @@ loses nothing.
 - P1: Secrets: `--secret`/`--pat` today go to Vault (`runDeploy`,
   `SaveRepoPAT`); Akash has no equivalent, SDL env is plaintext (S3). ->
   hard block in Phase 1.
-- P2: Tool versions unpinned (S1 states none) and denom docs inconsistent
-  (S2). -> Phase 0 must pin before trusting results.
+- P2: Actual `akt` artifact/checksum still unverified despite upstream
+  v1.1.2; denomination docs inconsistent. -> Phase 0 must pin the binary,
+  and enforce `uact` independently before trusting results.
 - P2: CLI version stamping broken (`Makefile` LDFLAGS path), weakening any
   audit line that cites CLI version. -> separate fix, outside this issue.
 - P3: No CPU price evidence; GPU only averages. -> cost case unproven.
+
+
+### Independent review amendments (2026-11-23; unapproved)
+
+**P1 — Temporal approval:** this issue's running DevLoop can advance to Tier 2
+on a proposal approval signal. Reviewing this PR and even merging its docs
+does not authorize implementation. Recompute the proposal digest after
+merge and obtain an **explicit separate GO_OFFLINE_HARNESS** limited to the
+offline harness before any controlled approval. No current approval signal.
+
+**P1 — native vs MCTL policy:** upstream `akt` accepts tagged images like
+`nginx:1.27`; it is *not* a digest-only policy validator. A separate
+preflight must enforce `@sha256:<64hex>`, fixture env key allowlist,
+disallowed `credentials`/secret structures, and no persistent storage or
+public non-HTTP/database ports **before invoking** the native validator.
+Never claim upstream validator exit code alone proves MCTL security rules.
+
+**P1 — secret canary:** generate a synthetic canary in process memory; do
+not write it into committed SDL or test inputs. Reject it before invoking
+`akt` or writing stdout/stderr; compare captures to the in-memory value.
+Use independent non-sensitive markers for validator behavior tests.
+Avoid `> deploy.yaml` before all preflight checks pass.
+
+**P2 — reproducible and offline:** `akt` **v1.1.2** is an upstream
+candidate; pin official archive/checksum and record independently computed
+hash, architecture and binary-reported version during *networked preparation*.
+Then run validation with no network access, unprivileged scratch directory,
+temporary empty `HOME`, `XDG_CONFIG_HOME`, `AKT_HOME`, scrubbed env and
+no mounted credentials. `env -i` alone is insufficient network isolation.
+
+**P2 — denomination:** `uact` means micro-ACT, nominally 1:1 USD, not
+AKT. Upstream SDL syntax reference has stale `uakt`/AKT cost comments.
+Enforce `uact` in MCTL even if `akt sdl validate` just warns on
+`uakt`. Offline cap is an *estimate*, not spending enforcement; model
+on-chain deposits and Console-credit paths separately, and don't invent
+live provider bids.
+
+**P2 — fixture:** minimize the validator-valid SDL; no fabricated
+`signedBy` or `region` placeholder. Test those filters separately.
+Use `akt sdl init` as a baseline for schema comparison.
+
+**P3 — pricing / scope:** no observed comparable Akash CPU prices or exact
+Hetzner plan prices yet; GPU averages are not live quotes. The unrelated
+`cli/mctl/Makefile` version-stamping flaw remains a separate task.
+
+Sources verified by independent review:
+- https://akash.network/docs/developers/deployment/akt/deployments/
+- https://akash.network/docs/developers/deployment/akt/installation/
+- https://akash.network/docs/developers/deployment/akash-sdl/syntax-reference/
+- https://github.com/akash-network/akt/releases/tag/v1.1.2
 
 ## Alternatives
 
