@@ -758,3 +758,12 @@ mctlGlovo:
   # value so the two cannot drift. A whole number, 1..20. Raising it is an
   # owner decision with its own reviewed PR, never a rider on another change.
   capacity: 1
+  # Link attempts per hour for the whole service: the one-time code, the preview
+  # and the upload each count one, so a single link takes three. Left to the
+  # default (5 x capacity, which is 5 an hour for one user) a retry or two
+  # after a refused attempt exhausts it, and nothing can link until the oldest
+  # attempt ages out. 15 allows five complete links an hour for the owner-only
+  # stage; the per-address cap (10 an hour) is untouched. A whole number 1..300,
+  # 0 for the service default. Reached by the pod through its environment, so
+  # changing it rolls the pod.
+  linkAttemptsPerHour: 15

@@ -245,6 +245,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '          command: ["glovo-migrate"]',
         '            - {name: GLOVO_C2_ENABLED, value: "true"}',
         '            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}',
+        '            - {name: GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR, value: {{ $linkAttempts | quote }}}',
         '            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}',
         '            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}',
         '            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}',
