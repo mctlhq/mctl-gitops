@@ -787,6 +787,16 @@ jobs:
           python3 scripts/cloudflare-portal-health.py --selftest
           python3 tests/test_cloudflare_portal_health_cronjob.py
 
+      - name: Check the in-cluster R2 operations budget check against its sources
+        # The r2-ops-budget CronJob runs a ConfigMap copy of
+        # scripts/r2-ops-budget.py and reads its token from the Secret an
+        # ExternalSecret writes. A drifted copy would run an old script and
+        # stay green; a drifted Secret name or key would keep the Job from
+        # starting, which R2OpsBudgetStale catches, but 12 hours later.
+        run: |
+          python3 scripts/r2-ops-budget.py --selftest
+          python3 tests/test_r2_ops_budget_cronjob.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by
