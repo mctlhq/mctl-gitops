@@ -302,9 +302,8 @@ env:
   # the plain values land with PA_ENABLED "false", so nothing PA runs and the
   # server reads none of the PA settings below (config.loadPA returns before
   # reading anything when the flag is off). The bot token, webhook secret,
-  # local KEK and principal allowlist come from Vault through an
-  # ExternalSecret added in its own change once the owner has written the
-  # Vault path (an ExternalSecret on a missing path marks the app Degraded).
+  # local KEK and principal allowlist come from Vault through the
+  # labs-mctl-telegram-preview-pa ExternalSecret below.
   # PA_ENABLED goes "true" after the owner's GO, once that Secret reports
   # synced: config.Load refuses PA_ENABLED=true without the bot token and
   # webhook secret, and strategy is Recreate, so the order matters.
@@ -503,7 +502,38 @@ envFrom:
       name: "labs-mctl-telegram-preview-login"
   - secretRef:
       name: "labs-mctl-telegram-preview-events"
+  # optional: if the ExternalSecret ever fails to sync, the pod still starts
+  # while PA_ENABLED is "false" (nothing reads these keys); with it "true" a
+  # missing key refuses startup, which is the fail-closed answer.
+  - secretRef:
+      name: "labs-mctl-telegram-preview-pa"
+      optional: true
 extraExternalSecrets:
+  # Personal Assistant bot (mctlhq/mctl-telegram#1318): its own bot token
+  # (a different bot from the login bot), the webhook secret, the
+  # preview-only local KEK (threat model T3; transit before production) and
+  # the principal allowlist (a comma-separated list of Telegram user ids;
+  # unset or empty allows nobody). The ids are personal data and this
+  # repository is public, so they live in Vault only.
+  labs-mctl-telegram-preview-pa:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-pa
+    data:
+      - secretKey: PA_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: bot-token
+      - secretKey: PA_WEBHOOK_SECRET
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: webhook-secret
+      - secretKey: PA_KEK_LOCAL_KEY
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: kek-local-key
+      - secretKey: PA_ALLOWED_PRINCIPALS
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: allowed-principals
   # EVENTS_VALKEY_PASSWORD for the telegram-producer Valkey ACL user
   # (XADD to mctl:events:telegram and mctl:events:audit only).
   labs-mctl-telegram-preview-events:
