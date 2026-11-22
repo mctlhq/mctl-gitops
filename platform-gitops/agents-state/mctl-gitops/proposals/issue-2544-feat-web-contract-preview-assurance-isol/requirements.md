@@ -6,7 +6,7 @@ Epic mctlhq/.github#330 has three earlier parts:
 
 - P0 evidence (mctl-design#207, PR #208) captured anonymous HTTP headers and four CSS SHA-256 matches.
 - Two contracts are merged in mctl-design:
-  - `docs/contracts/web-header-a11y.md` (contract `web-header-a11y` v1.0.0, HDR-1..HDR-16, cases `AC-<HDR>-<consumer>-<route class>`), from mctl-design#209, PR #212, merge `918d671651f8e9d3eb2882f7581a9a0495588929`;
+  - `docs/contracts/web-header-a11y.md` (contract `web-header-a11y` v1.0.0, HDR-1..HDR-16, cases `AC-<HDR>-<consumer>-<route class>`), from mctl-design#209, PR #212, merge `918d671651f8e9d3eb2882f7581a9a0495588929` (an ancestor of the current pin `6d82a6b239365213d6859f2794c2449af7dd4e1f`, refreshed 2026-11-22);
   - `docs/contracts/web-asset-integrity.md` (manifest spec, delivery modes A/B, gates G1-G4), from mctl-design#210, PR #211, merge `9561bf725fc21c21b02d1142b198d6e74ec89394`.
 
 Every test matrix in those contracts is still `not-run`. No browser, a11y, runtime SRI, CORS, CSP or failure test has run against any of the six consumers: mctl-web, mctl-docs, mctl-telegram, mctl-academy, mctl-alice and seerrsense.
@@ -65,7 +65,7 @@ Header accessibility (contract `web-header-a11y` v1.0.0)
 
 Asset integrity (contract `web-asset-integrity`, G1-G4)
 
-- WHEN an asset case runs, THE SYSTEM SHALL compute SHA-256 over the `0.20.2` sheets (`mctl.css`, `global.css`, `prose.css`, `site.css`) from mctl-design `apps/storybook/public/0.20.2/` at the pinned commit. It SHALL compare them byte-for-byte with a test-only frozen manifest fixture labelled "test-only, not a published artifact" (G1).
+- WHEN an asset case runs, THE SYSTEM SHALL compute SHA-256 over the `0.21.0` sheets (and the still-committed `0.20.2` sheets) (`mctl.css`, `global.css`, `prose.css`, `site.css`) from mctl-design `apps/storybook/public/<version>/` at the pinned commit. It SHALL compare them byte-for-byte with a test-only frozen manifest fixture labelled "test-only, not a published artifact" (G1).
 - WHEN SRI cases run, THE SYSTEM SHALL serve those bytes from a local fixture origin inside the isolated network and SHALL assert the browser outcome for each of these cases:
   - valid sha384 with `crossorigin="anonymous"` and ACAO `*`: the sheet applies;
   - sha384 mismatch: the sheet is blocked and the page stays readable;
@@ -98,7 +98,7 @@ Artifacts
 
 ## Open questions
 
-- Consumer runnability. The harness can only produce `[PREVIEW]` rows for consumers whose OCI image starts in an isolated network with dummy env and no backend. This proposal assumes that is plausible for mctl-web, mctl-docs and seerrsense. It may not be for mctl-telegram (MTProto), mctl-alice (OAuth) or mctl-academy (backend). Sites that cannot start report `not-run` with the observed reason; no consumer change is made to fix that. Owners should confirm which images are expected to start standalone.
+- Consumer runnability. Consumer images are pulled before the internal network is created and run with the runner UID and the internal-network hardening in design.md. The harness can only produce `[PREVIEW]` rows for consumers whose OCI image starts in an isolated network with dummy env and no backend. This proposal assumes that is plausible for mctl-web, mctl-docs and seerrsense. It may not be for mctl-telegram (MTProto), mctl-alice (OAuth) or mctl-academy (backend). Sites that cannot start report `not-run` with the observed reason; no consumer change is made to fix that. Owners should confirm which images are expected to start standalone.
 - GHCR access. Whether `ghcr.io/mctlhq/<consumer>` packages are readable by the mctl-gitops `GITHUB_TOKEN` (`packages: read`) has not been observed. If they are not, the affected consumer rows stay `not-run`.
 - Site breakpoints for mctl-web, mctl-docs and mctl-telegram are `unknown (not observed)` in the contract. The harness takes `B` from `pins.json`. Until an owner or pinned source supplies it, those sites' `B-1`/`B` cases are `NOT-RUN (breakpoint unknown)`.
 - Public probing. The issue allows "explicitly authorized anonymous safe HEAD/GET" only. This proposal keeps it off by default (`allow_public_probe: false`). Who authorizes it, and for which hosts, is open.
