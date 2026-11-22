@@ -75,7 +75,6 @@ CI
 
 - Calling an arbitrary existing standard ChatGPT web conversation through undocumented RPC, browser/cookie/token extraction or session impersonation. SIWC Responses creates a separate client-managed context.
 - Building a duplicate Codex bridge or reusing the platform owner's OAuth grant for shared tenant work.
-
 - Changing `mctlhq/mctl-gitops/cli/mctl` itself. That is a follow-up after the owner records the verdict.
 - An owner-only inference path, or using the owner's plan for tenant or user work.
 - A new `mctl-runtime` CLI or daemon. The #746 thin adapter is evaluated only if a need is proven.
