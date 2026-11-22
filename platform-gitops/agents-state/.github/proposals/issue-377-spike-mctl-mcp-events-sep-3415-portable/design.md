@@ -1,288 +1,248 @@
 # Design: issue-377-spike-mctl-mcp-events-sep-3415-portable
 
+Revision 2. This revision answers the REQUEST_CHANGES review of 2026-11-22
+(P1-EV-01 to P1-EV-04, P2-EV-05 to P2-EV-07). It remains a research-only spike
+with no runtime change.
+
 ## Current state
 
-### Event contract in this repository (`mctlhq/.github` @ `7a0659c5`)
+### Event contract in this repository (`mctlhq/.github` @ `60e9db5`)
 
 - `events/README.md` defines the delivery chain: producer (mctl-telegram,
-  mctl-api), then Valkey Streams (`platform-events`), then the mctl-events Channel
-  adapter in mctl-claude-remote, then the running Claude session, then hydration
-  through the source's MCP or GitHub tools, then `ack_event`, then `XACK`. The
-  contract says "the event is disposable; the source is canonical". Delivery is
-  at-least-once from a durable producer outbox. Consumers dedupe by `id`, the
-  consumer group is per session, `attempt > 1` marks a redelivery, and producers
-  trim with `XADD ... MAXLEN ~ 10000`.
-- `events/schemas/event-envelope.v1.schema.json` is closed
-  (`additionalProperties: false`) and capped at 4096 bytes by consumers. Its fields
-  are `specversion` = `mctl.events/v1`, `id`, a three-segment `type`, `source`,
-  `occurred_at`, `correlation_id`, and `subject` (string references only, at most
-  12 properties). It has **no tenant or principal field**.
+  mctl-api), then Valkey Streams, then the mctl-events Channel adapter
+  (mctl-claude-remote), then the running Claude session, then hydration through
+  the source's tools, then `ack_event`, then `XACK`. The rules it states:
+  - "the event is disposable; the source is canonical";
+  - delivery is at-least-once from a durable producer outbox;
+  - consumers dedupe by `id`, and there is "one consumer group per session";
+  - producers trim with `XADD ... MAXLEN ~ 10000`.
+- `events/schemas/event-envelope.v1.schema.json` is closed, capped at 4096 bytes
+  by consumers, and has fields `specversion`, `id` (stable, source-derived dedup
+  key), `type` (`<domain>.<entity>.<action>`), `source`, `occurred_at`,
+  `correlation_id` and `subject` (string references only). There is **no tenant
+  or principal field**.
 - `events/examples/{valid,invalid,calendar-invalid}/` and
-  `events/tests/test_envelope_schema.py` are run by `.github/workflows/events-validate.yml`.
-- `roadmap/epics/claude-remote-inbound-channels.yaml` (#87) is `lifecycle: completed`,
-  with work items valkey (gitops#1260), channel-skeleton (claude-remote#54),
-  envelope (#88), telegram-producer (telegram#646), github-producer (api#323),
-  delivery-guarantees (claude-remote#55) and e2e-audit (#89).
-- Spike conventions come from `roadmap/schemas/spike-definition.schema.json`
-  (required `title`, `question`, `lifecycle`, `github`, `outcomes`; `decision`
-  only when `decided`), examples `roadmap/spikes/journey-intent-correlation.yaml`
-  and `roadmap/spikes/mcp-tasks-durable-execution.yaml` (#41), and reports with
-  evidence tags in `docs/spikes/agent-client-compatibility.md` and
-  `docs/spikes/automation-control-plane.md`. The latter already models an
-  `event` trigger over envelope v1 and states that crash-safe per-subscriber
-  fanout is not proven (lines 247-248, 279).
-- `docs/plans/mcp-gateway.md` line 122: "Tasks and Apps pass through untouched
-  once measured (.github#41, ...)". The gateway epic #236 moved to Q1
-  (`docs/plans/q4-2026-plan.md` line 31).
+  `events/tests/test_envelope_schema.py` are fixtures the model reuses.
+- `docs/spikes/automation-control-plane.md` (about lines 247 and 279) states
+  that "crash-safe per-subscriber event fanout" was not proven. Revision 2 makes
+  that the central contract the model must prove (P1-EV-04).
+- Spike conventions come from `roadmap/schemas/spike-definition.schema.json`,
+  `roadmap/spikes/journey-intent-correlation.yaml`,
+  `roadmap/spikes/mcp-tasks-durable-execution.yaml` (#41) and the stdlib-Python
+  model style of `docs/spikes/finance-assistant/`.
 
 ### Deployed state checked
 
-- `[GITOPS]` `infra-components/data/valkey/configmap.yaml` (mctl-gitops @ `d08c0b0b`):
-  AOF `appendfsync everysec`, `maxmemory 200mb`, `maxmemory-policy noeviction`.
-  The comment says up to about 1s of loss is acceptable because producers republish
-  from their outbox.
-- `[GITOPS]` `infra-components/data/valkey/externalsecret.yaml`: the `default`
-  user is off. `telegram-producer`, `github-producer` and `synthetic-producer` may
-  only `XADD` to their own stream and `mctl:events:audit`. `claude-remote` has
-  `XREADGROUP`, `XACK` and `XAUTOCLAIM` on the three streams, may `XADD` only to
-  audit, and has state keys `mctl:events:state:*`. `events-observer` has read-only
-  access to audit. **There is no ACL user for any other consumer**, so an adapter
-  needs a new least-privilege user (gitops change, out of scope here).
-- `[GITOPS]` `infra-components/data/valkey/cloudflared.yaml`: tunnel
-  `events-valkey.mctl.ai` lets the operator's Claude Code session on a home Mac mini
-  consume the streams after labs/claude-remote was paused (#2247). Access admits a
-  single service token.
-- `[GITOPS]` `services/labs/claude-remote/values.yaml`: image `0.31.0`,
-  `replicaCount: 0` ("Paused 2026-10-29: the Claude account ... on hold"),
-  `MCTL_EVENTS_ENABLED: "true"`, Valkey user `claude-remote`, policy file
-  `mctl-events-policy` (deny by default), and `CLAUDE_REMOTE_MODEL:
-  "claude-haiku-5-5"`. The comment records that the #66 fake-ack failure (Haiku
-  4.5 wrote an ack to /tmp, `max_inflight` saturated) must be re-proven. Telegram
-  MCP token renewal has metrics to Pushgateway (#82).
-- `[GITOPS]` `services/labs/mctl-telegram/values.yaml` lines 352-358: producer
-  `telegram-producer` publishes to `mctl:events:telegram` after the ingest
-  transaction. The stream is shared with preview.
-- `[GITOPS]` `bootstrap/templates/mctl-platform/mctl-api.yaml`: mctl-api tag
-  `4.172.0`. Lines 424-430: the GitHub webhook enqueues into the audit DB outbox
-  and a relay `XADD`s to `mctl:events:github` as `github-producer`.
-- `[OBSERVED]` `mctl_get_service_status(labs, claude-remote)` on 2026-11-22
-  returned Argo `Healthy`/`Synced`, tag 0.31.0. With `replicaCount: 0` this means
-  no in-cluster consumer, not a running one.
-- `[OBSERVED]` `mctl_list_services(admins)` returned 8 catalogue services and no
-  mctl-api row. mctl-api is platform-bootstrapped, and its config was read from the
-  bootstrap template above.
-- Not observed: live stream lengths, consumer-group lag, the Mac mini consumer's
-  liveness, audit stream contents, and the `mctl-events-policy` ConfigMap contents
-  (not found as a separate file in the gitops checkout). These are open questions,
-  not "absent".
-- `[OBSERVED]` gitops `agents-state/.github/proposals/issue-300-.../.status.yaml`:
-  status `accepted`, but `blocked.code: execution-unauthorized`. The #300 Gate A
-  (ChatGPT existing-chat capability) has not run.
+- `[GITOPS]` `infra-components/data/valkey/configmap.yaml` (mctl-gitops @ `e1d0b67`): `appendfsync everysec`, `maxmemory 200mb`, `maxmemory-policy noeviction`.
+- `[GITOPS]` `infra-components/data/valkey/externalsecret.yaml` lines 48-54:
+  - `default` is off;
+  - `telegram-producer`, `github-producer` and `synthetic-producer` may only `+xadd` to their own stream and `mctl:events:audit`;
+  - `claude-remote` has `xreadgroup`/`xack`/`xautoclaim`/`xclaim`/`xpending`/`xgroup|create` on the three streams, `xadd` on audit and state keys `mctl:events:state:*`;
+  - `events-observer` has read-only access to audit;
+  - no ACL user exists for any other consumer.
+- `[GITOPS]` `services/labs/claude-remote/values.yaml`: tag `0.31.0`, `replicaCount: 0` (in-cluster consumer paused). The comments record the #66 fake-ack / inflight failure and the #82 token-renewal metrics.
+- `[GITOPS]` `bootstrap/templates/mctl-platform/mctl-api.yaml`: mctl-api tag `4.173.0`. Lines 430-431: the GitHub webhook "enqueues into the audit database's outbox and a relay XADDs to mctl:events:github". mctl-api therefore already owns a transactional database and an outbox pattern, which revision 2 reuses for per-subscription delivery records.
+- `[OBSERVED]` `mctl_get_service_status(labs, claude-remote)` on 2026-11-22: Argo `Healthy`/`Synced`, image `0.31.0`. With `replicaCount: 0` this means no in-cluster consumer is running.
+- `[GITOPS]` `agents-state/.github/proposals/issue-300-spike-events-push-github-events-into-exi/.status.yaml`: `status: accepted`, `blocked.code: execution-unauthorized`. The existing-ChatGPT-chat question (#300) is unresolved.
+- Not observed: live stream lengths, consumer-group lag, the Mac mini tunnel consumer's liveness, audit stream contents, the `mctl-events-policy` ConfigMap. These are recorded as unknown, not absent.
 
-### External sources (retrieved 2026-11-22 via WebFetch, summarized; to be re-pinned verbatim in task 2)
+### External sources (retrieved 2026-11-22)
 
-- `[DOC]` https://voting.modelcontextprotocol.io/p/seps/3415: SEP 3415 "Events
-  Extension", State "Scheduled", linked PR "Merged". The page shows no method names,
-  capability key or delivery modes. This **contradicts the issue's "Final"**.
-- `[DOC]` https://github.com/modelcontextprotocol/experimental-ext-triggers-events:
-  "Incubation space for the MCP Triggers & Events Working Group", stage "Beta",
-  "Experimental ... do not represent official MCP specifications". The extension id
-  is `io.modelcontextprotocol/events`. No releases or packages. The callback mechanism
-  is "webhooks or similar".
-- `[DOC]` https://developers.openai.com/plugins/build/mcp-events: "available in
-  Work chats on ChatGPT web", plus the desktop app with Cloud and dots. Webhook
-  delivery only. Methods `events/list`, `events/subscribe`, `events/unsubscribe`;
-  capability `events` in the `initialize` or `server/discover` result. Standard
-  Webhooks headers `webhook-id`, `webhook-timestamp`, `webhook-signature`, plus
-  `X-MCP-Subscription-Id`. A single-use challenge is compared in constant time.
-  Error `-32015` `CallbackEndpointError` (`challenge_failed`, `timeout`). Retries
-  keep the event id and get a fresh timestamp and signature, and 410 and 413 are not
-  retried. MCP HTTP protocol version `2026-07-28`.
-- Claude Code Channels (`claude/channel` capability, `notifications/claude/channel`):
-  only as used by mctl-claude-remote (per `events/README.md` and the values.yaml
-  comments). The vendor doc revision was not re-read in this run: unknown (not
-  observed). Codex, Antigravity, Grok: unknown (not observed).
+- `[DOC]` Normative spec, `modelcontextprotocol/ext-events` `specification/beta/events/events.mdx`:
+  - pinned at commit `17c0c64a5edb89dc5081d00ed50c4f836bbb67ff` (2026-11-19T15:41:56Z); the file was added by `24727f38a180b1bde5df1c6eae580ea0a0b703ee` ("Add Events extension specification at Beta");
+  - header: "Stage: Beta · Extension identifier: `io.modelcontextprotocol/events`", for protocol revision `2026-07-28` and later.
+
+  Rules quoted from that file:
+
+  | Topic | What the spec says |
+  |---|---|
+  | Capability | Advertised as a key in `capabilities.extensions`; "A client MUST NOT send them to a server that has not advertised the extension" (`-32601` otherwise). |
+  | Methods | `events/list`, `events/poll` (`name`, `arguments`, `cursor`, `maxAgeMs`, `maxEvents`), `events/stream` (`heartbeatMs`), `events/subscribe` (`delivery{mode,url,secret}`, `cursor`, `maxAgeMs`, `ttlMs`), `events/unsubscribe` (`name`, `arguments`, `delivery.url`). |
+  | Notifications | "The only message this extension adds outside an `events/*` request is `notifications/events/list_changed`". Push uses `notifications/events/{event,active,error,heartbeat,terminated}`. |
+  | Webhook control envelopes | Discriminated by top-level `type`: `gap`, `terminated`, `verification`. |
+  | Subscription key | "The subscription key is `(principal, delivery.url, name, arguments)`"; "`principal` comes from the authorization layer"; unauthenticated calls get `Forbidden`. |
+  | Secret | "`delivery.secret` is REQUIRED. The client supplies the HMAC signing secret, and the server never generates one". Format `whsec_` plus base64 of 24 to 64 random bytes; other values are rejected with `InvalidParams`. Rotation is a client refresh with a new secret; the server "SHOULD dual-sign ... for a short grace window"; "There is no server-initiated rotation." |
+  | Webhook identity | `webhook-id` "MUST NOT be derived from `eventId`", is "reused across retries of that message", and receivers "SHOULD deduplicate on `webhook-id`"; "the same `eventId` delivered on two subscriptions is two deliveries"; `X-MCP-Subscription-Id` carries the subscription id. |
+  | Cursors | "`null` means "start from now""; absent is the same as `null`; a `null` cursor must not be persisted. "`truncated: true` is the single signal" of a possible gap, returned with a fresh `cursor`. With `maxAgeMs`, replay starts from the later of the cursor and `now − maxAgeMs`, and `maxAgeMs` is ignored for a `null` cursor. With `hasMore`, the client polls again immediately. |
+  | Occurrence | `eventId`, `name`, `timestamp`, `data` are required; `cursor` and `_meta` are optional. |
+  | Retry | Each event is retried independently with exponential backoff; attempts and elapsed window are capped; `410` and `413` are non-retryable. |
+  | Verification | Delivery starts only after a constant-time echo match; failure gives `CallbackEndpointError` `-32027`. |
+  | Expiry | `refreshBefore` is the grant, and the subscription must be refreshed before it. |
+  | Webhook safety | Receivers SHOULD reject a `webhook-timestamp` older than 5 minutes. The server validates the callback at delivery time, rejects non-globally-routable IPs, and "MUST NOT follow HTTP redirects". |
+  | Errors | `NotFound` `-32023`, `Forbidden` `-32024`, `ResourceExhausted` `-32025`, `Unsupported` `-32026`, `CallbackEndpointError` `-32027`, `HeaderMismatch` `-32020`. |
+
+  The last 380 characters of the file were not read in this run, so task 2 re-reads the whole file.
+- `[DOC]` https://voting.modelcontextprotocol.io/p/seps/3415: State "Scheduled", linked PR `modelcontextprotocol/modelcontextprotocol#3415` "Merged", meeting 2026-11-04 "passed".
+- plan.modelcontextprotocol.io: the fetch rendered only the title "MCP Spec TPM", so it is unknown (not observed). The review reports `final` 2026-11-19, and this design records that as reported.
+- `[DOC]` https://developers.openai.com/plugins/build/mcp-events: "available in Work chats on ChatGPT web", plus the desktop app with Cloud and dots. Webhook only: "Polling, streaming, and the draft's gap and terminated control notifications are not supported". ChatGPT supplies the callback URL and a `whsec_` secret. It diverges from the pinned spec in three places:
+  - the capability key is `events` in `initialize` / `server/discover` capabilities;
+  - `CallbackEndpointError` is `-32015`;
+  - `webhook-id` is "The same value as the body's `eventId`".
+- Claude Code Channels (`claude/channel`, `notifications/claude/channel`): known only as used by mctl-claude-remote. Codex, Antigravity, Grok: unknown (not observed).
 
 ## Proposed solution
 
-A research-only spike in this repository with four artifacts and no runtime change.
+A research-only spike in `mctlhq/.github` with four artifacts and no runtime
+change: a spike manifest, a report, an offline reference model with tests, and an
+`AGENTS.md` index entry.
 
-### 1. Spike manifest `roadmap/spikes/mcp-events-sep-3415.yaml`
+### 1. Manifest `roadmap/spikes/mcp-events-sep-3415.yaml`
 
-A `SpikeDefinition` with `metadata.owner: mctlhq/.github`, issue
-`mctlhq/.github#377`, `lifecycle: proposed`, outcomes `REUSE_NATIVE_EVENTS`,
-`ADOPT_THIN_MCP_EVENTS_ADAPTER`, `BOUNDED_HOST_PILOT`, `DEFER`,
-`execution.devloop: true`, and `evidence.report: docs/spikes/mcp-events-sep-3415.md`.
-It has no `decision` block. The header comment says the proposed verdict lives in the
-report only, as in `journey-intent-correlation.yaml`.
+A SpikeDefinition with:
+- owner `mctlhq/.github`, issue `#377`, `lifecycle: proposed`;
+- the four outcomes and `evidence.report: docs/spikes/mcp-events-sep-3415.md`;
+- no `decision` block, and a header comment saying the verdict lives only in the report.
 
 ### 2. Report `docs/spikes/mcp-events-sep-3415.md`
 
 Sections:
 
-1. **Status and non-claims.** No host was run, no webhook was delivered, no account was linked.
-2. **Pinned sources.** The SEP tracker state, PR URL and merge SHA, spec file path
-   and commit SHA, extension id, SDK package names and versions (or "none
-   published"), the OpenAI doc retrieval date and quotes, and the Claude Channels doc revision.
-   It notes the tracker/issue discrepancy explicitly.
-3. **Method map.** One table maps each spec method or notification
-   (`events/list`, `events/subscribe`, `events/unsubscribe`, any poll or stream form,
-   delivery notification shape) to its MCTL equivalent: the envelope field, the Valkey
-   operation, and the existing Channel tool (`ack_event`). A separate table contrasts
-   Events with core `resources/subscribe` plus `notifications/resources/updated`,
-   with Tasks status notifications (#41), and with `notifications/claude/channel`.
-4. **Inventory (WP1)** from the "Deployed state checked" list above. Each row is
-   labeled merged, deployed or observed, and the incident rows are #66, #82, the paused
-   in-cluster consumer and the Mac mini tunnel consumer.
-5. **Host evidence matrix (WP2).** Columns: host, build or plan, surface,
-   transport, extension or capability, protocol revision, evidence tag, and
-   proven vs documented vs unknown. Rows: ChatGPT Work chat web, ChatGPT desktop
-   Cloud, ChatGPT dots, ChatGPT standard chat (unproven, see #300), Claude Code
-   Channels (active session only), Claude apps, Codex, Antigravity, Grok.
-6. **Thin adapter reference design (WP3)**, described below.
-7. **ADR options**, mapped to the four outcomes (see Alternatives).
-8. **Pilot proposal (WP4)** and **product hypotheses (WP5)**.
-9. **Fixture vs live operator runbook**, P1, P2 and P3 risks, and **GO/NO-GO**
-   with a proposed verdict.
+1. Status and non-claims.
+2. Pinned sources, with three separate maturity rows (governance, voting, extension).
+3. Finding-to-change matrix (below).
+4. Method map, with the comparison against core subscriptions, Tasks and Channels.
+5. WP1 inventory.
+6. WP2 host matrix, including the ChatGPT-vs-spec divergence table.
+7. Adapter reference design.
+8. ADR options.
+9. Pilot and hypotheses.
+10. Fixture-vs-live runbook.
+11. P1, P2 and P3 risks.
+12. GO/NO-GO.
 
-### 3. Thin adapter reference design (lives in the report and the model)
+Finding-to-change matrix (seeded here; the report adds spec quotes and test ids):
+
+| Finding | Revision 1 claim | Revision 2 change | Model | Tests |
+|---|---|---|---|---|
+| P1-EV-01 | server generates secret | client-supplied `whsec_` secret validated; `InvalidParams` otherwise; client-initiated refresh with dual-sign grace; no server rotation; secrets never logged | `model/webhooks.py`, `model/subscriptions.py` | T3, T4, T5 |
+| P1-EV-02 | `webhook-id = envelope.id` | `eventId = envelope.id`; random `webhook-id` per (subscription, occurrence) and per control envelope, persisted for retries; `X-MCP-Subscription-Id`; dedupe scoped correctly | `model/projection.py`, `model/fanout.py` | T6, T7, T8 |
+| P1-EV-03 | `cursor_expired` error | `null` = now; `maxAgeMs` later-of; gap is `truncated: true` plus fresh cursor, or a `gap` envelope for webhooks; `hasMore`; internal condition never on the wire | `model/cursor.py` | T9, T10, T11 |
+| P1-EV-04 | one PEL, XACK after delivery | transactional materialization of per-subscription delivery records before `XACK`; independent per-subscription progress, retry and quotas | `model/store.py`, `model/fanout.py`, `model/delivery.py` | T12, T13, T14, T15 |
+| P2-EV-05 | polling fallback with same cursor | no `events/*` without the advertised extension (`-32601`); only existing fallbacks, with no shared cursor | `model/client.py`, `model/server.py` | T16 |
+| P2-EV-06 | epoch check before POST | revocation linearized at commit; CAS claim; unsubscribe returns after drain; three distinct ACK facts | `model/delivery.py` | T17, T18 |
+| P2-EV-07 | "not Final" as DEFER trigger | three maturity rows; DEFER triggers redefined | report section 2 and 12 | doc review |
+
+### 3. Adapter reference design (model and report; a future slice would live in mctl-api)
 
 ```
 existing producers --XADD--> mctl:events:{github,telegram,synthetic}   (unchanged)
-                                   |
-                  XREADGROUP (new ACL user "mcp-events-relay", group per adapter)
-                                   v
-        mctl-api MCP Events adapter (future, behind a flag; owner mctl-api)
-          - events/list      -> allowlisted types the caller may subscribe to
-          - events/subscribe -> subscription row (tenant, principal, client, filters,
-                                callback, secret refs, expiry, epoch)
-          - events/unsubscribe / revocation -> epoch++ (fences in-flight deliveries)
-          - delivery: re-authorize -> project envelope -> sign -> POST (no redirects)
-          - cursor = stream entry id; poll/resume for reference client
-          - audit: XADD mctl:events:audit {id, correlation_id, subscription, stage}
-                                   v
-             host webhook (ChatGPT Work/dots) | reference polling client | mock recipient
-                                   v
-        host agent hydrates via existing authorized MCP/GitHub tools (no payload content)
+          | XREADGROUP (future ACL user "mcp-events-relay", one group for the adapter)
+          v
+  fanout: for each entry, ONE transaction in mctl-api's existing DB:
+      match active subscriptions (tenant-resolved, authorized filters)
+      INSERT delivery(subscription_id, event_id, webhook_id=random, state=pending,
+                      sub_seq=next per subscription) ON CONFLICT DO NOTHING
+      UPDATE adapter_position(stream, entry_id)
+    COMMIT  -> then XACK (stream PEL never waits on a recipient)
+          v
+  per-subscription delivery worker (independent backoff, inflight cap, quota)
+      CAS claim attempt WHERE sub.state=active AND sub.epoch=e
+      re-resolve + pin callback IP, sign (dual-sign in grace), POST, no redirects
+      2xx -> delivered (transport ACK) | 410 -> deactivate | 413 -> failed_final
+      other -> retry until caps -> dead_letter (+audit)
+          v
+  host / mock recipient -> hydrates via existing authorized tools; no authority
+  poll/stream clients: read stream directly through cursor.py (no per-sub rows)
 ```
 
-Key rules:
+The design decisions behind this diagram:
 
-- **Projection.** The Events item is the envelope v1 object plus the MCP framing
-  required by the pinned spec. No body, title or diff is added. Hydration
-  stays with `mctl-telegram` MCP or `gh pr view`, as in `events/README.md`.
-- **Ownership.** Subscription identity comes from authentication (the same
-  principal and OAuth-client derivation the WorkItem tools use). Filters are
-  `type` from an allowlist plus `subject` scopes. Each scope is authorized at
-  subscribe time and re-checked at delivery.
-- **Tenant resolution.** Envelope v1 has no tenant. The adapter maps the subject
-  to a tenant through existing bindings (for example `github.pull_request.repository`
-  goes through the repo binding the platform already uses for
-  `mctl_get_repo_binding`). An unresolvable subject reaches no tenant subscription.
-  Telegram events are operator-account events and are admin-only in a first slice.
-- **Durability and cursors.** Cursors are Valkey stream entry ids. The replay window is
-  bounded by `MAXLEN ~ 10000` and `maxmemory 200mb` (count-bounded, not
-  time-bounded), so the subscription advertises a retention hint and returns
-  `cursor_expired` when a cursor falls below `XINFO STREAM first-entry`. Ordering is
-  per stream. There is no cross-stream ordering guarantee.
-- **Dedupe.** `webhook-id` = envelope `id`. The adapter keeps a per-subscription
-  delivered set with a TTL at least the retry horizon. The reference recipient rejects a
-  seen `webhook-id`.
-- **Backpressure.** There is a per-subscription inflight cap and a queued quota. When
-  the quota is exceeded the adapter stops claiming for that subscription. The PEL
-  holds the entries, and other subscriptions are unaffected. `noeviction` means a
-  stuck group must never grow unbounded memory. The adapter therefore dead-letters
-  after the retry budget and `XACK`s with an audit record, mirroring the "reject,
-  audit and acknowledge" rule.
-- **Retries.** Bounded exponential backoff with jitter. 410 deactivates the
-  subscription. 413 is dropped and not retried. Other 4xx responses are dropped
-  after one attempt. 5xx responses and timeouts are retried.
-- **Callback safety.** HTTPS only; no userinfo; a port allowlist; no IP literal;
-  DNS resolution with every A/AAAA answer checked against deny ranges (RFC1918,
-  loopback, link-local 169.254/16 including metadata, CGNAT 100.64/10, ULA fc00::/7,
-  multicast, unspecified); connect to the checked IP (pinning) on every
-  delivery; redirects are not followed; a single-use challenge with constant-time compare before
-  activation.
-- **Secrets.** The per-subscription signing secret is generated server-side and stored
-  by reference (Vault in a future slice), with two-secret overlap for rotation. The
-  reference model keeps it in memory only.
-- **Replay protection.** Timestamp tolerance (default 5 minutes) plus the id set.
-- **Expiry, revocation and fencing.** Subscriptions carry `expires_at` and an
-  `epoch`. Unsubscribe, principal revocation or tenant removal increments the epoch,
-  and a delivery checks the epoch after signing and before sending, so a revoked
-  subscription never receives an event claimed before revocation.
-- **Two acks.** `delivered` means host 2xx. `processed` is only reported if the host
-  calls an explicit MCTL tool, and is never inferred. This mirrors the #66 lesson
-  that a fake ack is worse than none.
-- **Authority.** The delivery carries no grant. Acting still needs the existing tools,
-  approvals and the DevLoop decide page.
+- **Projection (EV-02).**
+  - `EventOccurrence` fields: `eventId = envelope.id`, `name = envelope.type`, `timestamp = occurred_at`, `data = {source, correlation_id, subject}` references only, and `cursor` = an opaque encoding of the position.
+  - `payloadSchema` in `events/list` is derived from envelope v1's `subject` constraints.
+  - A `webhook-id` is a random 128-bit id minted at materialization, persisted on the delivery row and reused on every retry.
+  - Control envelopes (`gap`, `terminated`, `verification`) get their own rows and ids.
+- **Ownership (EV-01).** The subscription key is `(principal, delivery.url, name, arguments)`. Tenant, principal and OAuth client come from authentication, using the same derivation as the WorkItem tools. The subscription id is server-minted and sent as `X-MCP-Subscription-Id`. The secret is client-supplied and held by reference: in memory in the model, Vault in a future slice. Only a fingerprint (`sha256` of the secret, truncated) appears in audit. During refresh the subscription holds `secret_current` and `secret_previous` with a `grace_until`.
+- **Tenant resolution.** Subject-to-tenant bindings (for example the GitHub repository goes through the repo binding). An unresolvable subject reaches no tenant subscription. Telegram events are admin-only in any first slice.
+- **Durable fanout (EV-04).**
+  - Stream entries are ACKed only after the materialization commit.
+  - Crash recovery rules:
+    - before commit: the entry stays in the PEL and `XAUTOCLAIM` re-materializes it, with `ON CONFLICT DO NOTHING` making that idempotent;
+    - after commit and before `XACK`: replay inserts nothing new;
+    - after POST and before marking `delivered`: the same `webhook-id` is resent and the recipient dedupes.
+  - Each subscription's progress is its own delivery rows and `sub_seq`, so one failing or revoked subscription cannot block another.
+  - Trim cannot lose a materialized delivery. A subscription paused by quota records `gap_from`, and on resume it receives a `gap` envelope.
+  - This reuses mctl-api's existing database and outbox pattern. No new bus.
+- **Cursors (EV-03).**
+  - Poll and stream cursors encode a stream entry id, and webhook cursors encode `sub_seq` or the entry id.
+  - `null` / absent means the current tail.
+  - Start = max(cursor, first retained entry, now − maxAgeMs). If that is later than the requested cursor, the response returns `truncated: true` with a fresh cursor.
+  - `maxEvents` drives `hasMore`.
+  - The internal `below_retention` flag goes to audit only.
+  - Ordering: per stream and per subscription. There is no cross-stream ordering.
+- **Revocation (EV-06).**
+  - The linearization point is the commit of `UPDATE subscription SET state='revoked', epoch=epoch+1`.
+  - An attempt must commit a claim row with `WHERE state='active' AND epoch=e` before POST.
+  - A claim that loses the race sends nothing.
+  - An attempt claimed before revocation may complete. `events/unsubscribe` responds only after such attempts finish or hit the HTTP timeout, so after the response nothing is in flight.
+  - Server-initiated termination (expiry, principal revoked, sustained failure) sends `terminated`.
+- **ACK facts.** `delivered` (transport 2xx), the delivery row state (persisted progress) and `processed` are separate. `processed` is set only via an explicit MCTL tool, which is an MCTL extension and not part of the spec. This follows the #66 lesson that a fake ack is worse than none.
+- **Fallback (EV-05).** Without the negotiated extension the model's client never calls `events/*`, and the server answers `-32601`. The documented fallbacks are Claude Channels (active Claude Code session) and host-scheduled reads through existing tools, with no shared cursor.
+- **Callback safety.**
+  - HTTPS only, no userinfo, a port allowlist and no IP literals.
+  - Every A and AAAA answer is checked against the deny ranges, at registration and at every delivery, and the connection goes to the pinned IP.
+  - Redirects are never followed.
+  - A `verification` envelope with constant-time echo is required before activation.
+- **Host profile.** The model's server is spec-conformant (`ext-events@17c0c64a`). The ChatGPT divergences are listed and **not** implemented as a compatibility mode. `webhook-id = eventId` breaks multi-subscription dedupe, and adopting it would need an owner ADR after live evidence. This decision is not taken here.
+- **Authority.** A delivery carries no grant. Acting uses existing tools and gates.
 
 ### 4. Offline reference model `docs/spikes/mcp-events-sep-3415/`
 
-Stdlib Python, the same style as `docs/spikes/finance-assistant/`:
+Stdlib Python, run with `python3 -I -m unittest`, no network. Modules:
 
-- `model/adapter.py`: the subscription store, filter authorization, projection,
-  cursor and retention, delivery state machine, retry, dead-letter and epoch fencing,
-  over an in-memory stream fake with `XADD`/`XREADGROUP`/`XACK`/trim semantics.
-- `model/webhooks.py`: Standard Webhooks sign and verify (HMAC-SHA256 over
-  `id.timestamp.body`), the challenge, and rotation.
-- `model/callback_guard.py`: URL and IP validation with an injectable resolver.
-- `model/recipient.py`: the read-only mock recipient and the reference polling client.
-- `fixtures/`: synthetic envelopes reused from `events/examples/valid/` plus a
-  synthetic `synthetic.devloop.proposal_ready` and a `github.pull_request` fixture.
-  No real content.
-- `tests/`: unittest, run with `python3 -I -m unittest`, no network.
+| File | Contents |
+|---|---|
+| `model/stream.py` | In-memory XADD/XREADGROUP/XACK/XAUTOCLAIM/MAXLEN fake |
+| `model/store.py` | Transactional in-memory DB with unique constraints, CAS updates and crash-injection points |
+| `model/subscriptions.py` | Key, secret validation and refresh, TTL and `refreshBefore`, epoch |
+| `model/projection.py` | Envelope to `EventOccurrence` |
+| `model/fanout.py` | Materialize-then-ACK |
+| `model/delivery.py` | Per-subscription workers, claim CAS, retry, 410/413, dead-letter, drain-on-unsubscribe, barrier hooks |
+| `model/cursor.py` | Cursor rules |
+| `model/webhooks.py` | Standard Webhooks signing, dual-sign, verification envelope |
+| `model/callback_guard.py` | Injectable resolver |
+| `model/server.py`, `model/client.py` | Capability negotiation |
+| `model/recipient.py` | Read-only mock recipient that dedupes on `webhook-id` |
+| `fixtures/` | Synthetic only, reusing `events/examples/valid/` |
+| `tests/` | The test suite |
+
+The spec quotes and the pinned commit live in `model/SPEC_PIN.md`.
+
+### 5. Verdict and DEFER triggers (report section 12)
+
+The proposed verdict is **BOUNDED_HOST_PILOT, offline-first**. The first approvable slice is this report, model and tests only. A flagged mctl-api slice on the synthetic stream, and any host delivery, are separate later gates.
+
+DEFER triggers, none of which is "not Final" alone:
+- the full spec text cannot be pinned at a commit;
+- the model cannot prove T12 to T15 (the fanout contract);
+- no target host is observed accepting spec-conformant deliveries, which leaves no interoperable consumer;
+- the owner rejects adding per-subscription rows to mctl-api's database.
 
 ## Alternatives
 
-ADR options, mapped to the issue's outcomes:
-
-1. **REUSE_NATIVE_EVENTS** (no MCP adapter; keep Claude Channels and give
-   other hosts polling skills). It is cheap and already deployed, but it is not
-   portable: only an active Claude Code session is woken, and that consumer is paused
-   in-cluster. It stays the fallback if the spec is not stable.
-2. **ADOPT_THIN_MCP_EVENTS_ADAPTER** in mctl-api now. Rejected as the
-   immediate step: the spec is "Scheduled" or Beta, not Final, no SDK is published,
-   the only documented host is ChatGPT Work or dots over webhook, the envelope lacks
-   a tenant, and the gateway (#236) that may own the public surface is moving.
-   Building production code against a moving extension risks rework and
-   a second authorization path.
-3. **BOUNDED_HOST_PILOT** (proposed). An offline reference model now. Then a
-   flagged, synthetic-stream-only adapter slice in mctl-api with a mock recipient,
-   and only after separate owner approval one ChatGPT Work webhook delivery of a
-   synthetic event. It is reversible, exercises every security rule, and does not touch the
-   Channel path.
-4. **DEFER.** Chosen automatically if task 2 cannot pin a spec text and revision, or
-   if the pinned spec diverges from the OpenAI-documented methods.
-
-Also dropped: a new broker or webhook fan-out service (it violates the "no second bus" rule).
-Putting the adapter in mctl-claude-remote was also dropped: that is a single-session consumer and
-currently paused, and a tenant-facing subscription store there would create a second
-authorization plane.
+1. **REUSE_NATIVE_EVENTS.** Keep Channels and polling skills only. It is cheap and deployed, but it is not portable, and the in-cluster consumer is paused. It remains the fallback.
+2. **ADOPT_THIN_MCP_EVENTS_ADAPTER now.** Rejected as the immediate step. The extension is Beta, no SDK was observed, the only documented host diverges from the spec on wire identity, envelope v1 lacks a tenant, and the gateway (#236) that may own the surface is moving.
+3. **Per-subscription consumer groups on Valkey instead of DB rows.** Dropped. It multiplies PELs on a `200mb noeviction` instance, needs dynamic ACL and group management per tenant subscriber, and makes revocation and retention per subscriber harder to fence. Reusing mctl-api's transactional DB keeps one authorization plane.
+4. **Adapter in mctl-claude-remote, or a new webhook fan-out service.** Dropped. The first is a single-session, paused consumer. The second would be a second bus and authorization plane.
 
 ## Platform impact
 
-- **Migrations:** none. The spike adds only docs, a manifest and offline code to
-  `mctlhq/.github`. Envelope v1, the streams, ACLs and the Channel consumer are unchanged.
-- **Backward compatibility:** the roadmap validator must accept the new
-  SpikeDefinition. The `events-validate.yml` examples are untouched.
-- **Resources:** none at runtime. CI adds a few seconds of offline unittest, if it is
-  wired at all. Otherwise it is run by hand, as other spike models are.
-- **Future-slice impact (documented, not done):** a new Valkey ACL user
-  `mcp-events-relay` (read and group only on chosen streams, audit `XADD`), a
-  subscription table in mctl-api, Vault secret refs, an outbound egress policy for
-  webhooks, and a consumer group whose PEL counts against `maxmemory 200mb noeviction`.
-- **Risks and mitigations:**
-  - P1: claiming host or spec support that is only announced. Mitigation: evidence
-    tags, `unknown (not observed)`, and no "Final" wording.
-  - P1: cross-tenant leak through platform-wide streams. Mitigation: fail closed
-    on unresolvable tenant, plus re-authorization at delivery (tested).
-  - P1: SSRF through callback URLs. Mitigation: the guard with DNS re-check and IP pinning (tested).
-  - P2: a stuck subscriber filling Valkey under `noeviction`. Mitigation: quotas,
-    a bounded retry budget, then dead-letter and `XACK`.
-  - P2: treating delivery as authority. Mitigation: a no-grant rule and separate ack types.
-  - P2: regressing Claude Channels. Mitigation: a separate group and ACL user, with the
-    baseline compared and not modified.
-  - P3: spec churn before Final. Mitigation: the DEFER trigger and isolating the projection
-    in one function.
-  - P3: cost. Mitigation: no live runs. Every later live run is a separate owner-approved gate.
+- **Migrations:** none. The spike adds only docs, a manifest and offline code. Envelope v1, streams, ACLs and Channels are unchanged.
+- **Backward compatibility:** the roadmap validator must accept the manifest, and the `events/tests` suite is untouched.
+- **Resources:** none at runtime. A few seconds of offline unittest.
+- **Future slice (documented, not done):**
+  - ACL user `mcp-events-relay`;
+  - mctl-api tables `mcp_event_subscription`, `mcp_event_delivery` and `mcp_event_adapter_position`;
+  - Vault references for client secrets;
+  - an egress policy for webhooks;
+  - one adapter consumer group whose PEL is bounded by the materialization latency, not by recipients.
+- **Risks:**
+  - P1: claiming host interop from spec conformance (or the reverse). Mitigation: a separate divergence table, with ChatGPT marked unknown until G-L3.
+  - P1: lost or duplicated per-subscriber delivery. Mitigation: materialize-then-ACK with crash tests T12 to T15.
+  - P1: cross-tenant leak through platform-wide streams. Mitigation: fail-closed tenant resolution and re-authorization at materialization and at claim.
+  - P1: secret leakage. Mitigation: client-supplied secrets, fingerprint-only audit, and a test scanning logs and captures (T5).
+  - P2: revocation race. Mitigation: the linearization point plus the barrier test T17.
+  - P2: SSRF and rebinding. Mitigation: the guard plus T20.
+  - P2: Channels regression. Mitigation: no change to that path.
+  - P3: spec churn from Beta. Mitigation: the pinned commit and isolated projection and cursor modules.
+  - P3: cost. Mitigation: no live runs.
