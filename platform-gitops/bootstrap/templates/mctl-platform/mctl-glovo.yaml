@@ -57,7 +57,7 @@ and must exist first.
 {{- /* gitops-bump / release-deploy rewrite the tag line below (values_path is this file). */}}
 {{- $image := fromYaml `
   repository: ghcr.io/mctlhq/mctl-glovo
-  tag: "0.3.2"
+  tag: "0.4.0"
 ` }}
 {{- $tsImage := "ghcr.io/tailscale/tailscale@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4" }}
 {{- $socatImage := "alpine/socat@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba" }}
