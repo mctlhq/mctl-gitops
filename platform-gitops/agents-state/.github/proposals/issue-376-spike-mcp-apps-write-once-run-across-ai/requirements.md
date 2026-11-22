@@ -143,3 +143,44 @@ Gates and decisions
 - Bridge implementation: default is to vendor the pinned official ext-apps `App` browser build (`app-with-deps`); the ext-apps `./server` helpers (`registerAppTool`, `registerAppResource`) are documented by Claude as generating "each host's metadata for you", which matters for TS consumers but not for the Go Telegram server.
 - `ui.domain`: omitted by default (the Telegram View makes no network calls). Claude documents `<first 32 hex of SHA-256(server URL)>.claudemcpcontent.com`; the spec cites URL-derived `*.oaiusercontent.com` as another host's example; Antigravity's format was not found. Because one resource carries one `ui.domain` and formats differ per host and per server URL (route), any emitted value needs a reviewed per-host, per-route entry. Antigravity authenticates via DCR (its redirect `https://antigravity.google/*` is allowlisted, but `antigravity.google` is not in `OAUTH_CIMD_ALLOWED_HOSTS`), so it can only be selected by an explicit operator binding or not at all.
 - mctl-api live state: GitOps pins `admins-mctl-api` (bootstrap template blob `1f54cb70`, chart `a91f7fb4` described as the 4.171.0 release commit, image `4.173.0`), but the live Argo application was not observable from this run (`mctl_get_service_status` found no `admins-mctl-api`; sync-window reads are outside this run's scope). This must be observed before backlog slice B5.
+
+## Non-blocking adjacent-UI research (owner screenshots, 2026-11-22)
+
+This is a comparison appendix within Phase 0 task 7, **not** a fourth MCP Apps
+host, new renderer implementation or an additional G1–G6 acceptance gate.
+The core three-host MCP Apps portability contract above is unchanged.
+
+- WHEN the Phase 0 report is written THE SYSTEM SHALL briefly distinguish
+  MCP Apps SEP-1865 (pre-built sandboxed HTML/JS bundle), A2UI 1.0 (agent-authored
+  declarative component tree rendered by a host-owned trusted catalog),
+  A2UI-over-MCP (`application/a2ui+json` / `a2ui://` resource or tool
+  response requiring an A2UI-capable renderer), A2UI *inside* an MCP App
+  (the App bundle hosts the renderer), AG-UI (#258/#261: agent↔user event,
+  state and action transport), and GPUI (Rust desktop rendering engine).
+- THE SYSTEM SHALL pin the A2UI protocol version and each actual renderer
+  version separately and record undocumented AI-host support as `unknown`;
+  MCP Apps compatibility SHALL NOT imply A2UI-over-MCP rendering support.
+- THE SYSTEM SHALL identify one later **synthetic read-only** Personal
+  Assistant/DevLoop status-or-choice-card evaluation, including catalog
+  allowlisting, schema validation, accessibility, state/replay handling,
+  host-vs-app render options, and a plain-text fallback. This is a backlog
+  hypothesis only, coordinated with #258/#261; no product runtime or agent
+  approval path changes are authorized here.
+- THE SYSTEM SHALL document GPUI as `DEFER_NATIVE_DESKTOP`: it cannot
+  replace an MCP Apps iframe, run as an AI-host transport, or establish
+  cross-host portability. Any desktop GPUI/Tauri/Electron benchmark needs a
+  separate explicit owner gate and MCTL workload measurements.
+- A generated component action SHALL never be treated as authorization.
+  Consequential tool calls retain existing canonical identity, tenant
+  policy, exact-payload approval, fencing, idempotency and audit controls.
+
+Sources to record in the report:
+- Google A2UI 1.0 (2026-11-11):
+  https://developers.googleblog.com/en/a2ui-10-build-delightful-fast-reliable-agentic-experiences/
+- A2UI + MCP Apps design patterns (2026-06-17):
+  https://developers.googleblog.com/en/a2ui-and-mcp-apps/
+- Official A2UI source: https://github.com/a2ui-project/a2ui
+- GPUI: https://gpui.rs/examples/
+- Owner screenshots of Better Stack's A2UI (2026-11-21) and GPUI
+  (2026-11-20) videos are discovery context, not a watched transcript or
+  reproduced benchmark.
