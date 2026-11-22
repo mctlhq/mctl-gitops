@@ -1,8 +1,10 @@
 # Sync-window write path: what is built, and the mctl-api step (#2828 S1)
 
-**Status (updated 2026-11-22, after the first version of this file): steps 1
-and 2 are built and merged. The mctl-api step is built in three slices, all
-dark by default: S1 is merged (mctl-api#1153), S2 and S3 are not started.
+**Status (updated 2026-11-22, evening): steps 1 and 2 are built and merged.
+The mctl-api step is built in three slices: S1, S2 and S3 are merged
+(mctl-api#1153, #1154, #1155), released as mctl-api 4.173.0, and switched on
+with `RELEASE_WINDOWS_ENABLED=true` (gitops#2909). The first real run was
+made and watched the same evening (section 2). No window is on `main`.
 Section 5 records which decisions are now made and which are still open. This
 file authorises nothing; merging it is not a GO.**
 
@@ -65,12 +67,15 @@ mctl-api's own, not the S0 and S1 stages of the #2828 design:
   JSON>`. The server reads main's head itself and treats a failed read as
   unavailable, never as a guess. It computes the same `window_sha256` as the
   workflow, checked against shared golden vectors.
-- **S2, not started.** The MFA decide page for `release.window`, a clone of the
+- **S2, merged 2026-11-22 (mctl-api#1154).** The MFA decide page for
+  `release.window` at `/release/window-approvals/{aar_id}`, a clone of the
   release-grant page: fresh sign-in, MFA, only the owner decides. It decides
-  and does nothing else. Open fork: a second redirect URI on the page's
-  ZITADEL client (new callback path, no change to the live grant page) or a
-  shared callback.
-- **S3, not started.** The MCP tool and a REST execute route, in two calls.
+  and does nothing else. The fork was settled as a new callback path with a
+  second redirect URI on the same ZITADEL client (`mctl-api-release-approval`,
+  gitops#2905); the live grant page is unchanged.
+- **S3, merged 2026-11-22 (mctl-api#1155).** The MCP tool
+  `mctl_propose_release_window` and the REST route
+  `POST /api/v1/release/windows/{approval_id}/execute`, in two calls.
   The first returns the pending approval and its decide URL. The second, with
   the same arguments once the approval is granted, consumes it and dispatches
   `release-window-pr.yml`. A dispatch returns no run id, so the tool answers
@@ -95,6 +100,17 @@ Scope, as agreed so far:
 - Audit: request id, caller, window id, hash, the workflow runs link, PR
   number once it exists.
 
+First real run, 2026-11-22: request `aar_a495ad1bbdbb4c7cb3c1415f2c0482df`
+(window `w-cb40a0fccceb`: project `apps`, `admins-umami`, deny, `0 3 * * 1`,
+1h) decided by the owner with MFA at 18:36Z, executed at 18:37Z
+(`approved -> in_flight -> executed`). Workflow run 45056122362 opened PR
+#2915 from `release-window/w-cb40a0fccceb` as `mctl-gitops-pr[bot]`, one file,
+a diff identical to the approved window. The PR was closed unmerged and its
+branch deleted before its CI finished, so the validator result for that PR was
+not observed (the trial PR #2893 did pass it). Observed: the REST read
+`GET /api/v1/release/windows` lists windows from git, not approval state; the
+approval state is read by repeating the same `POST`, which is idempotent.
+
 Not in this step: removing or shortening a window, the exception path
 (`release.freeze_exception`, broker), a calendar policy file, activation
 checks. Each needs its own proposal.
@@ -109,11 +125,11 @@ written at GO time.
 
 ## 3. Facts about mctl-api, and what is verified
 
-Verified on GitHub on 2026-11-22: mctl-api#1153 (S1) is merged, and its
-description says the slices were agreed with the owner. The S2 and S3 detail
-above comes from the working session's notes and is not in any pull request
-yet. The rest is from a read-only scouting pass the same day against the
-default branches, to be re-checked when the work starts: the read tool lives in
+Verified on GitHub on 2026-11-22: mctl-api#1153, #1154 and #1155 (S1 to S3)
+are merged and shipped in release 4.173.0, and #1153's description says the
+slices were agreed with the owner. The rest is from a read-only scouting pass
+the same day against the default branches, to be re-checked if the code
+moves: the read tool lives in
 `internal/api/handlers_syncwindows_read.go` and `internal/argocd/syncwindows.go`;
 `internal/ghactions/dispatch.go` already dispatches workflows (the portal apply
 tool uses it); `release_approvals.go` defines the dedicated kind
@@ -154,6 +170,10 @@ generic route.
    review with no self-approval and the merge queue, and the real approval is
    the merge, which is a person on a protected path. The kind adds a second,
    earlier human step on the request.
-4. **GO to implement the tool.** S1 is built and merged. S2 and S3 are not
-   started; each release goes through the release ledger with the owner at the
-   screen, and the first real dispatch is its own watched checkpoint.
+4. **GO to implement the tool.** Given in session on 2026-11-22 for the
+   release of S1 to S3 and for the first real run, both done (4.173.0, flag on
+   through gitops#2909). Any real window on `main` is a separate decision.
+   Open follow-ups from the S3 review (mctl-api#1155, P3): settle on
+   `context.WithoutCancel` so a client disconnect does not leave the approval
+   `in_flight` for the 10-minute reclaim, and an `in_flight` row past
+   `expires_at` reports `ErrApprovalInFlight` instead of expired.
