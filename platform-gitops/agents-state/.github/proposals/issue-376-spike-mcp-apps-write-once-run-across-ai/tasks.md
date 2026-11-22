@@ -90,3 +90,20 @@ Specified now, implemented in product repos (B1, B2, B3, B5):
 - B3: revert the mctl-gitops PR, which removes the isolated deployment; clean up the throwaway account per the runbook.
 - B5: the mctl-api feature flag defined in that issue.
 - A DEFER or UNMEASURED outcome leaves the artifacts as the recorded measurement.
+
+## Non-blocking Phase 0 task 7 appendix: A2UI and GPUI comparison
+
+- [ ] 7a. Within the existing report-writing task 7 (no extra implementation),
+  add a source-pinned comparison table for MCP Apps, A2UI 1.0, A2UI-over-MCP,
+  A2UI inside an MCP App, AG-UI and GPUI as specified in design.md. Record
+  independent host/renderer capability, actual protocol versus renderer
+  versions, trust boundary, native/iframe presentation and text fallback.
+  DoD: no A2UI native-host assertion without observed evidence; no change
+  to the G1–G6/D1 portability verdict, fixed-bundle hash or three core hosts.
+- [ ] 7b. Record a *later* synthetic read-only A2UI PA choice-card or
+  DevLoop Run Inspector experiment, linked to .github#258/#261, requiring
+  its own issue, independent review and explicit owner GO. No renderer
+  implementation, runtime code, UI-originated writes, approval UI, GPUI
+  desktop implementation or production account connection is part of
+  tasks 1–8. GPUI defaults to DEFER_NATIVE_DESKTOP until a separate
+  workload-based benchmark is authorized.
