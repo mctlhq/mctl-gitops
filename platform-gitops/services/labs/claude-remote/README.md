@@ -114,8 +114,8 @@ pod comes back. Verify it then, in this order, before leaving the pod alone:
    `r2_ops_budget_class_a_used` (vm-rules/r2-ops-budget.yaml) should rise far
    slower than that. If the bucket is back near 19k a day, the cadence did not
    take effect: check the `s3-sync` args for `MIRROR_EVERY`. An
-   `R2OpsClassANearFreeTier` or `R2OpsClassAProjectedOverFreeTier` alert in the
-   first days after a resume is the same signal.
+   `R2OpsClassAHeadingOverFreeTier` alert in the first days after a resume is
+   the same signal.
 
 If any step fails, set `replicaCount` back to 0 by PR rather than debugging with
 the pod running against a possibly held account.

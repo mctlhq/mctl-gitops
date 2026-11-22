@@ -32,7 +32,9 @@ status says only whether the push got through. A successful read replaces the
 whole group (PUT), so a figure that no longer applies, such as the projection
 in the first two days of a cycle, cannot outlive its cycle. A failed read
 names only read_ok and the run time (POST) and leaves the last good figures
-alone: an unknown run must neither lower the count nor erase a high one.
+alone: an unknown run must neither lower the count nor erase a high one. That
+includes cycle_end, which is what lets the alerts tell, after the cycle has
+rolled over, that the count they still hold belongs to the cycle before.
 Without --pushgateway: 0 read, 2 could not be determined.
 
 The token comes from CLOUDFLARE_API_TOKEN and is sent only in the
@@ -208,6 +210,9 @@ def render_metrics(result: tuple[int, int] | None, start: dt.datetime, end: dt.d
             f"r2_ops_budget_class_a_free_tier {FREE_TIER_CLASS_A}",
             "# TYPE r2_ops_budget_cycle_start_timestamp_seconds gauge",
             f"r2_ops_budget_cycle_start_timestamp_seconds {start.timestamp():.0f}",
+            "# HELP r2_ops_budget_cycle_end_timestamp_seconds When the cycle the figures belong to ends.",
+            "# TYPE r2_ops_budget_cycle_end_timestamp_seconds gauge",
+            f"r2_ops_budget_cycle_end_timestamp_seconds {end.timestamp():.0f}",
             "# TYPE r2_ops_budget_unclassified_actions gauge",
             f"r2_ops_budget_unclassified_actions {unclassified}",
         ]
@@ -308,6 +313,8 @@ def selftest() -> int:
           "r2_ops_budget_read_ok 1\n" in body and "r2_ops_budget_class_a_used 850000\n" in body
           and "r2_ops_budget_class_a_free_tier 1000000\n" in body
           and f"r2_ops_budget_last_read_success_timestamp_seconds {now:.0f}\n" in body)
+    check("a read pushes the end of the cycle its figures belong to",
+          f"r2_ops_budget_cycle_end_timestamp_seconds {end.timestamp():.0f}\n" in body)
     cycle_len = (end - start).total_seconds()
     check("the projection scales the pace so far to the whole cycle",
           f"r2_ops_budget_class_a_projected {850_000 * cycle_len / day10:.0f}\n" in body)
@@ -316,7 +323,8 @@ def selftest() -> int:
     bad = render_metrics(None, start, end, now)
     check("a failed read pushes read_ok 0 and nothing about the count or success",
           "r2_ops_budget_read_ok 0\n" in bad and "class_a_used" not in bad
-          and "last_read_success" not in bad and "projected" not in bad)
+          and "last_read_success" not in bad and "projected" not in bad
+          and "cycle_end" not in bad)
     return 0 if all(cases) else 1
 
 
