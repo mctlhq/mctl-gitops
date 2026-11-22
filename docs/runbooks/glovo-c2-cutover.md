@@ -43,7 +43,7 @@ approval, never implied by a merge).
 
 | # | Fact | Tag | Source |
 |---|---|---|---|
-| F1 | SUPERSEDED (2026-11-22). Written 2026-11-18: all five existing switches `deploy`, `c2`, `allowlist`, `consent`, `control` were `false`. On main now `deploy`, `c2`, `allowlist`, `consent`, `control`, `apiConsent`, `linkLogin`, `ingress` and `apiC2Control.killSwitch` are `true`, `capacity` is 1 and `linkAttemptsPerHour` is 15. | [V] | `platform-gitops/bootstrap/values.yaml`, block `mctlGlovo`, main d712360fc |
+| F1 | SUPERSEDED (2026-11-22). Written 2026-11-18: all five existing switches `deploy`, `c2`, `allowlist`, `consent`, `control` were `false`. On main now `deploy`, `c2`, `allowlist`, `consent`, `control`, `apiConsent`, `linkLogin`, `ingress` and `apiC2Control.killSwitch` are `true`, `capacity` is 1 and `linkAttemptsPerHour` is 15. | [V] | `platform-gitops/bootstrap/values.yaml`, block `mctlGlovo` and `apiC2Control`, main 4915c6f5e (re-read 2026-11-22) |
 | F2 | Render rules: `deploy` refuses the placeholder image tag; `c2` needs `deploy`; `allowlist`, `consent`, `control` need `c2`; `c2` needs `allowlist` or `consent`. | [V] | `platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml` |
 | F3 | SUPERSEDED: the pin is now `0.4.0` (section 12). Written 2026-11-18: the pinned service image tag was `0.1.0`, the only release at the time; it predates the read-only-by-default change (mctl-glovo#54, merged aa9b3cc3, unreleased). Deploying `0.1.0` does not give the read-only guarantee. | [V] | template image block; `gh api repos/mctlhq/mctl-glovo/releases`; mctl-glovo#59 (0.2.0) open |
 | F4 | The service has a ClusterIP Service and, before the wiring PR below, no Ingress object. | [V] | same template |
@@ -97,13 +97,13 @@ effect.
 | 1 | Vault and infrastructure (owner). Names in section 7. | OWNER | Field names and metadata only, never values (`vault kv metadata get`). `[U]` today. | none (nothing reads them yet) | delete the entries |
 | 2 | `deploy: true` (and the image tag set to the step 0 release). | AGENT, GO | Tag is not the placeholder (render refuses otherwise); database `mctl-glovo` and roles `glovo_c2_runtime` / `glovo_c2_migrator` in the CNPG manifests (present on main, [V] `infra-components/data/cnpg/shared/`), actual state [U]; step 1 migrator credentials exist. | Namespace, migration Job, a bare Deployment (no C2 code path). | `deploy: false`. Closed: the Deployment is gone. The schema stays (forward only). Evidence after: Job exit 0 and "schema at version N"; `/readyz` proves nothing about C2. |
 | 3 | `apiConsent: true` (mctl-api side), with a `ROLLOUT_MARKER` bump in the same PR. | AGENT, GO | F12 solved (a service-kind provider entry and the subject exist); Vault `platform/mctl-api/glovo-consent` fields present; mctl-api image at the release with the consent routes (config accepted by `--check-config`, and stores booting on a throwaway Postgres with `/readyz` stores ok, both in the release gate, F15; `--check-config` alone opens no store, which is how the first flip stalled, gitops#2827 / mctl-api#1136), and the mctl-api release containing mctl-api#1136 (per-store init contexts); capacity value agreed (section 6). | mctl-api mounts the consent routes (record, read, withdraw) with the cap. No service reads them yet. | `apiConsent: false` (+ marker). Closed: `GET /api/v1/glovo/link-consent` answers 404 (routes unmounted); recorded consents stay in the table (history). |
-| 4 | `c2: true` and `allowlist: true`, `capacity` set in this PR or left at its default. | AGENT, GO | Steps 2 and 3 observed; allowlist Vault entry holds exactly one principal (field count only); audit key, Vault transit key and role, tailnet key and proxy target present (names only); proxy reachable by the egress tag ACL [U]; image tag has read-only by default. | `GLOVO_C2_ENABLED=true`, Vault login, database connection, egress sidecars, `/link` and `/mcp` mounted INSIDE the cluster only (no route yet). Store ships KILLED. | `c2: false` and `allowlist: false` in the same PR (`allowlist` requires `c2`, so setting only `c2: false` fails the render). Closed: the routes answer 404 as seen from inside the cluster by a one-shot probe from an allowed namespace and the backend is identified by a distinct marker; `/readyz` is vacuously 200. Evidence after: no `exit` and no `initial jwks fetch failed` in a clean start. |
+| 4 | `c2: true` and `allowlist: true`, `capacity` set in this PR or left at its default (1, which is also the committed value). | AGENT, GO | Steps 2 and 3 observed; allowlist Vault entry holds exactly one principal (field count only); audit key, Vault transit key and role, tailnet key and proxy target present (names only); proxy reachable by the egress tag ACL [U]; image tag has read-only by default. | `GLOVO_C2_ENABLED=true`, Vault login, database connection, egress sidecars, `/link` and `/mcp` mounted INSIDE the cluster only (no route yet). Store ships KILLED. | `c2: false` and `allowlist: false` in the same PR (`allowlist` requires `c2`, so setting only `c2: false` fails the render). Closed: the routes answer 404 as seen from inside the cluster by a one-shot probe from an allowed namespace and the backend is identified by a distinct marker; `/readyz` is vacuously 200. Evidence after: no `exit` and no `initial jwks fetch failed` in a clean start. |
 | 5 | `consent: true` (the service's reader and its `token-refresher` sidecar). | AGENT, GO | Step 3 observed; Vault `platform/mctl-glovo/consent-reader` (`key`, `user_id`, `key_id`, `scope`) present; zitadel-iac machine user applied (#2737). | The service reads consent from mctl-api; an active `glovo:c2` consent admits a principal (narrowed by the allowlist). | `consent: false`. Closed: the token file disappears and consent reads refuse (fail closed). Evidence after: refresher log `token refreshed`. |
 | 6 | `control: true` and the #2742 chain: prerequisites, then `chartSlots: true` with the chart pin move and the refresher tag and command, then `apiC2Control.enabled`, verify the Secret and the token file, then `killSwitch: true`. | AGENT, GO per sub-step | Everything in #2742's own order list; Vault role for the one-key store; `platform/mctl-glovo/control` and `control-caller` fields present. | The kill switch endpoint is mounted (service side) and mctl-api can call it. Every PUT, even "keep killed", is a production action with its own GO. | mctl-api side first: `killSwitch: false`, then `enabled: false`, then `control: false`. Safe: without the token file the client answers "unknown". Closed: the endpoint answers 404. |
 | 7 | `linkLogin: true`. | AGENT, GO | Step 4 observed; mctl-api A2 and mctl-glovo B2 released and deployed (F16); `linkMaxAuthAge` decided (default 5m). | `/link/code`, `/link/preview` and `/link/upload` accept the link-audience fresh token (from 0.4.0 the helper requests its own code at `/link/code`, section 12). All three still refuse with 503 `linking_disabled` while the store is killed (section 9). | `linkLogin: false`. Closed: preview and upload answer 503 again (documented behavior of the unset variable, F9). |
-| 8 | Public route: `ingress: true` plus the host owner entry plus the edge change (section 5). | AGENT for the gitops PRs, OWNER for the host choice and the edge apply, GO | Steps 4 to 7 observed; host decided; Traefik pod CIDRs known (the same set as mctl-api `TRUSTED_PROXY_CIDRS`); the glovo-home fallback condition of section 5 recorded. | The route to the cluster service exists; traffic moves only when the edge points at it. | See section 5. Closed: external `/link` and `/mcp` identify the old backend again. |
+| 8 | Public route: `ingress: true` plus the host owner entry plus the edge change (section 5). | AGENT for the gitops PRs, OWNER for the host choice and the edge apply, GO | Steps 4 to 7 observed; host decided; Traefik pod CIDRs known (the same set as mctl-api `TRUSTED_PROXY_CIDRS`); the glovo-home fallback condition of section 5 recorded. | The route to the cluster service exists; traffic moves only when the edge points at it. | See section 5. Closed: external `/link` and `/mcp` identify the old backend again; moving traffic back means re-adding the `glovo` record in the private infra repository (section 5, Closing, item 1). |
 | 9 | CORRECTED 2026-11-22: linking happens INSIDE the kill-switch window, so the old order (link at step 9, un-kill at step 10) was wrong. While the store is killed the code request, the preview and the upload all refuse with 503 `linking_disabled`. Step 9 is now: record the consent, open the window, link, read check, close the window; the exact sequence with its separate GOs is section 9. | OWNER (a direct human platform admin opens and closes the window; agents get 403) | Step 8 observed. Section 9 preconditions. `glovo-link` shows only a masked identity. | One stored session, one consent slot. | Close the window (kill), `c2: false` and withdraw the consent in mctl-api. Unlink works under kill and needs no Vault (section 11). |
-| 10 | Merged into step 9 (the window, the read check and the re-kill are one bounded operation). Evidence bundle: the times of the three steps and the `kill_switch_flip` and `link` audit lines. | OWNER decides, mctl-api admin acts | Separate GO per POST; observer named; kill state before is recorded. | Read-only tool calls by the one principal. | Flip to killed; then `c2: false` if needed. A latch after a decrypt-cap trip clears only by a pod restart (its own GO). |
+| 10 | Merged into step 9 (the window, the read check and the re-kill are one bounded operation). Evidence bundle: the times of the three steps and the `kill_switch_flip` and `link` audit lines. | OWNER decides, mctl-api admin acts | Separate GO per POST; observer named; kill state before is recorded. | Read-only tool calls by the one principal. | Flip to killed; then `c2: false` if needed. A latch after a decrypt-cap trip (100 an hour service-wide) clears only by a pod restart (its own GO). |
 
 Not in this plan, by design: raising the allowlist or capacity, basket writes,
 stages above owner-only. A step that wants any of them is a different plan.
@@ -147,8 +147,9 @@ Opening, in this order. Each item is its own PR or action.
    `ingress: true`.
    Result: an Ingress exists, Traefik can reach the pod on 8080 (the server
    policy adds a Traefik-only source), the kill switch path and health paths
-   are never in the Ingress. No traffic moves: the edge still points at the
-   mini (F6).
+   are never in the Ingress. At the time of this plan no traffic moved
+   because the edge still pointed at the mini (F6); SUPERSEDED 2026-11-22:
+   the record was removed (item 4) and the host now reaches Traefik.
 4. Edge, two changes in two repositories (DONE 2026-11-22). In this
    repository, a `glovo.mctl.ai/link*` route with no script so `/link` reaches
    an origin (it would otherwise be served by the landing Worker), applied
@@ -183,7 +184,7 @@ The old mini route stays as the fallback:
   stage. The rollback of step 8 is the edge revert (the record re-added in the
   infra repository), not a rebuild of the mini. The mini's session is NOT a
   hot standby: once the cluster holds the refresh-token chain the mini must not
-  refresh the same session (section 9, step 5 note), so after the link it is a
+  refresh the same session (section 9, the mini keepalive rule), so after the link it is a
   fallback that needs its own fresh Glovo login.
 - `glovo-home` offers three basket write tools without an approval step on the
   same host and audience (mctl-glovo#49 comment, 2026-11-17 [V]). After a
@@ -219,10 +220,20 @@ The old mini route stays as the fallback:
   boot). Why: the code request, the preview and the upload each count one
   link attempt, so one link takes 3, and the service-wide default is 5 x
   capacity an hour (5 at capacity 1). That was exhausted during the first
-  link; with 15 the owner has five complete links an hour. The per-address cap
-  (10 an hour) is untouched. The counters live in pod memory, so a pod restart
-  resets them; changing the value rolls the pod and resets them too. A cap
-  change is its own PR.
+  link. Two caps apply to every attempt: the service-wide cap (15 an hour as
+  committed) and the per-address cap (10 an hour, untouched, counted on the
+  same 3 calls). Both must have room, so the tighter one rules: one address
+  gets 3 complete links an hour (9 attempts), not 5; the service-wide 15 only
+  matters for several addresses. The counters live in pod memory; a pod
+  restart (or a rollout from changing the value) resets them as a side effect.
+  That is NOT a remedy for a 429: a restart is a production action with its
+  own owner GO, and it also drops the in-memory client and latches the kill
+  state (token-store design, retention table). A cap change is its own PR.
+- Decrypt caps can self-kill a pilot: more than 30 decrypts an hour for one
+  principal suspends that principal, and more than 100 an hour service-wide
+  trips the kill switch and latches it until a pod restart (its own GO). No
+  Glovo-specific alert rule exists in gitops yet; observation is manual, from
+  the service log.
 - No step raises capacity or the allowlist by itself. The allowlist is a
   principal list in Vault (`platform/mctl-glovo/c2-access`, field
   `allowed_principals`); it is never written into this repository.
@@ -263,8 +274,17 @@ section 9), every kill-switch POST, every GO, and the `STOP` word. Login to Vaul
 5. Observability: the service emits only logs (no metrics, no sender); a
    named observer is needed for the window [V per the unmerged runbook, [U]].
 6. TLS: the wiring renders an Ingress with no `tls` block and no cert-manager
-   annotation (the tunnel terminates TLS at the edge, if it does) [U]. If the
-   origin must serve a certificate, that is an addition to the ingress step.
+   annotation. Since 2026-11-22 the host reaches Traefik through the proxied
+   wildcard with the origin-pull client certificate (section 5), not through
+   the tunnel; which certificate Traefik serves for this host is [U], and
+   nothing in this repository states it. If the origin must serve a specific
+   certificate, that is an addition to the ingress step.
+7. Session lifecycle: the hosted service has NO keepalive and no refresh
+   caller (the token-store design describes one in section 4.5, but it is not
+   built; `cmd/mctl-glovo` has none). The linked session is refreshed only when
+   a tool call uses it, so a dormant linked session can silently die. The kill
+   switch does not protect it. Recovery is a relink, which needs the service
+   un-killed (section 9) and a session whose access token is fresh.
 
 ## 9. Operator sequence for linking (verified live 2026-11-22)
 
@@ -275,32 +295,56 @@ cannot work. Each numbered action is its own production action with its own
 recorded owner GO. A kill-switch POST is made by a direct human platform admin
 (the owner); a call from an agent identity answers 403.
 
+Order matters because of the freshness rule below: the slow, interactive
+parts come first, and the session refresh is the LAST preparation, right
+before the helper runs.
+
 1. Preconditions, read-only: the service runs the pinned release (section 12),
    the helper on the owner's machine is at least 0.4.0, and the kill state
    before is recorded (the control route has no read, so it is UNKNOWN unless a
    dated observation exists; section 4 step 6 and the c2-operations runbook).
+   Attempts left: count the attempts used since the window opened (3 per
+   helper run) against both caps of section 6 (per-address 10 an hour,
+   service-wide 15 an hour). Never start a run that cannot finish all 3.
 2. Record the consent: `PUT /api/v1/glovo/link-consent`, version `c2-link-v2`.
-3. Fresh Glovo session (see the freshness rule below), prepared BEFORE the
-   window opens so the window stays short.
-4. Open the window: `POST /api/v1/admin/glovo-c2/kill-switch` with
-   `{"killed":false}`. The CLI token lives about one hour: run `mctl auth
-   login` again before each POST.
-5. Link: run `glovo-link`, type the answer to the y/N question in Latin
+3. Install the helper (0.4.0 or later) and have the browser sessions ready
+   (the Glovo login and the platform login).
+4. Open the window: `mctl auth login` first (the CLI token lives about one
+   hour, owner-reported), then `POST /api/v1/admin/glovo-c2/kill-switch` with
+   `{"killed":false}`.
+5. Last preparatory step: the fresh Glovo session (see the freshness rule
+   below), taken immediately before the helper, so the upload happens within
+   the ~20 minute deadline.
+6. Link: run `glovo-link`, type the answer to the y/N question in Latin
    letters (section 10, last row), upload the session. One link is three
    attempts (section 6).
-6. Read check through the connector (a read-only tool such as
+7. Read check through the connector (a read-only tool such as
    `glovo_get_basket`). 2026-11-22: linked 17:25Z, read verified 17:29Z.
-7. Close the window: the same POST with `{"killed":true}`. 2026-11-22: closed
+8. Close the window: the same POST with `{"killed":true}`. 2026-11-22: closed
    17:31Z. Confirm the response is `200 {"killed": true}` and nothing else is
    assumed about other replicas.
 
-Session freshness (this cost two attempts on 2026-11-22). The upload validator
-makes one basket read with the uploaded session and never refreshes it (a
-refresh would rotate the refresh token). The Glovo access token lives about 20
-minutes (`expiresIn` 1198 s), so a session file older than that is refused as
+Retry rule. Before re-running the helper, count the attempts used since the
+window opened (3 per run; a failed upload still consumes one) against both
+caps. Never retry in a loop. A pod restart resets the in-memory counters only
+as a side effect; it is not a remedy (section 6).
+
+Session freshness (this cost two attempts on 2026-11-22, when the session was
+prepared before the slow steps). The upload validator makes one basket read
+with the uploaded session and never refreshes it (a refresh would rotate the
+refresh token). The Glovo access token lives about 20 minutes (`expiresIn`
+1198 s, owner-observed), so a session file older than that is refused as
 `glovo_validation_failed` inside the service, which the client sees as
 `session_refused` (HTTP 422). The session must have been refreshed within the
-last ~20 minutes when it is uploaded. If the session is taken from the mini:
+last ~20 minutes when it is uploaded.
+
+Mini keepalive procedure. PRECONDITION: use it ONLY for the very first link,
+while the cluster holds no session and no earlier upload succeeded. Never use
+it for a relink or after a successful upload (even one whose read check
+failed): the keepalive calls a basket read that refreshes and rotates the
+refresh token, which would break the cluster's copy. A relink needs a fresh
+Glovo login captured by the normal capture tooling, not the mini. For the
+first link only:
 
 1. set `GLOVO_HOME_KEEPALIVE=1m` on the mini and wait for the first tick (it
    refreshes and rewrites the session file);
@@ -308,18 +352,17 @@ last ~20 minutes when it is uploaded. If the session is taken from the mini:
 3. copy the file and run the helper within minutes.
 
 After the cluster holds the chain, the mini must NOT refresh the same session
-again, because rotation would invalidate the cluster's copy. Keep
-`GLOVO_HOME_KEEPALIVE=0` there and treat the mini as a fallback that needs its
-own fresh login.
+again. Keep `GLOVO_HOME_KEEPALIVE=0` there and treat the mini as a fallback
+that needs its own fresh login.
 
 ## 10. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | HTTP 503 `linking_disabled` (helper: "refused: linking is switched off") on code, preview or upload | The store is killed. Linking is refused under kill, by design (section 9). | Open the window (section 9, step 4, owner GO), link, close the window. Do not flip `linkLogin`; that variable answers a different 503 (F9). |
-| HTTP 429 `rate_limited` (helper: "too many link attempts") | A link attempt cap was hit: service-wide (`GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR`, 5 x capacity by default, 15 as committed) or per address (10 an hour). Code, preview and upload each count one, so one link takes 3. | Wait for the oldest attempt to leave the one-hour window, or raise `linkAttemptsPerHour` in its own PR (rolls the pod; a restart also resets the in-memory counters). Do not retry in a loop; the helper does not retry a refused code request. |
-| HTTP 422 `session_refused` (server side `glovo_validation_failed`) | Glovo rejected the one basket read made with the uploaded session, in practice because the access token had expired (about 20 minutes) or the session was already rotated elsewhere. | Section 9, freshness rule: refresh first, upload within minutes. Each failed upload still consumes an attempt. Check the mini did not refresh the same session after an earlier successful link. |
-| Helper prints "refused: no link code" on release 0.4.0 or later (owner-observed) | From 0.4.0 the helper logs in with the link audience and requests its own code; `/link/code` accepts only a link-audience token. A code minted separately, or a refused code request, leaves it without a code. | Run `glovo-link` again so it logs in itself, with a server that is also on the new behavior (section 12). A refused request shows its own reason first (503, 429 or the consent text). [U]: the exact message text was not found in the helper source on main when this was written. |
+| HTTP 429 `rate_limited` (helper: "too many link attempts") | A link attempt cap was hit: service-wide (`GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR`, 5 x capacity by default, 15 as committed) or per address (10 an hour, so 3 complete links from one address). Code, preview and upload each count one against both caps, so one link takes 3. | Wait for the oldest attempt to leave the one-hour window, or raise `linkAttemptsPerHour` in its own PR (the per-address cap of 10 is not raised by it). Count attempts before any rerun (section 9, retry rule). Do not retry in a loop; the helper does not retry a refused code request. A pod restart resets the counters only as a side effect and is not a remedy (section 6). |
+| HTTP 422 `session_refused` (server side `glovo_validation_failed`) | Glovo rejected the one basket read made with the uploaded session, in practice because the access token had expired (about 20 minutes) or the session was already rotated elsewhere. | Section 9, freshness rule: the refresh is the last step before the helper, upload within the deadline. Each failed upload still consumes an attempt, so check attempts left before a rerun (section 9, retry rule). Check the mini did not refresh the same session after an earlier successful link; if a link already succeeded, do not use the mini keepalive, take a fresh login with the normal capture tooling. |
+| Helper prints "refused: no link code" on release 0.4.0 or later (owner-observed) | From 0.4.0 the helper logs in with the link audience and requests its own code; `/link/code` accepts only a link-audience token. A code minted separately, or a refused code request, leaves it without a code. | Run `glovo-link` again so it logs in itself, with a server that is also on the new behavior (section 12). A refused request shows its own reason first (503, 429 or the consent text). The message is the stdin-code path message of helpers before 0.4.0, verified by running the old helper (it is no longer in the source on main). |
 | An older helper (before 0.4.0) is refused by the server | Older helpers needed a code minted with an MCP-audience token; the new server refuses that path. | Upgrade the helper (section 12): `go install github.com/mctlhq/mctl-glovo/cmd/glovo-link@<tag>`. Server first, then helper. |
 | The helper declines at the y/N question without asking | The answer was typed with a Cyrillic keyboard layout; the helper reads EOF and declines. | Switch to a Latin layout and type `y`. |
 | `403` on the kill-switch POST | The caller is an agent or service identity. | The owner runs it as a direct human platform admin. |
@@ -336,8 +379,11 @@ own fresh login.
 - Unlink works under kill and needs no Vault (token-store design, section 4);
   there is still no operator unlink route that mctl-api calls (F10).
 - Edge: re-add the `glovo` record to the private infra repository's
-  `dns_services` and apply (section 5). The service keeps running; only the
-  route moves.
+  `dns_services` and apply (section 5, Closing, item 1). The service keeps
+  running; only the route moves.
+- KILLED does not protect a linked session: the hosted service has no
+  keepalive and no refresh caller, so a dormant session can die unnoticed;
+  recovery is a relink (section 8, item 7).
 - Cap: set `linkAttemptsPerHour` back to 0 (service default) in its own PR.
 - Image: bump the tag back through the release path of section 12; the schema
   is forward-only (section 4).
