@@ -147,6 +147,23 @@ if r.returncode == 0:
     check(env.get("GLOVO_LINK_MAX_AUTH_AGE") == "5m", f"committed: link max age {env.get('GLOVO_LINK_MAX_AUTH_AGE')!r}")
     check("GLOVO_LINK_TRUSTED_PROXIES" not in env, "committed: the ingress variable is set although ingress is its own step")
 
+# 4b. mctl-api's side of the link resource: the same switch sets the same audience on
+# mctl-api (it mints the link token) as on the service (it checks it).
+v, r = api_values("--set", "mctlGlovo.linkLogin=false")
+check(v is not None, f"api render with linkLogin off failed: {r.stderr[-200:]}")
+if v:
+    check("GLOVO_LINK_RESOURCE" not in v["env"], "mctl-api carries the link resource with linkLogin off")
+v, r = api_values("--set", "mctlGlovo.linkLogin=true")
+check(v is not None, f"api render with linkLogin on failed: {r.stderr[-200:]}")
+if v:
+    check(v["env"].get("GLOVO_LINK_RESOURCE") == "https://glovo.mctl.ai/link", f"mctl-api link resource {v['env'].get('GLOVO_LINK_RESOURCE')!r}")
+    check(v["env"].get("GLOVO_LINK_RESOURCE") != v["env"].get("GLOVO_MCP_RESOURCE"), "mctl-api link resource equals the MCP resource (the boot would be refused)")
+    sv = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true")
+    if sv.returncode == 0:
+        check(v["env"].get("GLOVO_LINK_RESOURCE") == server_env(docs(sv)).get("GLOVO_LINK_RESOURCE"), "mctl-api and the service disagree on the link audience")
+v, r = api_values()
+check(v is not None and v["env"].get("GLOVO_LINK_RESOURCE") == "https://glovo.mctl.ai/link", "committed: mctl-api does not carry the link resource")
+
 # 5. ingress
 fails(SVC, "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", why="ingress switch requires the c2 switch")
 fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values=None)

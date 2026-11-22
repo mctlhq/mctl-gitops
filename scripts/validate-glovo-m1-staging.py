@@ -158,6 +158,9 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_CONSENT_ENABLED: "true"',
         '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
         '            - mctl-api-glovo-consent',
+        # The link resource of the account-link token (this PR), behind linkLogin.
+        '            {{- if .Values.mctlGlovo.linkLogin }}',
+        '            GLOVO_LINK_RESOURCE: "https://{{ .Values.mctlGlovo.host }}/link"',
     }),
     # The host stays reserved with no owner: since 2026-11-15 it is served
     # outside the cluster, and mctl-api no longer routes it.
