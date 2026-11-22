@@ -166,7 +166,12 @@ check(v is not None and v["env"].get("GLOVO_LINK_RESOURCE") == "https://glovo.mc
 
 # 5. ingress
 fails(SVC, "--set", "mctlGlovo.ingress=true", "--set", "mctlGlovo.c2=false", "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", why="ingress switch requires the c2 switch")
-fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values=None)
+# The committed values already name the service namespace as the host's owner; the
+# negative cases pin the owner list explicitly (empty, or another namespace).
+fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values="reservedPlatformHosts:\n  glovo.mctl.ai: []\n")
+fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, why="owner in reservedPlatformHosts", extra_values="reservedPlatformHosts:\n  glovo.mctl.ai: [labs]\n")
+committed_owners = (yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "values.yaml").read_text()).get("reservedPlatformHosts") or {}).get("glovo.mctl.ai")
+check(committed_owners == ["mctl-glovo"], f"committed: owners of the host are {committed_owners!r}, want exactly the service namespace")
 fails(SVC, *BASE, "--set", "mctlGlovo.ingress=true", why="trustedProxies", extra_values=HOSTS)
 r = helm(SVC, *BASE, "--set", "mctlGlovo.ingress=true", *PROXIES, extra_values=HOSTS)
 check(r.returncode == 0, f"ingress render failed: {r.stderr[-200:]}")
