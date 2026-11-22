@@ -6,14 +6,15 @@ The AppProject templates are Helm templates (`{{ .Values... }}`), so they are
 edited as text, never loaded and dumped. The caller re-renders the chart and
 checks that exactly this window arrived; this script only places the text.
 
-  release-window-insert.py hash            window JSON on stdin -> sha256 hex
+  release-window-insert.py hash PROJECT    window JSON on stdin -> sha256 hex
   release-window-insert.py insert FILE     window JSON on stdin, edits FILE
   release-window-insert.py --selftest
 
 The canonical form behind `hash` is
-  json.dumps(window, sort_keys=True, separators=(",", ":"))
+  json.dumps({"project": PROJECT, "window": WINDOW}, sort_keys=True, separators=(",", ":"))
 so whoever approves a window (the dispatcher) and the workflow that applies it
-hash the same bytes. A window that is not a JSON object is refused.
+hash the same bytes, and an approval for one project cannot be replayed against
+another. A window that is not a JSON object is refused.
 
 `insert` adds the window under `spec.syncWindows` (two-space indent):
   * no `syncWindows` key: the block is appended at the end of the file;
@@ -49,8 +50,14 @@ def canonical(window: object) -> str:
     return json.dumps(window, sort_keys=True, separators=(",", ":"))
 
 
-def window_hash(window: object) -> str:
-    return hashlib.sha256(canonical(window).encode()).hexdigest()
+def window_hash(project: str, window: object) -> str:
+    """sha256 of {"project": P, "window": W}, canonical. The project is in the
+    hashed bytes so one approval cannot be replayed against another project."""
+    if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", project):
+        raise Refuse("the project must be a lowercase DNS-style name")
+    body = json.dumps({"project": project, "window": json.loads(canonical(window))},
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def _item_lines(window: dict, indent: int) -> list[str]:
@@ -93,8 +100,6 @@ def insert(text: str, window: dict) -> str:
             end += 1
             continue
         indent = len(ln) - len(ln.lstrip(" "))
-        if indent <= 2 and not ln.lstrip().startswith("#"):
-            break
         if indent <= 2:
             break
         last_item = end
@@ -141,9 +146,15 @@ def _selftest() -> int:
         check("refused: window that is not an object", False)
     except Refuse:
         check("refused: window that is not an object", True)
-    a, b = window_hash(w), window_hash(dict(reversed(list(w.items()))))
+    a, b = window_hash("apps", w), window_hash("apps", dict(reversed(list(w.items()))))
     check("hash does not depend on key order", a == b and len(a) == 64)
-    check("hash changes with the window", a != window_hash({**w, "duration": "49h"}))
+    check("hash changes with the window", a != window_hash("apps", {**w, "duration": "49h"}))
+    check("hash changes with the project", a != window_hash("platform", w))
+    try:
+        window_hash("Apps; rm", w)
+        check("refused: malformed project name", False)
+    except Refuse:
+        check("refused: malformed project name", True)
     return 0 if ok else 2
 
 
@@ -151,8 +162,8 @@ def main(argv: list[str]) -> int:
     if argv[1:] == ["--selftest"]:
         return _selftest()
     try:
-        if len(argv) >= 2 and argv[1] == "hash" and len(argv) == 2:
-            print(window_hash(json.load(sys.stdin)))
+        if len(argv) == 3 and argv[1] == "hash":
+            print(window_hash(argv[2], json.load(sys.stdin)))
             return 0
         if len(argv) == 3 and argv[1] == "insert":
             window = json.load(sys.stdin)

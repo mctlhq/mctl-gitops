@@ -89,10 +89,11 @@ def problems(text):
     if "merge-base --is-ancestor" not in appr or "git diff --quiet" not in appr:
         out.append("the approval check lost its ancestry or unchanged-target test")
     ren = next((s for s in steps if label(s).startswith("Render the window")), {}).get("run", "")
-    if "render-sync-window.py" not in ren or "WINDOW_SHA256" not in ren or 'release-window-insert.py hash' not in ren:
+    if "render-sync-window.py" not in ren or "WINDOW_SHA256" not in ren or 'release-window-insert.py hash "$PROJECT"' not in ren:
         out.append("the render step lost the tool or the hash comparison")
     chk = next((s for s in steps if label(s).startswith("Check the edit")), {}).get("run", "")
-    if "validate-argocd-sync-windows.py" not in chk or "before + [want]" not in chk:
+    if ("validate-argocd-sync-windows.py" not in chk or "before + [want]" not in chk
+            or '--expect-project "$PROJECT"' not in chk):
         out.append("the post-edit check lost the validator or the exact-one-more-window test")
     for s in steps:
         if label(s).startswith("actions/checkout") and s.get("with", {}).get("ref") != "main":
@@ -118,7 +119,9 @@ def mutants(text):
     yield "unattributed author", sub("353875018+mctl-gitops-pr[bot]@users.noreply.github.com", "ci@mctl.ai")
     yield "ancestry check dropped", sub('git merge-base --is-ancestor "$BASE_SHA" HEAD ||', 'true ||')
     yield "unchanged-target check dropped", sub('git diff --quiet "$BASE_SHA" HEAD -- "$target"', 'true')
-    yield "hash comparison dropped", sub('python3 scripts/release-window-insert.py hash < "$out/window.json"', 'echo "$WINDOW_SHA256"')
+    yield "hash comparison dropped", sub('python3 scripts/release-window-insert.py hash "$PROJECT" < "$out/window.json"', 'echo "$WINDOW_SHA256"')
+    yield "project left out of the hash", sub('release-window-insert.py hash "$PROJECT" <', 'release-window-insert.py hash apps <')
+    yield "target project not expected by the validator", sub('--expect-project "$PROJECT" ', '')
     yield "exact-one-more test dropped", sub("after != before + [want]", "False")
     yield "branch guard dropped", sub("release-window/?*", "x/?*")
     yield "checkout off main", sub("          ref: main\n", "          ref: ${{ github.ref }}\n")

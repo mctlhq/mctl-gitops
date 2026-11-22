@@ -17,9 +17,11 @@ run-name: "release-window ${{ inputs.window_id }} on ${{ inputs.project }}"
 # gitops-bump.yaml; unlike a release bump, nothing enqueues the result.
 #
 # Inputs are bound to what was approved. window_sha256 is the canonical hash
-# (scripts/release-window-insert.py hash) of the window the dispatcher shows
-# the approver; the job rebuilds the window from the other inputs, renders it
-# against the live inventory, and refuses unless the hashes match. base_sha is
+# (scripts/release-window-insert.py hash PROJECT) of the project and the window
+# the dispatcher shows the approver; the job rebuilds the window from the other
+# inputs, renders it against the live inventory, and refuses unless the hashes
+# match. The project is part of the hashed bytes, so an approval for one project
+# cannot be replayed against another. base_sha is
 # the main commit the approval was given on; the job refuses when it is not an
 # ancestor of main or when the target template changed since.
 #
@@ -174,7 +176,7 @@ jobs:
           assert r["verdict"] == "ok" and r["writes"] == "none", r
           print(json.dumps(r["window"]))
           PY
-          got=$(python3 scripts/release-window-insert.py hash < "$out/window.json")
+          got=$(python3 scripts/release-window-insert.py hash "$PROJECT" < "$out/window.json")
           [ "$got" = "$WINDOW_SHA256" ] \
             || { echo "::error::the window built from the inputs hashes to ${got}, not the approved ${WINDOW_SHA256}"; exit 1; }
 
@@ -201,7 +203,7 @@ jobs:
           out="$RUNNER_TEMP/window"
           helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$out/bootstrap-after.yaml"
           python3 scripts/validate-argocd-sync-windows.py --expect-project default --expect-project platform \
-            "$out/bootstrap-after.yaml" "$out/argocd.yaml"
+            --expect-project "$PROJECT" "$out/bootstrap-after.yaml" "$out/argocd.yaml"
           python3 - "$out/bootstrap.yaml" "$out/bootstrap-after.yaml" "$out/window.json" "$PROJECT" <<'PY'
           import json, sys, yaml
           before_f, after_f, win_f, project = sys.argv[1:5]
