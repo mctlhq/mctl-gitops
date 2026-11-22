@@ -89,8 +89,9 @@ spec:
               services/labs/claude-remote/values.yaml (MIRROR_EVERY).
 
         - alert: R2OpsClassAProjectedOverFreeTier
-          # Only while the count is still under the limit: Over takes it from
-          # there. The projection is absent in the first two days of a cycle.
+          # Only while the count is under 80% of the limit: Near and Over take
+          # it from there, so one situation is one message. The projection is
+          # absent in the first two days of a cycle.
           expr: |
             (
               max by (job) (r2_ops_budget_class_a_projected{job="r2_ops_budget"})
@@ -99,7 +100,7 @@ spec:
             and
             (
               max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
-                < max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+                < 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
             )
           for: 6h
           labels:

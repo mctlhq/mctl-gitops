@@ -334,3 +334,62 @@ tests:
               summary: "No successful R2 operations budget check for over 12 hours"
               description: "Nothing has confirmed this cycle's R2 operation count for more than 12 hours. Check the r2-ops-budget CronJob in monitoring (failed Jobs, CreateContainerConfigError for a missing token Secret, pod logs) and the r2-ops-budget ExternalSecret. Until the Vault path platform/r2-ops-budget (property api-token) exists, this is expected."
 
+  - interval: 1m
+    name: past 80 percent with a pace over the limit fires Near only, not Projected as well
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '850000x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1200000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are at 80% of the free million"
+              description: "This billing cycle has used 80% or more of the free 1M R2 Class A operations. Crossing it costs the full $4.50 for the next block. Cut operations before the cycle ends (the 22nd): the biggest levers are in observability/loki.yaml (compaction_interval, tsdb_shipper.resync_interval) and the s3-sync sidecar in services/labs/claude-remote/values.yaml (MIRROR_EVERY)."
+      - eval_time: 8h
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: R2OpsClassAOverFreeTier
+        exp_alerts: []
+
+  - interval: 1m
+    name: just under 80 percent with a pace over the limit still fires Projected
+    input_series:
+      - series: 'r2_ops_budget_read_ok{job="r2_ops_budget"}'
+        values: '1x1000'
+      - series: 'r2_ops_budget_class_a_used{job="r2_ops_budget"}'
+        values: '799999x1000'
+      - series: 'r2_ops_budget_class_a_free_tier{job="r2_ops_budget"}'
+        values: '1000000x1000'
+      - series: 'r2_ops_budget_class_a_projected{job="r2_ops_budget"}'
+        values: '1200000x1000'
+      - series: 'r2_ops_budget_last_read_success_timestamp_seconds{job="r2_ops_budget"}'
+        values: '0+60x1000'
+    alert_rule_test:
+      - eval_time: 361m
+        alertname: R2OpsClassAProjectedOverFreeTier
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: r2-ops-budget
+              job: r2_ops_budget
+            exp_annotations:
+              summary: "R2 Class A operations are on pace to pass the free million"
+              description: "At the pace so far this billing cycle will end at about 1.2M R2 Class A operations, over the free 1M, though the count has not reached it yet. There is time to cut: see R2OpsClassANearFreeTier for where."
+      - eval_time: 8h
+        alertname: R2OpsClassANearFreeTier
+        exp_alerts: []
+
