@@ -93,7 +93,7 @@ spec:
             # its client id and secret come from mctl-api-oidc-zitadel
             # (mctl-gitops#2730) and the decider list from mctl-api-secrets,
             # both read only at container start.
-            ROLLOUT_MARKER: "2026-11-21-link-consent-routes-on"
+            ROLLOUT_MARKER: "2026-11-22-cimd-link-helper-host"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -281,7 +281,12 @@ spec:
             # their next sign-in), or remove all three lines.
             OAUTH_CIMD_ACCEPT: "true"
             OAUTH_CIMD_ADVERTISE: "true"
-            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev"
+            # Plus the product host that publishes the document of its own
+            # link helper (exact host; its Worker answers 404 for every other
+            # path, so only that one document can be fetched from it). Added
+            # for the C2 link step so the helper needs no registration of its
+            # own; see the C2 cutover runbook, step 9.
+            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev,glovo.mctl.ai"
             # Access-token audience, step B of mctlhq/mctl-api#805 (runbook
             # docs/access-token-signing.md). Since 4.125.0 every minted token
             # carries `aud` and a foreign `aud` is refused; aud-less HS256
