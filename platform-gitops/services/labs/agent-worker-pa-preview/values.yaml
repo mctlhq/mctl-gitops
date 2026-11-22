@@ -1,0 +1,152 @@
+# Worker: agent-worker-pa-preview
+# Team: labs
+# Chart: base-service (ingress disabled)
+
+# Personal Assistant (PA) worker for the mctl-telegram PREVIEW instance
+# (mctlhq/mctl-telegram#1318, step G2b). Same agent-worker-preview image as
+# agent-worker-managed-preview, started with AGENT_WORKER_PA=true, so it runs
+# only the PA loop (cmd/agent-worker/pa_mode.go): it claims PA jobs from
+# /api/pa/v1/jobs/* on labs-mctl-telegram-preview and calls an
+# OpenAI-compatible model in-process. The model is offered only the claim's
+# signed tool set, and every tool call is executed server-side by
+# mctl-telegram, never in this pod (mctl-telegram#1400). It never polls the agent
+# job queue, so it does not compete with agent-worker-managed-preview.
+#
+# Staged rollout. This lands inert: replicaCount 0 and no pool token. The
+# aud=agent-pool token (AGENT_API_TOKEN, Vault path
+# secret/data/platform/labs/agent-worker-pa-preview/api) does not exist yet,
+# and base-service renders every extraExternalSecrets entry unconditionally,
+# so an ExternalSecret on that path would leave the Application Degraded. It
+# is added together with the pool token, before the worker gets a replica;
+# run() refuses to start without AGENT_API_TOKEN, so a replica before then
+# would crash-loop rather than run unattributed.
+#
+# Rollback: replicaCount 0, revoke the pool token jti, PA_ENABLED "false" in
+# mctl-telegram-preview.
+replicaCount: 0
+image:
+  repository: ghcr.io/mctlhq/agent-worker-preview
+  tag: "main-0ef3857"
+  digest: "sha256:ee80385cfbf9644439d672ed9160e864e60322333a7232d81cd8773dfb1d263f"
+  # Same build as agent-worker-managed-preview (mctl-telegram 0ef3857, which
+  # carries pa_mode.go). mctl-telegram's preview-deploy.yml does not bump this
+  # file yet; until it does, the tag is moved by hand alongside
+  # agent-worker-managed-preview.
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  # No `claude` CLI subprocess in PA mode; same envelope as
+  # agent-worker-managed-preview.
+  requests:
+    cpu: 50m
+    memory: 64Mi
+    ephemeral-storage: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+    ephemeral-storage: 256Mi
+automountServiceAccountToken: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env:
+  # PA loop only (main.go: paMode branches before AGENT_POOL_MODE and the
+  # runner switch are read).
+  AGENT_WORKER_PA: "true"
+  # paWorkerFromEnv refuses any runner but openai.
+  AGENT_RUNNER: "openai"
+  # mctl-telegram origin, no path: the PA routes are absolute. Plain http is
+  # accepted only for a host ending in .svc or .svc.cluster.local (or
+  # loopback), because the pool credential and every job token go to it, so
+  # the short Service name alone would be refused at startup.
+  AGENT_PA_BASE_URL: "http://labs-mctl-telegram-preview-base-service.labs.svc:8080"
+  # Still required by run() before the PA branch; unused by the PA loop.
+  AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service.labs.svc:8080/api/agent/v1"
+  # Same model, gateway, output cap and shadow prices as
+  # agent-worker-managed-preview; see the reasons there. PA mode refuses a
+  # zero price or an unset output cap: the worker checks the job cost limit
+  # (max_job_cost_usd, sent by the server with each claim) between model
+  # calls, and the cap bounds what one call adds past it.
+  AGENT_MODEL: "zai-org/GLM-5.3-Flash"
+  AGENT_OPENAI_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-telegram/custom-nebius/v1"
+  AGENT_OPENAI_MAX_OUTPUT_TOKENS: "16384"
+  MODEL_INPUT_USD_PER_MTOK: "0.15"
+  MODEL_OUTPUT_USD_PER_MTOK: "0.50"
+  AGENT_WORKER_CONCURRENCY: "1"
+  # Non-secret quota-domain label on mctl_agent_credential_domain, its own
+  # value so PA spend is told apart from the managed pool. The key itself is
+  # the managed-preview Nebius key (see the ExternalSecrets below).
+  AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-pa-preview/openai-nebius"
+  # Not set on purpose, although agent-worker-managed-preview sets them: the
+  # PA path never reads AGENT_POOL_MODE, AGENT_MAX_TURNS,
+  # AGENT_OPENAI_MIN_INTERVAL or AGENT_SYSTEM_PROMPT (all read only after the
+  # PA branch returns), and AGENT_MAX_BUDGET_USD is parsed but never passed to
+  # the PA worker; the per-job limit comes from the server's claim.
+# One ExternalSecret per credential, both on Vault paths that already exist
+# for agent-worker-managed-preview. The pool-token ExternalSecret
+# (labs-agent-worker-pa-preview-api) is added with the pool token, before the
+# first replica; see the header.
+envFrom:
+  - secretRef:
+      name: labs-agent-worker-pa-preview-openai
+  - secretRef:
+      name: labs-agent-worker-pa-preview-gateway
+extraExternalSecrets:
+  # Nebius Token Factory key, sent through the gateway (byok). Shared with
+  # agent-worker-managed-preview for the preview window.
+  labs-agent-worker-pa-preview-openai:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-pa-preview-openai
+    data:
+      - secretKey: AGENT_OPENAI_API_KEY
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/openai-nebius
+        property: token
+  # cf-aig-authorization bearer for the mctl-telegram AI Gateway (run only).
+  labs-agent-worker-pa-preview-gateway:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-pa-preview-gateway
+    data:
+      - secretKey: AGENT_GATEWAY_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/gateway
+        property: token
+extraVolumes:
+  - name: agent-tmp
+    emptyDir:
+      sizeLimit: 64Mi
+extraVolumeMounts:
+  - name: agent-tmp
+    mountPath: /tmp
+extraContainers: []
