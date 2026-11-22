@@ -150,7 +150,8 @@ env:
   # agentspodium.com: hosted Hermes agents (mctl-telegram#1401 Gate A). One
   # exact host, no wildcard. Its client_id documents are per pod
   # (/oauth/mcp/clients/<pod>/<server>.json, one https redirect on the same
-  # host, none auth). Only the test pod below is bound to core-readonly;
+  # host, none auth). Only the test pod below is bound to core-readonly with a
+  # read-only scope_ceiling (token scopes, not just tools);
   # any other pod on this host gets the default scope surface, which is the
   # open risk recorded in the PR. Rollback: drop the host and the profile
   # record; removing the host also cuts off that client's refreshes.
@@ -164,7 +165,7 @@ env:
   # refused once and must authorize again; they age out by 2026-11-21.
   # Rollback: drop the record; the client returns to its scope surface at its
   # next refresh.
-  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg.json","profile":"core-readonly"}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
