@@ -6,14 +6,18 @@ on:
   pull_request_review:
     types: [submitted]
 
-permissions:
-  contents: write
-  pull-requests: write
-  checks: read
+# No default grant: each job lists what it needs. Nothing here writes to the
+# repository contents any more (the auto-merge job stopped merging, see its
+# last step), and `checks: read` was never used.
+permissions: {}
 
 jobs:
   request-review:
     runs-on: ubuntu-latest
+    # `gh pr edit --add-reviewer` is the only write.
+    permissions:
+      contents: read
+      pull-requests: write
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/')
     steps:
       - name: Request Copilot review
@@ -28,6 +32,10 @@ jobs:
 
   auto-merge:
     runs-on: ubuntu-latest
+    # Reads the PR and its file list through the API; merges nothing.
+    permissions:
+      contents: read
+      pull-requests: read
     if: >-
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
