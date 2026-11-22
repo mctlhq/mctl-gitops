@@ -578,9 +578,11 @@ reservedPlatformHosts:
   sso.mctl.ai: [zitadel]
   accounts.mctl.ai: [zitadel]
   api.mctl.ai: [mctl-api]
-  # Served outside the cluster through a Cloudflare tunnel since
-  # 2026-11-15; kept reserved with no owner so no tenant can claim it.
-  glovo.mctl.ai: []
+  # Served outside the cluster through a Cloudflare tunnel since 2026-11-15.
+  # The owner is the product's own namespace, so that its ingress switch can
+  # render an Ingress; with that switch off nothing is created and no other
+  # namespace can claim the host.
+  glovo.mctl.ai: [mctl-glovo]
   app.mctl.ai: [backstage]
   ops.mctl.ai: [argocd]
   secrets.mctl.ai: [vault]

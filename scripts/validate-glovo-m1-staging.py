@@ -162,12 +162,12 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            {{- if .Values.mctlGlovo.linkLogin }}',
         '            GLOVO_LINK_RESOURCE: "https://{{ .Values.mctlGlovo.host }}/link"',
     }),
-    # The host stays reserved with no owner: since 2026-11-15 it is served
-    # outside the cluster, and mctl-api no longer routes it.
+    # The host is reserved with the product's own namespace as the only owner
+    # (the ingress switch needs it); every other namespace stays refused.
     # C2 kill switch caller: the refresher image repository (the tag is a
     # separate line and never matches).
     "platform-gitops/bootstrap/values.yaml": frozenset({
-        '  glovo.mctl.ai: []',
+        '  glovo.mctl.ai: [mctl-glovo]',
         '    repository: ghcr.io/mctlhq/mctl-glovo',
         # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the public host
         # of the route (an owner decision) behind the ingress switch.

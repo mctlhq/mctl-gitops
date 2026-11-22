@@ -35,7 +35,7 @@ approval, never implied by a merge).
 | F2 | Render rules: `deploy` refuses the placeholder image tag; `c2` needs `deploy`; `allowlist`, `consent`, `control` need `c2`; `c2` needs `allowlist` or `consent`. | [V] | `platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml` |
 | F3 | The pinned service image tag is `0.1.0`, the only release at the time; it predates the read-only-by-default change (mctl-glovo#54, merged aa9b3cc3, unreleased). Deploying `0.1.0` does not give the read-only guarantee. | [V] | template image block; `gh api repos/mctlhq/mctl-glovo/releases`; mctl-glovo#59 (0.2.0) open |
 | F4 | The service has a ClusterIP Service and, before the wiring PR below, no Ingress object. | [V] | same template |
-| F5 | `glovo.mctl.ai` is in `reservedPlatformHosts` with an EMPTY owner list; admission (`mctl-reserved-platform-hosts-ingress`) refuses an Ingress for a reserved host from any namespace that is not an owner. | [V] | `bootstrap/values.yaml` (`reservedPlatformHosts`), `bootstrap/templates/system/admission-policies.yaml` |
+| F5 | `glovo.mctl.ai` is in `reservedPlatformHosts` with the service namespace `mctl-glovo` as its only owner (was an empty list until the owner-entry PR); admission (`mctl-reserved-platform-hosts-ingress`) refuses an Ingress for a reserved host from any namespace that is not an owner. | [V] | `bootstrap/values.yaml` (`reservedPlatformHosts`), `bootstrap/templates/system/admission-policies.yaml` |
 | F6 | The public host is served by a Cloudflare tunnel to the mini (`glovo-home`). Worker routes: `glovo.mctl.ai/` and `glovo.mctl.ai/*` go to the `glovo-landing` Worker; `glovo.mctl.ai/mcp*` and `glovo.mctl.ai/.well-known/*` have no script (tunnel origin). A `glovo.mctl.ai/link*` route without a script is declared in git (stays on the origin); until the owner dispatches the Cloudflare Apply it is not live, and then `/link` is still answered by the landing Worker. Which origin the tunnel maps for `/link*` is defined outside this repository (F7). | [V] | `infrastructure/cloudflare/zones/mctl-ai/workers.tf`, `scripts/validate-cloudflare-glovo-routes.py` |
 | F7 | Where the tunnel's public-hostname and origin mapping is defined (which origin answers `/mcp`) is not in this repository. | [U] | not found by grep over `infrastructure/` |
 | F8 | The service reads capacity from `GLOVO_C2_CAPACITY` (1..20, more is a boot error); mctl-api reads the same variable as the consent slot cap (unset, 0 or malformed means closed: no new consent). The template hard-coded `10`. | [V] | mctl-glovo `cmd/mctl-glovo/c2.go`, mctl-api `cmd/api/glovo_consent.go`, `docs/glovo-link-consent.md` (main, aa9b3cc3 and the 2026-11-18 mctl-api main) |
@@ -104,8 +104,8 @@ Opening, in this order. Each item is its own PR or action.
    the code is `https://glovo.mctl.ai/mcp` and the link audience is derived
    from the same host; a different host changes both audiences and the CORS
    and metadata surface, so it is a separate design [U].
-2. gitops PR: set `reservedPlatformHosts` for the host to include the service
-   namespace. Without it admission refuses the Ingress (F5); the new render
+2. DONE (owner-entry PR): `reservedPlatformHosts` for the host lists the service
+   namespace, and no other. Without it admission refuses the Ingress (F5); the new render
    guard refuses the flip PR until this is done.
 3. gitops PR: `trustedProxies` set to the Traefik pod CIDRs and `ingress: true`.
    Result: an Ingress exists, Traefik can reach the pod on 8080 (the server
