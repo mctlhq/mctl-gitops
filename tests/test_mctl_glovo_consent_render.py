@@ -193,7 +193,7 @@ def dark_problems(text):
     The switches are set explicitly: values.yaml carries the LIVE state (deploy is on
     once the cutover starts), and this proves what "all off" renders, not what is live."""
     r = render(text, switches=["--set", "mctlGlovo.deploy=false", "--set", "mctlGlovo.c2=false",
-                                  "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false"])
+                                  "--set", "mctlGlovo.allowlist=false", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false"])
     if r.returncode:
         return [f"dark render failed: {r.stderr[-200:]}"]
     kinds = {d["kind"] for d in yaml.safe_load_all(r.stdout) if d}
