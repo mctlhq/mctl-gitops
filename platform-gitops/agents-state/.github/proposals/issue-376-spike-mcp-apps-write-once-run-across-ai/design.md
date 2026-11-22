@@ -442,3 +442,41 @@ personal-assistant interoperability stays in mctl-telegram#1379.
   - P3: the official SDK build is large or needs CSP changes. Mitigation: measured, justified hand-rolled fallback.
   - P3: Alice's TS SDK 1.x lags. Mitigation: last in product order.
 - Rollback: revert the phase 0 PR. Product slices roll back by unsetting `MCP_APPS_ENABLED` or `MCP_TOOL_FILTER` or emptying the `ui.domain` allowlist; the PoC deployment is removed by reverting its mctl-gitops PR.
+
+## Adjacent UI layers: A2UI 1.0 and GPUI (non-blocking Phase 0 appendix)
+
+This is a short architecture comparison in the Phase 0 report only.
+It does **not** alter G1–G6, D1/D2, the three core hosts, the immutable
+MCP Apps release hash, the Phase 0 task set or PoC/production gates.
+
+| Technology | Agent sends | Renders where | Implication for MCTL |
+| --- | --- | --- | --- |
+| MCP Apps SEP-1865 | `ui://` HTML/JS/CSS bundle + tool data | Host's sandboxed iframe | Existing #376 portable static/custom UI contract; host support must be measured |
+| A2UI 1.0 | Declarative data + trusted component catalog | Native-capable React/Angular/Lit/Flutter/SwiftUI/Jetpack Compose renderer (actual versions vary) | Dynamic choices/cards/forms in PA or Run Inspector, with strict component/action allowlist |
+| A2UI-over-MCP | `a2ui://` + `application/a2ui+json` in resource/tool result | Only a client with an A2UI renderer | **Not** automatically supported by ChatGPT/Claude/Antigravity/Grok just because they support MCP |
+| A2UI *inside* MCP App | Declarative A2UI data in fixed MCP App HTML bundle | The App's own iframe-embedded A2UI renderer | Bounded hybrid experiment; bundle stays immutable, generated UI data is untrusted |
+| AG-UI 1.0 (#258/#261) | Events for state, tool steps and human interaction | MCTL-owned agent UI / host adapter | Complements either rendering scheme; canonical Temporal/approval state remains in MCTL |
+| GPUI Rust | Rust widget tree | Native GPU-drawn desktop window | No AI-host interop; defer until an actual desktop-client workload/benchmark |
+
+Initial hypothesis: A2UI is complementary to SEP-1865, not a replacement.
+Pilot candidate **only after a separately approved follow-up**:
+synthetic read-only PA date/option picker or DevLoop Run Inspector status
+card with pinned A2UI schema + trusted component catalog, safe bidirectional
+event handling, no user secrets or arbitrary JS, stale-state/replay tests,
+accessibility and text-only fallback. Compare A2UI-over-MCP in an
+MCTL-owned renderer versus rendering A2UI inside one MCP App using the
+official bridge. Do not claim that AI hosts render A2UI directly without
+real verified evidence. Component actions must go through the same
+identity/tenant/policy/approval/audit tools; UI buttons cannot grant authority.
+
+GPUI is out-of-scope for this comparison beyond the negative finding:
+it accelerates desktop display, not JSON-RPC, MCP resource delivery or
+generative UI. Better Stack's GPUI/Electron/Tauri example is discovery
+material, not a reproducible MCTL performance comparison or GO to add Rust.
+No new Rust backend, UI port or SDK.
+
+Source pins (retrieved 2026-11-22): Google
+https://developers.googleblog.com/en/a2ui-and-mcp-apps/
+and https://developers.googleblog.com/en/a2ui-10-build-delightful-fast-reliable-agentic-experiences/ ;
+https://github.com/a2ui-project/a2ui ; https://gpui.rs/examples/ .
+The owner supplied video screenshots, not full transcripts.
