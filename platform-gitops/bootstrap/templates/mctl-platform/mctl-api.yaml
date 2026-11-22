@@ -493,6 +493,16 @@ spec:
             # and the pod logs "release approval page disabled" at Error
             # level. Rollback: delete this line and the /release extra path.
             RELEASE_APPROVAL_UI_ENABLED: "true"
+            # Release windows (sync-window write path, mctl-api#1153-#1155):
+            # POST /api/v1/release/windows, the MFA decide page under
+            # /release/window-approvals (same OIDC client and deciders as the
+            # grant page above; its second redirect URI is in zitadel-iac,
+            # gitops#2905) and the execute step that dispatches
+            # release-window-pr.yml. Needs the work-items ledger and the GitOps
+            # GitHub credential; without them the routes stay off or answer
+            # 503. The window itself only opens a PR, nothing is merged or
+            # synced. Rollback: delete this line.
+            RELEASE_WINDOWS_ENABLED: "true"
             {{- if .Values.mctlGlovo.apiConsent }}
             # Link consent routes and the consent read of the C2 service (its
             # epic 11, C2-1c). The reader identity (service provider and
