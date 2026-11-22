@@ -12,7 +12,8 @@ Device name registered with Anthropic: **`claude-remote`**.
 
 ## How state persists
 
-`/workspace` lives in an `emptyDir` volume, mirrored to Cloudflare R2 every 60s by the
+`/workspace` lives in an `emptyDir` volume, mirrored to Cloudflare R2 every 5 minutes
+(the credentials file within 60s of a change, because the refresh token rotates) by the
 `s3-sync` sidecar at prefix `s3://claude-remote-state/labs/claude-remote/`. On pod
 start the `restore-state` initContainer pulls everything back. This includes
 the rotating OAuth credentials (`.claude/.credentials.json`), so device

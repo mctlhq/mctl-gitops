@@ -381,7 +381,8 @@ initContainers:
     volumeMounts:
       - name: workspace
         mountPath: /workspace
-# s3-sync sidecar — mirrors /workspace → R2 every 60 s + sync on pod shutdown.
+# s3-sync sidecar — mirrors /workspace → R2 every 5 min (credentials file: every
+# 60 s, on change) + sync on pod shutdown. See MIRROR_EVERY in the script.
 # Was 10s; the frequent `mc mirror` runs were the driver behind the CPU-limit
 # raises below. terminationGracePeriodSeconds: 60 already covers graceful
 # shutdown, so 10s only protected against an ungraceful pod death (OOM-kill,
@@ -451,7 +452,34 @@ extraContainers:
           case "$ns" in *'"accessToken":"'*) return 0 ;; esac
           return 1
         }
+        # R2 bills Class A operations in whole 1M blocks above a free 1M per
+        # cycle, and this sidecar was ~134k of the 1.08M that cost $4.50 in
+        # the 2026-10-22..11-21 cycle. The loop still ticks every 60 s, but:
+        #   - the full `mc mirror` (a bucket listing plus the changed files)
+        #     runs every MIRROR_EVERY ticks, i.e. every 5 minutes;
+        #   - the credentials file keeps its 60 s durability: the OAuth
+        #     refresh token rotates, so an R2 copy that is 5 minutes stale
+        #     after an ungraceful pod death would be a dead login, the
+        #     2026-08-23 failure. It is copied only when its content changed
+        #     (a few times a day), not on every tick as `lastgood` used to be.
+        MIRROR_EVERY=5
+        LAST_CRED=""
         while true; do
+          # Credentials fast path, every tick. Valid and changed since the
+          # last successful copy: refresh the live R2 key and the last-good
+          # copy. A failed copy leaves LAST_CRED alone so the next tick
+          # retries. An invalid file is never copied (see cred-guard below).
+          if cred_is_valid; then
+            cur=$(cat "$CRED" 2>/dev/null)
+            if [ "$cur" != "$LAST_CRED" ]; then
+              if mc cp "$CRED" s3/claude-remote-state/labs/claude-remote/.claude/.credentials.json >/dev/null 2>&1 \
+                 && mc cp --preserve "$CRED" \
+                      s3/claude-remote-state/labs/claude-remote/.claude/.credentials.json.lastgood >/dev/null 2>&1; then
+                LAST_CRED=$cur
+              fi
+            fi
+          fi
+          if [ $((i % MIRROR_EVERY)) -eq 0 ]; then
           # go/ (Go module cache) and .cache/ (go-build, gh, claude-cli) are
           # never synced: ~64k mostly-cache files made each 60 s mirror cost
           # ~2.8M R2 operations a month. Both rebuild on demand, so a restart
@@ -477,14 +505,10 @@ extraContainers:
           else
             mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
               /workspace s3/claude-remote-state/labs/claude-remote/ || true
-            # Keep a last-known-good copy that a later wipe cannot overwrite:
-            # it is only ever refreshed while the live file is valid. Recovery
-            # then needs a copy, not an interactive browser login.
-            if cred_is_valid; then
-              mc cp --preserve "$CRED" \
-                s3/claude-remote-state/labs/claude-remote/.claude/.credentials.json.lastgood \
-                >/dev/null 2>&1 || true
-            fi
+            # The last-known-good credentials copy (only ever refreshed while
+            # the live file is valid, so a later wipe cannot overwrite it) is
+            # now written by the fast path above, on change.
+          fi
           fi
           # GC check ~hourly (60 * 60s) so du doesn't walk the tree each cycle.
           i=$((i + 1))
