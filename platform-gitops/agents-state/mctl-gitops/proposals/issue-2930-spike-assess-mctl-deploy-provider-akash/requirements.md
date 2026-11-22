@@ -14,9 +14,9 @@ or implementer run happens under this issue.
 Today `mctl deploy` (`cli/mctl/cmd/deploy.go`, `runDeploy`) only builds a
 `deploy-service` `action=onboard` request and posts it to
 `/api/v1/operations/deploy-service/execute` (`internal/api/client.go`,
-`ExecuteOperation`). Every governed property (OAuth identity, tenant role
-`minRole: developer`, Vault-backed secrets, Argo Workflow audit) lives
-server-side in mctl-api, not in the CLI. A local `akt` transaction signed by
+`ExecuteOperation`). The existing `deploy-service` path enforces tenant authorization (`minRole:
+developer`) server-side and orchestrates Vault-backed secrets and Argo Workflow
+audit; the CLI is not an independent enforcement boundary. A local `akt` transaction signed by
 a user's own key would carry none of them. This proposal's recommendation is
 **DEFER** any governed or transacting Akash route, and authorize at most an
 **isolated offline harness** (fixture SDL, pinned validator, negative cases,
@@ -72,25 +72,39 @@ future work, not implemented here):
 - IF `--secret` or `--pat` is passed together with an Akash provider or
   Akash subcommand THEN THE SYSTEM SHALL exit non-zero before any SDL is
   rendered, and SHALL NOT print, write or log the value.
-- IF an `--env` value matches a secret-looking pattern (high-entropy token,
-  known key prefixes such as `sk-`, `ghp_`, `AKIA`, PEM headers) THEN THE
-  SYSTEM SHALL refuse to render the SDL and SHALL report only the key name.
-- IF the image reference is not pinned by `@sha256:` digest THEN THE SYSTEM
-  SHALL refuse to render or validate the SDL.
-- IF a pricing denom other than the one the pinned validator version
-  accepts as current (expected `uact`, to be confirmed against the pinned
-  tool) is supplied THEN THE SYSTEM SHALL refuse it.
+- IF an environment key is not on an explicit allowlist of non-sensitive
+  fixture keys (initially `LOG_LEVEL` and `PORT`) THEN THE SYSTEM SHALL reject
+  it before any file/stdout render. In Phase 0, heuristic secret-pattern
+  scanning SHALL be defense-in-depth only; reject every `--secret`, `--pat`,
+  `credentials`, or other sensitive SDL field even when the value does not
+  match a token pattern. Error diagnostics may name keys but never values.
+- IF the image reference is not pinned by a full `@sha256:` digest THEN THE
+  SYSTEM SHALL refuse to render or validate the SDL **in MCTL policy before
+  calling `akt`**; native `akt` accepts ordinary explicit tags, so its
+  successful validation is insufficient evidence of digest pinning.
+- IF pricing denom is not `uact` THEN MCTL policy SHALL reject it even if
+  the pinned `akt` validator merely warns; record the upstream v1.1.x
+  behavior and any protocol change rather than inferring it. Units must
+  display as micro-ACT (nominally USD-pegged ACT), not AKT.
 - IF a service exposes a database or non-HTTP port with `global: true`
   THEN THE SYSTEM SHALL refuse the SDL in Phase 1.
 - IF any persistent storage volume (`persistent: true`) is requested THEN
   THE SYSTEM SHALL refuse the SDL in Phase 1.
-- WHILE operating in offline mode THE SYSTEM SHALL make no network call,
-  read no wallet key, keyring or Console API key, and invoke no `akt`
-  subcommand other than `akt sdl validate` / `akt sdl init`.
+- WHILE executing the offline validation phase THE SYSTEM SHALL be confined
+  to a network-disabled runtime with temporary empty HOME, XDG directories,
+  and `AKT_HOME`, scrubbed subprocess environment and no mounted wallet,
+  keyring or Console API key. The validation phase SHALL invoke only pinned
+  `akt sdl validate` / `akt sdl init`; acquiring the verified release and
+  fixture image digest is an explicit **separate, networked preparation**
+  phase that never runs under the offline/no-network claim.
 - WHEN a read-only estimate is shown THE SYSTEM SHALL display the price
-  unit and block interval, the conversion formula, the currency-conversion
-  caveat, deposit/escrow and gas as separate lines, and the user's monthly
-  cap, and SHALL state that no provider availability or bid was observed.
+  unit (`uact`), approximate block interval, conversion formula to ACT
+  (nominal 1 ACT = 1 USD per current upstream docs; *not* AKT market price),
+  actual price/peg uncertainty, deposit/escrow or Console credit path,
+  gas/fees, and the user's monthly cap, and SHALL state that no provider
+  availability or live bid was observed. A cap displayed by an offline
+  estimator is advisory only; it SHALL NOT be represented as an enforceable
+  spend limit for any future signing path.
 - THE SYSTEM SHALL NOT describe any locally signed `akt` transaction as an
   MCTL governed deployment, in output text, docs or audit records.
 - IF a future funded step reports a failure after on-chain state was
@@ -109,18 +123,26 @@ future work, not implemented here):
 - Persistent production data on Akash.
 - GPU procurement decisions.
 - Approving or implementing this proposal; that needs separate owner
-  acceptance of its content digest.
+  acceptance of its content digest. **Do not signal the live Temporal DevLoop
+  approval while only reviewing or revising the proposal:** that approval
+  can advance directly to the Tier 2 implementer. A future owner decision
+  must explicitly authorize exactly the offline harness implementation,
+  separately from this documentation review.
 
 ## Open questions
 
-- Current `akt` release version and install/pinning channel: the deployment
-  lifecycle page (observed 2026-11-22) names no version except a historical
-  "akt 0.1.x" note. The harness task must pin an exact release and checksum
-  before any validation result is trusted.
-- Pricing denom: the SDL syntax reference shows `denom: uact` in its example
-  but its placement comments still describe amounts as uakt per block; the
-  `akt` lifecycle page says `akt sdl validate` warns on `uakt`. Treat `uact`
-  as current only after confirming against the pinned validator.
+- Upstream `akt` release and checksum: GitHub releases showed **v1.1.2**
+  as latest in the independent 2026-11-23 review; official installation
+  docs document downloadable SHA-256 manifest. An actual artifact checksum,
+  platform/architecture, release provenance and validated binary are **not
+  yet pinned**. Phase 0 must record and verify all of these before trusting
+  validation output.
+- Pricing denom: the current `akt` lifecycle guide says `uact` is micro-ACT
+  with 1:1 USD nominal accounting; a legacy `uakt` value may only warn at
+  validation and fail at deploy-time if deposit denominations mismatch.
+  The SDL syntax page still incorrectly describes its `uact` example using
+  `uakt` and `AKT`. Policy MUST reject non-`uact` before estimating; verify
+  behavior with a pinned binary and pin the source pages in the report.
 - Whether the Go SDK exposes an SDL parser usable without pulling a full
   chain client: the API getting-started page (observed 2026-11-22) names Go
   and TS SDKs but no module paths or SDL functions. Not observed.
@@ -133,3 +155,39 @@ future work, not implemented here):
 - Whether the owner wants a future governed path to live in mctl-api (path
   A, server-held managed-wallet key) at all; this spike recommends against
   deciding that until the offline harness results exist.
+
+## Independent review gates (2026-11-23; reviewer amendment draft)
+
+- **P1 / approval coupling:** approving a live Temporal DevLoop is an
+  execution action, not a read-only signoff. This PR does not approve the
+  current proposal or start Tier 2. New owner GO, reviewed digest and bounded
+  implementation scope are required before any approval signal.
+- **P1 / secrets:** no secret may enter fixture SDL or output even if it
+  evades regex detection. Synthetic canaries are held only in memory and
+  compared against captured/sanitized output; never commit canaries in
+  negative fixture files. Negative cases that a validator would echo must
+  be rejected by the MCTL preflight policy *before* invoking `akt`.
+- **P1 / immutability:** `akt` accepts explicit image tags. A digest-only
+  policy is MCTL-specific and must be tested independently.
+- **P2 / reproducibility:** pin the actual `akt` release artifact and checksum
+  (not just `latest`), use an unprivileged sandbox with network disabled
+  and credential-free temporary HOME. Separate acquisition from offline runs.
+- **P2 / price:** distinguish `uact`/ACT from `uakt`/AKT, expose actual vs
+  hypothetical bid and non-enforceable offline caps. Fix inconsistent upstream
+  documentation by recording—not repeating—the error.
+- **P2 / fixture:** generate an actually validator-valid minimal SDL with
+  no invented `signedBy` address or restrictive region. Provider filters and
+  their real semantics are research subjects, not requirements for fixture
+  validation.
+- **P3 / economics:** CPU comparison currently unobserved; GPU published
+  averages do not establish a cheaper equivalent deployment.
+
+Independent upstream evidence (reviewed 2026-11-23):
+- https://akash.network/docs/developers/deployment/akt/deployments/
+- https://akash.network/docs/developers/deployment/akt/installation/
+- https://akash.network/docs/developers/deployment/akash-sdl/syntax-reference/
+- https://github.com/akash-network/akt/releases/tag/v1.1.2
+
+**GO remains `GO_RESEARCH`, not `GO_OFFLINE_HARNESS`.** The reviewed and
+merged revision plus an explicit owner decision are prerequisites to
+executing tasks 1–6.
