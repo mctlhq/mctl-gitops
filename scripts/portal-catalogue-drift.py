@@ -496,14 +496,26 @@ KNOWN_STALE = {
         #     scope they stop firing as missing, this waiver becomes wider
         #     than what fires, and the nightly asks for it to be narrowed
         #     (exit 3).
+        #   - set_pa_principal_disabled, get_pa_principal_status (tg 0.142.0,
+        #     mctlhq/mctl-telegram#1318): Personal Assistant admin tools that
+        #     need the admin:users scope (the read one also accepts
+        #     admin:users:read), which the sync credential lacks. Both are
+        #     `enabled: false` in tg.json (mctl-gitops#2884), so nothing is
+        #     exposed on the shared portal; operators call them on the tg
+        #     server directly. Found 2026-11-22 when the nightly went red
+        #     after the release. The first guess was a re-snapshot, which
+        #     would have taken tg down and made every portal user
+        #     re-authorize, and would have added nothing.
         "tools": ["prepare_send_message", "draft_reply", "send_reply",
                   "prepare_broadcast", "list_broadcasts", "get_broadcast",
-                  "cancel_broadcast"],
+                  "cancel_broadcast", "set_pa_principal_disabled",
+                  "get_pa_principal_status"],
         "why": "not visible to the portal's sync credential: flag-gated "
                "(prepare_send_message, mctlhq/mctl-telegram#569), core-reply "
-               "profile only (draft_reply, send_reply), or needing the "
-               "admin:broadcast scope the sync credential lacks (the four "
-               "*_broadcast tools); a re-snapshot cannot add them",
+               "profile only (draft_reply, send_reply), or needing an admin "
+               "scope the sync credential lacks (the four *_broadcast tools "
+               "need admin:broadcast, the two *_pa_principal_* tools need "
+               "admin:users); a re-snapshot cannot add them",
     },
 }
 
