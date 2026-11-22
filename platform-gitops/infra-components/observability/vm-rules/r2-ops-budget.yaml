@@ -16,6 +16,7 @@
 #   r2_ops_budget_class_a_free_tier              operations included free (1M)
 #   r2_ops_budget_class_a_projected              end-of-cycle figure at the pace so far
 #                                                (absent in the first two days)
+#   r2_ops_budget_cycle_end_timestamp_seconds    when the cycle those figures belong to ends
 #   r2_ops_budget_last_read_success_timestamp_seconds
 #
 # A failed read pushes only read_ok=0: it never lowers the count and never
@@ -23,10 +24,21 @@
 # R2OpsBudgetStale as well, and "could not observe" stays distinct from
 # "within budget".
 #
-# The three count alerts are mutually exclusive on purpose, so one situation
-# sends one message: below 80% nothing; 80% up to the limit, Near; at the
-# limit, Over. Projected covers the case where the pace will cross the limit
-# before the count reaches 80% of it.
+# Two count alerts, one message per situation:
+#
+#   Heading  the count is under the limit and either at 80% of it or on pace
+#            to pass it. One alert for both reasons on purpose: with one alert
+#            per reason, the count crossing 80% resolved the pace alert while
+#            the 80% alert was still waiting out its `for`, and Telegram
+#            showed "RESOLVED" for a situation that had just got worse.
+#   Over     the count is at the limit. `for: 0m`: inside a cycle the count
+#            only grows, so there is no flapping to wait out, and any wait
+#            would reopen that gap between Heading ending and Over firing.
+#
+# Both stop once the cycle they describe has ended. A failed read leaves the
+# last cycle's figures in place, so right after the 22nd they would go on
+# describing the cycle before; cycle_end says so. It silences them only on
+# evidence: with no cycle_end series at all the alerts still fire.
 #
 # Alertnames all start with R2Ops, for one alertmanager route (Telegram: every
 # remedy is a values edit or a token, which mctl-agent cannot make).
@@ -45,9 +57,15 @@ spec:
       rules:
         - alert: R2OpsClassAOverFreeTier
           expr: |
-            max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
-              >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
-          for: 30m
+            (
+              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+                >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+            )
+            unless on (job)
+            (
+              time() >= max by (job) (r2_ops_budget_cycle_end_timestamp_seconds{job="r2_ops_budget"})
+            )
+          for: 0m
           labels:
             severity: warning
             component: r2-ops-budget
@@ -63,56 +81,43 @@ spec:
               sources as of 2026-11: loki (PutObject, ListObjects), then tempo-traces,
               claude-remote-state and argo-workflows-logs.
 
-        - alert: R2OpsClassANearFreeTier
+        - alert: R2OpsClassAHeadingOverFreeTier
+          # Under the limit, and either 80% of it used or the pace on course to
+          # pass it. The projection is absent in the first two days of a cycle,
+          # which leaves only the 80% half.
           expr: |
             (
-              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
-                >= 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
-            )
-            and
-            (
+              (
+                max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
+                  >= 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+                or
+                max by (job) (r2_ops_budget_class_a_projected{job="r2_ops_budget"})
+                  >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+              )
+              and
               max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
                 < max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
             )
-          for: 1h
-          labels:
-            severity: warning
-            component: r2-ops-budget
-          annotations:
-            summary: "R2 Class A operations are at 80% of the free million"
-            description: >-
-              This billing cycle has used 80% or more of the free 1M R2 Class A
-              operations. Crossing it costs the full $4.50 for the next block.
-              Cut operations before the cycle ends (the 22nd): the biggest
-              levers are in observability/loki.yaml (compaction_interval,
-              tsdb_shipper.resync_interval) and the s3-sync sidecar in
-              services/labs/claude-remote/values.yaml (MIRROR_EVERY).
-
-        - alert: R2OpsClassAProjectedOverFreeTier
-          # Only while the count is under 80% of the limit: Near and Over take
-          # it from there, so one situation is one message. The projection is
-          # absent in the first two days of a cycle.
-          expr: |
+            unless on (job)
             (
-              max by (job) (r2_ops_budget_class_a_projected{job="r2_ops_budget"})
-                >= max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
-            )
-            and
-            (
-              max by (job) (r2_ops_budget_class_a_used{job="r2_ops_budget"})
-                < 0.8 * max by (job) (r2_ops_budget_class_a_free_tier{job="r2_ops_budget"})
+              time() >= max by (job) (r2_ops_budget_cycle_end_timestamp_seconds{job="r2_ops_budget"})
             )
           for: 6h
           labels:
             severity: warning
             component: r2-ops-budget
           annotations:
-            summary: "R2 Class A operations are on pace to pass the free million"
+            summary: "R2 Class A operations are heading past the free million"
             description: >-
-              At the pace so far this billing cycle will end at about
-              {{ $value | humanize }} R2 Class A operations, over the free 1M,
-              though the count has not reached it yet. There is time to cut:
-              see R2OpsClassANearFreeTier for where.
+              This billing cycle's R2 Class A operations are under the free 1M
+              but either at 80% of it or on pace to pass it before the cycle ends
+              (the 22nd). Crossing it costs the full $4.50 for the next block.
+              There is time to cut: the biggest levers are in
+              observability/loki.yaml (compaction_interval,
+              tsdb_shipper.resync_interval) and the s3-sync sidecar in
+              services/labs/claude-remote/values.yaml (MIRROR_EVERY, while that
+              pod runs). The figures are r2_ops_budget_class_a_used and
+              r2_ops_budget_class_a_projected in VictoriaMetrics.
 
         - alert: R2OpsBudgetReadFailing
           expr: max by (job) (r2_ops_budget_read_ok{job="r2_ops_budget"}) == 0
