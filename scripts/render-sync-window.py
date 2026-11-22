@@ -119,6 +119,10 @@ def inventory(docs: list[dict], repo_root: str) -> list[dict]:
         ns_t = (tp.get("destination") or {}).get("namespace")
         srv_t = (tp.get("destination") or {}).get("server", server)
         patterns = [(g.get("git") or {}).get("directories") or [] for g in spec.get("generators") or []]
+        # `exclude: true` removes matches from the set; honouring it is not implemented,
+        # so reading it as an include would widen the inventory. Unreadable, not shorter/wider.
+        if any(isinstance(d, dict) and d.get("exclude") for ds in patterns for d in ds):
+            raise Unreadable(f"ApplicationSet {need!r}: directory generator with exclude is not supported")
         dirs = [d.get("path") for ds in patterns for d in ds if isinstance(d, dict)]
         if not name_t or not ns_t or not dirs or not all(isinstance(d, str) for d in dirs):
             raise Unreadable(f"ApplicationSet {need!r}: name, namespace or directory generator not readable")
@@ -262,6 +266,16 @@ def selftest() -> int:
             print("selftest FAIL generator matching nothing must be unreadable"); ok = False
         except Unreadable:
             print("selftest ok   generator matching no directory is unreadable")
+        # Without the exclude check this builds cleanly (svc-s2-t2 is a unique extra name),
+        # so only the explicit refusal can make it unreadable.
+        os.makedirs(os.path.join(tmp, "platform-gitops/services/t2/s2"))
+        docs[0]["spec"]["generators"][0]["git"]["directories"] = [
+            {"path": "platform-gitops/services/t1/*"}, {"path": "platform-gitops/services/t2/s2", "exclude": True}]
+        try:
+            inventory(docs, tmp)
+            print("selftest FAIL generator with exclude must be unreadable"); ok = False
+        except Unreadable:
+            print("selftest ok   generator with exclude is unreadable")
     # Inventory that cannot be built is unreadable, never shorter.
     try:
         inventory([], "/nonexistent")
