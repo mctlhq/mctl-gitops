@@ -82,6 +82,10 @@ spec:
           # Managed-runtime pool worker (gitops#2345). Same port, path and
           # mctl_agent_.* keep filter; at 0 replicas it simply has no target.
           - labs-agent-worker-managed-preview
+          # Personal Assistant worker (mctlhq/mctl-telegram#1318, step G5).
+          # Same image and health port as the managed pool; it emits the
+          # mctl_agent_.* worker series that the keep filter below admits.
+          - labs-agent-worker-pa-preview
   namespaceSelector:
     matchNames:
       - labs
