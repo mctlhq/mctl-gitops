@@ -17,6 +17,11 @@ This document records honest dispositions, **not** a blanket clearance of P1 gat
 | P3-MEASURE | **OPEN** | $0.50/100 turns, latency, false wake and Russian provider budgets are unmeasured targets. Source-pinned prices/provider choices required before a product gate. |
 | P3-REPRO | **Addressed for current CI** | Draft PR #1410 new HEAD `7269b8fc498ae5326941b955f63153809785ea45` (17 local tests). Initial CI `45090802713` SUCCESS at older HEAD `22e271e3fcf5617897f73ed7dd485b4c5fddd114`; latest GitHub simulator CI [45091262216](https://github.com/mctlhq/mctl-telegram/actions/runs/45091262216) SUCCESS on exact HEAD; pinned upstream SHA `92d400d6374bbe750e0a0188fa969fc4042820c2`. Re-review must use a **new exact HEAD** if either PR changes. |
 
+## Explicit follow-on blockers
+
+- B2 firmware/device/TLS/OTA hardening tracked separately: https://github.com/mctlhq/mctl-telegram/issues/1411 (research only; no hardware GO).
+- B3 PA identity, consent and voice disclosure ADR tracked separately: https://github.com/mctlhq/mctl-telegram/issues/1412 (design only; no PA integration GO).
+
 ## Gates and decisions
 
 - **B1 (CI-only synthetic harness):** owner-limited in #1409; Python 3.13, websockets 16.0. Simulator's local 17/17 and GitHub simulator CI on the exact 17-test HEAD are both green. Independent review and broader repository checks remain separate gates. Draft PR remains unmerged, and independent PR review is outstanding.
