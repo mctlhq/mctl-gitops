@@ -1,10 +1,10 @@
 # Tasks: issue-1379-spike-ai-product-discovery-grok-bot-benc
 
-Revision 3 (2026-11-23). Remaining tasks are docs-only/research-only and need independent re-review and owner approval. The already owner-observed Grok (grok.com) connection on 2026-11-22 is historical evidence, NOT a newly executed test. No implementer, report PR or live test is authorized.
+Revision 4 (2026-11-23). Remaining tasks are docs-only/research-only and need independent re-review and owner approval. The already owner-observed Grok (grok.com) connection on 2026-11-22 is historical evidence, NOT a newly executed test. No implementer, report PR or live test is authorized.
 
 - [ ] 1. Re-pin the baseline at report time.
   - Record the mctl-telegram SHA, the mctl-gitops SHA, and the production and preview image tags.
-  - If either SHA moved past `b318e97` / `a967430`, re-read every cited line.
+  - Re-pin current mctl-telegram/gitops/mctl-alice/mctl-api source commits per revision 4; retain the 2026-11-21 SHAs only as historical evidence.
   - Write report section 1a, the PA baseline. Each row is classified merged, deployed (gitops desired state), flagged, tested or planned, with a path.
 
   — DoD: every row has a path and a label. No gitops identifier is copied: no TTL-exempt ids, no Cloudflare account path, no Vault paths.
@@ -26,7 +26,7 @@ Revision 3 (2026-11-23). Remaining tasks are docs-only/research-only and need in
   — DoD: every row records its registration strategy, callback host and URI, `resource`, PKCE, the requested and granted scopes, `initialize`, `tools/list`, the identity read, a synthetic read, negatives and audit. Preserve historic Grok Web OWNER_OBSERVED_WORKS. All NEW Grok Bot attribution and restricted security tests are BLOCKED or `NOT-EXECUTED` until a separate owner GO. The live-test preconditions are listed: stable `client_id`, `core-readonly` plus a minimum-read ceiling, no admin, groups, write or account scopes, token scopes verified without logging values. Dynamic-id clients are BLOCKED.
 - [ ] 6. External-client threat model (depends on 2, 3): report section 6.
 
-  — DoD: a control-by-control table of what applies and what does not for a direct MCP client, with the Grok Bot sharing and boundary quotes. Alice is limited to `iot:view` with no device or control step. Unverified claims are `UNKNOWN`. The mctl-alice code is marked as not read unless it is read at a pinned SHA.
+  — DoD: a control-by-control table of what applies and what does not for a direct MCP client, with the Grok Bot sharing and boundary quotes. Alice is limited to `iot:view` with no device or control step. Unverified claims are `UNKNOWN`. The mctl-alice `TOOL_SCOPES` map is pinned and verified at `cb276d65`; OAuth issuer/refresh/runtime remains UNKNOWN unless separately verified.
 - [ ] 7. Telegram consent and licensing gate (depends on 2): report section 7.
 
   — DoD: it cites `docs/design/core-profiles.md` and the dated terms, and lists the policy and legal questions apart from the engineering questions. Every digest, memory or distribution hypothesis references the gate.
@@ -55,10 +55,10 @@ Revision 3 (2026-11-23). Remaining tasks are docs-only/research-only and need in
 
 The change is docs-only. Revert the report commit, or close its PR unmerged. No runtime, flag, OAuth, gitops, account or vendor state is touched, so nothing else needs to be undone.
 
-## Revision 3 additions (research-only, not executed)
+## Revision 4 evidence completion tasks (all research-only; not executed)
 
-- [ ] 10. Reconcile the 2026-11-22 Grok working matrix and PR #1393 with #1381's staged audit. Distinguish owner-observed works from scripted repro and from Grok Bot-specific client attribution. DoD: no successful Grok test is erased, no unsupported Bot claim introduced.
-- [ ] 11. Source-classify Grok Bot Remote HTTPS OAuth client identity, skills/routines, Hermes skills, dots and Gemini. DoD: a claim/date/URL/evidence ledger and explicit UNKNOWNs; no vendor account access.
-- [ ] 12. Add an admin-scope leakage/least-privilege decision record based on #1381, and design an isolated synthetic negative test plan. DoD: fixed client identity and explicit scope ceiling required before any separate owner-authorized test; never re-run unrestricted production OAuth or widen policy.
-- [ ] 13. Reconcile PA GitOps: preview flags off, dedicated worker replicaCount zero, production distinct; phase gates unproven. DoD: paths and pinned SHAs, desired-state label, no claim of live PA readiness.
-- [ ] T7. Check no .status.yaml, flags, credentials, deployment, user data, app account, implementer or OAuth allowlist was changed by this revision.
+- [ ] 10. Reconcile Grok (grok.com) and Town `OWNER_OBSERVED_WORKS` with #1393 and historical #1381 audit; retain Grok Bot exact client/build UNKNOWN and Town CIMD-versus-DCR UNKNOWN.
+- [ ] 11. Use pinned latest repo SHA ledger and live-vs-desired proof: preview PA read-only flags enabled, worker replicaCount 1, three services Healthy/Synced; NO fabricated R1–R6 or Phase-4 results.
+- [ ] 12. Pin mctl-alice `src/tools/handlers.ts` and its read/control/Quasar scope map; external-client threat model and admin over-scoping held for future separate minimum-privilege test.
+- [ ] 13. Verify vendor primary URLs and checked-on dates, document source quotes; separate conformance scripted tests from vendor E2E and owner observation; keep Telegram consent legal decision open.
+- [ ] T7. Before review confirm exactly six OpenSpec files changed in the same PR, no `.status.yaml`, OAuth configuration or runtime changes, no implementation or login; retain proposal status `proposed`.
