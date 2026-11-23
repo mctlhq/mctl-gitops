@@ -15,7 +15,7 @@
 # only verifies the assertion Access forwards.
 image:
   repository: ghcr.io/mashkovd/mcp-for-argocd
-  tag: "0.9.1-portal.1"
+  tag: "0.9.1-portal.2"
 # The image's CMD is `http`; the entrypoint is `node dist/index.js`, so args replace
 # only the arguments. --stateless: no per-replica sessions to lose. The image binds
 # loopback by default, so the bind is explicit here; the Host allow list turns
