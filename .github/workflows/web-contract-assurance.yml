@@ -17,6 +17,11 @@ on:
       - 'tests/test_web_contract_report.py'
       - '.github/workflows/web-contract-assurance.yml'
   workflow_dispatch:
+    inputs:
+      capture_html:
+        description: 'Also save each healthy consumer landing page into the artifact (selector evidence)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -58,6 +63,8 @@ jobs:
       # FAIL, 3 bad input or pin, 4 guard, 5 setup or incomplete run); the step
       # fails on any non-zero code and the artifact is uploaded regardless.
       - name: Isolated run and report
+        env:
+          WCA_CAPTURE_HTML: ${{ inputs.capture_html && '1' || '0' }}
         run: assurance/web-contracts/run.sh
 
       - name: Log out of ghcr.io
