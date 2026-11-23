@@ -184,7 +184,7 @@ fi
 # mode:image consumers: dummy env only, 60 s health wait; a failure is NOT-RUN with a sanitized reason.
 ALLOW_HOSTS=""
 CONSUMER_JSON='{}'
-sanitize() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from build_report import sanitize_text; lines = sys.stdin.read().strip().splitlines(); print(sanitize_text(lines[-1] if lines else "")[:200])' "$HERE/report"; }
+sanitize() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from build_report import sanitize_text; lines = [l.strip() for l in sys.stdin.read().splitlines() if l.strip()]; print(sanitize_text(" | ".join(lines[-3:]))[:300])' "$HERE/report"; }
 while read -r name image; do
   [ -n "${name:-}" ] || continue
   c=$PREFIX-$name
