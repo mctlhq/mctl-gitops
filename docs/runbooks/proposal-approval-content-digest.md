@@ -16,22 +16,36 @@ CWFT still agree.
 
 ## Which path to use
 
-Who may put the digest in the request body depends on the caller. A human
-admin supplies it themselves; a service principal may not, because only a
-grant carries a human's decision, so mctl-api takes the digest from the grant.
+The owner decides a pending DevLoop grant on the **DevLoop decide page**
+(owner decision 2026-11-18). The page asks for a fresh ZITADEL sign-in with a
+second factor, and mctl-api binds the decision, and the digest, to the grant.
+Its link is the `decide_url` field of `mctl_get_dev_loop_approval`
+(`GET /api/v1/agents/dev-loop/<id>/approval`), set while a grant is pending.
+Agents and CLIs hand that link to the owner on its own line; if a terminal
+wraps it, copy the whole link.
+
+From mctl-api 4.170.0 the API approve routes no longer decide a pending
+grant. They refuse with 403 `decide_page_required` and return the same
+`decide_url`. Re-sending a grant that is already approved (`approval_ref`)
+still works, as recovery when the approve signal was lost. The break-glass
+`DEVLOOP_BEARER_APPROVE_ENABLED=true` restores the API path; it is off by
+default and turning it on is the owner's decision.
 
 | Caller and path | Where the digest comes from | Action needed |
 |-----------------|-----------------------------|---------------|
-| DevLoop approve (`mctl_approve_dev_loop`, `POST /api/v1/agents/dev-loop/<id>/approve`) | mctl-api, from the exercised action-approval grant | none: preferred path |
-| Human admin, direct REST call | the human, in the request body | compute it, see below |
-| Human admin, `mctl_trigger_approve` MCP tool | nowhere yet: the tool has no digest parameter | use the REST call until mctlhq/mctl-api#722 adds it |
+| Owner, DevLoop decide page (`decide_url`) | mctl-api, from the grant the page decides | none: the way to approve |
+| DevLoop approve API (`mctl_approve_dev_loop`, `POST /api/v1/agents/dev-loop/<id>/approve`) | mctl-api, from the exercised grant | from mctl-api 4.170.0, refused for a pending grant (`decide_page_required`); re-sending an approved grant still works |
+| Human admin, direct `mctl-agents-approve` operation (REST or `mctl_trigger_approve`) | the human, in the request body | from mctl-api 4.170.0, refused for direct use unless the break-glass is on; see below |
 | Service or agent principal, no grant | not accepted: mctl-api refuses a body digest from a service principal (only a grant may carry one) | not supported; this caller's legacy relay is already refused in production |
 
-## Manual fallback: direct approve by a human
+## Break-glass: direct approve by a human
 
-Use this only when no DevLoopWorkflow is running for the proposal (check with
-`mctl_get_dev_loop` first: signalling a live loop is the right path, and a
-direct flip races it).
+Before mctl-api 4.170.0, or when the owner has turned the break-glass on, a
+human admin can still run the flip directly. Use this only when no
+DevLoopWorkflow is running for the proposal (check with `mctl_get_dev_loop`
+first: a live loop is decided on its decide page, and a direct flip races
+it). Otherwise restart the loop so it parks at a fresh decision; see the
+mctl-agents runbook `docs/runbooks/dev-loop-restart-after-abandon.md`.
 
 1. Compute the digest of the content you reviewed. Pin it to the commit you
    read, not to whatever is on disk now:

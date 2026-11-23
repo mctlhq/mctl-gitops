@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-11-22T00:23:49Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-162d9a6ba93ee24a
+  trace_id: 511dc2e65a52b71daa736b0e36e026e3
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/seerrsense
+  issue: 127
+  url: https://github.com/mctlhq/seerrsense/issues/127
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-145cae12b1a9cf8a
+  content_hash: sha256:145cae12b1a9cf8a4e4d8196f40ee9a12c664ceecc60ec55e2559b5d03e0605b
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0

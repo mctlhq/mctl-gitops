@@ -73,6 +73,23 @@ image:
 #   /oauth/authorize's ZITADEL upstream, in the MCTL API project): no new
 #   action; a create, plus an in-place update of the data of
 #   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   mctl-api#1006 (mctl-api.tf: the mctl-api-glovo-basket web client of the
+#   Glovo basket approval page, in the MCTL API project): no new action; a
+#   create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   mctl-api#1026 (mctl-api.tf: the mctl-api-deploy-approval web client of
+#   the deploy approval page, in the MCTL API project): no new action; a
+#   create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   C2 machine users (c2-machine-users.tf: two machine users, their public
+#   keys, the control audience project, the data of
+#   mctl-api/mctl-api-c2-machine-ids): no new action; all creates, plus an
+#   in-place update of the data of mctl-api/mctl-api-oidc-zitadel
+#   (service_subjects in the entry).
+#   mctl-api#1022 (mctl-api.tf: the mctl-api-release-approval web client of
+#   the release approval page, in the MCTL API project): no new action; a
+#   create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
 #   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
 #   for coolify-mcp and mctl-academy, one grant of each project per tenant
 #   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel
@@ -132,7 +149,9 @@ allowedActions: "no-op read update create"
 # that needs it, and empty the list once it has applied.
 #   (#1533 listed zitadel_email_provider_smtp.resend for the SMTP port move;
 #   applied 2026-10-04, emptied again here.)
-allowedDeletes: ""
+#   The ERPact Frappe sign-in removal listed eight addresses; applied
+#   2026-11-21, emptied again here.
+allowedDeletes: ''
 
 # The CronJob's schedule. Users come from Vault, which no sync observes, so
 # this is how a user added there reaches ZITADEL.

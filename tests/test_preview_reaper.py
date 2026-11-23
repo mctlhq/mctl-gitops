@@ -15,7 +15,7 @@ although the docs and the mctl_create_preview description promise it.
   - keeps going after one failed uninstall, then fails the run;
   - takes its namespace from the workflow, not from a parameter;
 - the tenant chart renders the CronWorkflow into every tenant namespace with
-  preview enabled, except where tenant.preview.reaper is off (erpact: an
+  preview enabled, except where tenant.preview.reaper is off (an
   external-manifests namespace, where argo-workflow-sa is denied), and
   AppProject platform admits CronWorkflow;
 - the reaper pod's requests, with the executor's init and wait containers,
@@ -251,12 +251,6 @@ class Wiring(unittest.TestCase):
             self.assertNotIn("schedule", cron["spec"])
             self.assertEqual(cron["spec"]["schedules"], ["17 * * * *"])
         self.assertGreater(checked, 0)
-
-    def test_external_manifests_tenant_has_no_reaper(self):
-        # Pods in erpact may use only SA default (bootstrap
-        # externalManifestNamespaces), so a reaper there fails every hour.
-        values = yaml.safe_load((TENANTS / "erpact/values.yaml").read_text())
-        self.assertIs(values["tenant"]["preview"]["reaper"], False)
 
     def test_reaper_pod_fits_every_tenant_quota(self):
         doc = yaml.safe_load(REAPER.read_text())

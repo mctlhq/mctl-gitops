@@ -162,3 +162,18 @@ run "rejects_a_login_name_that_another_key_already_has" {
   }
   expect_failures = [var.platform_admins]
 }
+
+# Moved here from erpact.tftest.hcl when the ERPact Frappe sign-in was removed:
+# it covers admins.tf, not the Frappe path.
+run "rejects_admin_login_name_held_by_a_tenant_user" {
+  command = plan
+  plan_options {
+    target = [zitadel_human_user.platform_admin]
+  }
+  variables {
+    platform_admins = jsonencode({
+      dmitrii = jsonencode({ email = "a@example.com", first_name = "A", last_name = "B", username = "tuser" })
+    })
+  }
+  expect_failures = [zitadel_human_user.platform_admin]
+}

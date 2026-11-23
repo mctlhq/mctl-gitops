@@ -201,3 +201,33 @@ resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
     },
   ]
 }
+
+# The portal's seventh member, argocd. Same reasoning as portal_member_projects above:
+# the server resource (infrastructure/cloudflare/portal/mcp-servers.tf) and its
+# membership in the portal's servers[] do not create this third object, and without
+# it the server is invisible in the portal for everyone.
+resource "cloudflare_zero_trust_access_application" "portal_member_argocd" {
+  account_id = var.account_id
+  name       = "MCP server: argocd (via portal mcp.mctl.ai)"
+  type       = "mcp"
+
+  destinations = [
+    {
+      type          = "via_mcp_server_portal"
+      mcp_server_id = "argocd"
+    },
+  ]
+
+  session_duration = "8760h"
+
+  # ZITADEL access role only. Unlike the other members this one has no pilot
+  # (break-glass) door: the upstream (argocd-mcp.tf) is an admin surface that
+  # admits ZITADEL only, so a pilot address would pass here and then be denied
+  # by the upstream Access application.
+  policies = [
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 1
+    },
+  ]
+}

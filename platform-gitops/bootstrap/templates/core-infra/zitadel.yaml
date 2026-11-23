@@ -29,11 +29,25 @@ spec:
   sources:
     - repoURL: https://charts.zitadel.com
       chart: zitadel
-      # Chart 10.3.0 ships ZITADEL v4.19.2 and the Login V2 UI (v4.19.2).
+      # Chart 10.3.0 ships ZITADEL v4.19.2; both images are pinned to v4.20.5
+      # below, because no chart release carries it yet (10.5.0 still ships
+      # v4.19.2).
       targetRevision: 10.3.0
       helm:
         values: |
           replicaCount: 1
+
+          # v4.20.5 fixes GHSA-qqv8-37gw-ww2q (Login V2 MFA bypass, high),
+          # GHSA-3985-45jm-558m (Login V1 OIDC code flow auth bypass, high) and
+          # GHSA-pm3x-9hh8-g745 (Login V2 open redirect). It also stops Login V2
+          # answering 403 QUERY-dsfr3 when the browser still holds the cookie
+          # of an expired session, which locked users out of every MCTL login
+          # until they cleared cookies. ZITADEL and the Login UI must run the
+          # same release: scripts/check-zitadel-login-texts.py reads this tag
+          # and fails on a mismatch. Drop both overrides once a chart's
+          # appVersion reaches v4.20.5.
+          image:
+            tag: v4.20.5
 
           zitadel:
             # Holds the masterkey under key `masterkey` (ExternalSecret
@@ -110,6 +124,8 @@ spec:
           # run: every render would mint a new keypair and log the UI out of
           # the API on each sync.
           login:
+            image:
+              tag: v4.20.5
             loginServiceKeySecretName: zitadel-login-service-key
             sessionCookieSecretName: zitadel-login-session
             replicaCount: 1

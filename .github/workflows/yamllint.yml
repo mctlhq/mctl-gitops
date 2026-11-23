@@ -43,6 +43,8 @@ jobs:
           # the two prod placeholders, the two issue-903 evaluation
           # templates, the #1280 Tempo datasource (a template
           # comment, so a render with no Tempo emits no document), the
+          # C2 cluster service template (mctl-glovo.yaml: template comment, then
+          # leading `$` bindings and its switch gates),
           # permanent Tempo's tracing.yaml (template comment, then its
           # `{{- if .Values.tracing.enabled }}` gate), the issue-2286 OBI
           # spike (template comment, then its default-off `obiSpike.enabled`
@@ -73,6 +75,7 @@ jobs:
             platform-gitops/bootstrap/templates/observability/tracing.yaml
             platform-gitops/bootstrap/templates/observability/obi-spike.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-consent.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-support-incident-producer.yaml
@@ -80,6 +83,8 @@ jobs:
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-portal.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-repo-binding.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-security-code-scanning.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml
             platform-gitops/argocd/templates/argocd-rbac-cm.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template

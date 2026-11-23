@@ -37,6 +37,19 @@ def check(name, cond, detail=""):
         failures.append(f"{name}: {str(detail)[:300]}")
 
 
+
+def trust_policy(tmp):
+    """The bump steps read the gate policy from origin/main (--policy-rev): give the
+    scratch checkout an origin/main that carries its policy file."""
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "platform-gitops/release-gates.yaml")
+    git("commit", "-qm", "policy", "--no-gpg-sign")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def fixture(tmp):
     def w(rel, text):
         (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +67,10 @@ def fixture(tmp):
         for p in g["paths"]:
             (tmp / p).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / p, tmp / p)
+    for h in gate["version_holds"]:
+        (tmp / h["file"]).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / h["file"], tmp / h["file"])
+    trust_policy(tmp)
 
 
 def bump(tag="1.2.3", image=OTHER_IMAGE, path=OTHER, glob="", script=BUMP, prepare=None):
@@ -63,7 +80,7 @@ def bump(tag="1.2.3", image=OTHER_IMAGE, path=OTHER, glob="", script=BUMP, prepa
         if prepare:
             prepare(tmp)
         src = script.replace("/tmp/gitops-bump-changed-files.txt", str(tmp / "changed.txt"))
-        before = {str(p.relative_to(tmp)): p.read_bytes() for p in tmp.rglob("*") if p.is_file()}
+        before = {str(p.relative_to(tmp)): p.read_bytes() for p in tmp.rglob("*") if p.is_file() and ".git" not in p.parts}
         r = subprocess.run([sys.executable, "-c", src], cwd=tmp, capture_output=True, text=True,
                            env={**os.environ, "IMAGE_NAME": image, "NEW_TAG": tag,
                                 "VALUES_PATH": path, "VALUES_GLOB": glob})
@@ -74,7 +91,8 @@ def bump(tag="1.2.3", image=OTHER_IMAGE, path=OTHER, glob="", script=BUMP, prepa
 
 def validate(**kw):
     env = {"INPUT_IMAGE_NAME": OTHER_IMAGE, "INPUT_IMAGE_TAG": "1.2.3",
-           "INPUT_VALUES_PATH": OTHER, "INPUT_VALUES_GLOB": ""}
+           "INPUT_VALUES_PATH": OTHER, "INPUT_VALUES_GLOB": "",
+           "INPUT_IMAGE_DIGEST": ""}
     env.update({f"INPUT_{k.upper()}": v for k, v in kw.items()})
     return subprocess.run(["bash", "-e", "-c", VALIDATE], env={**os.environ, **env},
                           capture_output=True, text=True).returncode
@@ -160,7 +178,12 @@ def broken_gate(tmp):
 
 
 def no_gate(tmp):
+    # The policy is read from origin/main: it must be gone there too.
     (tmp / GATE).unlink()
+    for a in (["rm", "-q", "--cached", GATE], ["commit", "-qm", "no policy", "--no-gpg-sign"],
+              ["update-ref", "refs/remotes/origin/main", "HEAD"]):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
 
 
 rc, changed, _, _ = bump(prepare=broken_gate)
@@ -192,13 +215,18 @@ for good in ("1.35.0", "1.35.0-rc.1", "main-4ccb257", "0.1.0-r2", "staging-110",
     check(f"an ordinary tag ({good[:20]}) is accepted", bump(tag=good)[0] == 0 and validate(image_tag=good) == 0)
 check("validate accepts a glob alone", validate(values_path="", values_glob="platform-gitops/argo-workflows/cluster-templates/cwft-*.yaml") == 0)
 check("validate accepts a tag and path of real shape", validate() == 0)
+check("validate accepts a sha256 digest", validate(image_digest="sha256:" + "0" * 64) == 0)
+for label, digest in [("a short hex", "sha256:" + "0" * 63), ("uppercase", "sha256:" + "A" * 64),
+                      ("another algorithm", "sha512:" + "0" * 64), ("a newline", "sha256:" + "0" * 64 + "\nx: y"),
+                      ("a trailing space", "sha256:" + "0" * 64 + " ")]:
+    check(f"validate refuses a digest with {label}", validate(image_digest=digest) != 0)
 
 # Structure.
 m = re.search(r"ALLOWED_PREFIXES=\((.*?)\)", VALIDATE, re.S)
 shell_prefixes = re.findall(r'"([^"]+)"', m.group(1))
 py_prefixes = re.findall(r'"([^"]+/)"', re.search(r"ALLOWED_PREFIXES = \((.*?)\)", BUMP, re.S).group(1))
 check("the two prefix lists match", shell_prefixes == py_prefixes, (shell_prefixes, py_prefixes))
-check("bump waits for validation", WF["jobs"]["bump"]["needs"] == "validate-inputs")
+check("bump waits for validation", "validate-inputs" in WF["jobs"]["bump"]["needs"])
 check("validation holds no permissions", WF["jobs"]["validate-inputs"]["permissions"] == {})
 check("validation has no environment or checkout",
       "environment" not in WF["jobs"]["validate-inputs"] and "uses" not in str(WF["jobs"]["validate-inputs"]["steps"]))

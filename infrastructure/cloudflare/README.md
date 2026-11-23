@@ -101,7 +101,7 @@ it:
 ```
 (ip.src.asnum eq 24940 and http.host in
   {"secrets.mctl.ai" "ops.mctl.ai" "app.mctl.ai" "api.mctl.ai"
-   "media.mctl.ai" "tg.mctl.ai" "workflows.mctl.ai"})
+   "media.mctl.ai" "tg.mctl.ai" "tg-preview.mctl.ai" "workflows.mctl.ai"})
 ```
 
 The list is not a guess. Cloudflare analytics cannot produce it on this plan —
@@ -122,6 +122,7 @@ later:
 | `api.mctl.ai` | `mctl-agents` (`MCTL_MCP_URL`, hardcoded) and its Temporal workers |
 | `media.mctl.ai` | `seerrsense` → Overseerr, with the Access service token |
 | `tg.mctl.ai` | the `mctl-telegram` canary CronJob, deliberately probing from outside |
+| `tg-preview.mctl.ai` | `mctl-telegram-preview` itself: the Personal Assistant connector fetches its own OAuth metadata, token and `/mcp` endpoints over the public URL (mctl-telegram#1318), because the token audience is the public resource |
 | `workflows.mctl.ai` | Backstage's backend submitting Argo workflows (`argoWorkflows.baseUrl`) |
 
 **The failure mode is worth knowing before editing this rule**, and it has

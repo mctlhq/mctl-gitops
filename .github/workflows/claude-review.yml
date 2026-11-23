@@ -10,7 +10,7 @@ permissions: {}
 
 jobs:
   claude-review:
-    uses: mctlhq/.github/.github/workflows/claude-review.yml@25478e959d7fdc25dba4f87a15effb5af8254b75
+    uses: mctlhq/.github/.github/workflows/claude-review.yml@84f51e2d83868aa1205e41c5ad6684d8666b5797
     permissions:
       contents: read
       pull-requests: write
@@ -25,7 +25,7 @@ jobs:
       # by non-human actor", and since branch protection requires an
       # approving review, dependabot PRs then sit unmergeable until a
       # maintainer triggers a review by hand.
-      allowed-bots: "mctl-claude-remote,github-actions,dependabot,mctl-agents,mctl-codex"
+      allowed-bots: "mctl-claude-remote,github-actions,dependabot,mctl-agents,mctl-codex,mctl-gitops-pr"
       conventions: |
         Focus on:
         - Correctness: invalid Helm values, broken ArgoCD Application specs,

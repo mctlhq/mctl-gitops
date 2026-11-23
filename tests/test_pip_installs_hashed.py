@@ -9,7 +9,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-WORKFLOWS = ("gitops-bump.yaml", "release-deploy.yaml", "release-gate-watch.yml")
+WORKFLOWS = ("gitops-bump.yaml", "release-deploy.yaml", "release-gate-watch.yml", "mirror-image.yaml")
 REQ = "scripts/requirements-ci-hashed.txt"
 PIP = re.compile(r"pip3?\s+install\b[^\n]*")
 GOOD = re.compile(r"--require-hashes\s+-r\s+" + re.escape(REQ) + r"(\s|$)")

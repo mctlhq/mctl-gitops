@@ -37,6 +37,10 @@ regardless of its content.
 Contract and readiness crosswalk: [`CROSSWALK.md`](CROSSWALK.md) (slice
 map, mismatches, ordered gates to P1; informational, not an approval).
 
+ZITADEL client of the basket approval page (mctlhq/mctl-api#1006):
+[`zitadel-client.patch.md`](zitadel-client.patch.md), text only; it lands in
+zitadel-iac, which applies to production on merge, only at activation.
+
 ## Obsolete staged artifacts (bridge-only provider)
 
 Since the provider worker became a #968 bridge client (mctlhq/mctl-telegram#1262)

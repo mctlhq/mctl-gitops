@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
@@ -36,8 +35,8 @@ var (
 func init() {
 	configCmd.Flags().StringVarP(&configTeam, "team", "t", "", "Team name (required)")
 	configCmd.Flags().StringVarP(&configName, "name", "n", "", "Service name (required)")
-	configCmd.Flags().StringSliceVar(&configEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
-	configCmd.Flags().StringSliceVar(&configSecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
+	configCmd.Flags().StringArrayVar(&configEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
+	configCmd.Flags().StringArrayVar(&configSecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
 	configCmd.Flags().BoolVarP(&configWait, "wait", "w", false, "Wait for workflow to complete")
 
 	configCmd.MarkFlagRequired("team")
@@ -49,6 +48,15 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("provide at least one --env or --secret flag")
 	}
 
+	envVars, err := joinKV("env", configEnv)
+	if err != nil {
+		return err
+	}
+	secretVars, err := joinKV("secret", configSecret)
+	if err != nil {
+		return err
+	}
+
 	token, err := auth.GetToken()
 	if err != nil {
 		return err
@@ -57,9 +65,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	inputs := map[string]string{
 		"action":          "update-config",
 		"team_name":       configTeam,
-		"component_name":    configName,
-		"env_vars":        strings.Join(configEnv, "\n"),
-		"secret_env_vars": strings.Join(configSecret, "\n"),
+		"component_name":  configName,
+		"env_vars":        envVars,
+		"secret_env_vars": secretVars,
 	}
 
 	client := api.NewClient(token)

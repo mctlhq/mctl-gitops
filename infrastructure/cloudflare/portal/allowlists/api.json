@@ -145,6 +145,11 @@
       "reason": "Liveness of one DevLoop workflow by id: status and phase only, no code, no secrets; the upstream refuses ids outside the caller's tenants."
     },
     {
+      "name": "mctl_get_dev_loop_approval",
+      "enabled": false,
+      "reason": "Reads a DevLoop's approval grant and decision context by workflow id (mctl-api#936). Off the shared portal until the owner decides: the portal switch is user-blind, and reviewers can use the direct MCP endpoint meanwhile."
+    },
+    {
       "name": "mctl_get_incident",
       "enabled": true,
       "reason": "Incident record with collected evidence (log excerpts, analysis, PR links); tenant-scoped by the upstream. Excerpts can carry application log text, acceptable on a private admin-only aggregate."
@@ -215,6 +220,31 @@
       "reason": "Read-only lookup of a stored preview deploy plan (mctlhq/mctl-api#866); enabling it on the shared portal is a separate owner decision."
     },
     {
+      "name": "mctl_get_deployment",
+      "enabled": false,
+      "reason": "Read-only lookup of the deployment record of an applied plan (mctlhq/mctl-api#1047); enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_request_deploy_approval",
+      "enabled": false,
+      "reason": "Opens a pending deploy.apply grant request for a stored plan (mctlhq/mctl-api#1026); grants nothing. Enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_promote_deployment",
+      "enabled": false,
+      "reason": "Writes an immutable production-promotion plan row (mctlhq/mctl-api#1049); enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_rollback_deployment",
+      "enabled": false,
+      "reason": "Writes an immutable production-rollback plan row (mctlhq/mctl-api#1049); enabling it on the shared portal is a separate owner decision."
+    },
+    {
+      "name": "mctl_deploy_apply",
+      "enabled": false,
+      "reason": "Spends a tenant owner's deploy.apply grant and submits preview-deploy (mctlhq/mctl-api#1026); enabling it on the shared portal is a separate owner decision."
+    },
+    {
       "name": "mctl_get_repo_binding",
       "enabled": false,
       "reason": "Read-only repository to service binding lookup for deploy (mctlhq/.github#254); enabling it on the shared portal is a separate owner decision."
@@ -268,6 +298,16 @@
       "name": "mctl_list_agent_assets",
       "enabled": false,
       "reason": "Admin-only read-only index of agent registry, gitops profiles, release intents, policy catalogs and skills with reverse references. Exposes agent platform internals; not enabled on the shared portal."
+    },
+    {
+      "name": "mctl_get_sync_windows",
+      "enabled": true,
+      "reason": "Admin-only read of Argo CD sync windows of one AppProject, and one application's canSync state. Read-only; exposes platform deploy scheduling, which a non-admin caller is refused by the API itself. Enabled on the shared portal by owner decision 2026-11-22: the owner is the only user of the portal, and the mctl API's own role check, not the portal switch, is the access control."
+    },
+    {
+      "name": "mctl_propose_release_window",
+      "enabled": true,
+      "reason": "Admin-only request and execution of one Argo CD deny sync window: the owner decides on an MFA page, the execute call opens a gitops pull request and merges nothing, so a caller here can ask for a window but cannot approve or merge it. Enabled on the shared portal by owner decision 2026-11-22: the owner is the only user of the portal, and the mctl API's own role check, MFA approval and receipt gate are the access control."
     },
     {
       "name": "mctl_list_agent_versions",
@@ -403,6 +443,11 @@
       "name": "mctl_rollback_agent_binding",
       "enabled": false,
       "reason": "Admin-only write: appends a ReleaseBinding revision that restores a prior definition/profile pair for an agent in an environment. Destructive to running behaviour and not recorded readOnly, so it stays off the shared portal."
+    },
+    {
+      "name": "mctl_rollback_revision",
+      "enabled": false,
+      "reason": "Restores a service's whole values.yaml and image digest from an earlier deployment record, changing production. New (mctlhq/mctl-api#1048) and not yet enabled on the shared portal: the owner decides visibility once deployment records exist for deploy-service."
     },
     {
       "name": "mctl_rollback_service",

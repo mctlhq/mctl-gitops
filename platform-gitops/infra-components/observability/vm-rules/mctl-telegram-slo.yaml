@@ -72,12 +72,19 @@
 # app.kubernetes.io/instance=labs-mctl-telegram and so never scrapes preview at
 # all.
 #
-# Known property, not a bug: on a low-traffic service a 1h window holds few
-# invocations, so a couple of errors can cross a burn threshold. docs/slo.md
-# prescribes no minimum-volume guard and none is invented here; the thresholds
-# are exactly the ones the SLO doc decided. Tune with observed traffic rather
-# than by guessing, and note that a total outage is covered by
-# ServiceUnavailable and the canary alerts, not by these.
+# Minimum-volume guard (docs/slo.md, "Minimum-volume guard", accepted by the
+# owner 2026-11-21): the two MCP tool-availability burn alerts below do not
+# read the recorded rate() ratios. They compute the ratio from increase() over
+# the alert's own window and also require a minimum number of errors (5 in 1h,
+# 10 in 6h). The percentage thresholds are unchanged. The reason is the
+# traffic: a median hour holds 32 user calls (147 of 504 hours hold fewer than
+# 20), so three errors already exceed 7.2%, and rate() on a lazily created
+# error series extrapolated 2 errors in 115 calls into a 0.150 ratio on
+# 2026-11-18 16:20Z. The cost is stated in the doc: a real outage at very low
+# volume does not trip these two alerts, and is covered by ServiceUnavailable
+# and the canary alerts instead. The recording rules stay as they are because
+# dashboards read them. The OAuth and session-borrow burn alerts are not part
+# of the guard.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -275,7 +282,15 @@ spec:
       interval: 1m
       rules:
         - alert: MctlTelegramToolAvailabilityFastBurn
-          expr: mctl_telegram:tool_errors:ratio_rate1h > 0.072
+          expr: |
+            (
+              sum by (job, namespace) (increase(mctl_tool_invocations_total{status="error",traffic!="canary"}[1h]))
+              /
+              sum by (job, namespace) (increase(mctl_tool_invocations_total{status=~"ok|error",traffic!="canary"}[1h]))
+              > 0.072
+            )
+            and
+            sum by (job, namespace) (increase(mctl_tool_invocations_total{status="error",traffic!="canary"}[1h])) >= 5
           for: 0m
           labels:
             severity: critical
@@ -292,7 +307,15 @@ spec:
               https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
 
         - alert: MctlTelegramToolAvailabilitySlowBurn
-          expr: mctl_telegram:tool_errors:ratio_rate6h > 0.030
+          expr: |
+            (
+              sum by (job, namespace) (increase(mctl_tool_invocations_total{status="error",traffic!="canary"}[6h]))
+              /
+              sum by (job, namespace) (increase(mctl_tool_invocations_total{status=~"ok|error",traffic!="canary"}[6h]))
+              > 0.030
+            )
+            and
+            sum by (job, namespace) (increase(mctl_tool_invocations_total{status="error",traffic!="canary"}[6h])) >= 10
           for: 0m
           labels:
             severity: warning

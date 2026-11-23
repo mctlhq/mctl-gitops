@@ -98,7 +98,7 @@ def check(name, cond, detail=""):
         failures.append(f"{name}: {detail}")
 
 
-def run(values, mn="2", mx="6", cpu="65", runs=1):
+def run(values, mn="2", mx="6", cpu="65", runs=1, enabled="true", disable="false"):
     """Returns (last proc, values.yaml text after each run, guard log, shim log)."""
     with tempfile.TemporaryDirectory() as d:
         root = pathlib.Path(d)
@@ -127,6 +127,8 @@ def run(values, mn="2", mx="6", cpu="65", runs=1):
             "GITOPS_REPO": "example-repo",
             "PARAM_TEAM_NAME": "team1",
             "PARAM_COMPONENT_NAME": "svc1",
+            "PARAM_AUTOSCALING_ENABLED": enabled,
+            "PARAM_AUTOSCALING_DISABLE": disable,
             "PARAM_MIN_REPLICAS": mn,
             "PARAM_MAX_REPLICAS": mx,
             "PARAM_CPU_THRESHOLD": cpu,
@@ -183,7 +185,7 @@ check("missing block: unrelated blocks keep their values",
       == yaml.safe_load(BLOCKS), got)
 
 # 4. Numbers stay numbers (an !!int node), also with leading zeros.
-for mn, mx, cpu in (("2", "6", "65"), ("02", "010", "0070"), ("0", "0", "0")):
+for mn, mx, cpu in (("2", "6", "65"), ("02", "010", "0070"), ("1", "0", "0")):
     proc, (text,), _, _ = run(EXISTING, mn, mx, cpu)
     a = yaml.safe_load(text)["autoscaling"]
     check(f"types: ints stay ints for {mn}/{mx}/{cpu}",
@@ -220,6 +222,70 @@ for bad in ("", "abc", "1.5", "-1", "5 ", "1\nimage:\n  repository: pwned", "1|2
         check(f"validation: {field}={bad!r} is rejected and nothing is written",
               proc.returncode != 0 and text == EXISTING and guard == "" and shim == "",
               f"rc={proc.returncode} guard={guard!r}")
+
+# 8b. Disabling (gitops#1218). `autoscaling_enabled` defaults to "false" and every
+#     existing caller passes it on an ordinary deploy, so the switch-off is its
+#     own opt-in parameter, `autoscaling_disable`.
+WITH_REPLICAS = EXISTING.replace("replicaCount: 2", "replicaCount: 3")
+proc, (text,), guard, _ = run(WITH_REPLICAS, mn="1", enabled="false", disable="true")
+got = yaml.safe_load(text)
+check("disable: the step succeeds", proc.returncode == 0, proc.stderr)
+check("disable: autoscaling.enabled becomes false, bounds untouched",
+      got["autoscaling"] == {"enabled": False, "minReplicas": 1, "maxReplicas": 5,
+                             "targetCPUUtilizationPercentage": 80}, got.get("autoscaling"))
+check("disable: replicaCount is left alone for min_replicas=1", got["replicaCount"] == 3, got)
+check("disable: other blocks are untouched",
+      {k: v for k, v in got.items() if k not in ("autoscaling",)}
+      == {k: v for k, v in yaml.safe_load(WITH_REPLICAS).items() if k != "autoscaling"}, got)
+check("disable: the release gate still ran first", guard.split() == ["target", "team1", "svc1"], repr(guard))
+
+ON = EXISTING.replace("enabled: false\n  minReplicas: 1", "enabled: true\n  minReplicas: 1")
+proc, (text,), _, _ = run(ON, mn="1", enabled="false", disable="true")
+check("disable: an enabled HPA is switched off",
+      proc.returncode == 0 and yaml.safe_load(text)["autoscaling"]["enabled"] is False, proc.stderr + text)
+
+proc, (text,), _, _ = run(ON, mn="0", enabled="false", disable="true")
+got = yaml.safe_load(text)
+check("stop: min_replicas=0 with disable sets replicaCount 0 and the HPA off",
+      proc.returncode == 0 and got["replicaCount"] == 0 and got["autoscaling"]["enabled"] is False,
+      proc.stderr + text)
+
+proc, (text,), _, _ = run(BLOCKS, mn="1", enabled="false", disable="true")
+check("disable: no autoscaling block is created where there was none",
+      proc.returncode == 0 and "autoscaling" not in yaml.safe_load(text), proc.stderr + text)
+proc, (text,), _, _ = run(BLOCKS, mn="0", enabled="false", disable="true")
+got = yaml.safe_load(text)
+check("stop: min_replicas=0 on a service without a block sets replicaCount 0 only",
+      proc.returncode == 0 and got["replicaCount"] == 0 and "autoscaling" not in got,
+      proc.stderr + text)
+
+# Enabling with min_replicas=0 is rejected (an HPA cannot take it), also "00".
+for mn in ("0", "00"):
+    proc, (text,), _, _ = run(EXISTING, mn=mn)
+    check(f"enable: min_replicas={mn!r} is rejected and nothing is written",
+          proc.returncode != 0 and text == EXISTING and "min_replicas=0" in proc.stderr,
+          f"rc={proc.returncode} {proc.stderr}")
+
+# Both directions at once is a contradiction, refused before the clone.
+proc, (text,), guard, _ = run(EXISTING, enabled="true", disable="true")
+check("conflict: enabled=true with disable=true is rejected before anything runs",
+      proc.returncode != 0 and text == EXISTING and guard == "", f"rc={proc.returncode} {proc.stderr}")
+
+# Template wiring: the step runs for enable OR disable, never for the default.
+step = [t for t in doc["spec"]["templates"][0]["dag"]["tasks"] if t["name"] == "patch-autoscaling"][0]
+params = {p["name"]: p.get("value") for p in doc["spec"]["arguments"]["parameters"]}
+check("wiring: autoscaling_disable defaults to false", params.get("autoscaling_disable") == "false", params)
+
+
+def step_runs(enabled, disable):
+    w = (step["when"].replace("{{workflow.parameters.autoscaling_enabled}}", enabled)
+         .replace("{{workflow.parameters.autoscaling_disable}}", disable))
+    return eval(w.replace("||", " or ").replace("&&", " and "))
+
+
+check("wiring: the step is skipped for the default (false, false)", step_runs("false", "false") is False)
+check("wiring: the step runs for enabled=true", step_runs("true", "false") is True)
+check("wiring: the step runs for disable=true", step_runs("false", "true") is True)
 
 # 9. The sed substitutions are gone from this step. The first checks above are the
 #    behavioural proof; this one pins the shape the fix chose.

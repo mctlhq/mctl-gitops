@@ -6,14 +6,25 @@
 argo-cd:
   nameOverride: argocd
 
-  # Disable CRD management to prevent annotation overflow
-  # CRDs are already installed and should not be modified
+  # CRDs are chart-managed from 3.5 on (argocd-self-managed applies with
+  # ServerSideApply=true, so the old client-side last-applied-configuration
+  # size limit no longer applies). Chart 9.x left them out and applying them
+  # by hand per release does not scale: 3.5 adds AppProject/Application
+  # sourceIntegrity and 3.6 rewrites most of the ApplicationSet schema.
+  # keep: true stays so a removed chart never deletes the CRDs (and with them
+  # every Application).
   crds:
-    install: false
+    install: true
     keep: true
 
   global:
     domain: ops.mctl.ai
+    # Chart 10.x creates its own NetworkPolicies by default. They are additive
+    # to ours and the chart's argocd-server policy allows ingress from ANY
+    # source, which would cancel allow-argocd-server-clients (Traefik
+    # only). Keep ours as the single source of truth.
+    networkPolicy:
+      create: false
     # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR
     # for redis). No imagePullSecret is required. Set explicitly to [] so the
     # value never picks up a stale ghcr-registry secret from a prior release —
@@ -46,6 +57,11 @@ argo-cd:
       # ci-freshness` against the cluster kubeconfig, stored as the
       # ARGOCD_FRESHNESS_TOKEN Actions secret of this repository.
       accounts.ci-freshness: apiKey
+      # Read-only account for the argocd-mcp service (labs/argocd-mcp), the
+      # portal's Argo CD MCP upstream. Token: `argocd --core account
+      # generate-token --account argocd-mcp`, stored in Vault at
+      # secret/data/teams/labs/argocd-mcp (key ARGOCD_API_TOKEN).
+      accounts.argocd-mcp: apiKey
 
       # Health check for ExternalSecrets
       resource.customizations.health.external-secrets.io_ExternalSecret: |
@@ -181,8 +197,23 @@ argo-cd:
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
+        # ... and read AppProjects, only for the admin-only sync windows tool
+        # (mctl_get_sync_windows, GET /api/v1/projects/{name}/syncwindows).
+        # Read only: windows are written by a gitops PR, never through the API.
+        # The object of the projects resource is the bare project name, not
+        # <project>/<app> as for applications: "*/*" matches no project name
+        # (a first version used it and Argo CD answered permission denied).
+        p, mctl-api, projects, get, *, allow
         # argocd-freshness workflow: list applications and their revisions
         p, ci-freshness, applications, get, */*, allow
+        # argocd-mcp (read-only Argo CD MCP behind the Cloudflare portal): read
+        # applications, their logs, projects (sync windows) and clusters. No
+        # write verbs and no exec. projects takes the bare project name as the
+        # object, not <project>/<app> (see the mctl-api lines above).
+        p, argocd-mcp, applications, get, */*, allow
+        p, argocd-mcp, logs, get, */*, allow
+        p, argocd-mcp, projects, get, *, allow
+        p, argocd-mcp, clusters, get, */*, allow
 
         # Tenant roles: no exec. Argo CD exec is a cluster-admin-adjacent
         # shell into application pods; only role:admin retains it. New

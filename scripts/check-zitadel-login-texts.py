@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check that zitadel-iac's Login V2 overrides still cover every "Zitadel".
 
-Reads the ZITADEL release the zitadel chart pin deploys (the chart's
-appVersion), fetches that release's hosted login locale files
+Reads the ZITADEL release the zitadel Application deploys (the image tag
+override when the Application sets one, else the chart's appVersion), fetches that release's hosted login locale files
 (apps/login/locales/*.json in zitadel/zitadel) and compares them with
 platform-gitops/helm-charts/zitadel-iac/iac/login_texts.json. Fails when:
 
@@ -79,6 +79,19 @@ def app_version(chart: str) -> str:
     if not m:
         sys.exit(f"chart zitadel {chart} has no appVersion")
     return m.group(1)
+
+
+def image_tag_override() -> str | None:
+    """The image tag the Application pins over the chart's appVersion, if any.
+
+    ZITADEL and its Login UI must run the same release, so every `image: tag:`
+    in the Application has to agree; two different tags are an error rather
+    than a guess at which one serves the login texts.
+    """
+    tags = set(re.findall(r"^\s+image:\s*\n(?:\s+#.*\n)*\s+tag:\s*['\"]?([^'\"\s]+)", APP.read_text(), re.M))
+    if len(tags) > 1:
+        sys.exit(f"{APP} pins different ZITADEL image tags: {sorted(tags)}")
+    return tags.pop() if tags else None
 
 
 def fetch(url: str) -> bytes:
@@ -209,7 +222,7 @@ def main() -> int:
         source, locales = args.locales, local_locales(args.locales)
     else:
         chart = chart_version()
-        tag = app_version(chart)
+        tag = image_tag_override() or app_version(chart)
         source, locales = f"zitadel {tag} (chart {chart})", upstream_locales(tag)
 
     errors = problems(locales, json.loads(OVERRIDES.read_text()), source)

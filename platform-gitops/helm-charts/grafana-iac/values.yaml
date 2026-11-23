@@ -22,6 +22,8 @@ allowedActions: "no-op read create update"
 # Resource addresses the Job may destroy or replace, space-separated. Any
 # other delete in a plan fails the Job. Name the exact address, in the PR
 # that needs it, and empty the list once it has applied.
+#   The ERPact organization removal listed its six addresses; applied
+#   2026-11-21, emptied again here.
 allowedDeletes: ""
 
 # The CronJob's schedule. It reverts permissions changed in the UI, which no

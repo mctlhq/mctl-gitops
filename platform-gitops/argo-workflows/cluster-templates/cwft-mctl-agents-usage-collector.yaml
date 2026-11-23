@@ -39,7 +39,7 @@ spec:
       - name: dry_run
         value: "false"
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.117.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.1
         # Bump alongside the other CWFTs' agent_image default; the registry's
         # resolved image_ref overrides this once a caller pins per-run.
 
@@ -181,6 +181,9 @@ spec:
     # reconcile CWFT: a routine Succeeded tick reports nothing, since
     # near-zero artifacts is the expected state until step (d) lands.
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that

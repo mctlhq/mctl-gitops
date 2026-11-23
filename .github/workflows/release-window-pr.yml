@@ -1,0 +1,373 @@
+name: Release Window PR
+run-name: "release-window ${{ inputs.window_id }} on ${{ inputs.project }}"
+
+# Opens a release-window/<id> pull request that adds ONE deny sync window to an
+# AppProject template (proposal issue-2828, 8.2) and then queues it for merge.
+# The owner's MFA approval on the release-window decide page is the only human
+# review: it is what the dispatcher checked before it dispatched this run, and
+# the decide page tells the owner that approving means exactly this (owner
+# decision 2026-11-23, docs/plans/sync-window-write-path.md, section 5, item 6).
+# The open-pr job opens the PR and touches nothing on main; the enqueue-window
+# job puts that one head in the merge queue after an approving review and the
+# required checks, and refuses anything else (scripts/release-window-enqueue-wait.sh).
+# A red check, a review that does not approve, or a head that is not the pushed
+# commit leaves the PR open and the window off. Closing the PR cancels it.
+#
+# Why a dispatch workflow on main, and why the App: the pull request has to be
+# authored by an identity the ruleset can attribute (a commit by ci@mctl.ai is
+# "unattributed" and wants a second approval nobody is there to give), and the
+# App key is a secret of the main-only `app-gitops-pr` environment, so a pull
+# request cannot change the code that holds it. mctl-gitops-pr is not a bypass
+# actor: it can push a branch, not main. Same shape as publish-pr in
+# gitops-bump.yaml; unlike a release bump, nothing enqueues the result.
+#
+# Inputs are bound to what was approved. window_sha256 is the canonical hash
+# (scripts/release-window-insert.py hash PROJECT) of the project and the window
+# the dispatcher shows the approver; the job rebuilds the window from the other
+# inputs, renders it against the live inventory, and refuses unless the hashes
+# match. The project is part of the hashed bytes, so an approval for one project
+# cannot be replayed against another. base_sha is
+# the main commit the approval was given on; the job refuses when it is not an
+# ancestor of main or when the target template changed since.
+#
+# Refused here, not left to the review: a window the validator or the render
+# tool rejects (default project, recovery chain, unknown or foreign
+# application, allow, manualSync, globs), a project other than apps or
+# platform, an existing branch or open pull request for the same id, and any
+# diff that is not exactly one edit to the target template.
+on:
+  workflow_dispatch:
+    inputs:
+      window_id:
+        description: "Short id for the branch release-window/<id> (lowercase letters, digits, dashes)"
+        required: true
+        type: string
+      project:
+        description: "AppProject that receives the window: apps or platform (never default)"
+        required: true
+        type: string
+      applications:
+        description: "Comma-separated exact Application names the window blocks"
+        required: true
+        type: string
+      schedule:
+        description: "Five-field cron, UTC (e.g. 0 22 * * 5)"
+        required: true
+        type: string
+      duration:
+        description: "Go-style duration (e.g. 48h, 90m, 1h30m)"
+        required: true
+        type: string
+      base_sha:
+        description: "main commit the approval was given on (40 hex)"
+        required: true
+        type: string
+      window_sha256:
+        description: "Canonical sha256 of the approved window (64 hex)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Serialises only the opening, which takes seconds. enqueue-window can wait
+    # up to 50 minutes and must stay outside any group: GitHub keeps one pending
+    # run per group, so a third dispatch would cancel a second, MFA-approved one.
+    concurrency:
+      group: release-window-pr
+      cancel-in-progress: false
+    # Only a dispatch run of this file on main can enter the environment that
+    # holds the App key.
+    if: github.ref == 'refs/heads/main'
+    environment: app-gitops-pr
+    permissions:
+      contents: read
+    outputs:
+      pr: ${{ steps.open.outputs.pr }}
+      head: ${{ steps.open.outputs.head }}
+    steps:
+      # Before any credential exists: shape-check every input. Values reach the
+      # shell only through env, never through ${{ }} in a script.
+      - name: Check the inputs
+        env:
+          WINDOW_ID: ${{ inputs.window_id }}
+          PROJECT: ${{ inputs.project }}
+          APPLICATIONS: ${{ inputs.applications }}
+          SCHEDULE: ${{ inputs.schedule }}
+          DURATION: ${{ inputs.duration }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          WINDOW_SHA256: ${{ inputs.window_sha256 }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$WINDOW_ID" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || fail "window_id must be 1-40 characters of a-z, 0-9 and dash, not starting with a dash"
+          case "$PROJECT" in apps|platform) ;; *) fail "project must be apps or platform" ;; esac
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "base_sha must be 40 lowercase hex characters"
+          [[ "$WINDOW_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "window_sha256 must be 64 lowercase hex characters"
+          [[ "$SCHEDULE" =~ ^[0-9*/,-]+(\ [0-9*/,-]+){4}$ ]] || fail "schedule must be a five-field cron"
+          [[ "$DURATION" =~ ^([0-9]{1,4}[hm]){1,2}$ ]] || fail "duration must look like 48h, 90m or 1h30m"
+          [[ "$APPLICATIONS" =~ ^[a-z0-9][a-z0-9.-]{0,62}(,[a-z0-9][a-z0-9.-]{0,62}){0,19}$ ]] || fail "applications must be 1-20 comma-separated exact names"
+          git check-ref-format "refs/heads/release-window/${WINDOW_ID}" || fail "window_id makes an invalid branch name"
+
+      - name: Generate a write token for the window pull request
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      # The approval was given on base_sha. If it is not an ancestor of main,
+      # or the template it targets moved since, the approved diff is not the
+      # diff this run would produce: refuse and ask for a fresh approval.
+      - name: Check the approval is still current
+        env:
+          PROJECT: ${{ inputs.project }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          target="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          git cat-file -e "${BASE_SHA}^{commit}" || { echo "::error::base_sha is not a commit of this repository"; exit 1; }
+          git merge-base --is-ancestor "$BASE_SHA" HEAD || { echo "::error::base_sha is not an ancestor of main"; exit 1; }
+          [ -f "$target" ] || { echo "::error::${target} does not exist"; exit 1; }
+          git diff --quiet "$BASE_SHA" HEAD -- "$target" \
+            || { echo "::error::${target} changed on main since the approval; ask for a new one"; exit 1; }
+
+      # The window is rebuilt from the inputs and judged by the same tools CI
+      # runs on every pull request. A refusal (exit 1) or an unreadable
+      # inventory (exit 2) both stop here.
+      - name: Render the window against the live inventory
+        env:
+          PROJECT: ${{ inputs.project }}
+          APPLICATIONS: ${{ inputs.applications }}
+          SCHEDULE: ${{ inputs.schedule }}
+          DURATION: ${{ inputs.duration }}
+          WINDOW_SHA256: ${{ inputs.window_sha256 }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/window"; mkdir -p "$out"
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$out/bootstrap.yaml"
+          helm template argocd platform-gitops/argocd -f platform-gitops/argocd/values.yaml --namespace argocd > "$out/argocd.yaml"
+          args=()
+          IFS=',' read -r -a apps <<< "$APPLICATIONS"
+          for a in "${apps[@]}"; do args+=(--application "$a"); done
+          rc=0
+          python3 scripts/render-sync-window.py --repo-root . --project "$PROJECT" "${args[@]}" \
+            --schedule "$SCHEDULE" --duration "$DURATION" \
+            "$out/bootstrap.yaml" "$out/argocd.yaml" > "$out/report.json" || rc=$?
+          if [ "$rc" != 0 ]; then
+            echo "::error::render-sync-window refused the window (exit ${rc}):"
+            cat "$out/report.json" 2>/dev/null || true
+            exit 1
+          fi
+          python3 - "$out/report.json" > "$out/window.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          assert r["verdict"] == "ok" and r["writes"] == "none", r
+          print(json.dumps(r["window"]))
+          PY
+          got=$(python3 scripts/release-window-insert.py hash "$PROJECT" < "$out/window.json")
+          [ "$got" = "$WINDOW_SHA256" ] \
+            || { echo "::error::the window built from the inputs hashes to ${got}, not the approved ${WINDOW_SHA256}"; exit 1; }
+
+      - name: Add the window to the project template
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          target="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          python3 scripts/release-window-insert.py insert "$target" < "$RUNNER_TEMP/window/window.json"
+
+      # The edit must be exactly one file, and the re-rendered chart must carry
+      # exactly one more window in that project, equal to the approved one and
+      # last in the list, and pass the same validator CI runs.
+      - name: Check the edit changed nothing else
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          target="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          [ "$(git diff --name-only)" = "$target" ] || { echo "::error::the edit touched more than ${target}"; git diff --name-only; exit 1; }
+          [ -z "$(git status --porcelain --untracked-files=all | grep -vxF " M ${target}" || true)" ] \
+            || { echo "::error::the working tree has changes besides ${target}"; exit 1; }
+          out="$RUNNER_TEMP/window"
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$out/bootstrap-after.yaml"
+          python3 scripts/validate-argocd-sync-windows.py --expect-project default --expect-project platform \
+            --expect-project "$PROJECT" "$out/bootstrap-after.yaml" "$out/argocd.yaml"
+          python3 - "$out/bootstrap.yaml" "$out/bootstrap-after.yaml" "$out/window.json" "$PROJECT" <<'PY'
+          import json, sys, yaml
+          before_f, after_f, win_f, project = sys.argv[1:5]
+          def windows(path):
+              for d in yaml.safe_load_all(open(path)):
+                  if isinstance(d, dict) and d.get("kind") == "AppProject" and d["metadata"]["name"] == project:
+                      return (d.get("spec") or {}).get("syncWindows") or []
+              raise SystemExit(f"AppProject {project} not found in {path}")
+          before, after, want = windows(before_f), windows(after_f), json.load(open(win_f))
+          if after != before + [want]:
+              raise SystemExit(f"the render does not equal before plus the approved window: before={before} after={after}")
+          PY
+
+      - name: Open the release-window pull request
+        id: open
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          WINDOW_ID: ${{ inputs.window_id }}
+          PROJECT: ${{ inputs.project }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          WINDOW_SHA256: ${{ inputs.window_sha256 }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          branch="release-window/${WINDOW_ID}"
+          git check-ref-format "refs/heads/${branch}" || { echo "::error::invalid branch name"; exit 1; }
+          case "$branch" in release-window/?*) ;; *) echo "::error::branch is not under release-window/"; exit 1 ;; esac
+          target="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+
+          # No force push and no reuse: a branch or an open pull request for
+          # this id means an earlier request is still around. Close it or let
+          # it merge; do not overwrite what a reviewer may be reading.
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          [ -z "$existing" ] || { echo "::error::pull request #${existing} is already open for ${branch}"; exit 1; }
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null 2>&1; then
+            echo "::error::branch ${branch} already exists; delete it or choose another window_id"; exit 1
+          fi
+
+          # The commit is authored as the App's bot account, which the ruleset
+          # can attribute. The trailer says no agent wrote the change.
+          git config user.name "mctl-gitops-pr[bot]"
+          git config user.email "353875018+mctl-gitops-pr[bot]@users.noreply.github.com"
+          git add -- "$target"
+          git commit -q -m "ci(sync-window): deny window ${WINDOW_ID} on project ${PROJECT}" \
+            -m "Adds one deny window to the ${PROJECT} AppProject. Opened by release-window-pr.yml: ${RUN_URL}" \
+            --trailer "Agent: none"
+          # The only push this job makes; the refspec names a release-window/ ref.
+          git push origin "HEAD:refs/heads/${branch}"
+
+          # The body is built from the render report by a script, not by shell
+          # string handling of the report's fields.
+          BODY_FILE="$RUNNER_TEMP/window/body.md" REPORT="$RUNNER_TEMP/window/report.json" python3 - <<'PY'
+          import json, os
+          r = json.load(open(os.environ["REPORT"]))
+          matched = "\n".join(f"- `{a['name']}` ({a['namespace']})" for a in r["matched"])
+          body = "\n".join([
+              f"Adds one deny sync window to the `{os.environ['PROJECT']}` AppProject (proposal issue-2828, 8.2).",
+              "",
+              f"Opened by release-window-pr.yml: {os.environ['RUN_URL']}",
+              f"Base: `{os.environ['BASE_SHA']}`. Window sha256: `{os.environ['WINDOW_SHA256']}`.",
+              "",
+              "Applications the window matches:",
+              matched,
+              "",
+              "Rendered patch:",
+              "",
+              "```yaml",
+              r["patch"].rstrip("\n"),
+              "```",
+              "",
+              "The enqueue-window job of this workflow puts this pull request in the merge queue after an "
+              "approving review and the required checks, pinned to the head it pushed. The owner's MFA approval "
+              "of this exact window is the only human review. Closing the pull request cancels the window.",
+              "",
+          ])
+          open(os.environ["BODY_FILE"], "w").write(body)
+          PY
+          pr_url=$(gh pr create --repo "$REPO" --base main --head "$branch" \
+            --title "ci(sync-window): deny window ${WINDOW_ID} on project ${PROJECT}" \
+            --body-file "$RUNNER_TEMP/window/body.md")
+          echo "::notice::opened ${pr_url}"
+          pr_number="${pr_url##*/}"
+          [[ "$pr_number" =~ ^[0-9]+$ ]] || { echo "::error::no pull request number in '${pr_url}'"; exit 1; }
+          {
+            echo "pr=${pr_number}"
+            echo "head=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  # Queue the one pull request open-pr made. The wait runs with the read-only
+  # job token; the App token is minted only after it says ready, and is used for
+  # the one enqueue, pinned with expectedHeadOid to the head the wait judged.
+  # The token that can enqueue so that the queue's checks do start is the App's,
+  # not GITHUB_TOKEN's (events caused by GITHUB_TOKEN start no merge_group run).
+  # It is released only to a job on main in the app-gitops-pr environment.
+  enqueue-window:
+    needs: open-pr
+    if: github.ref == 'refs/heads/main' && needs.open-pr.result == 'success'
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # The wait gives up after 45 minutes; a window that does not get approved
+    # and green is a red run, not a silent open PR.
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval and the required checks on the pushed head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          EXPECT_HEAD: ${{ needs.open-pr.outputs.head }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          case "$PROJECT" in apps|platform) ;; *) echo "::error::project must be apps or platform"; exit 1 ;; esac
+          export TARGET="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          bash scripts/release-window-enqueue-wait.sh
+
+      - name: Generate the App token for the enqueue
+        id: token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # expectedHeadOid: the queue refuses the entry if the head is no longer
+      # the one the wait judged and the approval covers.
+      - name: Enqueue the judged head with the App token
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          PR_ID: ${{ steps.ready.outputs.pr_id }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+          if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+                -f id="$PR_ID" -f h="$HEAD_SHA" 2>&1); then
+            echo "::error::enqueue of #${PR} was refused: ${out}"
+            exit 1
+          fi
+          echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"

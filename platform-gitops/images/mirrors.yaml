@@ -1,0 +1,43 @@
+# Third-party images mirrored into ghcr.io/mctlhq/<name>:<tag>.
+#
+# .github/workflows/mirror-image.yaml copies `source` byte-for-byte with
+# `regctl image copy`. Each entry is a single-platform manifest pinned by
+# digest, so the mirror ends up with exactly the same digest, and scan
+# evidence bound to that digest still applies. The workflow refuses to finish
+# when the digests differ.
+#
+# Why mirror: an upstream registry can garbage-collect an untagged digest.
+# chainguard/nginx publishes only `latest`, which moves on every rebuild.
+# Once that happens, a node without a cached copy cannot pull the image, and
+# the ref no longer works as a rollback target. A GHCR package keeps the
+# version until someone deletes it.
+#
+# Rules (scripts/validate-image-mirrors.py; CI and the workflow both run it):
+#   name      the GHCR package name, [a-z0-9-]
+#   source    registry/repo@sha256:<64 hex>; no tag, not ghcr.io/mctlhq
+#   platform  linux/amd64 only (the cluster's nodes)
+#   tag       immutable: never `latest`; a tag never moves to another digest
+#
+# Adding or changing an entry is a reviewed PR. Running the workflow is a
+# separate decision, made after merge.
+mirrors:
+  # RedLoop synthetic staging (mctl-gitops#2744). One entry per GHCR package,
+  # so a new version replaces the previous one here; the earlier tag stays in
+  # GHCR and remains the rollback target.
+  #
+  # Current: nginx 1.31.9 (nginx.org advisories of 2026-11-18), amd64 manifest
+  # of docker.io/chainguard/nginx:latest as of 2026-11-18, image created
+  # 2026-11-18T18:39:15Z, uid 65532, `nginx -v` = 1.31.9. Not yet scanned or
+  # rolled out: RedLoop Stage 3 stays NO-GO, and running the mirror workflow,
+  # the scan allowlist entry and the values bump are separate decisions.
+  #
+  # Previous: ghcr.io/mctlhq/chainguard-nginx:1.31.8-20261115, source digest
+  # sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98.
+  # Gate 4 scan evidence is bound to that digest (0 CRITICAL, 0 HIGH,
+  # redloop-image-scan run 44048121064). It is the digest running in staging
+  # today. nginx 1.31.8 is inside the vulnerable range of CVE-2026-123007 and
+  # CVE-2026-123633 (no HTTP/2 or HTTP/3 listener is configured there).
+  - name: chainguard-nginx
+    source: docker.io/chainguard/nginx@sha256:4841077f54db8761ca74942fa759f33b1e94d7b63cd7b1719338366b4e7003a9
+    platform: linux/amd64
+    tag: 1.31.9-20261118

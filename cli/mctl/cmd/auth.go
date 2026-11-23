@@ -30,12 +30,14 @@ var authStatusCmd = &cobra.Command{
 // order, and asks the API who it is. It never reports an identity taken from
 // anywhere but that credential.
 func authStatus(w io.Writer) error {
+	// MCTL_TOKEN first, as in GetToken: it wins over MCTL_AUTH, so a bad
+	// MCTL_AUTH beside it does not stop the token from working.
+	if os.Getenv("MCTL_TOKEN") != "" {
+		return tokenStatus(w, "MCTL_TOKEN")
+	}
 	mode, err := auth.AuthMode()
 	if err != nil {
 		return err
-	}
-	if os.Getenv("MCTL_TOKEN") != "" {
-		return tokenStatus(w, "MCTL_TOKEN")
 	}
 	switch mode {
 	case auth.ModeZitadel:

@@ -20,6 +20,9 @@ mock_provider "kubernetes" {}
 variables {
   smtp_password        = "test"
   customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
+  # Production turns the Google IdP on (customers_rollout.auto.tfvars.json),
+  # which tofu test also loads; the mocked client stands in for Vault.
+  customers_google_idp = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
   # A valid value, as in the other test files: targeted plans prune the
   # validation of platform_admins today, which nothing here should rely on.
   platform_admins = jsonencode({
@@ -168,8 +171,8 @@ run "ui_client_is_a_confidential_web_client_with_refresh" {
   }
   # Exactly the Backstage handler of auth provider `oidc`.
   assert {
-    condition     = zitadel_application_oidc.portal_ui.redirect_uris == tolist(["https://app.mctl.ai/api/auth/oidc/handler/frame", "https://app.mctl.ai/api/auth/zitadel-customer/handler/frame"])
-    error_message = "The redirect URIs must be exactly the handlers of the staff sign-in (oidc) and the customer entry (zitadel-customer)."
+    condition     = zitadel_application_oidc.portal_ui.redirect_uris == tolist(["https://app.mctl.ai/api/auth/oidc/handler/frame", "https://app.mctl.ai/api/auth/zitadel-customer/handler/frame", "https://app.mctl.ai/api/auth/zitadel-customer-google/handler/frame"])
+    error_message = "The redirect URIs must be exactly the handlers of the staff sign-in (oidc) and the customer entries (zitadel-customer, zitadel-customer-google)."
   }
   assert {
     condition     = zitadel_application_oidc.portal_ui.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.portal_ui.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
@@ -195,6 +198,12 @@ run "ui_client_is_a_confidential_web_client_with_refresh" {
 
 run "oidc_provider_client_reaches_the_portal_secret" {
   command = plan
+  variables {
+    customers_google_idp_enabled      = true
+    customers_google_idp              = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
+    identity_hook_create_gate_enabled = true
+    identity_hook_intent_enabled      = true
+  }
   plan_options {
     target = [kubernetes_secret_v1_data.portal_oidc]
   }
@@ -215,14 +224,18 @@ run "oidc_provider_client_reaches_the_portal_secret" {
     target = zitadel_org_idp_github.customers
     values = { id = "customers-github-idp-id" }
   }
+  override_resource {
+    target = zitadel_org_idp_google.customers
+    values = { id = "customers-google-idp-id" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.metadata[0].name == "backstage-oidc-zitadel" && kubernetes_secret_v1_data.portal_oidc.metadata[0].namespace == "backstage"
     error_message = "The keys go into backstage/backstage-oidc-zitadel, the Secret the mctl-portal-oidc-zitadel Application pre-creates."
   }
   assert {
-    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET", "AUTH_OIDC_CUSTOMERS_ORG_ID", "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID"])
-    error_message = "backstage/backstage-oidc-zitadel must carry exactly the six keys the portal reads."
+    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET", "AUTH_OIDC_CUSTOMERS_ORG_ID", "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID", "AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID"])
+    error_message = "With Google on, backstage/backstage-oidc-zitadel must carry exactly the seven keys the portal reads."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["OIDC_ZITADEL_CLIENT_ID"]) == "portal-client-id"
@@ -249,7 +262,32 @@ run "oidc_provider_client_reaches_the_portal_secret" {
     error_message = "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID must be the customers organization's GitHub IdP id."
   }
   assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID"]) == "customers-google-idp-id"
+    error_message = "AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID must be the customers organization's Google IdP id."
+  }
+  assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.field_manager == "zitadel-iac" && kubernetes_secret_v1_data.portal_oidc.force == true
     error_message = "The Job patches the Secret Argo CD created, as field manager zitadel-iac."
+  }
+}
+
+# Google IdP off: the portal is told no Google IdP id, so it offers no
+# Google entry (the key is absent, not empty).
+run "google_idp_off_leaves_the_portal_secret_without_a_google_id" {
+  command = plan
+  variables {
+    customers_google_idp_enabled = false
+  }
+  plan_options {
+    target = [kubernetes_secret_v1_data.portal_oidc]
+  }
+
+  assert {
+    condition     = !contains(keys(kubernetes_secret_v1_data.portal_oidc.data), "AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID")
+    error_message = "With Google off, the portal must not be given a Google IdP id."
+  }
+  assert {
+    condition     = contains(keys(kubernetes_secret_v1_data.portal_oidc.data), "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID")
+    error_message = "The GitHub IdP id is unaffected by the Google switch."
   }
 }

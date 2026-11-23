@@ -55,6 +55,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: zitadel
+        # C2 cluster service (runtime pods and its migration Job).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-glovo
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-glovo
         # Grafana queries Postgres directly: its own database (role grafana)
         # and the academy usage dashboard's datasource pointed at
         # shared-pg-rw:5432 (observability/academy-postgres-datasource.yaml),

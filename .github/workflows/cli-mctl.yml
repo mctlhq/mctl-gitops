@@ -1,0 +1,75 @@
+name: cli-mctl
+
+# Build, vet and vulnerability scan for the mctl CLI under cli/mctl
+# (mctlhq/mctl-gitops#967). Nothing else in this repository compiled the CLI,
+# so a broken build or a vulnerable standard library only showed up when
+# someone cut a release by hand.
+#
+# GOTOOLCHAIN is pinned to an exact patch release on purpose. go.mod's `go`
+# line is only a floor (1.26.9, which govulncheck reports as vulnerable in the
+# standard library: GO-2026-6809 and one more); the toolchain that actually
+# compiles and is scanned must be at or above the fixed release. Raise it here
+# when govulncheck starts failing on a newer standard-library advisory.
+#
+# There is intentionally no required-check wiring: the paths filter means the
+# workflow does not run on unrelated PRs, and a skipped required check would
+# block them.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "cli/mctl/**"
+      - ".github/workflows/cli-mctl.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cli/mctl/**"
+      - ".github/workflows/cli-mctl.yml"
+  schedule:
+    # Weekly: a new advisory lands without any change under cli/mctl.
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.11"
+  GOTOOLCHAIN: "go1.26.11"
+  GOVULNCHECK_VERSION: "v1.7.0"
+
+jobs:
+  cli:
+    name: Build, vet, govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cli/mctl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: cli/mctl/go.sum
+
+      - name: Toolchain
+        run: go version
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: govulncheck
+        # A scan that could not run is a failure, not a clean result: set -e
+        # plus govulncheck's own non-zero exit on findings or on a load error.
+        run: |
+          set -euo pipefail
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "$(go env GOPATH)/bin/govulncheck" ./...

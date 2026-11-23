@@ -11,6 +11,14 @@ name: Release gate watch
 # between the parent and the pushed commit by content, reading the policy from
 # the parent. A read that fails is reported as unknown, never as clean. A push
 # can change this file too, so the daily run reads whatever main then holds.
+#
+# Release ledger (mctlhq/mctl-api#1022 S4b): on a push that writes the image of
+# a hold with a `ledger:` block, it asks mctl-api whether that exact digest was
+# approved with MFA. Under `enforce` a write without such a decision is a
+# violation and an unreadable ledger is unknown; under `shadow` it only
+# reports. It runs in its own `ledger` job, only on a push, and that job is
+# the only one holding id-token: write; mctl-api admits GitHub OIDC tokens only
+# from push, workflow_dispatch and release events on main anyway.
 
 on:
   push:
@@ -21,6 +29,7 @@ on:
     paths:
       - '.github/workflows/release-gate-watch.yml'
       - 'scripts/release-gate.py'
+      - 'scripts/release-ledger-shadow.py'
       - 'platform-gitops/release-gates.yaml'
   workflow_dispatch:
 
@@ -109,4 +118,67 @@ jobs:
           message: |
             🔧 *Release gate check could not run*
             Main is unverified, not known to be clean: checkout, PyYAML, the script or a read of the parent commit failed.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  # Its own job, so that this is the only job holding an OIDC-capable token
+  # (id-token: write), and only on a push: `verify` also runs on pull_request
+  # (PR-head code) and on schedule, and must never be able to mint one.
+  ledger:
+    name: held-image writes carry a ledger decision
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The reader token for mctl-api (audience https://api.mctl.ai).
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Release ledger decisions for held-image writes
+        id: ledger
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # 6 = an enforced hold's image was written with no approved MFA
+          # decision for its digest, 7 = the ledger, the registry or a commit
+          # could not be read. A shadow hold only reports and exits 0.
+          rc=0
+          python3 scripts/release-ledger-shadow.py watch --base "$BEFORE" --head "$SHA" || rc=$?
+          case "$rc" in
+            0) echo "no enforced held-image write lacks a ledger decision" ;;
+            6) echo "state=violated" >> "$GITHUB_OUTPUT"
+               echo "::error::the push wrote a held image the release ledger did not approve" ;;
+            7) echo "state=unknown" >> "$GITHUB_OUTPUT"
+               echo "::error::could not judge the push against the release ledger" ;;
+            *) echo "::error::release-ledger-shadow.py exited $rc, nothing was judged" ;;
+          esac
+          exit "$rc"
+
+      - name: Notify Telegram - ledger violated
+        if: failure() && steps.ledger.outputs.state == 'violated'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ⚠️ *Release gate violated on main*
+            The push wrote a held image that the release ledger did not approve, and Argo CD syncs it.
+            Commit: ${{ github.sha }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Telegram - ledger check could not run
+        if: failure() && steps.ledger.outputs.state != 'violated'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🔧 *Release gate check could not run*
+            The push is unverified against the release ledger, not known to be clean: checkout, PyYAML, the script, a commit, the registry or the ledger read failed.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

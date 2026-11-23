@@ -1,0 +1,886 @@
+{{- /*
+Sync waves in this file are all <= 0 on purpose. root-app manages itself in wave 0
+and its own health stays Missing until every resource of the chart exists, so a
+POSITIVE wave here makes root-app wait for itself and never reach it (the same
+deadlock as 2026-10-03, hit again on 2026-11-20 when `deploy` first rendered a
+Deployment in wave 1). The order is: namespace -3, secrets and policies -2, the
+migration Job -1 (the sync waits for it to complete), Deployment, Service and
+Ingress 0.
+*/ -}}
+{{- /*
+The C2 cluster service (mctlhq/mctl-gitops#2725 and the service repo's epic 11), as one bootstrap-owned
+namespace: its own NetworkPolicies, ServiceAccounts and ExternalSecrets, which
+a base-service cannot carry (the chart refuses NetworkPolicy).
+
+This file is the ONLY path the leak guard (scripts/validate-glovo-m1-staging.py,
+ALLOWED_PATHS) admits for the service, and it is also the values_path of the
+release flow: gitops-bump rewrites the `tag:` line of the image block below,
+nothing else. Every line that names the service literally needs an exact entry
+in ALLOWED_LINES, so the name is spelled once ($app) and derived everywhere.
+
+DARK BY DEFAULT. Switches live in bootstrap/values.yaml (the C2 service block), each one
+a reviewed PR:
+  (none)     renders the Namespace, the ServiceAccounts and the NetworkPolicies
+             only: no workload, no Secret, nothing pulls an image.
+  deploy     adds the ExternalSecret of the migration DSN, the migration Job and
+             a bare Deployment (one replica, /livez and /readyz, no C2 code
+             path). Refused at render time while the image tag below is still
+             the placeholder.
+  c2         switches the C2 code path on (the store ships KILLED), with its
+             database, Vault, audit key and the tailnet egress sidecars.
+  allowlist  the pilot gate (principal ids from Vault). Keep on until the
+             cohort gate is decided.
+  consent    mctl-api's consent read, with the ZITADEL token refresher.
+  control    the kill switch endpoint mctl-api calls.
+  linkLogin  fresh sign-in on the link routes (two optional variables).
+  ingress    the public route: an Ingress object, the Traefik source in the
+             server policy and the trusted-proxies variable.
+  capacity   a value, not a switch: the cohort size (default 1, owner decision 18.11: owner-only first stage).
+  linkAttemptsPerHour  a value, not a switch: the service-wide cap on link attempts per hour
+             (code, preview and upload each count one). 0 or unset leaves the
+             service's own default, 5 x capacity; otherwise a whole number 1..300.
+  keepaliveInterval  a value, not a switch: how often the hosted keepalive refreshes
+             every stored session chain. Empty or unset leaves it off (the
+             service default); otherwise a whole number of hours, like 12h (1h..24h).
+  apiConsent mctl-api's side of the consent read (rendered in mctl-api.yaml and
+             mctl-api-secrets.yaml, not here).
+Rollback of any switch: set it back to false.
+
+Ordering inside one sync: Namespace (-2); ServiceAccounts, NetworkPolicies and
+ExternalSecrets (-1); the migration Job (0, recreated whenever it changes, i.e.
+on every image bump, and idempotent); Deployment and Service (1, after the Job
+completed). The database and its roles come from the shared-pg Application
+and must exist first.
+*/}}
+{{- $app := "mctl-glovo" }}
+{{- $ns := $app }}
+{{- $v := .Values.mctlGlovo }}
+{{- $rt := "glovo_c2_runtime" }}
+{{- $tsTag := "tag:glovo-egress" }}
+{{- /* gitops-bump / release-deploy rewrite the tag line below (values_path is this file). */}}
+{{- $image := fromYaml `
+  repository: ghcr.io/mctlhq/mctl-glovo
+  tag: "0.6.1"
+` }}
+{{- $tsImage := "ghcr.io/tailscale/tailscale@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4" }}
+{{- $socatImage := "alpine/socat@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba" }}
+{{- $placeholder := eq $image.tag "0.0.0-unreleased" }}
+{{- if and $v.deploy $placeholder }}
+{{- fail "the deploy switch needs a released image: the tag is still the placeholder (the first release bump has not run)" }}
+{{- end }}
+{{- if and $v.c2 (not $v.deploy) }}{{ fail "the c2 switch requires the deploy switch" }}{{ end }}
+{{- if and (or $v.allowlist $v.consent $v.control) (not $v.c2) }}{{ fail "the allowlist, consent and control switches require the c2 switch" }}{{ end }}
+{{- if and $v.c2 (not $v.allowlist) (not $v.consent) }}{{ fail "the c2 switch needs an access gate: allowlist or consent (the service refuses to start without one)" }}{{ end }}
+{{- if and $v.linkLogin (not $v.c2) }}{{ fail "the linkLogin switch requires the c2 switch" }}{{ end }}
+{{- if and $v.ingress (not $v.c2) }}{{ fail "the ingress switch requires the c2 switch" }}{{ end }}
+{{- $capacity := int $v.capacity }}
+{{- if or (lt $capacity 1) (gt $capacity 20) (ne (toString $v.capacity) (toString $capacity)) }}{{ fail "the capacity value must be a whole number from 1 to 20 (the service refuses anything else at boot)" }}{{ end }}
+{{- $linkAttempts := int ($v.linkAttemptsPerHour | default 0) }}
+{{- if or (lt $linkAttempts 0) (gt $linkAttempts 300) (ne (toString ($v.linkAttemptsPerHour | default 0)) (toString $linkAttempts)) }}{{ fail "the linkAttemptsPerHour value must be a whole number from 1 to 300, or 0 for the service default (the service refuses anything else at boot)" }}{{ end }}
+{{- $keepalive := toString ($v.keepaliveInterval | default "") }}
+{{- if and $keepalive (not (regexMatch "^([1-9]|1[0-9]|2[0-4])h$" $keepalive)) }}{{ fail "the keepaliveInterval value must be empty (off) or a whole number of hours from 1h to 24h, like 12h (the service refuses anything else at boot)" }}{{ end }}
+{{- if $v.linkLogin }}
+{{- if not (regexMatch "^[1-9][0-9]*[sm]$" (toString $v.linkMaxAuthAge)) }}{{ fail "the linkMaxAuthAge value must be a whole number of seconds or minutes, like 300s or 5m" }}{{ end }}
+{{- $ageSecs := int (trimSuffix "m" (trimSuffix "s" (toString $v.linkMaxAuthAge))) }}
+{{- if hasSuffix "m" (toString $v.linkMaxAuthAge) }}{{ $ageSecs = mul $ageSecs 60 }}{{ end }}
+{{- if gt $ageSecs 900 }}{{ fail "the linkMaxAuthAge value must be at most 15m (the service refuses a longer age at boot)" }}{{ end }}
+{{- end }}
+{{- if $v.ingress }}
+{{- if not $v.host }}{{ fail "the ingress switch needs the host value" }}{{ end }}
+{{- if not $v.trustedProxies }}{{ fail "the ingress switch needs the trustedProxies value (the Traefik pod CIDRs): without them per-IP link limits key on the proxy address" }}{{ end }}
+{{- if not (has $ns (default (list) (index (default (dict) .Values.reservedPlatformHosts) $v.host))) }}{{ fail "the ingress switch needs the host's owner in reservedPlatformHosts to include this namespace: admission refuses the Ingress otherwise" }}{{ end }}
+{{- end }}
+{{- $dbPrivate := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    mctl.ai/purpose: c2-cluster-service
+    # The pod specs below meet the restricted profile (non-root, no
+    # capabilities, seccomp RuntimeDefault, no privilege escalation).
+    pod-security.kubernetes.io/enforce: restricted
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+---
+# The server pod: Vault login needs the projected token (automount on).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+automountServiceAccountToken: true
+---
+# The migration Job: no token at all.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $app }}-migrate
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+automountServiceAccountToken: false
+---
+# Default deny, both directions. Everything below opens one path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{- if $v.deploy }}
+---
+# The migration Job reaches the database and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-migrate-egress
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $app }}
+      app.kubernetes.io/component: migrate
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-db
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: shared-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+{{- end }}
+{{- if and $v.deploy (or $v.c2 $v.consent $v.control) }}
+---
+# The server pod. Rules are added only for the switches that are on, so the
+# bare deploy step opens nothing but DNS.
+#
+# Pod-level policy cannot tell the app container from the tailnet sidecar, so
+# the public egress below is open to both: the guarantee that the upstream traffic
+# only leaves through the proxy is the client's (WithRequireProxy: a proxy
+# failure is a 503, never a direct call), not this policy's. Direct tailnet
+# UDP paths are not opened; the sidecar falls back to DERP over 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-server
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $app }}
+      app.kubernetes.io/component: server
+  policyTypes:
+    {{- if or $v.control $v.ingress }}
+    - Ingress
+    {{- end }}
+    - Egress
+  {{- if or $v.control $v.ingress }}
+  ingress:
+    {{- if $v.control }}
+    # The kill switch flip, called by mctl-api only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+    {{- if $v.ingress }}
+    # The public route (the ingress switch): Traefik only. The Ingress object
+    # below lists the paths; the kill switch path is never among them.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+  {{- end }}
+  egress:
+    {{- if $v.c2 }}
+    # Token store: shared-pg primary and replicas by label (Service DNAT
+    # happens before policy evaluation).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-db
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: shared-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+    # Vault transit login and encrypt/decrypt (vault-active).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+      ports:
+        - {protocol: TCP, port: 8200}
+    # Public internet, never RFC1918/CGNAT: token key sets over https, the
+    # tailnet control plane and DERP relays (443) and STUN (3478).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range $dbPrivate }}
+              - {{ . }}
+              {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: UDP, port: 3478}
+    {{- end }}
+    {{- if $v.consent }}
+    # mctl-api: the consent read.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+{{- end }}
+{{- if $v.deploy }}
+---
+# Vault access for the ExternalSecrets below: a namespaced SecretStore bound to
+# its own Vault role (eso-$app, policy: secret/data/platform/$app/* only), NOT
+# the cluster-wide vault-backend, which every namespace can use and which reads
+# all of secret/platform/* (mctlhq/mctl-gitops#2759). Same shape as tenant-store
+# and cnpg-db-creds. The ServiceAccount below exists only so ESO can request a
+# token for it (TokenRequest): no pod uses it and nothing is mounted. Rendered
+# together with the first ExternalSecret (the deploy switch), so the dark render
+# is unchanged. Vault side (policy, role): vault-config/README.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $app }}-eso
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: {{ $app }}-vault
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  provider:
+    vault:
+      server: "http://vault.vault.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "eso-{{ $app }}"
+          serviceAccountRef:
+            name: {{ $app }}-eso
+---
+# The migration Job's connection string, from the migrator credentials in
+# Vault (host, port, database, username, password). TLS is mandatory (the
+# migrator refuses anything weaker than sslmode=require).
+# Password alphabet: urlquery turns a space into '+', which url.Parse does not
+# decode in userinfo, and ESO templates have no PathEscape. Keep the Vault
+# passwords URL-safe ([A-Za-z0-9]): the platform provisioner
+# (wft-provision-database) already emits alphanumeric passwords.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-migrate-db
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-migrate-db
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        GLOVO_MIGRATE_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"
+  data:
+    {{- range $f := list "host" "port" "database" "username" "password" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/{{ $app }}/database-migrator
+        property: {{ $f }}
+    {{- end }}
+{{- end }}
+{{- if $v.c2 }}
+---
+# Runtime connection string (DML-only role) and the audit digest key.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-runtime
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-runtime
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        GLOVO_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"
+        GLOVO_C2_AUDIT_KEY: "{{ `{{ .audit_key }}` }}"
+  data:
+    {{- range $f := list "host" "port" "database" "username" "password" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/{{ $app }}/database-runtime
+        property: {{ $f }}
+    {{- end }}
+    - secretKey: audit_key
+      remoteRef:
+        key: platform/{{ $app }}/audit-key
+        property: key
+---
+# Tailnet egress: the ephemeral auth key (file mount) and the tailnet name of
+# the forward proxy host (a hostname, so it comes from Vault: this repository
+# is public). OWNER: add the field proxy_target to the existing secret.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-egress
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-egress
+    creationPolicy: Owner
+  data:
+    - secretKey: auth_key
+      remoteRef:
+        key: platform/{{ $app }}/tailscale
+        property: auth_key
+    - secretKey: proxy_target
+      remoteRef:
+        key: platform/{{ $app }}/tailscale
+        property: proxy_target
+{{- end }}
+{{- if $v.allowlist }}
+---
+# The pilot gate: principal ids never live in this public repository.
+# OWNER: create platform/<service>/c2-access with the field
+# allowed_principals (comma-separated prn_ ids) before turning this on.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-access
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-access
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        GLOVO_C2_ALLOWED_PRINCIPALS: "{{ `{{ .allowed_principals }}` }}"
+  data:
+    - secretKey: allowed_principals
+      remoteRef:
+        key: platform/{{ $app }}/c2-access
+        property: allowed_principals
+{{- end }}
+{{- if $v.control }}
+---
+# The kill switch endpoint's machine-user subjects and audience.
+# TODO(ZITADEL, zitadel-iac): the machine user mctl-api signs in as, and its
+# project audience, are created in the zitadel-iac root, not here. OWNER:
+# create platform/<service>/control with the fields subjects (comma-separated
+# machine user ids, the token `sub`) and audience.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-control
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-control
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        GLOVO_C2_CONTROL_SUBJECTS: "{{ `{{ .subjects }}` }}"
+        GLOVO_C2_CONTROL_AUDIENCE: "{{ `{{ .audience }}` }}"
+  data:
+    {{- range $f := list "subjects" "audience" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/{{ $app }}/control
+        property: {{ $f }}
+    {{- end }}
+{{- end }}
+{{- if $v.consent }}
+---
+# The refresher's credentials (ZITADEL machine user, JWT profile).
+# TODO(ZITADEL, zitadel-iac): the machine user is created in the zitadel-iac
+# root, with the private key held by the operator (as orchestrator-devloop.tf).
+# OWNER: create platform/<service>/consent-reader with the fields key (the
+# private key PEM), user_id, key_id and scope (the project audience scope).
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $app }}-consent-reader
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ $app }}-vault
+  target:
+    name: {{ $app }}-consent-reader
+    creationPolicy: Owner
+  data:
+    {{- range $f := list "key" "user_id" "key_id" "scope" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/{{ $app }}/consent-reader
+        property: {{ $f }}
+    {{- end }}
+{{- end }}
+{{- if $v.deploy }}
+---
+# Schema and runtime grants, as the migration owner. Idempotent: a current
+# schema is a no-op and never resets the kill switch (a fresh database ships
+# KILLED). Not a hook: it lives in root-app, whose every sync would run a hook.
+# The name carries the image tag, so each release is a NEW Job (a Job spec is
+# immutable, it is never mutated or replaced): wave 0 runs it to completion
+# before the Deployment (wave 1) rolls, and root-app's prune (automated,
+# prune: true) removes the previous release's Job. No Force/Replace: root-app
+# has no ApplyOutOfSyncOnly, so those options would delete and recreate the
+# Job on EVERY root-app sync, not only on an image bump. No
+# ttlSecondsAfterFinished either: a TTL-deleted Job is OutOfSync and selfHeal
+# would re-run the migration. A failed Job (backoffLimit spent) stays failed
+# for its tag; retry by deleting it or by shipping the next tag.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $app }}-migrate-{{ regexReplaceAll "[^a-z0-9]+" ($image.tag | lower) "-" | trunc 40 | trimSuffix "-" }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $app }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $app }}-migrate
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ $image.repository }}:{{ $image.tag }}
+          command: ["glovo-migrate"]
+          args: ["-runtime-role", {{ $rt | quote }}]
+          envFrom:
+            - secretRef:
+                name: {{ $app }}-migrate-db
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+---
+# One replica, always: the caps and the decrypt counters are in-process.
+# Recreate, so a rollout never runs two pods against the counters.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+    app.kubernetes.io/component: server
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $app }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $app }}
+        app.kubernetes.io/component: server
+      annotations:
+        kubectl.kubernetes.io/default-container: server
+    spec:
+      serviceAccountName: {{ $app }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # The kubelet writes secret volume files as root:<fsGroup>; without an
+        # fsGroup the 0440 key files below are root:root and unreadable by uid
+        # 10001 (the refresher would exit 2). With it they are root:10001 0440.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $v.c2 }}
+      initContainers:
+        # Copies the static tailscale CLI next to the forwarder, which has
+        # socat but not the CLI (UNVERIFIED path, see the forwarder).
+        - name: ts-cli
+          image: {{ $tsImage }}
+          command: ["cp", "/usr/local/bin/tailscale", "/ts-bin/tailscale"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - {name: ts-bin, mountPath: /ts-bin}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ $image.repository }}:{{ $image.tag }}
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - {name: LISTEN_ADDR, value: ":8080"}
+            {{- if $v.c2 }}
+            - {name: GLOVO_C2_ENABLED, value: "true"}
+            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}
+            {{- if $linkAttempts }}
+            - {name: GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR, value: {{ $linkAttempts | quote }}}
+            {{- end }}
+            {{- if $keepalive }}
+            - {name: GLOVO_C2_KEEPALIVE_INTERVAL, value: {{ $keepalive | quote }}}
+            {{- end }}
+            - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}
+            - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}
+            # The sidecar forwarder below, loopback only (http://host:port is
+            # the only shape the client accepts).
+            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}
+            {{- if $v.ingress }}
+            # The Traefik pod source CIDRs, set with the Ingress. Unset, per-IP
+            # link limits key on the connecting address (the proxy's).
+            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}
+            {{- end }}
+            {{- if $v.linkLogin }}
+            # The audience and the maximum age of the fresh sign-in token on
+            # /link/preview and /link/upload. Unset (the switch off), both
+            # routes answer 503. The audience must differ from the MCP one.
+            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}
+            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- if $v.consent }}
+            - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}
+            - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}
+            {{- end }}
+            {{- if $v.control }}
+            - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}
+            - {name: GLOVO_C2_CONTROL_JWKS_URL, value: "https://auth.mctl.ai/oauth/v2/keys"}
+            {{- end }}
+          {{- if $v.c2 }}
+          envFrom:
+            - secretRef:
+                name: {{ $app }}-runtime
+            {{- if $v.allowlist }}
+            - secretRef:
+                name: {{ $app }}-access
+            {{- end }}
+            {{- if $v.control }}
+            - secretRef:
+                name: {{ $app }}-control
+            {{- end }}
+          {{- end }}
+          livenessProbe:
+            httpGet: {path: /livez, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          {{- if $v.consent }}
+          volumeMounts:
+            - {name: consent-token, mountPath: /var/run/secrets/mctl-api, readOnly: true}
+          {{- end }}
+        {{- if $v.c2 }}
+        # Userspace tailscaled, tagged for egress, ephemeral key. Run directly,
+        # not through containerboot: in a pod with a ServiceAccount token
+        # containerboot insists on a Kubernetes Secret for state (verified
+        # locally: it exits without one), and this pod must not get RBAC.
+        # VERIFIED locally: starts as uid 10001 with a read-only root
+        # filesystem and no capabilities, and reads the key from a file.
+        # UNVERIFIED: registration with the real key and the tag ACL.
+        - name: tailscaled
+          image: {{ $tsImage }}
+          command:
+            - sh
+            - -c
+            - |
+              tailscaled --tun=userspace-networking --state=mem: --socket=/ts-sock/tailscaled.sock &
+              i=0; until [ -S /ts-sock/tailscaled.sock ] || [ "$i" -ge 40 ]; do i=$((i+1)); sleep 0.5; done
+              until tailscale --socket=/ts-sock/tailscaled.sock up --auth-key=file:/ts-auth/auth_key --hostname={{ $app }} --advertise-tags={{ $tsTag }} --accept-dns=false --reset; do sleep 5; done
+              wait
+          env:
+            - {name: HOME, value: /tmp}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 20m, memory: 48Mi}
+            limits: {cpu: 300m, memory: 128Mi}
+          volumeMounts:
+            - {name: ts-sock, mountPath: /ts-sock}
+            - {name: tmp, mountPath: /tmp}
+            - {name: ts-auth, mountPath: /ts-auth, readOnly: true}
+        # Loopback forwarder: 127.0.0.1:3128 -> `tailscale nc <proxy host> 3128`
+        # through the userspace daemon (which gives the app no route to tailnet
+        # addresses). The proxy host is the forward proxy on the tailnet; its
+        # ACL admits only the egress tag. A SOCKS-only forwarder would not work
+        # with Go's HTTP proxy support. VERIFIED locally: socat accepts and
+        # execs the copied static CLI as uid 10001. UNVERIFIED: the whole path
+        # (socat + `tailscale nc` against the real proxy) and CONNECT to the
+        # upstream API host through it. With this container down the client
+        # answers 503: it never falls back to a direct call.
+        - name: egress-forwarder
+          image: {{ $socatImage }}
+          command:
+            - sh
+            - -c
+            - exec socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr "EXEC:/ts-bin/tailscale --socket=/ts-sock/tailscaled.sock nc $PROXY_TARGET 3128"
+          env:
+            - name: PROXY_TARGET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $app }}-egress
+                  key: proxy_target
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+          volumeMounts:
+            - {name: ts-bin, mountPath: /ts-bin, readOnly: true}
+            - {name: ts-sock, mountPath: /ts-sock}
+        {{- end }}
+        {{- if $v.consent }}
+        # Writes the ZITADEL machine-user access token (JWT) to
+        # /var/run/secrets/mctl-api/token atomically, refreshing it well before
+        # expiry. It is the third binary (token-refresher) of the same image as
+        # the server (service repo PR 37; the image ENTRYPOINT is the server,
+        # hence the command below), so it ships and pins with the image tag
+        # above and has no image of its own. Contract: reads the key
+        # file and the ids below, signs a JWT-profile assertion (RFC 7523,
+        # iss = sub = user id, kid = key id), exchanges it at the issuer's
+        # token endpoint for the scope, writes the token to a temp file and
+        # renames it over the target, mode 0644, and exits non-zero if it
+        # cannot refresh before expiry (so the pod restarts rather than
+        # serving a dead token). The server reads the file on every call.
+        - name: consent-token-refresher
+          image: {{ $image.repository }}:{{ $image.tag }}
+          command: ["token-refresher"]
+          env:
+            - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
+            - {name: TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}
+            - {name: KEY_FILE, value: "/var/run/secrets/consent-reader/key"}
+            - name: ZITADEL_USER_ID
+              valueFrom: {secretKeyRef: {name: {{ $app }}-consent-reader, key: user_id}}
+            - name: ZITADEL_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ $app }}-consent-reader, key: key_id}}
+            - name: ZITADEL_SCOPE
+              valueFrom: {secretKeyRef: {name: {{ $app }}-consent-reader, key: scope}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - {name: consent-token, mountPath: /var/run/secrets/mctl-api}
+            - {name: consent-key, mountPath: /var/run/secrets/consent-reader, readOnly: true}
+        {{- end }}
+      {{- if $v.c2 }}
+      volumes:
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 16Mi}}
+        - {name: ts-sock, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+        - {name: ts-bin, emptyDir: {sizeLimit: 64Mi}}
+        - name: ts-auth
+          secret:
+            secretName: {{ $app }}-egress
+            defaultMode: 0440
+            items:
+              - {key: auth_key, path: auth_key}
+        {{- if $v.consent }}
+        - {name: consent-token, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+        - name: consent-key
+          secret:
+            secretName: {{ $app }}-consent-reader
+            defaultMode: 0440
+            items:
+              - {key: key, path: key}
+        {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $app }}
+    app.kubernetes.io/component: server
+  ports:
+    - {name: http, port: 8080, targetPort: http, protocol: TCP}
+{{- if $v.ingress }}
+---
+# The public route (the ingress switch). Explicit paths only: never the kill
+# switch path, never the health paths. The host's reservedPlatformHosts owner
+# must list this namespace, or admission refuses the object. The old route to
+# the same host stays until the edge (Cloudflare) is pointed here: this object
+# alone moves no traffic. Rollback: ingress false, then the edge back.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ $v.host | quote }}
+      http:
+        paths:
+          {{- range $p := list "/mcp" "/link" "/.well-known/oauth-protected-resource" }}
+          - path: {{ $p }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $app }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}
+{{- end }}

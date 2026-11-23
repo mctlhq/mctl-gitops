@@ -460,6 +460,47 @@ jobs:
           permission-contents: read
           permission-metadata: read
 
+      # What each open allowlist bump PR (portal-allowlist/<id>-<sha7>, from
+      # this repository -- a fork's branch cannot be read here and is not a
+      # bump PR) would vendor, as {id: [[tool names of one PR], ...]}, for the
+      # catalogue check's --pending. One list per PR, never a union: two
+      # partial PRs together do not carry a lag. A
+      # catalogue lag whose every live tool is already named there is waiting
+      # on review, not drift: the check exits 6, the job stays green and the
+      # land job names the PR. Written only when every listing and every read
+      # succeeded -- a bump PR this run could not observe covers nothing, so
+      # the lag stays exit 5 and red.
+      - name: Collect the tools named by open allowlist bump PRs
+        id: pending
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/pending.json"
+          rm -f "$out"
+          limit=500
+          if ! prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit "$limit" --json headRefName,isCrossRepository \
+                       --jq '[.[] | select(.isCrossRepository | not) | .headRefName]') \
+             || ! total=$(jq -e 'if type == "array" then length else error("not a list") end' <<<"$prs") \
+             || [ "$total" -ge "$limit" ]; then
+            echo "::warning::could not list open PRs completely; no catalogue lag counts as awaiting review"
+            exit 0
+          fi
+          doc='{}'
+          for br in $(jq -r '.[] | select(test("^portal-allowlist/[a-z0-9-]+-[0-9a-f]{7}$"))' <<<"$prs"); do
+            sid=$(sed -E 's#^portal-allowlist/(.*)-[0-9a-f]{7}$#\1#' <<<"$br")
+            if ! names=$(gh api -H 'Accept: application/vnd.github.raw' \
+                           "repos/${GITHUB_REPOSITORY}/contents/infrastructure/cloudflare/portal/allowlists/${sid}.json?ref=${br}" \
+                         | jq -ce '[.tools[].name | strings]'); then
+              echo "::warning::could not read ${sid}.json on ${br}; no catalogue lag counts as awaiting review"
+              exit 0
+            fi
+            doc=$(jq -c --arg s "$sid" --argjson n "$names" '.[$s] = ((.[$s] // []) + [$n])' <<<"$doc")
+          done
+          printf '%s\n' "$doc" > "$out"
+          echo "open bump PRs name tools for: $(jq -r 'to_entries | map("\(.key) (\(.value | length) PR)") | join(", ")' "$out")"
+
       - name: Check the tool catalogue against the upstreams
         id: catalogue
         if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
@@ -483,8 +524,10 @@ jobs:
           # "known stale:" line -- which the script prints FIRST, deliberately
           # -- is held until exit and lands at the bottom of the captured
           # block, detached from the section it qualifies.
+          pending=()
+          if [ -f "$RUNNER_TEMP/pending.json" ]; then pending=(--pending "$RUNNER_TEMP/pending.json"); fi
           PYTHONUNBUFFERED=1 tofu show -json \
-            | { PYTHONUNBUFFERED=1 "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" --lag-out "$RUNNER_TEMP/catalogue-lag.json" 2>&1; } \
+            | { PYTHONUNBUFFERED=1 "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" --lag-out "$RUNNER_TEMP/catalogue-lag.json" "${pending[@]}" 2>&1; } \
             | tee catalogue.txt
           code=${PIPESTATUS[1]}
           set -e
@@ -540,10 +583,15 @@ jobs:
                  grep -q 'which this exit status does not name' catalogue.txt \
                    && echo "> Other findings also fired tonight and this status does not name them — read the block above."
                  true; } >> "$GITHUB_STEP_SUMMARY" ;;
+            6) { echo "### \`portal\` — committed catalogue lags the portal; its bump PR is open, awaiting review";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 echo "> Not paged: every lagging server's live tools are already named by an open allowlist bump PR. Merge it (recording any widening in baseline.json) and run cloudflare-apply. The land job names the PR."; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`portal\` — catalogue check could not run, or a server is serving no tools (exit $code)";
                  echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f catalogue.txt
+          # 6 is reported (summary above, land job's message), not failed.
+          if [ "$code" = 6 ]; then exit 0; fi
           exit "$code"
 
       # The vendored allowlists against the repos that own them
@@ -619,8 +667,9 @@ jobs:
           rm -f vendor.txt
           exit "$code"
 
-      # Exit 5 only: the portal is fine and catalogue.json lags it. The job
-      # stays red. The `land` job below proposes the update in a PR when it
+      # Exit 5 or 6: the portal is fine and catalogue.json lags it. On 5 the
+      # job stays red; on 6 an open bump PR already carries the lag and the
+      # job stays green. Either way the `land` job below proposes the update in a PR when it
       # cannot widen exposure (#2416); merging and cloudflare-apply stay with
       # people. The write token lives in that job's own environment, so this
       # step only hands over what the catalogue check found. It runs for every
@@ -635,7 +684,7 @@ jobs:
           set -eu
           mkdir -p "$RUNNER_TEMP/landing"
           printf '%s\n' "${CATALOGUE_CODE:-none}" > "$RUNNER_TEMP/landing/code"
-          if [ "${CATALOGUE_CODE:-}" = 5 ]; then
+          if [ "${CATALOGUE_CODE:-}" = 5 ] || [ "${CATALOGUE_CODE:-}" = 6 ]; then
             cp "$RUNNER_TEMP/catalogue-lag.json" "$RUNNER_TEMP/landing/catalogue-lag.json"
           fi
 
@@ -697,7 +746,7 @@ jobs:
             ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
              && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code) || '' }}
             ${{ steps.catalogue.outputs.code && steps.catalogue.outputs.code != '0'
-             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing or is wider than what fires, delete or narrow it; 4 = an upstream is missing from the portal; 5 = allowlists/catalogue.json lags the portal, update it in a PR). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing or is wider than what fires, delete or narrow it; 4 = an upstream is missing from the portal; 5 = allowlists/catalogue.json lags the portal, update it in a PR; 6 = that lag is already carried by an open bump PR, not paged on its own). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
             ${{ steps.vendor.outputs.code && steps.vendor.outputs.code != '0'
              && format('Vendored allowlist check exit <code>{0}</code> (1 = a vendored copy was edited here, tampered; 3 = the owning repo has a newer allowlist not yet vendored; 2 = could not run).', steps.vendor.outputs.code) || '' }}
             ${{ (steps.creds.outputs.code == '' || steps.creds.outputs.code == '0')
@@ -708,7 +757,7 @@ jobs:
              && format('<b>Your decision may be what this waits on.</b> Open allowlist bump PR: {0}. Do you accept what it enables on the portal? If yes, record that in baseline.json in the PR, merge it and run cloudflare-apply.', steps.bump_prs.outputs.links) || '' }}
             ${{ steps.bump_prs.outputs.state == 'unknown'
              && 'Could not list open allowlist bump PRs, so one may be waiting on a decision.' || '' }}
-            ${{ steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
+            ${{ (steps.catalogue.outputs.code == '5' || steps.catalogue.outputs.code == '6') && github.ref == 'refs/heads/main'
              && 'A follow-up job (land) tries to propose the catalogue update in a PR and posts its own message with the outcome. If that message does not arrive, catalogue.json needs a PR by hand.' || '' }}
             ${{ steps.catalogue.outputs.code == '5' && github.ref != 'refs/heads/main'
              && 'Not a main run, so no catalogue update is proposed; catalogue.json needs a PR by hand.' || '' }}
@@ -723,7 +772,10 @@ jobs:
   land:
     name: land catalogue update
     needs: drift
-    if: ${{ always() && github.ref == 'refs/heads/main' && needs.drift.result == 'failure' }}
+    # Also on a green drift run: a catalogue lag already carried by an open
+    # bump PR (exit 6) does not fail the portal leg, and this job is what
+    # names that PR. A green run with nothing to land decides `skip`, silently.
+    if: ${{ always() && github.ref == 'refs/heads/main' && (needs.drift.result == 'failure' || needs.drift.result == 'success') }}
     runs-on: ubuntu-latest
     environment: app-gitops-pr
     # Its own group, not cloudflare-tofu-<root>: two overlapping portal runs
@@ -762,7 +814,7 @@ jobs:
           if [ "$DOWNLOAD" = success ] && [ -s "$dir/code" ]; then
             code=$(tr -d '[:space:]' < "$dir/code")
             case "$code" in
-              5) if [ -s "$dir/catalogue-lag.json" ]; then state=land; fi ;;
+              5|6) if [ -s "$dir/catalogue-lag.json" ]; then state=land; fi ;;
               none|[0-9]|[0-9][0-9]) state=skip ;;
             esac
           fi

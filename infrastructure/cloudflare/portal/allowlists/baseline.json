@@ -23,8 +23,8 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 112,
-      "tools_enabled": 79,
+      "tools_total": 121,
+      "tools_enabled": 81,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
@@ -54,6 +54,7 @@
         "mctl_get_service_pods",
         "mctl_get_service_status",
         "mctl_get_support_task",
+        "mctl_get_sync_windows",
         "mctl_get_tenant",
         "mctl_get_work_item",
         "mctl_get_workflow_logs",
@@ -80,6 +81,7 @@
         "mctl_list_work_item_snapshots",
         "mctl_list_workflows",
         "mctl_promote_agent",
+        "mctl_propose_release_window",
         "mctl_provision_database",
         "mctl_publish_agent_version",
         "mctl_publish_platform_skill",
@@ -114,7 +116,7 @@
         "platform-skill",
         "troubleshoot_incident"
       ],
-      "recorded": "2026-11-06"
+      "recorded": "2026-11-21"
     },
     "coolify": {
       "tools_total": 45,
@@ -179,8 +181,8 @@
       "recorded": "2026-09-25"
     },
     "tg": {
-      "tools_total": 46,
-      "tools_enabled": 43,
+      "tools_total": 50,
+      "tools_enabled": 47,
       "enabled_tools": [
         "cancel_broadcast",
         "delete_fork",
@@ -204,7 +206,10 @@
         "list_assistants",
         "list_broadcasts",
         "list_dialogs",
+        "list_folders",
         "list_telegram_identities",
+        "list_topics",
+        "mark_read",
         "mint_worker_token",
         "pin_message",
         "prepare_broadcast",
@@ -214,6 +219,7 @@
         "revoke_local_bridge_device",
         "revoke_telegram_session",
         "revoke_worker_token",
+        "save_draft",
         "search_messages",
         "send_media",
         "send_message",
@@ -228,7 +234,29 @@
       ],
       "prompts_total": 0,
       "prompts_enabled": 0,
-      "recorded": "2026-11-01"
+      "recorded": "2026-11-15"
+    },
+    "argocd": {
+      "tools_total": 13,
+      "tools_enabled": 13,
+      "enabled_tools": [
+        "get_application",
+        "get_application_events",
+        "get_application_managed_resources",
+        "get_application_resource_tree",
+        "get_application_sync_windows",
+        "get_application_workload_logs",
+        "get_appproject",
+        "get_appproject_sync_windows",
+        "get_resource_actions",
+        "get_resource_events",
+        "get_resources",
+        "list_applications",
+        "list_clusters"
+      ],
+      "prompts_total": 0,
+      "prompts_enabled": 0,
+      "recorded": "2026-11-23"
     }
   }
 }

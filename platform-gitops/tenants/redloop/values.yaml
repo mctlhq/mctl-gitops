@@ -1,0 +1,44 @@
+# Tenant configuration for: redloop
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: redloop
+  displayName: "RedLoop Staging"
+  description: "Dedicated isolated tenant for RedLoop Phase P2 security audit testing"
+  contactEmail: ""
+  members:
+    - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+      role: owner
+  ghcrCredentials:
+    enabled: false
+  secretStore:
+    enabled: false
+  preview:
+    enabled: false
+  quotas:
+    # Quotas sized for up to 4 pods (steady state + rolling update surge + cert-manager HTTP-01 solver).
+    # Sized for 4x pod requests (25m CPU, 64Mi memory) and limits (100m CPU, 128Mi memory).
+    requests.cpu: "100m"
+    requests.memory: "256Mi"
+    limits.cpu: "400m"
+    limits.memory: "512Mi"
+    pods: "4"
+    persistentvolumeclaims: "0"
+    requests.storage: "0"
+    services: "2"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "100m"
+      memory: "128Mi"
+    defaultRequest:
+      cpu: "25m"
+      memory: "64Mi"
+    max:
+      cpu: "500m"
+      memory: "512Mi"
+  networking:
+    allowIntraNamespace: false
+    allowClusterEgress: false
+    allowInternetEgress: false
+  podSecurityLevel: "restricted"

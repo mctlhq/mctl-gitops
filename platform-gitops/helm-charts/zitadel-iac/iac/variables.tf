@@ -8,14 +8,12 @@ variable "tenant_users" {
     JSON object, one key per platform tenant. Each value is the tenant's
     Vault secret secret/platform/zitadel/users/<tenant> as JSON: one field
     per user name, each a JSON-encoded {email, first_name, last_name,
-    preferred_language, argocd, vault, workflows, kubectl, anthropic, frappe,
+    preferred_language, argocd, vault, workflows, kubectl, anthropic,
     github_login}; argocd, vault, workflows and kubectl (optional, default
     false) grant the tenant's Argo CD role (argocd.tf), Vault role
     (vault.tf), Argo Workflows role (workflows.tf) and kubectl role
     (kubernetes.tf); anthropic (optional, default false) grants the
-    Anthropic `users` role (anthropic.tf); frappe (optional, tenant erpact only:
-    {sites, roles}) lists the user for the copy's Frappe sites (erpact.tf);
-    github_login (optional) is the user's GitHub login, for the
+    Anthropic `users` role (anthropic.tf); github_login (optional) is the user's GitHub login, for the
     mctl:github_login claim (github-login.tf). This repository is public, so
     personal data never appears in it.
   EOT
@@ -54,16 +52,14 @@ variable "platform_admins" {
     The Vault secret secret/platform/zitadel/admins as JSON: one field per
     personal platform admin account in the MCTL organization, each a
     JSON-encoded {email, first_name, last_name, preferred_language, username,
-    frappe, frappe_access, github_login, kubectl, kubectl_tenants} (admins.tf). The field name is the stable key of
+    github_login, kubectl, kubectl_tenants} (admins.tf). The field name is the stable key of
     the account; `username`, optional, is its login name when it differs
-    from the key; `frappe`, optional ({sites, roles}, as for tenant users),
-    lists the admin for the ERPact copy's Frappe sites and grants their
-    sign-in (erpact.tf); `github_login`, optional, is the admin's GitHub
+    from the key; `github_login`, optional, is the admin's GitHub
     login, as for tenant users (github-login.tf); `kubectl`, optional
     (true), grants cluster-admin through kubectl sign-in (kubernetes.tf).
     `kubectl_tenants`, optional (list of existing tenant names), adds those
-    tenant roles to an opted-in admin's Kubernetes grant. `frappe_access`,
-    optional (true), grants ERPact SSO access without provisioning Frappe users.
+    tenant roles to an opted-in admin's Kubernetes grant. The retired
+    `frappe` and `frappe_access` fields are ignored.
     This repository is public, so personal data never appears in it.
   EOT
   type        = string
@@ -160,6 +156,45 @@ variable "customers_github_idp" {
       false
     )
     error_message = "customers_github_idp must be JSON {client_id, client_secret} with both non-empty; zitadel-iac-github-idp resolved nothing usable from Vault secret/platform/zitadel/github-idp."
+  }
+}
+
+variable "customers_google_idp_enabled" {
+  description = <<-EOT
+    Adds a Google IdP to the customers organization next to GitHub
+    (mctlhq/mctl-api#1079). Off by default. Turn it on only once the mctl-api
+    release that handles Google in the identity hook AND resolves Google
+    customers to principals is live (mctl-api#1079 slices 1 and 2), and
+    ZITADEL_HOOK_GOOGLE_IDP_ID reaches mctl-api from the hook Secret. Earlier,
+    the hook fails closed (the create gate refuses every Google link) but
+    the button would only produce refusals.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "customers_google_idp" {
+  description = <<-EOT
+    The Google OAuth client of the customers organization's Google IdP, as
+    JSON {client_id, client_secret}: Vault secret/platform/zitadel/google-idp
+    through ExternalSecret zitadel-iac-google-idp. Optional (empty) while
+    customers_google_idp_enabled is false. The secret is write-only in the
+    provider and never enters the state.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  # Empty is "not provided"; anything else must be complete. Whether it may
+  # be empty is decided by the IdP's precondition (customers.tf), which can
+  # see customers_google_idp_enabled.
+  validation {
+    condition = var.customers_google_idp == "" || try(
+      length(trimspace(jsondecode(var.customers_google_idp).client_id)) > 0 &&
+      length(trimspace(jsondecode(var.customers_google_idp).client_secret)) > 0,
+      false
+    )
+    error_message = "customers_google_idp must be empty or JSON {client_id, client_secret} with both non-empty (zitadel-iac-google-idp, Vault secret/platform/zitadel/google-idp)."
   }
 }
 

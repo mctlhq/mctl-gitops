@@ -1,0 +1,18 @@
+# Which images land their release bump as a pull request instead of a direct
+# push to main (mctlhq/mctl-gitops#2543, stage 1 fast track).
+#
+# release-deploy.yaml and gitops-bump.yaml read this file through
+# scripts/release-bump-route.py. An image named here is bumped by a
+# `release-bump/<service>-<tag>` pull request opened with the mctl-gitops-pr
+# App token (environment app-gitops-pr) and merged by auto-merge.yml once the
+# review and required checks pass. Any other image keeps the deploy-key push.
+#
+# This is a fast PR-based path for the listed images. It does NOT remove the
+# DeployKey bypass actor from ruleset 18465404: that stays until every writer is
+# migrated (#2543 stays open).
+#
+# The file is read from main at release time and a PR that edits it is reviewed
+# like any other. Names are exact image names, no globs. An unreadable or
+# malformed file refuses the release; it never falls back to either route.
+pr_route_images:
+  - ghcr.io/mctlhq/mctl-api

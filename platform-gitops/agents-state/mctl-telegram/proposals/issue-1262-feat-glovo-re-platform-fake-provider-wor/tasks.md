@@ -20,6 +20,12 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   `EncodeResult` (marshal then validate), using `santhosh-tekuri/jsonschema/v6` with
   `AssertFormat()`. Delete `ProviderRequest`. — DoD: the files' sha256 values are `b857f62b...6dae1`
   and `c91bb86e...354f`; the wire tests pass.
+- [ ] 2b. (Round 7) The v1alpha2 `place_order_fake` (depends on 2; the schemas exist after mctl-agents#1059
+  task 5b). Vendor `command-place-order-fake.schema.json`, `approval-basket.schema.json` and
+  `claim-response.schema.json` byte for byte with their `SHA256SUMS` digests pinned in `wire_test.go`;
+  extend `ParseCommand` to dispatch on `schema_version` (v1alpha2 only for `place_order_fake`), accept the
+  `claim/v1alpha2` envelope, execute the command fake only through the existing mutating path, and answer
+  with the v1alpha1 result. — DoD: T26 and T27 pass.
 - [ ] 3. Extend `fakestore` (depends on 1). Add the synthetic `FAKE-1..FAKE-3` catalogue codes,
   `PlaceOrderFake` and `CancelOrderFake` keyed by `command_id` (idempotent), `EffectOf(commandID)`,
   `OrderStatus(orderRef)`, lazy session provisioning per `tenant_ref|connection_ref` and
@@ -141,6 +147,13 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
 - [ ] T25. Deadlines: a result retry continues past the lease deadline and succeeds as a same-token
   replay before `expires_at`; a permit is never requested after the lease deadline; `lease_stale`
   stops result retries.
+
+- [ ] T26. (Round 7) v1alpha2 write: the valid fixture runs permit, one effect, `applied`; a v1alpha2
+  `cancel_order_fake`, a v1alpha2 read kind, a v1alpha1 `place_order_fake` with a basket payload and a
+  v1alpha2 command with a missing or extra field are each refused locally with zero permit calls and zero
+  effects; the claim response with `claim/v1alpha2` is accepted and an unknown claim version is a failed
+  claim. Proven red: make `ParseCommand` accept v1alpha2 for every kind, and the refusal subtests fail.
+- [ ] T27. (Round 7; round 8, A-5) The provider's own code refuses what it does not support, and executes the one v1alpha2 command fake only. Against the real `ParseCommand` and claim client (not the fake bridge's gate): a claim envelope with an unknown `schema_version` is a failed claim, no command from it is parsed, zero permit calls and zero effects; a v1alpha2 command of any kind but `place_order_fake`, and a `schema_version` the build does not know, are refused locally with the same zero counts; a valid v1alpha2 `place_order_fake` from a `claim/v1alpha2` envelope runs permit, one fake effect and a v1alpha1 result. Proven red: make `ParseCommand` or the envelope check accept any version and the refusals fail. The server side of "a provider that does not advertise v1alpha2 is never handed the command" is mctl-api#986 T4f (write), T4h (predicate, envelope) and T7c (reads), not this test.
 
 ## Rollback
 

@@ -22,14 +22,23 @@ PROTECTED = [
     "platform-gitops/agent-platform/x.yaml",
     "platform-gitops/agents-state/mctl-agents/proposals/issue-1/.status.yaml",
     "scripts/release-gate.py",
+    "scripts/release-ledger-shadow.py",
     "platform-gitops/release-gates.yaml",
+    "scripts/release-bump-diff-guard.py",
+    "scripts/release-bump-route.py",
+    "scripts/release-bump-checks-ready.py",
+    "scripts/release-bump-apply.sh",
+    "scripts/release-bump-enqueue-wait.sh",
+    "platform-gitops/release-bump-routes.yaml",
     "platform-gitops/argo-workflows/scripts/release-gate-guard.sh",
     CT + "tpl-git-commit.yaml",
     CT + "tpl-validate-tenant.yaml",
     CT + "wft-add-custom-domain.yaml",
     CT + "wft-deploy-service.yaml",
+    CT + "wft-promote-deployment.yaml",
     CT + "wft-provision-database.yaml",
     CT + "wft-remove-custom-domain.yaml",
+    CT + "wft-rollback-revision.yaml",
     CT + "wft-rollback-service.yaml",
     ".github/workflows/auto-merge.yml",
     ".github/workflows/gitops-bump.yaml",
@@ -39,22 +48,49 @@ PROTECTED = [
     "tests/test_release_gate.py",
     "tests/test_release_gate_guard.py",
     "tests/test_release_gate_watch.py",
+    "tests/test_release_ledger_watch.py",
+    "tests/test_release_bump_diff_guard.py",
+    "tests/test_release_bump_route.py",
+    "tests/test_release_bump_pr_route.py",
+    "tests/test_release_bump_supersede.py",
+    "tests/test_release_bump_apply.py",
+    "tests/test_release_bump_enqueue.py",
     "tests/test_release_deploy_bump.py",
     "tests/test_gitops_bump_inputs.py",
     "tests/test_wft_deploy_service_autoscaling_values.py",
     "tests/test_auto_merge_protected_paths.py",
+    # AppProject definitions carry sync windows, sourceRepos and roles; the
+    # scripts and the consumer list are what bound where a window may land.
+    "platform-gitops/bootstrap/templates/projects/project-apps.yaml",
+    "platform-gitops/bootstrap/templates/projects/project-platform.yaml",
+    "scripts/validate-argocd-sync-windows.py",
+    "scripts/render-sync-window.py",
+    "scripts/app-project-consumers.json",
+    # The window PR-opener holds the App key flow and decides what a window PR
+    # may contain; a PR that edits it must not be machine-merged either.
+    ".github/workflows/release-window-pr.yml",
+    "scripts/release-window-insert.py",
+    "tests/test_release_window_pr.py",
 ]
 NOT_PROTECTED = [
     "README.md",
     "platform-gitops/services/foo/values.yaml",
     "platform-gitops/agents-state/mctl-agents/proposals/issue-1/proposal.md",
     "scripts/release-gate.py.bak",
+    "scripts/release-bump-diff-guard.py.bak",
+    "platform-gitops/release-bump-routes.yaml.orig",
     "scripts/other.py",
     "platform-gitops/release-gates.yaml.orig",
     CT + "wft-scale-service.yaml",
     ".github/workflows/ci.yml",
+    "scripts/release-bump-enqueue-wait.sh.orig",
     "tests/test_other.py",
     "tests/test_release_deploy_validate_inputs.py",
+    "platform-gitops/bootstrap/templates/projects.yaml",
+    "scripts/render-sync-window.py.bak",
+    "scripts/app-project-consumers.json.orig",
+    ".github/workflows/release-window-pr.yml.orig",
+    "scripts/release-window-insert.py.bak",
 ]
 
 
@@ -120,6 +156,20 @@ def run_guard(files, regex=None):
         return r.returncode, out.read_text()
 
 
+def merge_calls(text):
+    """Steps of the auto-merge job whose script runs `gh pr merge`.
+
+    main has a merge queue. `gh pr merge --delete-branch` is refused under one,
+    and without the flag it enqueues with GITHUB_TOKEN, an entry that starts no
+    merge_group run and so sits in AWAITING_CHECKS (#2780, #2792). The job must
+    not merge; the queue entry is made with the App token, on main
+    (scripts/release-bump-enqueue-wait.sh, tools/merge-gitops-pr.sh).
+    """
+    doc = yaml.safe_load(text)
+    return [st.get("name", "?") for st in doc["jobs"]["auto-merge"]["steps"]
+            if re.search(r"gh\s+pr\s+merge", st.get("run", ""))]
+
+
 def main():
     pat = pattern()
     bad = failures(pat)
@@ -138,7 +188,7 @@ def main():
     # The workflow must actually use the variable.
     assert 'grep -E "$protected_re"' in WF.read_text()
     # MUTANTS: removing the release-gate entries must turn rows red.
-    gate_alts = ["release-gate", "release-gates", "cluster-templates", "workflows", "tests/test_"]
+    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers", "release-window-pr", "release-window-insert", "release_window"]
     for needle in gate_alts:
         parts = pat.split("|")
         kept = [a for a in parts if needle not in a]
@@ -147,6 +197,31 @@ def main():
     # Original (pre-change) list must fail the new rows.
     old = "|".join(pat.split("|")[:2])
     assert failures(old), "old list unexpectedly passes"
+    # release-bump/* PRs no longer reach this job: their guards run in
+    # scripts/release-bump-enqueue-wait.sh (tests/test_release_bump_enqueue.py).
+    doc = yaml.safe_load(WF.read_text())
+    assert "release-bump/" not in doc["jobs"]["auto-merge"]["if"], "release-bump PRs reach auto-merge again"
+    # The job does not merge (merge queue on main). Proven both ways: the real
+    # workflow has no `gh pr merge` step, and the pre-fix step, put back, is
+    # caught. Without the second half this would also pass on a broken matcher.
+    assert merge_calls(WF.read_text()) == [], f"auto-merge merges again: {merge_calls(WF.read_text())}"
+    runs = [st.get("run", "") for st in doc["jobs"]["auto-merge"]["steps"]]
+    assert not [r for r in runs if "--delete-branch" in r], "--delete-branch is back in a step of the auto-merge job"
+    pre_fix = WF.read_text().rstrip("\n") + (
+        "\n      - name: Merge PR\n        run: |\n"
+        "          gh pr merge \"$PR\" \\\n            --merge --delete-branch\n")
+    assert merge_calls(pre_fix) == ["Merge PR"], "the pre-fix merge step is not detected"
+    # Least privilege: no `write` on contents anywhere, no workflow-level grant,
+    # and the job that only reads the PR holds no pull-requests write. Proven
+    # both ways: the pre-change block, put back, is caught.
+    def widest(text):
+        d = yaml.safe_load(text)
+        grants = [("workflow", d.get("permissions"))] + [(j, v.get("permissions")) for j, v in d["jobs"].items()]
+        return [(n, g) for n, g in grants if g is None or g.get("contents") == "write"
+                or (n in ("workflow", "auto-merge") and g and g.get("pull-requests") == "write")]
+    assert widest(WF.read_text()) == [], f"auto-merge.yml holds more than it needs: {widest(WF.read_text())}"
+    pre_perms = WF.read_text().replace("permissions: {}", "permissions:\n  contents: write\n  pull-requests: write", 1)
+    assert widest(pre_perms), "the pre-change workflow-level write grant is not detected"
     print("ok")
 
 

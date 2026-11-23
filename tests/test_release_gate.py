@@ -73,11 +73,11 @@ for label, wf, first_write in (("release-deploy", rd, "with open(path, 'w')"), (
     bump = wf.find("- name: Bump image tag")
     check(f"{label}: PyYAML is installed before the bump", 0 < inst < bump)
 check("release-deploy: verify runs every push attempt, after the rebase, and is fatal",
-      re.search(r"release_gate\(\) \{\n\s+python3 scripts/release-gate\.py verify \|\| \{\n\s+echo[^\n]*\n\s+exit 1\n", rd)
+      re.search(r"release_gate\(\) \{\n\s+python3 scripts/release-gate\.py verify --policy-rev origin/main \|\| \{\n\s+echo[^\n]*\n\s+exit 1\n", rd)
       is not None and re.search(r"for attempt in 1 2 3 4 5; do\n\s+release_gate\n", rd) is not None
       and "verify || true" not in rd)
 check("gitops-bump: verify is the line right before git push",
-      re.search(r"release-gate\.py verify\n\s+git push", gb) is not None)
+      re.search(r"release-gate\.py verify --policy-rev origin/main\n\s+git push", gb) is not None)
 
 # 3b. The rollback workflow pushes one values file with the deploy key. It calls
 #     the shared guard script like every other writer; its behaviour (gated file,
