@@ -600,7 +600,10 @@ with tempfile.TemporaryDirectory() as d:
     rc, out, err = run("--check-pins", "--pins", f)
     check("an env URL to a non-fixture host is rejected by the existing URL scan", rc == 3 and "non-fixture host" in (out + err), (rc, out, err))
 check_pins_with("a plain tmpfs path is accepted", "tmpfs", ["/tmp/wca", "/var/data"], True)
-for label, t in (("a relative path", ["tmp/x"]), ("a dot segment", ["/tmp/../etc"]), ("the root", ["/"]), ("/proc", ["/proc"]),
+for label, t in (("a relative path", ["tmp/x"]), ("a dot-dot segment", ["/tmp/../etc"]), ("a single dot segment", ["/tmp/./x"]),
+                 ("a bare dot", ["/."]), ("a dot under /proc", ["/proc/."]), ("a dot under /dev", ["/dev/."]),
+                 ("a path below /proc", ["/proc/sys/x"]), ("a path below /sys", ["/sys/fs"]), ("a path below /dev", ["/dev/shm"]),
+                 ("the root", ["/"]), ("/proc", ["/proc"]), ("/sys", ["/sys"]), ("/dev", ["/dev"]),
                  ("a mount option injected", ["/tmp/x:rw,exec"]), ("a duplicate", ["/tmp/a", "/tmp/a"]),
                  ("five paths", ["/a", "/b", "/c", "/d", "/e"]), ("a trailing newline", ["/tmp/x\n"]), ("a string", "/tmp/x")):
     check_pins_with(f"tmpfs with {label} is rejected", "tmpfs", t, False)

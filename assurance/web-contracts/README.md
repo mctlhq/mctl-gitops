@@ -249,6 +249,6 @@ capabilities dropped). `sites[].env` maps upper-case names to plain placeholder 
 four absolute paths mounted as small tmpfs (`noexec,nosuid,nodev`, 16 MiB). Both are checked before anything runs:
 `PORT` is reserved (the harness forces 8080), values use a small shell-inert character set that excludes `@` (so
 credentials cannot ride in a URL) and any URL in the file must still point at a fixture host, and a tmpfs path may not
-be `/`, `/proc`, `/sys` or `/dev`, contain a dot segment, or carry mount options. The file is public: only
+be `/` or lie in or below `/proc`, `/sys` or `/dev`, contain a `.` or `..` segment, or carry mount options. The file is public: only
 placeholders belong here, never a real secret. The declared values are appended after the harness defaults. A site that
 still does not start stays NOT-RUN with the last three sanitized log lines as the reason.

@@ -404,7 +404,9 @@ def valid_env(env):
 
 def valid_tmpfs(paths):
     return (isinstance(paths, list) and len(paths) <= 4
-            and all(isinstance(p, str) and TMPFS_RE.fullmatch(p) and ".." not in p.split("/") and p not in ("/", "/proc", "/sys", "/dev")
+            and all(isinstance(p, str) and TMPFS_RE.fullmatch(p)
+                    and not any(seg in (".", "..") for seg in p.split("/"))
+                    and p.split("/")[1] not in ("proc", "sys", "dev")
                     for p in paths) and len(set(paths)) == len(paths))
 
 
