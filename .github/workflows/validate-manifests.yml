@@ -402,11 +402,16 @@ jobs:
 
       - name: Release window PR-opener (wiring, input binding, insert script)
         # Proposal issue-2828, 8.2: release-window-pr.yml opens a release-window/*
-        # pull request with the App token and nothing else. The test pins its
-        # triggers, environment, input checks before the token, single push
-        # target and absence of enqueue or merge, with mutants for each; the
-        # insert script's selftest runs inside it.
-        run: python3 tests/test_release_window_pr.py
+        # pull request with the App token (open-pr) and queues it for merge
+        # (enqueue-window), the owner's MFA approval being the only review.
+        # The test pins its triggers, environment, input checks before the
+        # token, single push target, no enqueue in open-pr and the enqueue-window
+        # wiring, with mutants for each; the insert script's selftest runs
+        # inside it. The second test runs the wait script itself with a fake gh:
+        # every guard that decides what may enter the merge queue.
+        run: |
+          python3 tests/test_release_window_pr.py
+          python3 tests/test_release_window_enqueue.py
 
       - name: Tenant-class templates and Secret readers, by credential name
         run: |

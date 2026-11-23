@@ -36,6 +36,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/release-bump-enqueue-wait.sh"
 WF_DIR = ROOT / ".github/workflows"
 CALLERS = ("release-deploy.yaml", "gitops-bump.yaml")
+WINDOW = "release-window-pr.yml"
 REQ = "cloudflare-plan,reserved-hosts,validate"
 HEAD = "a" * 40
 APP = "mctl-gitops-pr[bot]"
@@ -240,9 +241,14 @@ def wiring_cases(texts):
     out = []
     # Repo-wide: an enqueue never runs with GITHUB_TOKEN, only with an App token.
     eqs = enqueue_steps(docs)
-    out.append(("exactly the two enqueue-bump jobs enqueue, one in each release workflow",
-                sorted(fn for fn, _, _ in eqs) == sorted(CALLERS)
-                and all(docs[fn]["jobs"].get("enqueue-bump") is job for fn, job, _ in eqs)))
+    # The release-window PR is the one other enqueue: its enqueue-window job in
+    # release-window-pr.yml, judged by scripts/release-window-enqueue-wait.sh
+    # and pinned by tests/test_release_window_pr.py and
+    # tests/test_release_window_enqueue.py.
+    out.append(("exactly the two enqueue-bump jobs and the one enqueue-window job enqueue",
+                sorted(fn for fn, _, _ in eqs) == sorted(CALLERS + (WINDOW,))
+                and all(docs[fn]["jobs"].get("enqueue-window" if fn == WINDOW else "enqueue-bump") is job
+                        for fn, job, _ in eqs)))
     for fn, job, s in eqs:
         env = s.get("env") or {}
         tok = str(env.get("GH_TOKEN", ""))
