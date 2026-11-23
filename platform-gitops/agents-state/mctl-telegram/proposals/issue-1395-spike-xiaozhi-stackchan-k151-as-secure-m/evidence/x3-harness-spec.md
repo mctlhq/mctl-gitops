@@ -9,7 +9,7 @@ python test/xiaozhi-sim/run.py
 
 Location: draft https://github.com/mctlhq/mctl-telegram/pull/1410 (branch `spike/xiaozhi-protocol-sim-1409`); dedicated workflow `.github/workflows/xiaozhi-sim.yml`, Python 3.13, `websockets==16.0`. No real account or vendor endpoint; software fixture binds `127.0.0.1` on an ephemeral port.
 
-Observed local on 2026-11-23: **17/17 unittest green**, exit 0. Observed original GitHub workflow `45090802713`: **SUCCESS** at `22e271e3fcf5617897f73ed7dd485b4c5fddd114` (14 tests). Revised local **17/17** on branch HEAD `7269b8fc498ae5326941b955f63153809785ea45`; GitHub Actions for this new HEAD must be separately verified.\n\nNew tests: `test_live_mcp_modern_discovery_and_pagination`, `test_live_mcp_legacy_initialize`, `test_live_mcp_modern_method_not_found_legacy_fallback`. Unsolicited MCP messages are always dropped, and invalid JSON-RPC does not trigger legacy fallback.
+Observed local on 2026-11-23: **17/17 unittest green**, exit 0. Observed original GitHub workflow `45090802713`: **SUCCESS** at `22e271e3fcf5617897f73ed7dd485b4c5fddd114` (14 tests). Revised local **17/17** on branch HEAD `7269b8fc498ae5326941b955f63153809785ea45`; GitHub Actions run [45091262216](https://github.com/mctlhq/mctl-telegram/actions/runs/45091262216) **SUCCESS** on this exact HEAD (17 tests).\n\nNew tests: `test_live_mcp_modern_discovery_and_pagination`, `test_live_mcp_legacy_initialize`, `test_live_mcp_modern_method_not_found_legacy_fallback`. Unsolicited MCP messages are always dropped, and invalid JSON-RPC does not trigger legacy fallback.
 
 ## Coverage mapping
 
