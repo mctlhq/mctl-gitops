@@ -160,7 +160,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 3. **Interop compatibility matrix.**
    - Rows: Grok Bot x `tg`, Townie x `tg`, Grok Bot x `alice`, Townie x `alice`, plus optional Grok Chat x `tg` and Cursor IDE x `tg` as distinct categories.
    - Columns: the work package 3 columns.
-   - Grok (grok.com) x tg: OWNER_OBSERVED_WORKS (2026-11-22, #1393/#1381), with untested negative paths. Grok Bot specifically x tg: client/build ATTRIBUTION_UNKNOWN; do not downgrade the existing Grok observation or upgrade the Bot without new proof.
+   - Grok (grok.com) x tg: OWNER_OBSERVED_WORKS (2026-11-22, #1393/#1381), with untested negative paths. Grok Bot specifically x tg: client/build UNKNOWN; do not downgrade the existing Grok observation or upgrade the Bot without new proof. Current elevated grant/refresh status UNKNOWN, with security-owner follow-up #1433.
    - Alice rows: pinned source scope map VERIFIED_CODE at `mctlhq/mctl-alice@cb276d65` (`src/tools/handlers.ts:4–26`); OAuth E2E and device behavior UNKNOWN.
 4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT_EXECUTED`).
    - Positive steps:
@@ -258,15 +258,22 @@ Historical deployment observations above are not current; `PA_ENABLED=true` for 
 
 mctl-alice `src/tools/handlers.ts:4–26` at `cb276d65` verified: four read methods accept `iot:view` or `iot:control`; write control tools require `iot:control`; Quasar tools require `quasar`. Issuer OAuth discovery/refresh remain UNKNOWN; no live calls attempted.
 
-Owner-observed 2026-11-22 Grok (grok.com) and Town connections WORK (merged mctl-telegram#1393), but no replayable transcript. Grok Bot-specific executable and exact callback/client id UNKNOWN; Town CIMD-vs-DCR UNKNOWN. Historical #1381 admin-scope overgrant is not read-only confinement. Keep direct MCP client policy distinct from PA consent/taint/audit.
+Owner-observed 2026-11-22 Grok (grok.com) and Town connections WORK (merged mctl-telegram#1393), but no replayable transcript. Grok Bot-specific executable and exact callback/client id UNKNOWN; Town CIMD-vs-DCR UNKNOWN. Historical #1381 admin-scope overgrant is not read-only confinement; current grant and refresh-family status UNKNOWN, risk treated potentially active. Open security owner follow-up mctl-telegram#1433, no least-privilege claim or live test without separate GO. Keep direct MCP client policy distinct from PA consent/taint/audit.
 
-Sources checked 2026-11-23 (minimal excerpts, all *vendor docs*, not test outcomes):
-- Grok Bot skills https://docs.x.ai/grok-bot/skills-routines-and-automations — “Set up a routine to” (VENDOR_DOCUMENTED).
-- Grok Bot Remote HTTPS MCP https://docs.x.ai/grok-bot/computer-and-apps — “OAuth Client ID” (VENDOR_DOCUMENTED, client/callback identity UNKNOWN).
-- Hermes https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md — “Agent-Managed Skills” (PROJECT_DOCUMENTED).
-- dots https://openai.com/index/introducing-dots/ — “Introducing dots” (VENDOR_DOCUMENTED).
-- Gemini https://support.google.com/gemini/answer/17094710 — “A schedule acts as the automated trigger for a task” (VENDOR_DOCUMENTED).
-- Town https://www.town.com/docs/integrations/mcp-servers — “Town talks to MCP servers over Streamable HTTP only” (VENDOR_DOCUMENTED).
-- Telegram https://telegram.org/tos/content-licensing — “all relevant users individually provide explicit, informed, affirmative and continued consent” (policy/legal gate OPEN, no third-party consent inferred).
+### Primary-source source-to-claim ledger (directly checked 2026-11-23)
+
+All quotations below are short exact excerpts supporting ONLY the adjacent narrow claim. They demonstrate **vendor documentation**, not MCTL execution or feature parity. Treat feature availability, product identity and any unverified quote beyond these excerpts as `UNKNOWN`.
+
+| Claim | Claim-supporting primary-source excerpt (checked 2026-11-23) | Evidence class and limitation |
+| --- | --- | --- |
+| Grok Bot skills and recurring routines | [Grok Bot skills/routines](https://docs.x.ai/grok-bot/skills-routines-and-automations): “A routine tells one Bot when to run a workflow: on a schedule, or when something happens” | `VENDOR_DOCUMENTED`; not proof that the observed `grok.com` client was Grok Bot |
+| Grok Bot external MCP registration | [Grok Bot computer/apps](https://docs.x.ai/grok-bot/computer-and-apps): “Remote HTTPS takes a Server URL, with optional HTTP headers and an OAuth Client ID” | `VENDOR_DOCUMENTED`; exact OAuth callback, DCR/CIMD behavior and identity `UNKNOWN` |
+| Hermes reusable agent-authored skills | [Hermes skills](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md): “The agent can create, update, and delete its own skills via the `skill_manage` tool” | `PROJECT_DOCUMENTED`; does not imply MCTL has managed skills |
+| OpenAI dots always-on cloud agent | [OpenAI dots](https://openai.com/index/introducing-dots/): “Dots can do nearly anything using their own cloud computer, their own browser, and the apps you’ve connected” | `VENDOR_DOCUMENTED`; no MCTL parity/entitlement inference |
+| Gemini scheduled-task triggers | [Gemini help](https://support.google.com/gemini/answer/17094710): “A schedule acts as the automated trigger for a task” | `VENDOR_DOCUMENTED`; plan/region limits are separate |
+| Town MCP transport | [Town MCP docs](https://www.town.com/docs/integrations/mcp-servers): “Town talks to MCP servers over Streamable HTTP only” | `VENDOR_DOCUMENTED`; does not prove CIMD vs DCR on the observed connection |
+| Telegram content use constraints | [Telegram licensing](https://telegram.org/tos/content-licensing): “all relevant users individually provide explicit, informed, affirmative and continued consent” | `VENDOR_DOCUMENTED`; policy/legal interpretation remains an open gate |
+
+**Direct MCTL evidence, separate class:** owner-observed Grok (grok.com) and Town sign-in, token and tool calls are `OWNER_OBSERVED_WORKS` in [mctl-telegram#1393](https://github.com/mctlhq/mctl-telegram/pull/1393). Grok Bot-specific identity is `UNKNOWN`; the admin-scope overgrant is `OBSERVED_AUDIT` historically, but current grant state is `UNKNOWN` pending [mctl-telegram#1433](https://github.com/mctlhq/mctl-telegram/issues/1433). Execution status for future vendor negative/sandbox tests is `NOT_EXECUTED`.
 
 The original P2-01/P2-05 partial findings are addressed at the source-ledger level; all vendor tests and consent-policy decisions remain separately gated. No production changes, owner GO, merge, or implementer. A Grok Bot-specific negative/sandbox test remains `NOT_EXECUTED`.
