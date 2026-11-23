@@ -246,3 +246,38 @@ Sections:
   re-verify at their own pins.
 - Risk: the timebox lapses without live slices. Mitigation: the report states which
   verdict the `[REF]` evidence alone supports.
+
+
+---
+
+
+## Architecture amendment — S3 MCP App-first, Backstage optional (2026-11-24)
+
+**This section supersedes only S3's earlier portal-first UX wording; existing Phase B S1/S2 contracts, authority and tests are retained. No runtime change is authorized.** Architectural coordination: https://github.com/mctlhq/.github/issues/393 .
+
+```text
+ChatGPT / Claude / Antigravity              app.mctl.ai (Backstage, optional)
+        | MCP App (read-only)                         | read-only view
+        +-----------------------+---------------------+
+                                v
+                  Canonical mctl-api ExecutionView
+              actor/tenant authz; evidence/ref projections
+                    /                       \
+             MCP read tools           optional AG-UI SSE
+                    \                       /
+                      Durable execution records
+                      WorkItem, approval, audit
+```
+
+**Design alternatives to independently review:**
+1. `A_MCP_APP_FIRST` (recommended hypothesis): fixed, immutable host-feature-detected MCP App with canonical read tool calls, read-only status/stages/evidence/UNKNOWN display; semantic text fallback. Different clients may have different sandbox, extension, OAuth and Portal route support; prove them at #650/#376. Never let visible UI metadata grant permissions.
+2. `B_BACKSTAGE_ONLY` (existing #261 S3 wording): a React `@ag-ui/client` Run Inspector in `mctl-portal`, useful for deep operator workflows but adds an obligatory browser view and does not prove external-host adoption.
+3. `C_DUAL_HOST_SAME_READ_MODEL`: MCP App + Backstage share semantic normalized API and evidence references, not necessarily a common React package. Adopt only after two observed consumers justify maintenance cost.
+
+**Experiment boundary:** first cross-host S3 interface is **read-only**. Original S2 `resume/cancel` reference tests still prove server-governed interrupt semantics but are not exposed as buttons in the first MCP App. Any later operator approval controls through Backstage or MCP App demand separate owner-approved UI scope and the same canonical exact-payload approval handlers.
+
+**Measurable evidence:** same tool read semantics and normalized IDs across hosts, feature negotiation and fallback, time to useful state, event/trace provenance, render/refresh success, app bundle digest per app release across routes, replay/tenant refusal, accessibility, CSP, latency/payload and frontend dependency footprint. Missing evidence means `UNKNOWN`, never `PASS`.
+
+**Deferred technologies:** A2UI 1.0 may later render a synthetic trusted-catalog choice/status card inside an MCTL-owned renderer or fixed MCP App. It never generates executable JS/HTML or bypasses the canonical MCP/REST authority. GPUI/new desktop app and generic shared UI SDK are out of scope.
+
+**Compatibility:** this change is a *proposal revision only*. Before doing the S3 live implementation, update the canonical .github#261 issue/S3 scope through formal review and exact-digest approval; continue already approved limited S1/S2 only within their existing grants. Do not silently treat prior portal-first approval as permission for the cross-host inspector.
