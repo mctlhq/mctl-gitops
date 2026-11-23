@@ -1,0 +1,173 @@
+"""scripts/release-window-enqueue-wait.sh: what may enter the merge queue.
+
+Plain script: `python3 tests/test_release_window_enqueue.py`.
+
+The MFA approval of a release window is the only human review, so this script
+is the whole machine-side gate (docs/plans/sync-window-write-path.md, section
+5, item 6). It is run for real with a fake gh. Every guard has a case that must
+refuse, and every guard has a mutant (the line removed) that must turn a case
+red: a check that cannot fail proves nothing.
+"""
+import json
+import os
+import pathlib
+import stat
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts/release-window-enqueue-wait.sh"
+REQ = "cloudflare-plan,reserved-hosts,validate"
+HEAD = "a" * 40
+APP = "mctl-gitops-pr[bot]"
+TARGET = "platform-gitops/bootstrap/templates/projects/project-apps.yaml"
+
+
+def run_for(name, status="completed", conclusion="success", i=[0]):
+    i[0] += 1
+    return {"id": i[0], "name": name, "status": status, "conclusion": conclusion}
+
+
+def green():
+    return [run_for(n) for n in REQ.split(",")] + [run_for("claude-review / review")]
+
+
+def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="release-window/w-1", state="open",
+               merged="false", pr_ok=True, files=(TARGET,), changed=None, prev="", files_ok=True, cur=HEAD,
+               pr_head=HEAD, expect=HEAD, target=TARGET, gstate="OPEN", decision="APPROVED", on_head=1,
+               review_ok=True, runs=None, total=None, runs_ok=True, wait_seconds=100000):
+    """Run the wait script with a fake gh. Returns (rc, outputs, log)."""
+    runs = green() if runs is None else runs
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "scripts").mkdir()
+        (d / "scripts/release-window-enqueue-wait.sh").write_text(script_text or SCRIPT.read_text())
+        (d / "scripts/release-bump-checks-ready.py").symlink_to(ROOT / "scripts/release-bump-checks-ready.py")
+        (d / "info").write_text(json.dumps({
+            "head": {"sha": pr_head, "ref": head_ref, "repo": {"full_name": head_repo} if head_repo else None},
+            "changed_files": len(files) if changed is None else changed, "user": {"login": author},
+            "state": state, "merged": merged == "true", "node_id": "PRID"}))
+        (d / "listing").write_text("".join(f"{f}\t{prev}\n" for f in files))
+        (d / "review").write_text(f"{cur} {gstate} {decision} {on_head}\n")
+        (d / "runs").write_text("\n".join(json.dumps(r) for r in runs))
+        (d / "total").write_text(str(len(runs) if total is None else total))
+        bin_ = d / "bin"
+        bin_.mkdir()
+        gh = bin_ / "gh"
+        pr_cmd = f'jq -r "$jqf" "{d}/info"' if pr_ok else "exit 1"
+        gh.write_text(
+            "#!/bin/bash\n"
+            'jqf=; prev=; for a in "$@"; do [ "$prev" = --jq ] && jqf=$a; prev=$a; done\n'
+            'case "$*" in\n'
+            f'  *enqueuePullRequest*) echo "$*" >> "{d}/enqueue"; exit 0 ;;\n'
+            f'  *graphql*) {"cat " + str(d / "review") if review_ok else "exit 1"} ;;\n'
+            f'  *"/files?"*) {"cat " + str(d / "listing") if files_ok else "exit 1"} ;;\n'
+            f'  *"per_page=1 "*) cat "{d}/total" ;;\n'
+            f'  *check-runs*) {"cat " + str(d / "runs") if runs_ok else "exit 1"} ;;\n'
+            f'  *"pulls/7 "*) {pr_cmd} ;;\n'
+            '  *) echo "unexpected gh call: $*" >&2; exit 1 ;;\n'
+            "esac\n")
+        sleep = bin_ / "sleep"
+        sleep.write_text(f'#!/bin/sh\necho x >> "{d}/sleeps"\n[ "$(wc -l < "{d}/sleeps")" -ge 3 ] && kill -9 $PPID\nexit 0\n')
+        for f in (gh, sleep):
+            f.chmod(f.stat().st_mode | stat.S_IEXEC)
+        out = d / "out"
+        out.write_text("")
+        env = {"PATH": f"{bin_}:{os.environ['PATH']}", "GH_TOKEN": "x", "REPO": "o/r", "PR": "7", "EXPECT_HEAD": expect,
+               "TARGET": target, "GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(d), "WAIT_SECONDS": str(wait_seconds)}
+        r = subprocess.run(["bash", str(d / "scripts/release-window-enqueue-wait.sh")], env=env,
+                           capture_output=True, text=True, timeout=60, cwd=d)
+        assert not (d / "enqueue").exists(), "the wait script must never enqueue itself"
+        return r.returncode, out.read_text(), r.stdout + r.stderr
+
+
+def cases(script_text=None):
+    def ready(**kw):
+        rc, out, _ = run_script(script_text=script_text, **kw)
+        return rc == 0 and "ready=true" in out and f"head_sha={HEAD}" in out and "pr_id=PRID" in out
+
+    def refused(**kw):
+        rc, out, log = run_script(script_text=script_text, **kw)
+        return rc not in (0, -9) and "::error::" in log and "ready=true" not in out
+
+    def idle(**kw):
+        rc, out, log = run_script(script_text=script_text, **kw)
+        return "ready=true" not in out and "waiting" in log
+
+    def done(**kw):
+        rc, out, _ = run_script(script_text=script_text, **kw)
+        return rc == 0 and "ready=false" in out and "ready=true" not in out
+
+    pending = green() + [run_for("trivy", "in_progress", None)]
+    other = "platform-gitops/bootstrap/templates/projects/project-default.yaml"
+    return [
+        ("approved, green, App author, the pushed head, one template -> ready", lambda: ready(), True),
+        ("the platform template is allowed too",
+         lambda: ready(files=("platform-gitops/bootstrap/templates/projects/project-platform.yaml",),
+                       target="platform-gitops/bootstrap/templates/projects/project-platform.yaml"), True),
+        ("a head that is not the pushed commit is refused", lambda: refused(pr_head="b" * 40, cur="b" * 40), True),
+        ("a human author is refused", lambda: refused(author="mashkovd"), True),
+        ("another bot is refused", lambda: refused(author="mctl-agents[bot]"), True),
+        ("a head in a fork is refused", lambda: refused(head_repo="evil/r"), True),
+        ("a branch outside release-window/ is refused", lambda: refused(head_ref="release-bump/x"), True),
+        ("an unreadable PR is refused", lambda: refused(pr_ok=False), True),
+        ("the default project template as target is refused", lambda: refused(files=(other,), target=other), True),
+        ("a target that is not a project template is refused",
+         lambda: refused(files=("scripts/release-gate.py",), target="scripts/release-gate.py"), True),
+        ("a different file than the target is refused", lambda: refused(files=("platform-gitops/argocd/values.yaml",)), True),
+        ("a second file is refused", lambda: refused(files=(TARGET, "README.md")), True),
+        ("a short file list is refused", lambda: refused(changed=2), True),
+        ("a rename onto the target is refused", lambda: refused(prev="platform-gitops/old.yaml"), True),
+        ("an unreadable file list is refused", lambda: refused(files_ok=False), True),
+        ("a merged PR is a no-op", lambda: done(merged="true", state="closed"), True),
+        ("a closed PR is a no-op", lambda: done(state="closed"), True),
+        ("a head moved during the wait is refused", lambda: refused(cur="b" * 40), True),
+        ("an unreadable review state is refused", lambda: refused(review_ok=False), True),
+        ("changes requested is refused", lambda: refused(decision="CHANGES_REQUESTED"), True),
+        ("an unknown review decision is refused", lambda: refused(decision="SOMETHING"), True),
+        ("no review yet waits", lambda: idle(decision="REVIEW_REQUIRED", on_head=0), True),
+        ("APPROVED with no approval on this head waits", lambda: idle(on_head=0), True),
+        ("a pending check waits", lambda: idle(runs=pending), True),
+        ("a missing required check waits", lambda: idle(runs=[r for r in green() if r["name"] != "validate"]), True),
+        ("a failed check is refused", lambda: refused(runs=green() + [run_for("trivy", conclusion="failure")]), True),
+        ("an unreadable check list is refused", lambda: refused(runs_ok=False), True),
+        ("a truncated check list is refused", lambda: refused(total=len(green()) + 3), True),
+        ("the deadline is a refusal", lambda: refused(runs=pending, wait_seconds=0), True),
+        ("no approval by the deadline is a refusal", lambda: refused(on_head=0, wait_seconds=0), True),
+    ]
+
+
+MUTANTS = {
+    "pushed head not compared": ('[ "$head_sha" = "$EXPECT_HEAD" ] ||', 'true ||'),
+    "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),
+    "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||'),
+    "branch check dropped": ("case \"$head_ref\" in release-window/?*) ;;", "case \"$head_ref\" in *) ;;"),
+    "target shape unchecked": ('|| die "\'${TARGET}\' is not the apps or platform project template; not enqueueing."', '|| true'),
+    "file count ignored": ('[ "$expected" = 1 ] ||', 'true ||'),
+    "file list not compared to the target": ('[ "$files" = "${TARGET}"$\'\\t\' ] ||', 'true ||'),
+    "moved head accepted": ('[ "$cur" = "$head_sha" ] ||', 'true ||'),
+    "approval on another head accepted": ('APPROVED) [[ "$on_head" =~ ^[1-9][0-9]*$ ]] && approved=1 ;;', 'APPROVED) approved=1 ;;'),
+    "review not required": ('REVIEW_REQUIRED|null) ;;', 'REVIEW_REQUIRED|null) approved=1 ;;'),
+    "changes requested waits": ('CHANGES_REQUESTED) die', 'CHANGES_REQUESTED) : die'),
+    "not-ready verdict accepted": ("    case \"$rc\" in\n      0)", "    case \"$rc\" in\n      0|10|11|12)"),
+    "a failed check waits": ('*) die "#${PR} is not mergeable: ${verdict}" ;;', '*) echo waiting ;;'),
+    "deadline ignored": ('if [ "$SECONDS" -ge "$deadline" ]; then', 'if false; then'),
+}
+
+
+def main():
+    text = SCRIPT.read_text()
+    for name, thunk, want in cases():
+        got = thunk()
+        assert got == want, f"case failed: {name}"
+    for name, (old, new) in MUTANTS.items():
+        assert old in text, f"mutant anchor missing: {name}"
+        mutated = text.replace(old, new, 1)
+        failed = [n for n, thunk, want in cases(mutated) if thunk() != want]
+        assert failed, f"mutant not caught: {name}"
+    print("ok")
+
+
+if __name__ == "__main__":
+    main()

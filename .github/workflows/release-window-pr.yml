@@ -2,11 +2,16 @@ name: Release Window PR
 run-name: "release-window ${{ inputs.window_id }} on ${{ inputs.project }}"
 
 # Opens a release-window/<id> pull request that adds ONE deny sync window to an
-# AppProject template (proposal issue-2828, 8.2). It opens the PR and does
-# nothing else: it does not enqueue, merge or touch main. A person reviews the
-# diff and merges it with tools/merge-gitops-pr.sh, so the human merge stays the
-# real approval; the dispatcher's approval step only gates who may ask for the
-# PR.
+# AppProject template (proposal issue-2828, 8.2) and then queues it for merge.
+# The owner's MFA approval on the release-window decide page is the only human
+# review: it is what the dispatcher checked before it dispatched this run, and
+# the decide page tells the owner that approving means exactly this (owner
+# decision 2026-11-23, docs/plans/sync-window-write-path.md, section 5, item 6).
+# The open-pr job opens the PR and touches nothing on main; the enqueue-window
+# job puts that one head in the merge queue after an approving review and the
+# required checks, and refuses anything else (scripts/release-window-enqueue-wait.sh).
+# A red check, a review that does not approve, or a head that is not the pushed
+# commit leaves the PR open and the window off. Closing the PR cancels it.
 #
 # Why a dispatch workflow on main, and why the App: the pull request has to be
 # authored by an identity the ruleset can attribute (a commit by ci@mctl.ai is
@@ -64,20 +69,25 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: release-window-pr
-  cancel-in-progress: false
-
 jobs:
   open-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Serialises only the opening, which takes seconds. enqueue-window can wait
+    # up to 50 minutes and must stay outside any group: GitHub keeps one pending
+    # run per group, so a third dispatch would cancel a second, MFA-approved one.
+    concurrency:
+      group: release-window-pr
+      cancel-in-progress: false
     # Only a dispatch run of this file on main can enter the environment that
     # holds the App key.
     if: github.ref == 'refs/heads/main'
     environment: app-gitops-pr
     permissions:
       contents: read
+    outputs:
+      pr: ${{ steps.open.outputs.pr }}
+      head: ${{ steps.open.outputs.head }}
     steps:
       # Before any credential exists: shape-check every input. Values reach the
       # shell only through env, never through ${{ }} in a script.
@@ -218,6 +228,7 @@ jobs:
           PY
 
       - name: Open the release-window pull request
+        id: open
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -274,8 +285,9 @@ jobs:
               r["patch"].rstrip("\n"),
               "```",
               "",
-              "This workflow does not enqueue or merge. It touches a protected path, so merge it after review "
-              "with `tools/merge-gitops-pr.sh <N>`. Closing the pull request cancels the window.",
+              "The enqueue-window job of this workflow puts this pull request in the merge queue after an "
+              "approving review and the required checks, pinned to the head it pushed. The owner's MFA approval "
+              "of this exact window is the only human review. Closing the pull request cancels the window.",
               "",
           ])
           open(os.environ["BODY_FILE"], "w").write(body)
@@ -284,3 +296,78 @@ jobs:
             --title "ci(sync-window): deny window ${WINDOW_ID} on project ${PROJECT}" \
             --body-file "$RUNNER_TEMP/window/body.md")
           echo "::notice::opened ${pr_url}"
+          pr_number="${pr_url##*/}"
+          [[ "$pr_number" =~ ^[0-9]+$ ]] || { echo "::error::no pull request number in '${pr_url}'"; exit 1; }
+          {
+            echo "pr=${pr_number}"
+            echo "head=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  # Queue the one pull request open-pr made. The wait runs with the read-only
+  # job token; the App token is minted only after it says ready, and is used for
+  # the one enqueue, pinned with expectedHeadOid to the head the wait judged.
+  # The token that can enqueue so that the queue's checks do start is the App's,
+  # not GITHUB_TOKEN's (events caused by GITHUB_TOKEN start no merge_group run).
+  # It is released only to a job on main in the app-gitops-pr environment.
+  enqueue-window:
+    needs: open-pr
+    if: github.ref == 'refs/heads/main' && needs.open-pr.result == 'success'
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # The wait gives up after 45 minutes; a window that does not get approved
+    # and green is a red run, not a silent open PR.
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval and the required checks on the pushed head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          EXPECT_HEAD: ${{ needs.open-pr.outputs.head }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          case "$PROJECT" in apps|platform) ;; *) echo "::error::project must be apps or platform"; exit 1 ;; esac
+          export TARGET="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          bash scripts/release-window-enqueue-wait.sh
+
+      - name: Generate the App token for the enqueue
+        id: token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # expectedHeadOid: the queue refuses the entry if the head is no longer
+      # the one the wait judged and the approval covers.
+      - name: Enqueue the judged head with the App token
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          PR_ID: ${{ steps.ready.outputs.pr_id }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+          if ! out=$(gh api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}' \
+                -f id="$PR_ID" -f h="$HEAD_SHA" 2>&1); then
+            echo "::error::enqueue of #${PR} was refused: ${out}"
+            exit 1
+          fi
+          echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"

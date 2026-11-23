@@ -202,12 +202,16 @@ generic route.
      opened. It does not merge directly, and `mctl-gitops-pr` does not become a
      bypass actor of `main-protection`: the queue still runs `validate`,
      `reserved-hosts` and `cloudflare-plan`, and the ruleset still wants its
-     approving review.
-   - **Exactly one exception.** The `protected_re` exclusion in
-     `auto-merge.yml` is lifted only for a pull request whose head is
-     `release-window/*`, authored by `mctl-gitops-pr[bot]`, with a diff that is
-     exactly the one `syncWindows` edit the workflow already checks. Any other
-     change to those paths stays human-merged.
+     approving review; the job waits for that review and for green checks on
+     the exact head before it enqueues.
+   - **No exception in `auto-merge.yml`.** As built, `protected_re` is not
+     lifted: `auto-merge.yml` keeps refusing these paths. The only way in is
+     the `enqueue-window` job of `release-window-pr.yml`, on main, in the
+     `app-gitops-pr` environment. `scripts/release-window-enqueue-wait.sh`
+     enqueues only the head the opening job pushed (`EXPECT_HEAD`), only when
+     the pull request is from `mctl-gitops-pr[bot]`, on a `release-window/`
+     branch in this repository, and changes exactly one file, the apps or
+     platform project template, with no rename. Anything else is refused.
    - **Fail closed.** A red check, a Claude review that does not approve, a
      stale `base_sha` or a refused enqueue leaves the pull request open and no
      window on `main`. Nothing here forces a merge.
