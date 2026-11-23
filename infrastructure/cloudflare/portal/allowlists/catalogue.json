@@ -98,6 +98,7 @@
       "mctl_plan_epic_wave",
       "mctl_promote_agent",
       "mctl_promote_deployment",
+      "mctl_propose_release_window",
       "mctl_provision_database",
       "mctl_publish_agent_definition_version",
       "mctl_publish_agent_profile_version",
