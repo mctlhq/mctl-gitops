@@ -14,7 +14,7 @@ Evidence collected from upstream repositories at immutable refs. Facts not obser
 | same | same | `docs/mcp-protocol.md:1-100,105-258`: gateway is MCP **client**, device MCP **server**; modern `2026-07-28` discovery, legacy `2024-11-05` initialization and paginated list | source documentation verified |
 | same | same | `main/boards/m5stack/stackchan/README.md:1-51`: CoreS3, Feetech servos, build/flashing, servo-power gate | source documentation verified |
 | same | same | `main/protocols/mqtt_protocol.cc:83-150`: MQTT settings, control connection and reconnect code exist | source verified (full security not audited) |
-| `m5stack/StackChan` | `28b9f0c8bd6acd81cb3c70f1a93c3e373b39d400` | `README.md:5-19` lists CoreS3 and factory firmware; `firmware/LICENSE` MIT; app/remote license not independently verified | partial |
+| `m5stack/StackChan` | `28b9f0c8bd6acd81cb3c70f1a93c3e373b39d400` | `README.md:5-19` lists CoreS3 and factory firmware; `firmware/LICENSE` MIT; `remote/code/LICENSE` MIT; `app/README.md` displays MIT badge but no `app/LICENSE` was found at directory root (cannot establish unambiguous app redistribution scope) | partial |
 | `m5stack/StackChan-BSP` | `e2f3b02dbe7f28e26a02adc72bef3aa2c545e4a0` | `README.md:7-32` lists hardware and license MIT | source documentation verified |
 | `xinnan-tech/xiaozhi-esp32-server` | `3219a2803906d71e6613d1f9de6af2e41109ee14` | `README.md:9,173-185,201-238,281-303` documents WebSocket/MQTT, plugin ASR/TTS and self-hosting | documentation verified; auth and egress **unreviewed** |
 
@@ -27,10 +27,10 @@ Important upstream URLs:
 
 ### Explicit unknowns (do not claim resolved)
 
-1. K151 **factory firmware** URL override and cloud-free initial activation without reflashing; alternative XiaoZhi board build support is not proof of factory behavior.
+1. K151 **factory firmware** URL override and cloud-free initial activation without reflashing: `m5stack/StackChan/firmware/main/Kconfig.projbuild:1-20` confirms the StackChan source build's default OTA endpoint is the vendor URL and is build-configurable, **not** proof that a retail preloaded device exposes reconfiguration without a flash.
 2. TLS verification / certificate pinning on every K151 network transport, and whether plaintext `ws://` is accepted.
 3. Self-hosting community server's detailed auth, egress and plugin isolation.
-4. Root repository `app/` / `remote/` license scope for forking and redistribution.
+4. `remote/code/LICENSE` at pinned SHA is MIT. App README *claims* MIT via badge but `app/LICENSE` and root LICENSE are absent; the application licensing scope and any third-party assets still need formal verification.
 5. A secure stock device key/rotation path, post-OTA token expiry handling, physical extraction protection.
 6. Actual Russian voice provider behavior/cost and verified end-to-end latency on K151.
 
