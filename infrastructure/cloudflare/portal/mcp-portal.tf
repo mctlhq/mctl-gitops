@@ -63,10 +63,12 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
   description = "Private aggregate portal. Never a public connector. Phase 0: tg only, fail-closed allowlist. Refs mctlhq/.github#35."
 
   secure_web_gateway = false
-  code_mode          = "off"
-  # Deprecated in provider 5.24, but left out it plans as (known after
-  # apply), so the live value is restated.
-  allow_code_mode = false
+  # `code_mode` alone pins Code Mode. `allow_code_mode` is deprecated in
+  # provider 5.24..5.29 (still Optional+Computed in 5.29.0) and is derived by
+  # the API from `code_mode` (`false` <=> `off`), so it is not restated here.
+  # In a plan that already has a change, it shows as (known after apply),
+  # which is cosmetic: apply sends `code_mode = "off"`.
+  code_mode = "off"
 
   # `servers` has nesting_mode `set` in the provider 5.24.0 schema
   # (`tofu providers schema -json`), so the lexical order of this map's keys
