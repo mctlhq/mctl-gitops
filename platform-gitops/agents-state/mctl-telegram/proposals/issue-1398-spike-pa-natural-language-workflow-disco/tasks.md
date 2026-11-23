@@ -2,7 +2,7 @@
 
 All tasks are research and documentation only. Each produces a section of `docs/spikes/pa-workflow-discovery.md`, delivered as one docs-only PR. No runtime code, flags, deployments or real data are involved.
 
-- [ ] 1. Pin historical and current baseline SHAs (including mctl-api automation/v1, .github decision, desired GitOps and observed live Argo), then build an inventory table covering the PA, the Catalog, the managed runtime, automation and memory, labelled VERIFIED_CODE / VERIFIED_DEPLOYMENT / DESIGNED_ONLY / UNKNOWN. Cite:
+- [ ] 1. Pin historical and current baseline SHAs (including mctl-api automation/v1, .github decision, desired GitOps and observed live Argo), then build an inventory table covering the PA, the Catalog, the managed runtime, automation and memory, labelled VERIFIED_CODE / VERIFIED_GITOPS_DESIRED / LIVE_ARGO_OBSERVED / DESIGNED_ONLY / UNKNOWN. Cite:
   - `internal/pa/context.go`, `runloop.go`, `jobs/jobs.go`, `connector/`, `catalog/pin.json`, `memory.go`;
   - `internal/assistant/`, `internal/digest/digest.go`;
   - the S1 and S2 manifests;
