@@ -154,6 +154,12 @@ def remove(text: str, window: dict) -> str:
         if ln.strip() != "" and len(ln) - len(ln.lstrip(" ")) <= 2:
             break
         end += 1
+    # The block ends at the first line indented two or less. A template action
+    # there (a column-0 `{{- if }}` followed by more items) would end it early,
+    # so that more windows sit past it than this function sees; it is not a
+    # guess to be made, so it is refused.
+    if end < len(lines) and _CONTROL.match(lines[end]):
+        raise Refuse("a template action ends `syncWindows:`; items may follow it, not guessing")
     block = lines[i + 1:end]
     if not block:
         raise Refuse("`syncWindows:` has no block items")
@@ -248,6 +254,8 @@ def _selftest() -> int:
             ("a comment inside the block", "spec:\n  syncWindows:\n    # c\n    - kind: deny\n", w),
             ("a blank line inside the block", insert(insert(base, w), w).replace("\n    - kind", "\n\n    - kind", 1), w),
             ("duplicate key", "spec:\n  syncWindows:\n    - a: 1\n  syncWindows:\n    - b: 2\n", w),
+            ("a template action ends the block with items after it",
+             insert(base, w) + "{{- if .Values.more }}\n    - kind: deny\n      schedule: '0 1 * * *'\n      duration: 1h\n      applications: [a]\n{{- end }}\n", w),
             ("unparseable item", "spec:\n  syncWindows:\n    - kind: [deny\n", w)):
         try:
             remove(text, win)

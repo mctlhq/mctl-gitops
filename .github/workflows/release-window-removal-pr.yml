@@ -71,6 +71,11 @@ jobs:
     # One group with release-window-pr.yml: both edit the same two templates, so
     # an opening of either waits for the other. Only the opening is serialised;
     # enqueue-window can wait up to 50 minutes and stays outside any group.
+    # GitHub keeps one pending run per group, so a third dispatch while one is
+    # running and one is waiting cancels the waiting one, additions and removals
+    # alike. The dispatch was accepted, so its MFA approval is already spent and
+    # nothing is opened: the requester sees the run cancelled in the workflow
+    # runs link and has to ask again and have the owner approve again.
     concurrency:
       group: release-window-pr
       cancel-in-progress: false
