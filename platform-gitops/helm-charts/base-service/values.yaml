@@ -131,6 +131,10 @@ serviceAccount:
 # -- Optional: deployment strategy (Recreate or RollingUpdate)
 strategy: {}
 
+# -- Optional: apply the Deployment with `kubectl replace` (Argo CD Replace=true).
+# One-shot aid for flipping an existing Deployment to strategy.type Recreate.
+replaceOnSync: false
+
 # -- Optional: persistent volume claims
 # Creates PVC resources. Keys become PVC name suffixes.
 # persistence:

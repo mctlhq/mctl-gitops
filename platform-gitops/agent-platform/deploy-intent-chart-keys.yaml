@@ -123,6 +123,9 @@ denied:
   - otel
   - blueGreen
   - strategy
+  # Adds the ArgoCD Replace=true sync option to the Deployment: a deploy-path
+  # write would let an agent force replace-on-sync, so it stays operator-only.
+  - replaceOnSync
   - prepull
   - autoscaling
   - nodeSelector

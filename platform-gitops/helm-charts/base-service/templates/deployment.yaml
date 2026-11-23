@@ -6,6 +6,15 @@ metadata:
   labels:
     {{- include "base-service.labels" . | nindent 4 }}
     {{- include "base-service.extraLabels" . | nindent 4 }}
+  {{- if .Values.replaceOnSync }}
+  annotations:
+    # kubectl replace instead of server-side apply, for a Recreate flip of a
+    # Deployment that carries the API server's defaulted rollingUpdate block:
+    # SSA cannot remove a field nobody owns, so it fails with "rollingUpdate:
+    # Forbidden" (admins-mctl-agents-worker, 2026-11-09). Remove the value once
+    # the flip has landed.
+    argocd.argoproj.io/sync-options: Replace=true
+  {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -13,7 +22,13 @@ spec:
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit | default 2 }}
   {{- with .Values.strategy }}
   strategy:
+    {{- /* Recreate forbids a rollingUpdate block, even a null one: a literal
+           `rollingUpdate: null` is not a reliable way to clear it. */}}
+    {{- if eq (.type | default "") "Recreate" }}
+    {{- toYaml (omit . "rollingUpdate") | nindent 4 }}
+    {{- else }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
   selector:
     matchLabels:
