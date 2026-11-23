@@ -228,13 +228,14 @@ Design matrix summary:
 | C Existing 60 s probe + lifecycle + KSM | Cannot bound a sub-60 s outage (may see 0 or 1 failed sample) | Zero | Systematic under-reporting. Lifecycle gap misread as downtime | In-cluster |
 | D Hybrid A + **verified** B logs + lifecycle | A's conditional sampling plus ingress attribution | Bounded probes + existing configured logs | Still no continuous/global availability proof | Mixed failure domains |
 
-Provisional decision: **`RELEASE_SCOPED_PROBE`**, with existing-telemetry
-correlation (Loki lifecycle, kube-state-metrics readiness, Traefik 5xx counters,
-`cf-ray` to `edge_request_id`) as attribution only. Upgrade to
-`HYBRID_EDGE_AND_PROBE` only if the open question on Cloudflare analytics access is
-answered positively. `REUSE_CURRENT_TELEMETRY` is rejected by option C's row.
-`EXTERNAL_MONITOR_REQUIRED` is not warranted: the failure under study is pod-scoped,
-not cluster-scoped.
+Provisional decision: **`RELEASE_SCOPED_PROBE`**, potentially
+**`HYBRID_EDGE_AND_PROBE`** once the already-configured Traefik
+400–599 JSON access logs have been verified live in redacted Loki.
+A hybrid does not require Cloudflare Analytics, but any optional
+Cloudflare edge evidence needs separate verified entitlements and
+granularity. Existing 60s probes alone cannot establish short outages.
+Neither probe nor ingress logs alone prove continuous real-client
+availability; record model assumptions and vantage limitations.
 
 Draft follow-up issue (text only, filed after owner GO): "Run the release-scoped
 probe for one `mctl-telegram-preview` rollout". Scope: a one-shot Argo Workflow in
@@ -242,9 +243,13 @@ probe for one `mctl-telegram-preview` rollout". Scope: a one-shot Argo Workflow 
 `https://mctl.ai/` at 1 Hz with a 2 s timeout from T-60 s to T+180 s around a
 preview sync, at most 10 minutes total. It writes JSONL to the workflow log archive
 and a summary to Pushgateway, and runs `estimate.py`. It adds no VMProbe, alert or
-dashboard. Preview acceptance: five preview rollouts produce `status: measured` or
-an explained `unknown`, the half-width is <= 2 s in at least 4 of 5, and there are
-zero challenged (403/429) attempts. Production use needs a separate GO.
+dashboard. Preview acceptance: five bounded preview rollouts have
+documented sampled outcomes (`measured`, `no_outage_observed` or
+specific `unknown`); stable probe cadence, cache bypass and 403/429
+classification; no real client writes. +/-2s is tested as a
+**conditional sampling-resolution goal**, not presumed true blackout
+accuracy. Do not infer continuous downtime from sample failures
+without independent evidence. Production use requires a separate GO.
 
 ## Alternatives
 
@@ -252,10 +257,11 @@ zero challenged (403/429) attempts. Production use needs a separate GO.
   deployed probe (not authorized), multiplies samples for every minute of the day
   to serve a few minutes per release, and shares the blackbox 10 s module timeout,
   which by itself breaks the precision target.
-- **Enable Traefik access logs or Cloudflare Logpush now (option B as primary).**
-  Dropped because it is a new log pipeline (explicitly excluded), it is
-  traffic-dependent so it cannot separate absence of traffic from availability, and
-  its Cloudflare side was not observable in this run.
+- **Enable a new Traefik logging pipeline or Cloudflare Logpush now.**
+  Traefik access logs are already **configured on**, so verify that
+  runtime ingestion first. New logging/Logpush is out of research scope;
+  even existing 400–599 lines lack 2xx success brackets and say nothing
+  about availability in an idle window.
 - **Infer downtime from lifecycle + readiness only (option C).** Dropped because
   the #1108 record already shows `/readyz` 503 beyond `listening`. Lifecycle is a
   lower-level proxy and would misreport.
@@ -272,12 +278,15 @@ zero challenged (403/429) attempts. Production use needs a separate GO.
 - Risks and mitigations:
   - The estimator is mistaken for a probe. Mitigation: static AST check plus test-scoped fail-fast network guard,
     and spike doc STATUS: NO LIVE PROBE.
-  - Overclaimed precision. Mitigation: `precision_target_met` is computed, fixtures
-    show the 10 s-timeout case failing it, and the doc forbids reporting lifecycle
-    as downtime.
-  - A future runner-based probe gets bot-challenged. Mitigation: recorded as an open
-    question. The draft follow-up uses an in-cluster vantage covered by the AS24940
-    skip rule, with a control target.
+  - Overclaimed precision. Mitigation: keep the observed failure
+    envelope descriptive, model-bound duration explicitly conditional
+    on an independent continuity hypothesis; test t0/t5/t10 and
+    hidden-recovery counterexamples. Lifecycle is separate.
+  - A runner may be WAF-challenged, while in-cluster ASN24940 is
+    a privileged path. Mitigation: classify 403/429 and challenges,
+    note target-specific WAF cannot be ruled out by a healthy control,
+    and forbid extrapolation to ordinary external users without
+    independent vantage evidence.
   - Adding a CI step to a required workflow. Mitigation: if the queue's required
     `validate` check is a concern, the step can instead go into an existing shard
     job. Either way it is a pure unit test with no secrets.
