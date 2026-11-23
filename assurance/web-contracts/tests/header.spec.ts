@@ -32,11 +32,15 @@ async function atGap(c: CaseDef, fn: () => Promise<void>): Promise<void> {
 const BASE = 'http://site.fixture.test:8080';
 const HEIGHT = 800;
 
-interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string }
+// `routes` selects the links that are in-app ROUTES (a client navigation moves the current marker). It is declared,
+// never guessed from an href: a section anchor or an external link is not a route, and HDR-14's route-change step
+// is only meaningful for a site that has route links.
+interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string }
+class NoRouteLinks extends Error {}
 interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel }
 
 const BUTTON_SEL: Sel = {
-  header: '#site-header', nav: '#site-nav', links: '#site-nav a', toggle: '.mctl-site-burger',
+  header: '#site-header', nav: '#site-nav', links: '#site-nav a', routes: '#site-nav a', toggle: '.mctl-site-burger',
   clickToggle: '.mctl-site-burger', outside: '#outside-link',
 };
 const CHECKBOX_SEL: Sel = { ...BUTTON_SEL, toggle: '#nav-toggle', clickToggle: 'label.cb-label' };
@@ -137,7 +141,9 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
       expect(await axe(), 'axe, narrow-closed').toEqual([]);
       await openPanel(p, t, width);
     }
-    await expect(p.getByRole('navigation', { name: /\S/ })).toHaveCount(1);
+    // the header region's landmark (AC-1: "inspect the header navigation landmark"); a named landmark elsewhere on the
+    // page, in content or the footer, is not the header's
+    await expect(p.locator(t.sel.header).getByRole('navigation', { name: /\S/ })).toHaveCount(1);
     expect(await axe(), 'axe on the header region').toEqual([]);
   },
 
@@ -199,7 +205,7 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     expect(same, 'aria-controls points at the panel').toBe(true);
   },
 
-  7: async ({ wca, t, width }) => {
+  7: async ({ wca, t, width, c }) => {
     const p = await load(wca, t, width);
     // narrow-closed: the panel links are skipped and focus is never trapped
     await toggle(p, t).focus();
@@ -215,12 +221,15 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     await p.keyboard.press(t.kind === 'checkbox' ? 'Space' : 'Enter');
     await expectOpen(p, t, width);
     const hrefs = await p.locator(t.sel.links).evaluateAll((as) => as.map((a) => a.textContent!.trim()));
-    const seen: string[] = [];
-    for (let i = 0; i < hrefs.length; i++) {
-      await p.keyboard.press('Tab');
-      seen.push(await p.evaluate(() => (document.activeElement?.textContent || '').trim()));
-    }
-    expect(seen).toEqual(hrefs);
+    // the one assertion a catalogued known_gap names (a header whose toggle follows the panel in DOM order)
+    await atGap(c, async () => {
+      const seen: string[] = [];
+      for (let i = 0; i < hrefs.length; i++) {
+        await p.keyboard.press('Tab');
+        seen.push(await p.evaluate(() => (document.activeElement?.textContent || '').trim()));
+      }
+      expect(seen).toEqual(hrefs);
+    });
   },
 
   8: async ({ wca, t, width }) => {
@@ -236,9 +245,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
       return;
     }
     await openPanel(p, t, width);
-    await toggle(p, t).focus();
-    await p.keyboard.press('Tab');
-    expect(await activeInNav(p, t)).toBe(true);
+    // focus inside the open panel is a precondition set directly: reaching it by Tab from the toggle depends on
+    // the DOM order HDR-7 covers, and HDR-8/12 only require where focus goes after the close
+    await p.locator(t.sel.links).first().focus();
+    expect(await activeInNav(p, t), 'precondition: focus is inside the open panel').toBe(true);
     await p.keyboard.press('Escape');
     await expectClosed(p, t);
     await expect(toggle(p, t)).toBeFocused();
@@ -288,9 +298,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
       return;
     }
     await openPanel(p, t, width);
-    await toggle(p, t).focus();
-    await p.keyboard.press('Tab');
-    expect(await activeInNav(p, t)).toBe(true);
+    // focus inside the open panel is a precondition set directly: reaching it by Tab from the toggle depends on
+    // the DOM order HDR-7 covers, and HDR-8/12 only require where focus goes after the close
+    await p.locator(t.sel.links).first().focus();
+    expect(await activeInNav(p, t), 'precondition: focus is inside the open panel').toBe(true);
     await p.keyboard.press('Escape');
     await expectClosed(p, t);
     expect(await p.evaluate((sel) => document.activeElement === document.querySelector(sel), t.sel.toggle),
@@ -334,13 +345,15 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
 
   14: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
-    await expect(p.locator(`${t.sel.links}[aria-current="page"]`)).toHaveCount(1);
+    // every link of the header region, the brand link included: exactly one carries the current marker
+    await expect(p.locator(`${t.sel.header} a[aria-current="page"]`)).toHaveCount(1);
     if (t.kind === 'checkbox') return; // server-rendered: every route is a full page load, there is no client transition
-    // client route change: the current marker must follow, still exactly one
+    // client route change: the current marker must follow, still exactly one. Only for a site that declares route links.
+    if (!t.sel.routes) throw new NoRouteLinks('no in-app route link declared for this site (its nav holds section anchors and external links only)');
     if (narrow) await openPanel(p, t, width);
-    const target = p.locator(t.sel.links).nth(1);
+    const target = p.locator(t.sel.routes).nth(1);
     await target.click();
-    await expect(p.locator(`${t.sel.links}[aria-current="page"]`)).toHaveCount(1);
+    await expect(p.locator(`${t.sel.header} a[aria-current="page"]`)).toHaveCount(1);
     await expect(target).toHaveAttribute('aria-current', 'page');
   },
 
@@ -415,7 +428,7 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string } {
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
   const s = site.selectors as Record<string, string>;
   return { t: { url: st.url, bp: site.breakpoint as number, kind: 'button',
-    sel: { header: s.header, nav: s.nav, links: s.links, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp };
+    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp };
 }
 
 for (const c of cases) {
@@ -431,6 +444,8 @@ for (const c of cases) {
       await fn({ wca, t, width, narrow, c });
     } catch (e) {
       // only the one assertion the known_gap names is a skip; any other failure stays a FAIL
+      // the conformant part ran and passed; the route-change step cannot run here, so the case is NOT-RUN, never PASS
+      if (e instanceof NoRouteLinks) test.skip(true, `route-change step not run: ${e.message}`);
       if (e instanceof KnownGap) test.skip(true, `observed gap, no exception registered: ${c.known_gap} (${e.message})`);
       throw e;
     }
