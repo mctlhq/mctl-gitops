@@ -296,7 +296,7 @@ resource "zitadel_application_oidc" "mctl_api_deploy_approval" {
 # The aud check is why this is a client of its own and not a redirect on
 # mctl-api-deploy-approval: a token issued for any other page is refused.
 # Same shape as mctl-api-deploy-approval otherwise: client secret plus PKCE,
-# two redirects, opaque (BEARER) access token. Do not switch it to JWT. Not in
+# three redirects, opaque (BEARER) access token. Do not switch it to JWT. Not in
 # ZITADEL_HOOK_CLAIM_CLIENT_IDS (customers.tf).
 #
 # The second redirect is the release-window page (mctl-api S2, sync-window
@@ -305,6 +305,12 @@ resource "zitadel_application_oidc" "mctl_api_deploy_approval" {
 # client on purpose: the page's aud/azp check names this client, and the two
 # pages stay apart on the mctl-api side by their own callback path, cookie and
 # flow kinds, not by a second client.
+#
+# The third redirect is the access decision page (mctl-api 4.176.0): an owner
+# approves, rejects or revokes one access request there, again behind a fresh
+# sign-in with a second factor. mctl-api mounts that page only with this
+# client's config, so it shares the client, the deciders and the required
+# amr, and has its own callback path, cookie and flow kinds.
 resource "zitadel_application_oidc" "mctl_api_release_approval" {
   org_id     = local.mctl_org_id
   project_id = zitadel_project.mctl_api.id
@@ -317,6 +323,7 @@ resource "zitadel_application_oidc" "mctl_api_release_approval" {
   redirect_uris = [
     "https://api.mctl.ai/release/approvals/callback",
     "https://api.mctl.ai/release/window-approvals/callback",
+    "https://api.mctl.ai/glovo/access-approvals/callback",
   ]
   access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
   dev_mode                    = false

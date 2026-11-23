@@ -104,6 +104,9 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '    GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret',
         '  name       = "mctl-api-glovo-basket"',
         '  redirect_uris               = ["https://api.mctl.ai/glovo/basket/approvals/callback"]',
+        # The access decision page callback on the release approval client
+        # (mctl-api 4.176.0).
+        '    "https://api.mctl.ai/glovo/access-approvals/callback",',
         '# The Glovo basket approval page (mctl-api#1006): an MCP client shows the',
         '# basket owner a link to api.mctl.ai/glovo/basket/approvals/{id}, and the',
         'resource "zitadel_application_oidc" "mctl_api_glovo_basket" {',
@@ -120,6 +123,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.name == "mctl-api-glovo-basket"',
         '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_glovo_basket.org_id == "100000000000000001"',
         '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.redirect_uris == tolist(["https://api.mctl.ai/glovo/basket/approvals/callback"])',
+        '    condition     = zitadel_application_oidc.mctl_api_release_approval.redirect_uris == tolist(["https://api.mctl.ai/release/approvals/callback", "https://api.mctl.ai/release/window-approvals/callback", "https://api.mctl.ai/glovo/access-approvals/callback"])',
         '    error_message = "The Glovo basket keys must carry the mctl-api-glovo-basket client\'s credentials, never another flow\'s."',
         '    error_message = "The client is named mctl-api-glovo-basket."',
         '    error_message = "The only redirect URI must be https://api.mctl.ai/glovo/basket/approvals/callback."',
