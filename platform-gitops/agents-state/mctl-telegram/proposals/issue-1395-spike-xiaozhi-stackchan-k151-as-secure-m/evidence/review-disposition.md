@@ -15,11 +15,11 @@ This document records honest dispositions, **not** a blanket clearance of P1 gat
 | P2-TOKEN | **OPEN hardware blocker** | OTA response writes gateway URL and token to NVS. Token ≤15m is a **proposed gateway policy**, not proven stock-firmware renewal. Require proof-of-possession, expiry/reconnect and replay tests before real pairing. |
 | P2-GATES | **Addressed** | Harness verdict `protocol_compatible_sim` expressly means a synthetic fixture pass, not `k151_tested` or `pa_compatible`. #1410 README and docs enforce distinction. |
 | P3-MEASURE | **OPEN** | $0.50/100 turns, latency, false wake and Russian provider budgets are unmeasured targets. Source-pinned prices/provider choices required before a product gate. |
-| P3-REPRO | **Addressed for current CI** | Draft PR #1410 new HEAD `7269b8fc498ae5326941b955f63153809785ea45` (17 local tests). Initial CI `45090802713` SUCCESS at older HEAD `22e271e3fcf5617897f73ed7dd485b4c5fddd114`; new-HEAD CI pending separate verification; pinned upstream SHA `92d400d6374bbe750e0a0188fa969fc4042820c2`. Re-review must use a **new exact HEAD** if either PR changes. |
+| P3-REPRO | **Addressed for current CI** | Draft PR #1410 new HEAD `7269b8fc498ae5326941b955f63153809785ea45` (17 local tests). Initial CI `45090802713` SUCCESS at older HEAD `22e271e3fcf5617897f73ed7dd485b4c5fddd114`; latest GitHub simulator CI [45091262216](https://github.com/mctlhq/mctl-telegram/actions/runs/45091262216) SUCCESS on exact HEAD; pinned upstream SHA `92d400d6374bbe750e0a0188fa969fc4042820c2`. Re-review must use a **new exact HEAD** if either PR changes. |
 
 ## Gates and decisions
 
-- **B1 (CI-only synthetic harness):** owner-limited in #1409; Python 3.13, websockets 16.0. Simulator's local 17/17 is green. The original 14-test HEAD has green GitHub CI; revised HEAD requires its own CI result before declaring gate green. Draft PR remains unmerged, and independent PR review is outstanding.
+- **B1 (CI-only synthetic harness):** owner-limited in #1409; Python 3.13, websockets 16.0. Simulator's local 17/17 and GitHub simulator CI on the exact 17-test HEAD are both green. Independent review and broader repository checks remain separate gates. Draft PR remains unmerged, and independent PR review is outstanding.
 - **B2 (hardware procurement/flashing):** DEFER pending G-ID, G-VENDOR, G-TLS and P1-DEVICE.
 - **B3 (PA identity/consent runtime):** NO-GO pending an accepted ADR and security review.
 - **B4 (private/physical writes):** NO-GO pending separate approval and threat model.
