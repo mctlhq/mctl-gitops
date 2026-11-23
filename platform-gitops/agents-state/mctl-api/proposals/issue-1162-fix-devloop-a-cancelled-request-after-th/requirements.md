@@ -29,34 +29,77 @@ place of a dead end, and a metric plus logs for the partial state.
 - AS an operator I WANT a metric and an alert for approved DevLoop grants that stay unconsumed SO THAT a stuck delivery is visible before someone asks why a DevLoop is idle.
 - AS an operator abandoning a DevLoop I WANT the abandon signal to survive my client disconnecting SO THAT the loop really ends.
 
-## Acceptance criteria (EARS)
+## Acceptance criteria (EARS) — revision 2
 
-- WHEN `ApproveDevLoopWorkflow` sends the approve signal THE SYSTEM SHALL send it on a context derived with `context.WithoutCancel` from the request context and bounded by its own deadline (`devLoopSignalTimeout`, default 15s), so cancelling the request does not cancel the signal.
-- WHEN `AbandonDevLoopWorkflow` sends the abandon signal THE SYSTEM SHALL use the same detached, deadline-bounded context.
-- IF the request context is cancelled after `decideDevLoopApproval` recorded the decision and before the signal returned THEN THE SYSTEM SHALL still deliver the signal with the grant's `approval_ref`.
-- WHILE a `mctl-agents-approve` grant is `approved`, not consumed, not expired, and decided more than `devLoopRedeliverMinAge` (default 2 minutes) ago THE SYSTEM SHALL treat it as an unfinished delivery.
-- WHEN the redelivery reconciler finds such a grant whose execution's Temporal run is `Running` THE SYSTEM SHALL re-send the approve signal with payload `{"approval_ref": <grant id>}` to that workflow (pinned to the run when the engine_ref pins one).
-- IF the run is closed, not found, or cannot be described THEN THE SYSTEM SHALL NOT send a signal, and SHALL log the grant id, the workflow id and the reason.
-- WHEN the reconciler re-sent a signal for a grant less than `devLoopRedeliverBackoff` (default 10 minutes) ago in this process THE SYSTEM SHALL NOT send it again in that pass.
-- WHEN a grant is `consumed` (or otherwise no longer `approved`) THE SYSTEM SHALL NOT select it for redelivery, so a pass after a successful delivery sends nothing.
-- THE SYSTEM SHALL run the reconciler from durable store state only (no in-memory record of decisions), so any replica, including one started after the deciding pod is gone, recovers the grant.
-- WHEN the decide-page callback reads the bound grant in state `approved` THE SYSTEM SHALL render a page stating that the approval is recorded but its delivery to the DevLoop is not confirmed, and SHALL offer a "Retry delivery" action in place of "Could not decide".
-- WHEN the signed-in admin confirms "Retry delivery" THE SYSTEM SHALL re-send the approve signal through `ApproveDevLoopWorkflow` with the same binding. No new decision is recorded, because the approved branch of `decideDevLoopApproval` returns the existing grant id.
-- WHEN the decide-page callback reads the grant in state `consumed`, `in_flight` or `executed` THE SYSTEM SHALL say the approval was already delivered, not that the decision is unknown or used.
-- THE SYSTEM SHALL expose a gauge `mctl_devloop_approval_undelivered` (approved, unconsumed DevLoop grants older than `devLoopRedeliverMinAge`, set on each reconciler pass) and a counter `mctl_devloop_approval_redeliveries_total{outcome}` (`signalled`, `run_closed`, `describe_failed`, `signal_failed`).
-- WHEN a grant is found undelivered THE SYSTEM SHALL log at WARN with `workflow_id`, `approval_ref`, `execution_id` and the grant's age.
-- WHEN the reconciler re-sends a signal THE SYSTEM SHALL write an audit entry with operation `dev-loop-approve-redeliver`, the workflow id and the approval ref, and `UserID` set to the service principal.
+The following criteria replace the revision-1 acceptance criteria and unresolved assumptions. They are mandatory for any later implementer GO; no production write is authorized by this proposal.
+
+### S1. Request cancellation and bounded delivery
+
+- WHEN an authorized human approval is durably decided THEN the approve signal SHALL use a distinct, deadline-bounded context created by `context.WithTimeout(context.WithoutCancel(requestContext), 15*time.Second)`, not the browser request cancellation context.
+- WHEN an already-authorized abandon operation signals Temporal THEN its signal SHALL use the same detached bounded context, preserving its existing explicit run-id binding.
+- IF the browser disconnects after the decision was committed THEN delivery SHALL continue until a result or the independent deadline, with an accurate audit trail and without rolling back a human decision.
+- IF the 15-second deadline is reached THEN the handler SHALL return a transport failure when possible and leave the existing approved grant eligible for safe reconciliation; it SHALL NOT create or approve a second grant.
+
+### S2. Exactly the authorized Temporal run (P1-1)
+
+- BEFORE sending any recovery signal THE SYSTEM SHALL establish the immutable association of (execution_id, workflow_id, concrete Temporal run_id, approval_ref, approved context/content digest, approval attempt). A workflow-id-only or `#xr_` engine reference is NOT sufficient evidence of run identity.
+- WHEN the reconciler sends an approve signal THE SYSTEM SHALL target that exact run via a run-bound Temporal client method, equivalent in run pinning to `SignalAbandon`; an empty/latest run id SHALL NOT be used.
+- IF the execution/run association cannot be proven, the run is no longer Running, or a continuation/restart changes its identity THEN the reconciler SHALL fail closed and expose a typed reason; it SHALL NOT signal the latest run as fallback.
+- WHEN the run changes between Describe and Signal THEN Temporal MUST reject delivery to the old closed run or deliver only to the original still-running run. The new run SHALL never receive the old grant.
+- This protection SHALL also apply to the authenticated manual retry path and shall not remove the worker's existing current-approval-ref guard.
+
+### S3. Current grant, context, freshness and content (P1-2, P2-1)
+
+- BEFORE claiming a delivery attempt and AGAIN just before signalling THE SYSTEM SHALL verify the grant is still the newest approval for its execution/attempt, state approved, not consumed, not denied/superseded, within both `expires_at` and `fresh_until` (if set), and bound to the exact workflow/run.
+- THE SYSTEM SHALL compare the recorded `decided_context_digest`, action intent/target, approved artifact/content digest and current proposal content digest. An unreadable repository/digest or an ambiguous grant/run/attempt mapping SHALL fail closed; cached digest guesses SHALL NOT authorize delivery.
+- WHEN a proposal changes and a new grant is pending/approved, or a previous run was abandoned/restarted, the older approved grant SHALL NOT be redelivered even if its database row remains approved.
+- No reconciler or retry SHALL change a grant's decision, issue an MFA decision, create a replacement grant, change the proposal status, or consume the grant on the user's behalf.
+- A successful Temporal signal acknowledgement SHALL NOT be equated with grant consumption or with the proposal being accepted: report those stages separately.
+
+### S4. Cross-replica retry, restart and failure semantics (P2-2)
+
+- THE SYSTEM SHALL use the existing durable approved-grant ledger as the source of pending delivery intent. It SHALL add a database-backed per-grant delivery lease / attempt record, or an equivalently proved atomic coordination mechanism, to fence competing reconcilers across replicas. An in-process `lastSent` map is not sufficient as the delivery gate.
+- A lease SHALL have a bounded expiry, a unique owner/fencing token, a durable last-attempt/result and a database-enforced retry backoff. Expired workers SHALL NOT settle another worker's lease.
+- WHEN the deciding pod terminates or a lease-holder crashes THEN another replica SHALL recover the undelivered, still-authorized grant from durable state after lease expiry/backoff. An ambiguous signal result MAY cause at-least-once delivery to the SAME pinned run and SAME grant only; worker spending remains compare-and-set and no exactly-once transport guarantee is claimed.
+- WHEN two replicas compete to deliver one grant THEN at most one SHALL hold its active delivery lease. Duplicate delivery caused by a crash/retry MUST be tested as safe, and bounded to the pinned run.
+- Candidate selection SHALL use a keyset-paged, snapshot-consistent enough enumeration that does not silently miss older grants, with a separately computed accurate count for monitoring.
+
+### S5. MFA page retry, authorization and state transitions (P2-3)
+
+- WHEN the signed-in administrator opens a binding-matched, already approved but unconsumed grant THEN the page SHALL say `Approved — delivery not confirmed` and offer retry without presenting another approve/reject decision.
+- WHEN the user presses Retry THE SYSTEM SHALL validate a new CSRF-protected, browser-bound, one-use challenge whose offered action is explicitly `redeliver`, revalidate the authenticated platform admin (including the established MFA semantics), and re-read exact newest grant, decision identity/actor policy, context digest, content digest, freshness, execution and run ownership before sending.
+- The manual retry SHALL use a delivery-only method that refuses pending/denied/consumed/expired/superseded grants; it SHALL NOT fall back to the regular `DecideActionApproval` path, mint a grant, or re-use an already-spent decision challenge.
+- Whether a different platform admin may re-deliver an approved decision MUST be an explicit policy; for this slice, require the original deciding principal with a nonempty matching DecidedByPrincipalID, with audited identity and no impersonation.
+- WHEN grant state changes between page render and POST THEN re-read and fail closed, rendering a factual state rather than sending a signal. A consumed grant SHALL show `Already consumed`; signalled-but-unconsumed SHALL say only `Delivery attempted`, not `DevLoop received`.
+
+### S6. Observability and dark launch (P2-4, P2-6)
+
+- THE SYSTEM SHALL expose a correct gauge of all eligible approved-but-unconsumed grants older than the minimum age, regardless of page size, with an explicit failure/staleness indicator if a DB scan fails; a truncated batch count MUST NOT masquerade as a total.
+- THE SYSTEM SHALL emit bounded-label counters for `claimed`, `signalled`, `signal_failed`, `run_mismatch`, `stale_grant`, `claim_lost`, `describe_failed`, `run_closed`, and `disabled` where appropriate; log workflow_id, run_id, approval_ref, execution_id, age, attempt number and typed reason without secrets.
+- The alert `mctl_devloop_approval_undelivered > 0 for 10m` SHALL have a tested MctlApi rule in the GitOps observability team’s vm-rules/mctl-api-alerts.yaml before live enablement; do not claim the alert deployed from this API PR alone.
+- `DEVLOOP_APPROVAL_REDELIVER_ENABLED` SHALL default to FALSE. The new reconciler SHALL first be validated in read-only/dry-run mode with zero grant, lease, attempt or backoff writes and synthetic/fake Temporal, then require a separate owner GO and a digest/image-pinned rollout for enabling any real resends.
+- WHEN disabled, the reconciler SHALL perform no Temporal mutations. Rollback SHALL disable it without deleting the durable grant or delivery state; a change to the detached HTTP signal helper remains a separately reviewable containment fix.
+
+### S7. Evidence and test matrix (P2-5)
+
+- Tests SHALL deterministically exercise: begin signal -> cancel browser request -> independently release fake signal -> observe success, and separately test the 15s detached timeout; tests must not wait for the signal context to cancel when the browser cancels.
+- Tests SHALL cover old-run-to-new-run races, unpinned `engine_ref`, restart, ContinueAsNew, abandoned run, latest-run mismatch, old approved grant followed by new pending/approved, changed proposal digest, wrong actor, stale `fresh_until`, and database/repository/Temporal unavailable.
+- Tests SHALL cover two reconcilers contending for the same grant, lease expiry/restart, ambiguous transport outcome, bounded retries, pagination above the batch limit, telemetry failures and stale grant count.
+- MFA page tests SHALL include exact binding, new/changing grant between GET and POST, consumed/expired/denied grants, different admin, one-time challenge reuse and cancelled POST.
+- CI SHALL run actual Go test/vet/lint and Postgres-backed store/lease migration tests before any merge; a source-only assertion is insufficient.
 
 ## Out of scope
 
-- Changing the worker (mctl-agents) signal handling. The design relies on the existing behaviour that the worker refuses a grant it has already exercised.
-- Rolling back a recorded decision when the signal fails.
-- Redelivering abandon signals in the background. Abandon records no durable decision in mctl-api that a reconciler could find. Detaching the signal and the existing 502 (which the caller can retry) cover it.
-- The release-window path (already fixed in #1156) and other approval kinds (deploy, glovo).
-- A Prometheus alert rule in this repo. No `PrometheusRule` exists under `helm/`. The alert is a follow-up in the monitoring config (see Open questions).
+- No change to the mctl-agents signal parser is assumed necessary, but its existing current-ref and consume CAS guarantees must be covered by integration evidence.
+- No rollback of a human approval on signal failure; no automatic new MFA decisions or production deploy.
+- No automatic abandon replay without its own durable decision record; only the bounded detached signal is in scope.
+- Release-window, deploy, commerce and Glovo approval semantics remain outside this slice.
+- A real MCP Tasks adapter and mctlhq/.github PR #387/#388 are separate workstreams.
 
-## Open questions
+## Resolved architecture decisions and still-required evidence
 
-- Grant freshness: `DecideActionApproval` sets `fresh_until` when `FreshFor > 0`. If the DevLoop approval freshness bound is shorter than the reconciler's min age plus its interval, a redelivered grant could be refused at consume. The design assumes the bound is at least tens of minutes. The implementer should check `h.opts` for the DevLoop `FreshFor` value and keep `devLoopRedeliverMinAge` well below it.
-- Where the "undelivered approval" alert rule lives (mctl-gitops monitoring config vs. a chart template). This proposal only exposes the metric and suggests the expression `mctl_devloop_approval_undelivered > 0 for 10m`.
-- Multiple replicas: the in-process backoff is per pod (`helm/values.yaml` has `replicaCount: 1`, and the deployed replica count was not observable). With N replicas a grant may be re-sent up to N times per backoff window. This is harmless because the signal is idempotent per grant id, but it is not literally once across pods.
+- The intended authorization model is **at-least-once delivery to a single immutable Temporal run**, **at-most-once consumed grant**, with a durable fenced claim and fail-closed current-grant revalidation. No exactly-once end-to-end transport claim.
+- Approved grant rows are durable intent; a new small lease/attempt table (migration subject to review) is recommended for coordination and observability. A transactional full outbox may be substituted only with an equally testable proof.
+- Decision freshness is configuration-dependent: `h.maxDecisionAge()` defaults to 24 hours, but deployment overrides remain possible. Never infer spendability from `expires_at` alone.
+- Existing chart default `replicaCount: 1` is NOT evidence of the deployed replica count, and observed worker consume latency does not define a safety guarantee.
+- Recovery covers canonical run-pinned executions only. On a confirmed closed run, stop delivery, report it to operators, and require a fresh grant and decision for any successor. Before enabling, verify the alert route, observe unsupported-run coverage and validate migration/index evidence in staging.
