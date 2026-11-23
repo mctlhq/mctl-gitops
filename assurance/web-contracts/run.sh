@@ -21,6 +21,8 @@
 #   WCA_DESIGN_REPO  a local mctl-design checkout holding the pinned commit; if unset the commit is
 #                    fetched from the public GitHub repository before isolation
 #   WCA_PINS         pins.json override (used only for the documented dry path)
+#   WCA_CAPTURE_HTML 1 = also save each healthy consumer's landing page to <out>/consumer-html/<name>.html
+#                    (evidence for choosing selectors; off by default)
 #   WCA_PW_ARGS      extra Playwright CLI arguments, e.g. a --grep filter for debugging (the report
 #                    then lists every unselected case as NOT-RUN; such a run proves nothing)
 #
@@ -102,7 +104,7 @@ else
   if [ -n "${WCA_WORK:-}" ]; then WORK=$WCA_WORK; mkdir -p "$WORK"; else WORK=$(mktemp -d); OWN_WORK=1; fi
   mkdir -p "$OUT"
   rm -rf "$OUT/junit.xml" "$OUT/guard.jsonl" "$OUT/consumers.json" "$OUT/results.json" "$OUT/matrix.md" \
-         "$OUT/network.txt" "$OUT/test-results"
+         "$OUT/network.txt" "$OUT/test-results" "$OUT/consumer-html"
 
   # pinned mctl-design bytes: a read-only git archive of the pinned commit
   ARCH=$WORK/arch
@@ -202,6 +204,18 @@ while read -r name image; do
       sleep 3
     done
     [ "$healthy" = true ] || reason="$(docker logs --tail 5 "$c" 2>&1 | sanitize || true) ($reason)"
+    # Optional evidence for choosing consumer selectors from observation (WCA_CAPTURE_HTML=1): the landing
+    # page exactly as the healthy image serves it, fetched from inside the isolated network by a hardened
+    # container, capped at 2 MiB. It is the unauthenticated page of an app with dummy env; a failed capture
+    # is a warning, never a verdict.
+    if [ "$healthy" = true ] && [ "${WCA_CAPTURE_HTML:-0}" = 1 ]; then
+      mkdir -p "$OUT/consumer-html"
+      CREATED_CONTAINERS+=("$PREFIX-capture")
+      docker run --rm --name "$PREFIX-capture" --network "$NET" "${HARDEN[@]}" "$PW_IMAGE" node -e \
+        "require('http').get('http://$alias:8080/',r=>{process.stderr.write('status '+r.statusCode+'\n');r.pipe(process.stdout)}).on('error',e=>{process.stderr.write(String(e)+'\n');process.exit(1)})" \
+        2>"$OUT/consumer-html/$name.status" | head -c 2097152 >"$OUT/consumer-html/$name.html" \
+        || log "WARNING: could not capture the landing page of $name"
+    fi
   fi
   ALLOW_HOSTS="${ALLOW_HOSTS:+$ALLOW_HOSTS,}$alias"
   CONSUMER_JSON=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d[sys.argv[2]]={"healthy": sys.argv[3]=="true","url":"http://"+sys.argv[4]+":8080/","reason":sys.argv[5]}; print(json.dumps(d))' \
