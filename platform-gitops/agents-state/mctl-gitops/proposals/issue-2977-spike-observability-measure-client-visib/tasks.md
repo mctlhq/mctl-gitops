@@ -3,32 +3,37 @@
 No task here runs a live probe or changes any deployed object (VMProbe, VMRule,
 blackbox modules, Traefik, Cloudflare Terraform, service values, rollout strategy).
 
-- [ ] 1. Write `docs/spikes/2977-rollout-client-downtime.md` with sections: STATUS
-  (`NO LIVE PROBE; DECISION PROVISIONAL`), evidence inventory, signal table, design
-  matrix A-D, time/identity contract, safety checklist, decision record and draft
-  follow-up issue. Follow the structure of design.md. — DoD: every inventory row
-  cites a repo path (`vmprobes.yaml`, `blackbox-exporter.yaml`,
-  `blackbox-alerts.yaml`, `mctl-telegram-alerts.yaml`, `mctl-telegram-canary.yaml`,
-  `mctl-telegram-slo.yaml`, `traefik-podscrape.yaml`,
-  `traefik-helmchartconfig.yaml.tpl`, `firewall.tf`, `monitoring.yaml`, `loki.yaml`,
-  `services/labs/mctl-telegram*/values.yaml`) or a read-only tool call, with interval
-  and retention. Cloudflare analytics/Logpush, external monitors and Kubernetes event
-  retention are listed as "not observed". The issue's lifecycle numbers appear only
-  under "lifecycle", never as downtime.
-- [ ] 2. Create `scripts/rollout-outage/estimate.py` (stdlib only), implementing the
-  attempt/window schema, outcome classes, bounds and `unknown` reasons exactly as
-  in design.md. The CLI is `estimate.py ATTEMPTS.jsonl --window META.json`, which
-  prints the report JSON to stdout and exits non-zero only on malformed input.
-  (depends on 1 for the contract text) — DoD: the module imports none of `socket`,
-  `urllib`, `http.client`, `requests`, `httpx` or `subprocess`. The report has
-  separate `http_outage` and `lifecycle` keys. `status` is in {measured,
-  no_outage_observed, unknown}, and `unknown` always carries `reason`.
-- [ ] 3. Add fixtures under `tests/fixtures/rollout-outage/` (one `.jsonl` +
-  `.meta.json` per case in T1-T12) and a `README.md` stating they are synthetic.
-  (depends on 2) — DoD: no real IPs, user ids, cookies, tokens or response bodies in
-  any fixture. Hosts are limited to `tg-preview.mctl.ai`, `tg.mctl.ai` and
-  `mctl.ai`.
-- [ ] 4. Add `tests/test_rollout_outage_estimator.py` (unittest) covering T1-T13.
+- [ ] 1. Write `docs/spikes/2977-rollout-client-downtime.md` with status
+  `NO LIVE PROBE / DECISION PROVISIONAL`, a source-pinned inventory,
+  signal matrix, option A–D comparison, offline estimator contract,
+  privacy/failure-domain analysis and draft-only follow-up issue.
+  **P1-1:** correct stale Oct 6 Traefik podscrape comment: Oct 29
+  `traefik-helmchartconfig.yaml.tpl` **configures** JSON access logging
+  400–599; read-only verify running flags and redacted Loki sample or
+  mark `runtime: not observed`. Never copy raw Cf-Connecting-Ip,
+  Cf-Ray or user headers. Include 30s metrics/60s blackbox/2s Ready,
+  CF access unresolved, and distinguish EndpointSlice from pod Ready.
+  0.143.0 Loki was *same-day query truncated/unverified*, not expired
+  because of configured 14d retention. Lifecycle != HTTP downtime.
+- [ ] 2. Create offline stdlib-only
+  `scripts/rollout-outage/estimate.py` with CLI
+  `estimate.py ATTEMPTS.jsonl --window META.json`, JSON output.
+  **P1-2:** separate sampled `http_observations` (a descriptive failure
+  event envelope, NOT an unconditional blackout lower bound),
+  `continuous_blackout` (unknown by default; only conditional
+  model bounds under independent continuity evidence; interleaved
+  success => unknown), and independent `lifecycle`.
+  Classify unattributed origin/edge 5xx, 403, 429, WAF challenges.
+  All-success sampling != proven uptime between probes. Fail closed
+  on missing bounds, coverage gaps, clock/cache/redirect/control errors.
+  A +/-1–2s target is only conditional model resolution.
+- [ ] 3. Create synthetic fixtures under
+  `tests/fixtures/rollout-outage/`: no real IPs/user IDs/headers,
+  cookies, full CF-Ray or response bodies. Use tg-preview/tg/mctl.ai
+  only. Explicitly include counterexamples: errors t0/t10 with
+  success t5, and adjacent failed samples with hidden recovery.
+  Include challenge/403/429 and privileged ASN24940 control success.
+- [ ] 4. Add `tests/test_rollout_outage_estimator.py` (unittest) covering T1-T18.
   (depends on 3) — DoD: `python3 tests/test_rollout_outage_estimator.py` passes
   locally.
 - [ ] 5. Add one step to `.github/workflows/validate-manifests.yml` that runs
@@ -49,21 +54,27 @@ blackbox modules, Traefik, Cloudflare Terraform, service values, rollout strateg
 
 ## Tests
 
-- [ ] T1. 200 -> 503 x ~15 -> 200 at 1 Hz, 2 s timeout, clock tolerance 50 ms:
-  `status: measured`. Lower/upper bounds match hand-computed values to the ms, and
-  `precision_target_met: true`.
-- [ ] T2. Same outage with a 10 s timeout and timeouts instead of 503s: still
-  `measured`, but `precision_target_met: false`.
-- [ ] T3. No traffic / no failures with full coverage: `no_outage_observed`.
+- [ ] T1. 200→503 (~15s)→200 at 1Hz, 2s timeout:
+  `http_observations.status=measured` and descriptive envelope;
+  `continuous_blackout=unknown` without independent proof,
+  `precision_target_met=null`; conditional hypothesis bounds
+  separately match arithmetic.
+- [ ] T2. 10s timeout response interval: sampled failures but
+  model half-width no longer satisfies +/-2s.
+- [ ] T3. No real user traffic; all synthetic samples successful
+  with full coverage: `no_outage_observed` means only no sampled
+  failure, not zero downtime between probes or on MCP/OAuth.
 - [ ] T4. No failures but a 20 s gap in attempts (missed probes): `unknown`,
   `reason: coverage_gap`.
 - [ ] T5. A failing span with a 5 s gap between L and F: `unknown`,
   `reason: coverage_gap`.
-- [ ] T6. Cloudflare 521/522 attempts: classified `edge_52x`, counted separately
-  from `origin_5xx`. The report is `measured`.
-- [ ] T7. Concurrent edge paths (ok/503 interleaved from two colos by `cf_ray`
-  suffix): `pattern: intermittent`, with the envelope bounds and transition count
-  reported.
+- [ ] T6. Cloudflare 521/522 => `edge_52x`;
+  502/503/504 without independent origin proof =>
+  `http_5xx_unattributed` (not `origin_5xx`).
+- [ ] T7. Interleaved 503/200 from multiple colos:
+  `pattern=intermittent`, event envelope descriptive,
+  transition count present, `continuous_blackout=unknown`,
+  no full ray identifiers stored.
 - [ ] T8. Clock offset unknown, or above tolerance: `unknown`,
   `reason: clock_untrusted`.
 - [ ] T9. No success after the failures before the window ends: `unknown`,
@@ -73,11 +84,22 @@ blackbox modules, Traefik, Cloudflare Terraform, service values, rollout strateg
 - [ ] T11. An attempt with `cf_cache_status: HIT`: `unknown`,
   `reason: edge_cache_served`. One with `redirect_count > 0`: `unknown`,
   `reason: redirect_followed`.
-- [ ] T12. Lifecycle metadata of 16.77 s with no subject failures:
-  `http_outage.status` is `no_outage_observed` (full coverage), and the lifecycle
-  value is reported only under `lifecycle`.
-- [ ] T13. Static guard: parse `estimate.py` with `ast` and fail on any forbidden
-  network/subprocess import.
+- [ ] T12. SIGTERM→listening = 16.77s with all-success
+  probes: `http_observations=no_outage_observed`; lifecycle
+  separately reports 16.77s.
+- [ ] T13. AST forbidden-import check: defense-in-depth only.
+- [ ] T14. Fail-fast runtime network/socket isolation guard exercised
+  by tests without actual external connections.
+- [ ] T15. 503@t0, success@t5, 503@t10 disproves a 10s continuous
+  blackout lower bound: observation envelope kept, blackout unknown.
+- [ ] T16. Two adjacent 503 observations with hidden brief recovery:
+  unconditional lower bound is unknown/zero, conditional model clearly labelled.
+- [ ] T17. 403/429/Cloudflare challenge from external ASN, while
+  trusted ASN24940 control succeeds: distinguish edge denial from origin
+  503 and ordinary client access from privileged vantage.
+- [ ] T18. Traefik access logging configured on but runtime
+  `not observed`; 0.143.0 same-day 1000-line Loki cutoff:
+  `query_truncated_or_unverified`, not data retention expiry.
 
 ## Rollback
 
