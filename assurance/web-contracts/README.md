@@ -252,3 +252,14 @@ credentials cannot ride in a URL) and any URL in the file must still point at a 
 be `/` or lie in or below `/proc`, `/sys` or `/dev`, contain a `.` or `..` segment, or carry mount options. The file is public: only
 placeholders belong here, never a real secret. The declared values are appended after the harness defaults. A site that
 still does not start stays NOT-RUN with the last three sanitized log lines as the reason.
+
+## Sensitive paths and static asset files
+
+The guard refuses any request whose path has a segment starting like an auth word (`oauth`, `login`, `token`,
+`session` and the rest of the list in `tests/guard.ts`). That prefix rule also read a site's own `/assets/tokens.css` as a
+token endpoint and blocked its stylesheet, so a page ran unstyled and the guard failed the run. The final segment of
+a path that does not end in a slash is now treated as a file, not a route, when it ends in one of a narrow list of inert
+asset extensions (`css`, `js`, `mjs`, `map`, `svg`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `avif`, `ico`, `woff`, `woff2`).
+Every directory segment above it is still checked (`/oauth/x.css` stays blocked), a decoded trailing slash makes it a
+directory again (`/tokens.css%2F`), and `.json`, `.html`, `.php` and extensionless names stay routes (`/token`, `/tokens`,
+`/token.json`). `guard-oauth-path` holds the table and was mutation-verified in both directions.

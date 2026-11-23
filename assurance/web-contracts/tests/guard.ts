@@ -23,8 +23,8 @@ export const DESIGN_DIR = process.env.WCA_DESIGN_DIR || '/design';
 export const SENSITIVE_SEGMENT =
   /^(oauth|oidc|auth|authorize|connect|manage|consent|callback|login|logout|signin|signup|sso|token|session)/;
 
-/** Percent-decode until stable (a server decodes %6Fauth), lowercase, drop ;params, split into segments. */
-export function pathSegments(pathname: string): string[] | null {
+/** Percent-decode until stable (a server decodes %6Fauth), lowercase, backslash as slash. Null = undecodable. */
+export function normalizePath(pathname: string): string | null {
   let p = pathname;
   for (let i = 0; i < 8; i++) {
     let d: string;
@@ -32,12 +32,31 @@ export function pathSegments(pathname: string): string[] | null {
     if (d === p) break;
     p = d;
   }
-  return p.toLowerCase().replace(/\\/g, '/').split('/').map((s) => s.split(';')[0]).filter((s) => s !== '');
+  return p.toLowerCase().replace(/\\/g, '/');
 }
 
+/** Normalized path, drop ;params, split into segments. */
+export function pathSegments(pathname: string): string[] | null {
+  const p = normalizePath(pathname);
+  return p === null ? null : p.split('/').map((s) => s.split(';')[0]).filter((s) => s !== '');
+}
+
+// A final segment that is a static asset file (/assets/tokens.css) is not a route: the prefix rule above would read
+// "tokens" as a token endpoint and block a site's own stylesheet. Only the LAST segment of a path that does not end in
+// a slash, and only a narrow list of inert asset extensions; json, html and extensionless names stay routes, and every
+// directory segment above the file is still checked (/oauth/x.css stays blocked).
+export const STATIC_ASSET_FILE = /\.(css|js|mjs|map|svg|png|jpe?g|gif|webp|avif|ico|woff2?)$/;
+
 export function isSensitivePath(pathname: string): boolean {
-  const segs = pathSegments(pathname);
-  return segs === null || segs.some((s) => SENSITIVE_SEGMENT.test(s));
+  const norm = normalizePath(pathname);
+  if (norm === null) return true;
+  const segs = pathSegments(pathname) as string[];
+  // judged on the decoded path: /tokens.css%2F is a directory, not a file
+  const endsInSlash = norm.endsWith('/');
+  return segs.some((s, i) => {
+    const isFile = i === segs.length - 1 && !endsInSlash && STATIC_ASSET_FILE.test(s);
+    return !isFile && SENSITIVE_SEGMENT.test(s);
+  });
 }
 const NON_NETWORK = new Set(['data:', 'blob:', 'about:']);
 
