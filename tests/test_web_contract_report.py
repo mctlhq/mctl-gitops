@@ -575,6 +575,36 @@ rc, res, mx, _ = report([case("G-2")], [("G-2", "error", "guard-blocked (host-no
 check("a guard error thrown mid-test by Wca.get keeps the older wording (it ran before any assertion)",
       "errored before its assertion" in next(r for r in res["results"] if r["id"] == "G-2")["reason"], res)
 
+# ---- declared dummy env and tmpfs for a consumer start (pins.json sites[].env / sites[].tmpfs)
+def check_pins_with(label, field, value, ok):
+    pins_x = pins_with(lambda p: next(x for x in p["sites"] if x["name"] == "mctl-alice").__setitem__(field, value))
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "pins.json"
+        f.write_text(json.dumps(pins_x))
+        rc, out, err = run("--check-pins", "--pins", f)
+        check(label, (rc == 0) if ok else (rc == 3 and field in (out + err)), (rc, out, err))
+
+
+check_pins_with("a plain dummy env is accepted", "env", {"OAUTH_DB_PATH": "/tmp/wca/oauth.db", "TG_API_ID": "1",
+                "DATABASE_URL": "file:/tmp/wca/x.db?_pragma=journal_mode(WAL)", "PUBLIC_BASE_URL": "https://site.fixture.test"}, True)
+for label, env in (("a lower-case name", {"db_path": "x"}), ("PORT, which the harness forces", {"PORT": "9"}),
+                   ("a value with '@' (credentials in a URL)", {"DATABASE_URL": "postgres://u:p@h/db"}),
+                   ("a value with a space or shell metacharacter", {"A": "x y"}), ("a value with a quote", {"A": "x'y"}),
+                   ("an empty value", {"A": ""}), ("a non-string value", {"A": 1}), ("a list instead of a mapping", ["A=b"]),
+                   ("a value with a trailing newline", {"A": "x\n"}), ("a value with a semicolon", {"A": "a;b"})):
+    check_pins_with(f"env with {label} is rejected", "env", env, False)
+pins_url = pins_with(lambda p: next(x for x in p["sites"] if x["name"] == "mctl-alice").__setitem__("env", {"PUBLIC_BASE_URL": "https://tg.real-host.com"}))
+with tempfile.TemporaryDirectory() as d:
+    f = pathlib.Path(d) / "pins.json"
+    f.write_text(json.dumps(pins_url))
+    rc, out, err = run("--check-pins", "--pins", f)
+    check("an env URL to a non-fixture host is rejected by the existing URL scan", rc == 3 and "non-fixture host" in (out + err), (rc, out, err))
+check_pins_with("a plain tmpfs path is accepted", "tmpfs", ["/tmp/wca", "/var/data"], True)
+for label, t in (("a relative path", ["tmp/x"]), ("a dot segment", ["/tmp/../etc"]), ("the root", ["/"]), ("/proc", ["/proc"]),
+                 ("a mount option injected", ["/tmp/x:rw,exec"]), ("a duplicate", ["/tmp/a", "/tmp/a"]),
+                 ("five paths", ["/a", "/b", "/c", "/d", "/e"]), ("a trailing newline", ["/tmp/x\n"]), ("a string", "/tmp/x")):
+    check_pins_with(f"tmpfs with {label} is rejected", "tmpfs", t, False)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

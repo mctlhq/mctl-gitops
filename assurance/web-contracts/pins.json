@@ -133,7 +133,18 @@
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
       "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "observed_image_digest_resolved_for_tag": "0.143.0",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit",
+      "env": {
+        "DATABASE_URL": "file:/tmp/wca/mctl-telegram.db?_pragma=journal_mode(WAL)",
+        "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
+        "TG_API_ID": "1",
+        "TG_API_HASH": "dummy",
+        "PUBLIC_BASE_URL": "https://site.fixture.test"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only, taken from the variable table of the consumer README (DATABASE_URL accepts a file: SQLite URL); an all-zero key is a placeholder, not a secret. Not yet shown to be sufficient for a healthy start."
     },
     {
       "name": "mctl-academy",
@@ -167,7 +178,15 @@
       "mode": "not-run",
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
       "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
-      "observed_image_digest_resolved_for_tag": "2.16.0"
+      "observed_image_digest_resolved_for_tag": "2.16.0",
+      "env": {
+        "OAUTH_DB_PATH": "/tmp/wca/oauth.db",
+        "TELEMETRY_DB_PATH": "/tmp/wca/telemetry.db"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only. The image keeps its SQLite files under ./data in a read-only root, so both database paths point at a tmpfs; observed in CI probe (mctl-alice start failure: unable to open database file)."
     },
     {
       "name": "seerrsense",

@@ -95,6 +95,11 @@ PW_IMAGE=$(pin "d['playwright_image']")
 NGINX_IMAGE=$(pin "d['nginx_image']")
 COMMIT=$(pin "d['mctl_design']['commit']")
 CONSUMER_LINES=$(pin "'\n'.join(s['name']+' '+s['image'] for s in d['sites'] if s['mode']=='image')")
+# Declared dummy environment and writable tmpfs for one site (pins.json sites[].env / sites[].tmpfs, format-checked
+# before anything runs). One docker argument per line; empty when the site declares none.
+site_extra_args() {
+  pin "'\n'.join(a for s in d['sites'] if s['name']=='$1' for a in [x for k,v in sorted(s.get('env',{}).items()) for x in ('-e', k+'='+v)] + [x for t in s.get('tmpfs',[]) for x in ('--tmpfs', t+':rw,noexec,nosuid,nodev,size=16m,mode=1777')])"
+}
 
 # ------------------------------------------------------------------ 2. before isolation
 if [ "$DRY" = 1 ]; then
@@ -190,9 +195,12 @@ while read -r name image; do
   c=$PREFIX-$name
   alias=consumer-$name
   CREATED_CONTAINERS+=("$c" "$PREFIX-probe")
+  EXTRA=()
+  while IFS= read -r a; do [ -n "$a" ] && EXTRA+=("$a"); done <<<"$(site_extra_args "$name")"
+  # the site's declared dummy environment comes after the defaults; PORT is reserved, so it cannot override it
   dk run -d --name "$c" --network "$NET" --network-alias "$alias" "${HARDEN[@]}" --memory 384m \
     -e NODE_ENV=production -e PORT=8080 -e OAUTH_CLIENT_ID=dummy -e OAUTH_CLIENT_SECRET=dummy \
-    -e TELEGRAM_BOT_TOKEN=dummy -e SESSION_SECRET=dummy "$image" >/dev/null || true
+    -e TELEGRAM_BOT_TOKEN=dummy -e SESSION_SECRET=dummy ${EXTRA[@]+"${EXTRA[@]}"} "$image" >/dev/null || true
   healthy=false; reason="did not answer on port 8080 within 60 s"
   if [ "$DRY" = 0 ]; then
     for _ in $(seq 1 20); do
