@@ -62,8 +62,11 @@ API = "https://api.cloudflare.com/client/v4"
 # last two manual servers, joined on 2026-09-26 in the change that moved them
 # (mctlhq/mctl-gitops#1363). With them there is no manual registration left,
 # so a scan now compares nothing but the DCR absence -- which is still a check,
-# and is reported as one rather than as "no resources".
-DCR_SERVERS = {"projects", "alice", "coolify", "seerrsense", "api", "tg"}
+# and is reported as one rather than as "no resources". `argocd` is the seventh,
+# registered by DCR from the start (mcp-servers.tf, no auth_credentials, no
+# client_secret); in state before it was named here, it would abort the scan
+# the same way `alice` once did.
+DCR_SERVERS = {"projects", "alice", "coolify", "seerrsense", "api", "tg", "argocd"}
 
 
 class Undetermined(Exception):
