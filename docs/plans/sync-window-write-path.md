@@ -5,8 +5,11 @@ The mctl-api step is built in three slices: S1, S2 and S3 are merged
 (mctl-api#1153, #1154, #1155), released as mctl-api 4.173.0, and switched on
 with `RELEASE_WINDOWS_ENABLED=true` (gitops#2909). The first real run was
 made and watched the same evening (section 2). No window is on `main`.
-Section 5 records which decisions are now made and which are still open. This
-file authorises nothing; merging it is not a GO.**
+On 2026-11-23 the owner decided that, once built, the MFA approval itself
+queues the window pull request for merge (section 5, item 6); that is a
+decision recorded here, not something built yet. Section 5 records which
+decisions are now made and which are still open. This file authorises nothing;
+merging it is not a GO.**
 
 This is the "new proposal" that section 1 of the #2828 design
 (`platform-gitops/agents-state/mctl-gitops/proposals/issue-2828-spike-release-governed-release-calendar/design.md`)
@@ -25,7 +28,7 @@ a person reviews and merges.
 | Read tool for live windows | mctl-api 4.172.0, gitops #2857 and #2864 | admin-only list of what Argo CD holds; writes nothing |
 | Window validator | `scripts/validate-argocd-sync-windows.py`, gitops #2880, run in `validate` | refuses default project, `allow`, `manualSync`, globs, bad schedule |
 | Render-only proposal tool | `scripts/render-sync-window.py`, gitops #2881 | patch and matched set against the rendered inventory; refuses recovery-chain, unknown and foreign applications |
-| Protected paths | gitops #2889: CODEOWNERS and `protected_re` for the project templates, both scripts and `app-project-consumers.json` | a window PR is never machine-merged |
+| Protected paths | gitops #2889: CODEOWNERS and `protected_re` for the project templates, both scripts and `app-project-consumers.json` | a window PR is never machine-merged (true as built; section 5, item 6 changes this for the release-window PR only, once built) |
 | PR-opener | `.github/workflows/release-window-pr.yml` and `scripts/release-window-insert.py`, gitops #2890 | dispatch on main, App `mctl-gitops-pr`, opens `release-window/<id>`; does not enqueue or merge |
 
 A trial run of the PR-opener on a preview application (run 45031165987, PR
@@ -181,3 +184,39 @@ generic route.
    because the owner is its only user (mctl-api#1159). The portal switch
    decides visibility only; the API's role check, the MFA page and the receipt
    gate stay the access control.
+
+6. **Auto-merge after the MFA approval.** Decided 2026-11-23, in session, by
+   the owner. It reverses the rule that a window pull request is never
+   machine-merged (section 1, protected paths; design section 8.2): the human
+   merge stops being the approval, and the MFA approval on the decide page
+   becomes it. What this item decides, and what it does not:
+   - **Consent says so.** The decide page, and the description of call 2 of
+     `mctl_propose_release_window`, must state that approving means the window
+     is queued for merge into `main` and applied by Argo CD without a further
+     review, next to the project, applications, schedule and duration being
+     approved. The owner's reason: if the consent names the effect, the
+     approval is informed and nothing else has to stand in for it.
+   - **Who merges.** The `release-window-pr.yml` workflow, after it has opened
+     the pull request, enqueues it through the merge queue with the
+     `enqueuePullRequest` mutation and `expectedHeadOid` set to the head it
+     opened. It does not merge directly, and `mctl-gitops-pr` does not become a
+     bypass actor of `main-protection`: the queue still runs `validate`,
+     `reserved-hosts` and `cloudflare-plan`, and the ruleset still wants its
+     approving review.
+   - **Exactly one exception.** The `protected_re` exclusion in
+     `auto-merge.yml` is lifted only for a pull request whose head is
+     `release-window/*`, authored by `mctl-gitops-pr[bot]`, with a diff that is
+     exactly the one `syncWindows` edit the workflow already checks. Any other
+     change to those paths stays human-merged.
+   - **Fail closed.** A red check, a Claude review that does not approve, a
+     stale `base_sha` or a refused enqueue leaves the pull request open and no
+     window on `main`. Nothing here forces a merge.
+   - **Not decided here.** Whether the Claude review approves a pull request on
+     those paths is not verified; if it does not, the approval is the open
+     question for the first live run, and the pull request simply stays open
+     until it is settled. Removal of a window is still its own proposal.
+   - **Order of work.** (1) this record; (2) mctl-api: decide-page and tool
+     text; (3) mctl-gitops: the enqueue step and the narrowed exclusion, with a
+     test that a pull request outside the exception is still refused. A window
+     that reaches `main` still needs the live run and its own owner decision,
+     as item 4 says. This item authorises none of the three steps' release.
