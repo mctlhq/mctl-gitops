@@ -1,10 +1,10 @@
-# Spike (revision 2): AI product discovery, comparing Grok Bot and Townie, plus MCP conformance and vendor interoperability test plans
+# Spike (revision 3): AI product discovery, comparing Grok Bot and Townie, plus MCP conformance and vendor interoperability test plans
 
 ## Context
 
 Issue #1379 (P2, parent #1312 Personal Assistant) asks for a research-only spike. It compares Townie (Town, the closest Telegram UX reference), Grok Bot (xAI's autonomous-agent benchmark) and the MCTL Personal Assistant (PA) as it really exists. It must answer four questions. Which daily jobs drive repeat use? Should MCTL be a PA, a trusted MCP provider for external agents, or both? Can Grok Bot and Townie use the existing MCTL MCP endpoints (`tg.mctl.ai`, `alice.mctl.ai`) through supported OAuth and transport, without any change to authority? Which gaps are evidence-backed product hypotheses? It also prepares a pack for the Grok Bot Meetup Belgrade, listed for 2026-11-28. That date is unconfirmed, because the banner and the date card differ.
 
-This is revision 2. The independent review of revision 1 (gitops `bb69c72`) returned REQUEST_CHANGES with 0 P1, 7 P2 and 4 P3 findings, and its amendments supersede the original instructions where they conflict. design.md, section "Finding-to-change matrix", maps each finding to the sections that address it. The baseline is pinned again:
+This is revision 3 (2026-11-23), incorporating the owner-observed 2026-11-22 Grok connection. The independent review of revision 1 (gitops `bb69c72`) returned REQUEST_CHANGES with 0 P1, 7 P2 and 4 P3 findings, and its amendments supersede the original instructions where they conflict. design.md, section "Finding-to-change matrix", maps each finding to the sections that address it. The baseline is pinned again:
 
 - mctl-telegram `b318e97a027bdae661344d4a324ddf47dc1426c6`;
 - mctl-gitops `a967430042424562a696cac216e428e00631c252`.
@@ -13,7 +13,7 @@ Three corrections to revision 1 follow from the re-pin:
 
 - Production `tg` now lists `grok.com`, `www.cursor.com` and `cursor.com` as implicit DCR hosts.
 - Preview lists none of those hosts, and no Town host either.
-- `docs/platforms/compatibility.md` already tracks Grok (#1381), Cursor (#1385) and Town (#784) admission verification.
+- `docs/platforms/compatibility.md` now records Grok (grok.com) and Town as works, owner-observed on 2026-11-22 (PR #1393); #1381 was closed. Cursor (#1385) remains not tested.
 
 The only output is a docs-only report, `docs/spikes/pa-grok-town-benchmark.md`, plus a decision recommendation. The report changes no code, configuration, OAuth policy or phase HOLD.
 
@@ -51,7 +51,7 @@ The only output is a docs-only report, `docs/spikes/pa-grok-town-benchmark.md`, 
   - tool profile (`MCP_CLIENT_PROFILES` profile);
   - scope ceiling (`MCP_CLIENT_PROFILES` `scope_ceiling`);
   - live observation (`docs/platforms/compatibility.md` status).
-- WHILE a host is admitted only as `grok.com` (Grok Chat web) or `cursor.com` (Cursor IDE) THE SYSTEM SHALL NOT classify Grok Bot as admitted or supported. Grok Bot's callback host is `UNKNOWN` until a vendor document states it.
+- WHEN classifying Grok clients THE SYSTEM SHALL preserve the owner-observed 2026-11-22 Grok (grok.com) sign-in, token and tool-call success, while separately marking the exact Grok Bot client/build attribution UNKNOWN. An implicit host alone is not proof, but PR #1393 records a later actual observation.
 - WHEN the profile and the ceiling are described THE SYSTEM SHALL state the following, citing `internal/toolprofile/toolprofile.go` (`Bindings.ScopeCeiling`, `Bindings.Resolve`) and `internal/oauth/scopes.go` (`applyScopeCeiling`, `withinScopeCeiling`):
   - a scope ceiling is keyed by exact `client_id` only;
   - a profile may be bound by `client_id` or by exact `redirect_uri`;
@@ -137,3 +137,12 @@ The only output is a docs-only report, `docs/spikes/pa-grok-town-benchmark.md`, 
 - Alice: the mctl-alice repo was not available in this run. Its OAuth discovery, its `TOOL_SCOPES` and its revocation are secondary evidence, taken from the PA threat model only.
 - Telegram licensing: per-chat consent of other participants, and whether an own-messages-only mode is needed. These need a legal opinion and a product decision.
 - Test account: which isolated approved account, if any, the owner allows for a later run. The plan assumes `tg-preview.mctl.ai`. Preview admits none of the vendor hosts, so a vendor row on preview is BLOCKED without an owner decision.
+
+## Revision 3: observed Grok and bounded Grok Bot interoperability (2026-11-23)
+
+- THE SYSTEM SHALL distinguish (a) Grok on grok.com: OWNER_OBSERVED_WORKS against https://tg.mctl.ai/mcp on 2026-11-22; (b) Grok Bot as a separately named product: exact initiating client/build UNKNOWN; and (c) least-privilege / negative interoperability checks: NOT_PROVEN. Cite https://github.com/mctlhq/mctl-telegram/pull/1393 , https://github.com/mctlhq/mctl-telegram/issues/1381 and docs/platforms/compatibility.md. Do not repeat already successful Grok OAuth simply to fill a research matrix.
+- THE SYSTEM SHALL record the 2026-11-21 #1381 audit nuance: the signing-in platform-admin account was granted implicit admin membership scopes beyond the five requested scopes. Functioning OAuth is **not** evidence of effective read-only scope confinement, safe sends, token refresh or revocation. A restricted, isolated test requires separate owner GO, exact stable client identity, scope ceiling, appropriate profile and synthetic data.
+- THE SYSTEM SHALL include a date-labelled source-to-claim ledger for Grok Bot Remote HTTPS custom MCP, skills and routines, Hermes skills, dots and Gemini proactive tasks. Each vendor claim is VENDOR_DOCUMENTED, distinct from an MCTL tested integration; document missing exact callback/PKCE/resource/client evidence as UNKNOWN. Sources: https://docs.x.ai/grok-bot/computer-and-apps , https://docs.x.ai/grok-bot/skills-routines-and-automations , https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md .
+- THE SYSTEM SHALL update the PA baseline: production has no PA variables; preview has explicit PA_ENABLED=false, PA_EXTERNAL_TOOLS_ENABLED=false, PA_SERVER_TG_ENABLED=false, PA_WRITES_ENABLED=false; the dedicated agent-worker-pa-preview is at replicaCount 0 in GitOps. This is desired state, not proof of a live run.
+- The comparative experiment SHALL separate a skill (non-authoritative procedure) from a routine (versioned, approved schedule/event occurrence) and user memory. External Grok observations do not imply PA runtime or Phase 4 activation. Existing #1398/#1325 own those designs.
+- The report SHALL distinguish OWNER_OBSERVED_WORKS, OBSERVED_AUDIT, VERIFIED_CODE, VERIFIED_GITOPS, VENDOR_DOCUMENTED, UNKNOWN and NOT_EXECUTED. Explicitly state the limits of #1393: owner report without replayable commands or screenshots. Preserve all HOLDs and status proposed.
