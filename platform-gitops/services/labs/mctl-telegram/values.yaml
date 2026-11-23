@@ -166,15 +166,17 @@ env:
   # refused once and must authorize again; they age out by 2026-11-21.
   # Rollback: drop the record; the client returns to its scope surface at its
   # next refresh.
-  # Redirect-URI ceilings (mctl-telegram 0.146.0, #1426): claude.ai, ChatGPT and
-  # vscode.dev are CIMD clients with per-install or no stable client_id, so the
-  # ceiling is keyed by their exact callback. It lists the five user scopes they
-  # hold today and no admin:*; a callback not listed here keeps the #1414
-  # default (membership scopes stripped). ChatGPT's per-connector callback
-  # /connector/oauth/<id> and loopback callbacks cannot be listed. A refresh
-  # family with no recorded redirect (pre-0.87.0) is refused once and must
-  # authorize again. Rollback: drop the three redirect_uri records.
-  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgprod.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"redirect_uri":"https://chatgpt.com/connector_platform_oauth_redirect","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]}]'
+  # Scope ceilings for the CIMD clients (mctl-telegram 0.146.0 #1426, 0.148.0
+  # #1437). Each lists the five user scopes the client holds today and no
+  # admin:*; a client matched by no record keeps the #1414 default (membership
+  # scopes stripped). The key depends on what is stable for the client:
+  # claude.ai shares one callback, so redirect_uri; vscode.dev has one
+  # client_id, which also covers its loopback callback; ChatGPT mints a
+  # client_id and a callback per connector, so client_id_prefix. The prefix is
+  # safe because a CIMD client_id is the URL the server itself fetched the
+  # document from. An image older than 0.148.0 refuses the client_id_prefix
+  # key and does not start: roll the record back before the image.
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgprod.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
