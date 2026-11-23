@@ -102,7 +102,7 @@
     {
       "name": "mctl-docs",
       "gitops_tag": "0.1.73",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
       "source_commit": null,
       "breakpoint": null,
       "route_classes": [
@@ -111,8 +111,8 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
       "observed_image_digest_resolved_for_tag": "0.1.73",
       "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
@@ -120,7 +120,7 @@
     {
       "name": "mctl-telegram",
       "gitops_tag": "0.143.0",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "source_commit": null,
       "breakpoint": null,
       "route_classes": [
@@ -129,8 +129,8 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "observed_image_digest_resolved_for_tag": "0.143.0",
       "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
@@ -138,7 +138,7 @@
     {
       "name": "mctl-academy",
       "gitops_tag": "0.1.101",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
       "source_commit": null,
       "breakpoint": 981,
       "route_classes": [
@@ -147,15 +147,15 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
       "observed_image_digest_resolved_for_tag": "0.1.101"
     },
     {
       "name": "mctl-alice",
       "gitops_tag": "2.16.0",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
       "source_commit": null,
       "breakpoint": 981,
       "route_classes": [
@@ -164,15 +164,15 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
       "observed_image_digest_resolved_for_tag": "2.16.0"
     },
     {
       "name": "seerrsense",
       "gitops_tag": "1.14.4",
-      "image": null,
+      "image": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
       "source_commit": null,
       "breakpoint": 768,
       "route_classes": [
@@ -181,8 +181,8 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
       "observed_image_digest_resolved_for_tag": "1.14.4"
     }
