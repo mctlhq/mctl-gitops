@@ -45,11 +45,15 @@ services:
     tracks_main: true
   - path: platform-gitops/services/labs/agent-worker-managed-preview/values.yaml
     tracks_main: true
+  - path: platform-gitops/services/labs/agent-worker-pa-preview/values.yaml
+    tracks_main: true
   - path: platform-gitops/services/admins/mctl-design/values.yaml
     tracks_main: true
     sha_only: true  # bare commit sha, no main- prefix
 
   # --- deliberately held ---
+  - path: platform-gitops/services/admins/umami/values.yaml
+    pinned_to: "3.4.0@sha256:85909afc45bdcda1917394594a087421fdbb05610fded0fa9f6fb861abb2f367"
 
   # --- not watched ---
   # These repositories publish no GitHub releases, so there is no release tag
@@ -90,3 +94,27 @@ services:
     unmapped: "no source repository recorded; deployed from staging-<n> builds"
   - path: platform-gitops/services/labs/projects-mcp/values.yaml
     unmapped: "mctlhq/projects-mcp releases stop at 0.1.1 while deploys follow tags"
+  # Added 2026-11-15: verified empty releases via gh api repos/mctlhq/<repo>/releases
+  - path: platform-gitops/services/admins/mctl-support/values.yaml
+    unmapped: "mctlhq/mctl-support publishes git tags but no GitHub releases"
+  - path: platform-gitops/services/labs/mctl-rules/values.yaml
+    unmapped: "mctlhq/mctl-rules publishes git tags but no GitHub releases"
+  - path: platform-gitops/services/namax66/news-factory/values.yaml
+    unmapped: "tenant repository NaMax66/sales-with.ai publishes no accessible GitHub releases"
+  - path: platform-gitops/services/redloop/redloop-synthetic-staging/values.yaml
+    unmapped: "synthetic staging target with pinned upstream nginx-unprivileged image"
+
+# First-party images deployed from platform-gitops/bootstrap/templates/mctl-platform/
+# with the tag inline in the Argo CD Application (#1292, option 3). The checker
+# requires one entry per such template and reports each with its reason. This
+# records the gap; it does not watch these tags. Reading an inline tag out of
+# the Application's helm.values string (option 1) is not implemented.
+bootstrap:
+  - path: platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml
+    unmapped: "inline image.tag in the Application spec; mctlhq/mctl-api releases are not compared, bumps rely on the bump workflow"
+  - path: platform-gitops/bootstrap/templates/mctl-platform/mctl-agent.yaml
+    unmapped: "inline image.tag in the Application spec; mctlhq/mctl-agent releases are not compared, bumps rely on the bump workflow"
+  - path: platform-gitops/bootstrap/templates/mctl-platform/mctl-portal.yaml
+    unmapped: "inline image.tag in the Application spec; mctlhq/mctl-portal releases are not compared"
+  - path: platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml
+    unmapped: "image tag is a template-level value, not in a values.yaml; releases are not compared"

@@ -631,3 +631,45 @@ tests:
       - eval_time: 90m
         alertname: HighToolLatency
         exp_alerts: []
+
+  # A client registering from a host that is not allowlisted must page; the
+  # other rejection reasons and accepted registrations must not.
+  - interval: 1m
+    name: MctlTelegramOAuthClientRejected fires on a redirect_host_not_allowed rejection
+    input_series:
+      - series: 'mctl_oauth_client_registrations_total{job="mctl-telegram",outcome="rejected",reason="redirect_host_not_allowed"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MctlTelegramOAuthClientRejected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram: an MCP client was refused at registration (redirect host not allowed)"
+              description: >-
+                Someone tried to add https://tg.mctl.ai/mcp in an MCP client whose
+                redirect_uri host is not allowlisted, so registration was
+                rejected with redirect_host_not_allowed. Find the host in the
+                labs/mctl-telegram logs: the line "oauth: client_registration
+                audit" with outcome=rejected carries client_name and
+                redirect_host. If the client should be admitted, add the host to
+                OAUTH_ALLOWED_IMPLICIT_HOSTS (and its origin to ALLOWED_ORIGINS
+                if it connects from a browser) in
+                platform-gitops/services/labs/mctl-telegram/values.yaml. If not,
+                ignore.
+
+  - interval: 1m
+    name: MctlTelegramOAuthClientRejected stays quiet for other reasons and accepted registrations
+    input_series:
+      - series: 'mctl_oauth_client_registrations_total{job="mctl-telegram",outcome="rejected",reason="malformed_body"}'
+        values: '0 0 0 5 5 5 5 5 5 5'
+      - series: 'mctl_oauth_client_registrations_total{job="mctl-telegram",outcome="accepted",reason="ok"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'mctl_oauth_client_registrations_total{job="mctl-telegram",outcome="rejected",reason="redirect_host_not_allowed"}'
+        values: '4 4 4 4 4 4 4 4 4 4'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MctlTelegramOAuthClientRejected
+        exp_alerts: []

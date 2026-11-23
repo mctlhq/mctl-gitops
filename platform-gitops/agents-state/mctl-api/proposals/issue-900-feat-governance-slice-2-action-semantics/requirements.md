@@ -8,7 +8,9 @@ exact `aar_` grant and decision context the person was shown
 Owner triage cards (rendered by mctlhq/mctl-agents#907) also offer three
 controls that are not approval decisions: request changes, defer and request
 cancel. Today mctl-api has no contract for them. The only nearby primitives
-are the approve route (which decides an `aar_`), the abandon route
+are the approve route (which decides an `aar_`, and since mctl-api 4.170.0
+only on the decide page after a second-factor sign-in, never for a bearer
+caller), the abandon route
 (`AbandonDevLoopWorkflow`, which ends a run but takes free-text `reason`, has
 no idempotency key and admits any admin including the service principal) and
 the human-input response route (information only). Without an explicit
@@ -61,6 +63,12 @@ Authority
   SHALL NOT decide any `aar_`.
 
 Non-decision of the grant
+
+- THE SYSTEM SHALL NOT let any owner action approve, or otherwise decide, an
+  `aar_`, and SHALL NOT offer a bearer-callable path to that decision: a
+  DevLoop approval is decided on the decide page only (mctl-api 4.170.0), and
+  the owner-action route behaves the same whether or not
+  `DEVLOOP_BEARER_APPROVE_ENABLED` (break-glass, off) is set.
 
 - WHEN an owner action of kind `request_changes` or `defer` succeeds THE
   SYSTEM SHALL leave the DevLoop's `mctl-agents-approve` grant in its prior

@@ -7,7 +7,8 @@ metadata:
       Deploy an ephemeral preview environment for a service.
 
       Two modes:
-        1. Existing image (git_ref=""):  deploys image_tag directly.
+        1. Existing image (git_ref=""):  resolves image_tag to its digest in GHCR
+           and deploys that digest.
         2. Build from branch (git_ref set): triggers build-image.yaml in mctl-gitops,
            waits for the image to be pushed to GHCR, then deploys.
 
@@ -93,9 +94,51 @@ spec:
         value: ""
         # Container port override. Leave empty to use the value from the service values.yaml.
         # Use when the image being previewed listens on a different port than production.
+      - name: preview_id
+        # Server-set preview id ([a-z0-9]{6}) from an approved deploy plan
+        # (mctl-api deploy_plan, .github#254). The plan digest binds the
+        # preview id and host, so the workflow must render exactly that id
+        # rather than derive one from its own name. Empty keeps the old
+        # behaviour: the last six [a-z0-9] of the workflow name.
+        value: ""
+      - name: gitops_ref
+        # 40-hex mctl-gitops commit the plan was computed against
+        # (gitops_base_sha). When set, the service values are read at that
+        # commit, so the values the plan digest binds are the values that
+        # deploy. Empty reads the default branch, as before.
+        value: ""
+      - name: compiled_values
+        # Server-set (mctl-api, mctlhq/mctl-gitops#2654): the values compiled
+        # from a DeployIntent for a service that has no values.yaml in gitops
+        # yet, gzip then base64. Never accepted from a caller. Requires
+        # gitops_ref (the chart is read at that commit) and values_sha256.
+        # Empty keeps the values.yaml path.
+        value: ""
+      - name: values_sha256
+        # sha256 of the decompressed compiled_values; the deploy step
+        # recomputes it and refuses a mismatch.
+        value: ""
 
   templates:
     - name: preview-pipeline
+      # The workflow's own output, so mctl-api can record the digest a
+      # deploy-plan apply ran (DeployRecord, mctlhq/mctl-api#1047) from
+      # status.outputs instead of from one node's outputs. Set only when the
+      # pipeline succeeds.
+      outputs:
+        parameters:
+          - name: image_digest
+            valueFrom:
+              parameter: "{{tasks.build-image.outputs.parameters.digest}}"
+          # What the platform observed of the running preview (preview-health-gate):
+          # "healthy" only when the gate saw it. mctl-api records it on the
+          # DeployRecord and refuses to promote a preview it never saw healthy.
+          - name: health
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health}}"
+          - name: health_url
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health_url}}"
       dag:
         tasks:
           # The component name is the image name: the build pushes
@@ -117,7 +160,9 @@ spec:
           - name: build-image
             template: trigger-github-build
             dependencies: [image-name]
-            when: "\"{{workflow.parameters.git_ref}}\" != \"\""
+            # Runs on both paths so its digest output always exists: an
+            # output of a Skipped task cannot be referenced. Without git_ref
+            # it writes an empty digest and makes no API call.
             arguments:
               parameters:
                 - name: dockerfile_repo
@@ -135,9 +180,7 @@ spec:
 
           - name: deploy-preview
             template: deploy
-            # `dependencies` (not `depends`) treats a Skipped build — no
-            # git_ref, deploying an existing image_tag — as satisfied, as it
-            # did before this task existed; a Failed image-name stops it.
+            # A Failed image-name or build-image stops it.
             dependencies: [image-name, build-image]
             arguments:
               parameters:
@@ -151,6 +194,32 @@ spec:
                   value: "{{workflow.parameters.ttl_hours}}"
                 - name: port
                   value: "{{workflow.parameters.port}}"
+                - name: preview_id
+                  value: "{{workflow.parameters.preview_id}}"
+                - name: gitops_ref
+                  value: "{{workflow.parameters.gitops_ref}}"
+                - name: compiled_values
+                  value: "{{workflow.parameters.compiled_values}}"
+                - name: values_sha256
+                  value: "{{workflow.parameters.values_sha256}}"
+                - name: image_digest
+                  value: "{{tasks.build-image.outputs.parameters.digest}}"
+
+          - name: health-gate
+            template: preview-health-gate
+            dependencies: [deploy-preview]
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: preview_id
+                  value: "{{tasks.deploy-preview.outputs.parameters.preview_id}}"
+                - name: preview_url
+                  value: "{{tasks.deploy-preview.outputs.parameters.preview_url}}"
+                - name: image_digest
+                  value: "{{tasks.build-image.outputs.parameters.digest}}"
 
     # ── Build: trigger build-image.yaml in mctl-gitops, poll until done ─────────
     - name: trigger-github-build
@@ -163,6 +232,24 @@ spec:
             default: "Dockerfile"
           - name: team_name
           - name: component_name
+      outputs:
+        parameters:
+          # sha256 digest the preview runs. With git_ref: the image this run
+          # built, from the build run's image-digest artifact. Without: what
+          # image_tag points at in GHCR now, so the preview keeps running that
+          # image even if the tag is pushed again while it lives.
+          - name: digest
+            valueFrom:
+              path: /tmp/image_digest
+      # The tenant's GHCR pull secret, the one kubelet pulls these images with.
+      # github-actions-pat is an Actions-only token and cannot read packages.
+      # Optional: a namespace without it (redloop has none) still builds from
+      # git_ref; only the existing-tag path needs it, and refuses without it.
+      volumes:
+        - name: ghcr-pull
+          secret:
+            secretName: ghcr-credentials
+            optional: true
       script:
         image: python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 # python:3.12-alpine
         command: [python3]
@@ -187,13 +274,19 @@ spec:
               secretKeyRef:
                 name: github-actions-pat
                 key: token
+        volumeMounts:
+          - name: ghcr-pull
+            mountPath: /ghcr-pull
+            readOnly: true
         source: |
-          import os, json, time, urllib.request, urllib.error, sys
+          import base64, io, os, re, json, time, urllib.parse, urllib.request, urllib.error, sys, zipfile
 
           PAT = os.environ["GITHUB_PAT"]
           GITOPS_ORG = os.environ["GITOPS_ORG"]
           GITOPS_REPO = os.environ["GITOPS_REPO"]
           API = "https://api.github.com"
+          REGISTRY = "https://ghcr.io"
+          GHCR_AUTH = "/ghcr-pull/.dockerconfigjson"
 
           # Parameters arrive as env, never interpolated into this
           # script's text. This block is Python, not shell, but the
@@ -211,6 +304,56 @@ spec:
 
           # Image name derived from org + component — consistent with deploy-service
           image_name = f"ghcr.io/{GITOPS_ORG}/{component_name}"
+
+          def resolve_tag_digest():
+              """What image_tag points at in GHCR now, read with the pull secret.
+
+              Any failed read fails the task: deploying by tag instead would run
+              whatever the tag points at when each pod starts (mctl-gitops#2652)."""
+              if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}", image_tag):
+                  sys.exit(f"image_tag {image_tag!r} is not a valid tag")
+              if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", component_name):
+                  sys.exit(f"component_name {component_name!r} is not a valid image name")
+              repo = f"{GITOPS_ORG.lower()}/{component_name}"
+              try:
+                  with open(GHCR_AUTH) as f:
+                      entry = json.load(f)["auths"]["ghcr.io"]
+              except (OSError, ValueError, KeyError, TypeError) as e:
+                  sys.exit(f"no ghcr.io pull credential in this namespace ({type(e).__name__}): "
+                           "cannot resolve image_tag to a digest")
+              auth = entry.get("auth") or base64.b64encode(
+                  f"{entry.get('username', '')}:{entry.get('password', '')}".encode()).decode()
+              q = urllib.parse.urlencode({"service": "ghcr.io", "scope": f"repository:{repo}:pull"})
+              req = urllib.request.Request(f"{REGISTRY}/token?{q}", headers={"Authorization": f"Basic {auth}"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      token = json.loads(resp.read(65536))["token"]
+              except (urllib.error.URLError, ValueError, KeyError, TypeError) as e:
+                  sys.exit(f"GHCR refused a pull token for {repo}: {e}")
+              accept = ", ".join([
+                  "application/vnd.oci.image.index.v1+json",
+                  "application/vnd.oci.image.manifest.v1+json",
+                  "application/vnd.docker.distribution.manifest.list.v2+json",
+                  "application/vnd.docker.distribution.manifest.v2+json",
+              ])
+              req = urllib.request.Request(f"{REGISTRY}/v2/{repo}/manifests/{image_tag}", method="HEAD",
+                                           headers={"Authorization": f"Bearer {token}", "Accept": accept})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      digest = resp.headers.get("Docker-Content-Digest", "")
+              except urllib.error.URLError as e:
+                  sys.exit(f"{image_name}:{image_tag} does not resolve in GHCR: {e}")
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                  sys.exit(f"GHCR gave no usable digest for {image_name}:{image_tag}: {digest!r}")
+              return digest
+
+          if not git_ref:
+              # Existing image_tag: nothing to build, but pin what the tag is now.
+              digest = resolve_tag_digest()
+              with open("/tmp/image_digest", "w") as f:
+                  f.write(digest)
+              print(f"No git_ref: deploying {image_name}:{image_tag} as {image_name}@{digest}")
+              sys.exit(0)
 
           headers = {
               "Authorization": f"Bearer {PAT}",
@@ -232,6 +375,48 @@ spec:
                   body_text = e.read().decode()
                   print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
                   raise
+
+          class _NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          def read_built_digest(run_id):
+              """The digest build-image.yaml pushed, from its image-digest artifact.
+
+              Anything but exactly one readable artifact naming this image is a
+              failed read and fails the task: deploying by tag instead would
+              deploy whatever the tag points at now, not what this run built."""
+              arts = api_request("GET",
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/runs/{run_id}/artifacts?name=image-digest")
+              found = [a for a in (arts or {}).get("artifacts", [])
+                       if a.get("name") == "image-digest" and not a.get("expired")]
+              if len(found) != 1:
+                  sys.exit(f"build run {run_id} has {len(found)} image-digest artifacts, expected 1")
+              url = found[0].get("archive_download_url", "")
+              if not url.startswith(f"{API}/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/artifacts/"):
+                  sys.exit(f"unexpected artifact download URL: {url!r}")
+              # The API answers with a redirect to blob storage. Followed by
+              # hand so the GitHub token is not sent to that other host.
+              opener = urllib.request.build_opener(_NoRedirect)
+              try:
+                  opener.open(urllib.request.Request(url, headers=headers))
+                  sys.exit("artifact download did not redirect")
+              except urllib.error.HTTPError as e:
+                  if e.code not in (301, 302, 303, 307, 308) or not e.headers.get("Location"):
+                      sys.exit(f"artifact download failed: HTTP {e.code}")
+                  location = e.headers["Location"]
+              if not location.startswith("https://"):
+                  sys.exit(f"artifact download redirected to a non-https URL: {location!r}")
+              with urllib.request.urlopen(location, timeout=60) as resp:
+                  blob = resp.read(65536)
+              with zipfile.ZipFile(io.BytesIO(blob)) as z:
+                  if z.namelist() != ["image-ref.txt"]:
+                      sys.exit(f"unexpected image-digest artifact content: {z.namelist()}")
+                  ref = z.read("image-ref.txt").decode().strip()
+              m = re.fullmatch(re.escape(image_name) + r"@(sha256:[0-9a-f]{64})", ref)
+              if not m:
+                  sys.exit(f"image-digest artifact names {ref!r}, not {image_name}@sha256:<64 hex>")
+              return m.group(1)
 
           print(f"Building: {dockerfile_repo}@{git_ref} -> {image_name}:{image_tag}")
           dispatch_path = f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/dispatches"
@@ -255,7 +440,7 @@ spec:
           for attempt in range(30):
               time.sleep(10)
               runs = api_request("GET",
-                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=5")
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=100")
               for run in runs.get("workflow_runs", []):
                   if run.get("name", "") == run_name or build_id in run.get("name", ""):
                       run_id = run["id"]
@@ -279,6 +464,10 @@ spec:
               if status == "completed":
                   if conclusion == "success":
                       print(f"Build succeeded: {image_name}:{image_tag}")
+                      digest = read_built_digest(run_id)
+                      with open("/tmp/image_digest", "w") as f:
+                          f.write(digest)
+                      print(f"Built {image_name}@{digest}")
                       sys.exit(0)
                   else:
                       print(f"Build failed: {conclusion} — {run_url}", file=sys.stderr)
@@ -291,6 +480,141 @@ spec:
           requests:
             memory: 128Mi
             cpu: 50m
+
+    # ── Health gate: what the running preview shows, not that helm returned ─────
+    # `helm --wait` only says the pods became ready once. This asks again from
+    # outside the release: every pod runs the digest the build produced (the
+    # imageID kubelet recorded, not the tag), all are Running and Ready, none
+    # restarts through a short window, and the public URL answers 2xx on the
+    # readiness path the pod itself declares. Green writes health=healthy;
+    # anything else exits non-zero, so the workflow fails and the record is
+    # never promotable. An empty image_digest (existing-tag mode, which has no
+    # build) skips only the digest comparison.
+    - name: preview-health-gate
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+          - name: preview_id
+          - name: preview_url
+          - name: image_digest
+            value: ""
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              path: /tmp/health-gate/health
+          - name: health_url
+            valueFrom:
+              path: /tmp/health-gate/health_url
+      # Own deadline is PHG_TIMEOUT (240s) plus the stability window; this is
+      # the backstop for a hung kubectl or curl.
+      activeDeadlineSeconds: 420
+      script:
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_PREVIEW_ID
+            value: "{{inputs.parameters.preview_id}}"
+          - name: PARAM_PREVIEW_URL
+            value: "{{inputs.parameters.preview_url}}"
+          - name: PARAM_IMAGE_DIGEST
+            value: "{{inputs.parameters.image_digest}}"
+        source: |
+          set -eu
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992), and are shape-checked again here.
+          OUT=/tmp/health-gate
+          mkdir -p "$OUT"
+          echo unknown > "$OUT/health"
+          : > "$OUT/health_url"
+
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          ID="$PARAM_PREVIEW_ID"
+          URL="$PARAM_PREVIEW_URL"
+          DIGEST="$PARAM_IMAGE_DIGEST"
+          TIMEOUT="${PHG_TIMEOUT:-240}"
+          WINDOW="${PHG_WINDOW:-20}"
+
+          die() { echo "unhealthy: $*" >&2; echo unhealthy > "$OUT/health"; exit 1; }
+
+          case "$ID" in ??????) case "$ID" in *[!a-z0-9]*) die "preview_id is not 6 characters [a-z0-9]" ;; esac ;; *) die "preview_id is not 6 characters [a-z0-9]" ;; esac
+          case "$TEAM$COMPONENT" in "" | *[!a-z0-9-]*) die "team or component name has unexpected characters" ;; esac
+          case "$URL" in https://*[!a-z0-9.-]* | https://) die "preview_url is not https://<host>" ;; https://*) ;; *) die "preview_url is not https://<host>" ;; esac
+          case "$DIGEST" in "") ;; sha256:*[!0-9a-f]*) die "image_digest is malformed" ;; sha256:????????????????????????????????????????????????????????????????) ;; *) die "image_digest is malformed" ;; esac
+
+          NS="${TEAM}-preview"
+          SEL="app.kubernetes.io/instance=preview-${COMPONENT}-${ID}"
+
+          # One snapshot of the release's pods: "ok" only when there is at
+          # least one, every one is Running and Ready, and each container's
+          # imageID names the digest. Prints a reason otherwise.
+          snapshot() {
+            kubectl get pods -n "$NS" -l "$SEL" -o json > /tmp/pods.json 2>/tmp/kubectl.err || { echo "kubectl failed: $(tail -1 /tmp/kubectl.err)"; return 1; }
+            jq -r --arg d "$DIGEST" '
+              if (.items | length) == 0 then "no pods"
+              elif ([.items[] | select(.metadata.deletionTimestamp != null)] | length) > 0 then "a pod is terminating"
+              elif ([.items[] | select(.status.phase != "Running")] | length) > 0 then "a pod is not Running"
+              elif ([.items[] | select(([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length) == 0)] | length) > 0 then "a pod is not Ready"
+              elif ($d != "") and ([.items[].status.containerStatuses[]? | select((.imageID // "") | endswith("@" + $d) | not)] | length) > 0 then "a container does not run " + $d
+              else "ok" end' /tmp/pods.json
+          }
+          restarts() { jq -c '[.items[] | .metadata.name + "=" + ([.status.containerStatuses[]?.restartCount] | add | tostring)] | sort' /tmp/pods.json; }
+
+          start=$(date +%s)
+          why=""
+          while :; do
+            why=$(snapshot) || true
+            [ "$why" = ok ] && break
+            [ $(( $(date +%s) - start )) -ge "$TIMEOUT" ] && die "$why"
+            echo "waiting: $why"
+            sleep 5
+          done
+          before=$(restarts)
+
+          # Stability window: the same pods, still ready, no new restarts. A
+          # crash loop that happens to be Ready at the instant of the first
+          # snapshot shows here.
+          sleep "$WINDOW"
+          why=$(snapshot) || true
+          [ "$why" = ok ] || die "after ${WINDOW}s: $why"
+          [ "$(restarts)" = "$before" ] || die "a container restarted within ${WINDOW}s ($before -> $(restarts))"
+
+          # The path the pod's own readiness probe asks. A pod with no HTTP
+          # readiness probe has nothing to ask over HTTP: the verdict then
+          # rests on the checks above, and says so.
+          path=$(jq -r '[.items[0].spec.containers[]?.readinessProbe.httpGet.path // empty][0] // ""' /tmp/pods.json)
+          if [ -n "$path" ]; then
+            case "$path" in /*) case "$path" in *[!A-Za-z0-9/._~-]*) die "unexpected readiness path: ${path}" ;; esac ;; *) die "unexpected readiness path: ${path}" ;; esac
+            code=000
+            while :; do
+              code=$(curl -sS -o /dev/null --connect-timeout 5 --max-time 10 -w '%{http_code}' "${URL}${path}" 2>/tmp/curl.err) || true
+              case "$code" in 2??) break ;; esac
+              [ $(( $(date +%s) - start )) -ge "$TIMEOUT" ] && die "${URL}${path} answered ${code}: $(tail -1 /tmp/curl.err)"
+              echo "waiting: ${URL}${path} answered ${code}"
+              sleep 5
+            done
+            echo "HTTP ${code} from ${URL}${path}"
+          else
+            echo "no HTTP readiness probe: HTTP not verified"
+          fi
+
+          echo healthy > "$OUT/health"
+          echo "$URL" > "$OUT/health_url"
+          echo "preview ${ID} is healthy"
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 20m
+          limits:
+            memory: 128Mi
+            cpu: 100m
 
     # ── Deploy: Helm install/upgrade into {team}-preview ─────────────────────────
     - name: deploy
@@ -306,6 +630,16 @@ spec:
             value: "{{workflow.parameters.ttl_hours}}"
           - name: port
             value: "{{workflow.parameters.port}}"
+          - name: preview_id
+            value: "{{workflow.parameters.preview_id}}"
+          - name: gitops_ref
+            value: "{{workflow.parameters.gitops_ref}}"
+          - name: compiled_values
+            value: "{{workflow.parameters.compiled_values}}"
+          - name: values_sha256
+            value: "{{workflow.parameters.values_sha256}}"
+          - name: image_digest
+            value: ""
       outputs:
         parameters:
           - name: preview_id
@@ -328,6 +662,16 @@ spec:
             value: "{{inputs.parameters.ttl_hours}}"
           - name: PARAM_PORT
             value: "{{inputs.parameters.port}}"
+          - name: PARAM_PREVIEW_ID
+            value: "{{inputs.parameters.preview_id}}"
+          - name: PARAM_GITOPS_REF
+            value: "{{inputs.parameters.gitops_ref}}"
+          - name: PARAM_COMPILED_VALUES
+            value: "{{inputs.parameters.compiled_values}}"
+          - name: PARAM_VALUES_SHA256
+            value: "{{inputs.parameters.values_sha256}}"
+          - name: PARAM_IMAGE_DIGEST
+            value: "{{inputs.parameters.image_digest}}"
           - name: ARGO_WORKFLOW_NAME
             value: "{{workflow.name}}"
         envFrom:
@@ -393,24 +737,153 @@ spec:
           TTL_HOURS="${TTL_HOURS:-0}"
           EXPIRES_AT=$(( $(date +%s) + TTL_HOURS * 3600 ))
 
-          PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
+          # A server-set id comes from an approved deploy plan whose digest
+          # binds it; it is asserted, never trusted. Without one, the id is
+          # derived from the workflow name as before.
+          PREVIEW_ID="$PARAM_PREVIEW_ID"
+          case "$PREVIEW_ID" in
+            "")
+              PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
+              ;;
+            ?????? )
+              case "$PREVIEW_ID" in
+                *[!a-z0-9]* )
+                  echo "❌ preview_id must be exactly 6 characters [a-z0-9]; got: ${PREVIEW_ID}" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            * )
+              echo "❌ preview_id must be exactly 6 characters [a-z0-9]; got: ${PREVIEW_ID}" >&2
+              exit 1
+              ;;
+          esac
+          GITOPS_REF="$PARAM_GITOPS_REF"
+          case "$GITOPS_REF" in
+            "") ;;
+            *[!0-9a-f]* )
+              echo "❌ gitops_ref must be a 40-character lowercase hex commit SHA; got: ${GITOPS_REF}" >&2
+              exit 1
+              ;;
+            ???????????????????????????????????????? ) ;;
+            * )
+              echo "❌ gitops_ref must be a 40-character lowercase hex commit SHA; got: ${GITOPS_REF}" >&2
+              exit 1
+              ;;
+          esac
+          # The digest of the image this workflow built, or empty when it
+          # deploys an existing image_tag. Always passed to helm, empty
+          # included: the service values may pin the production digest
+          # (mctl-gitops#2652), and inheriting it would render
+          # repository:<preview tag>@<production digest>, which runs the
+          # production image under the preview's tag.
+          DIGEST="$PARAM_IMAGE_DIGEST"
+          case "$DIGEST" in
+            "") ;;
+            sha256:???????????????????????????????????????????????????????????????? )
+              case "${DIGEST#sha256:}" in
+                *[!0-9a-f]* )
+                  echo "❌ image_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+            * )
+              echo "❌ image_digest must be sha256:<64 lowercase hex>; got: ${DIGEST}" >&2
+              exit 1
+              ;;
+          esac
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
           HOST="${COMPONENT}-${PREVIEW_ID}.${PLATFORM_DOMAIN}"
 
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
 
+          # Values compiled from a DeployIntent (mctlhq/mctl-gitops#2654), for
+          # a service with no values.yaml in gitops. Both parameters are
+          # server-set; the grammar is asserted here before anything is
+          # decoded. The chart is read at gitops_ref, so that is required.
+          COMPILED="$PARAM_COMPILED_VALUES"
+          VALUES_SHA="$PARAM_VALUES_SHA256"
+          if [ -n "$COMPILED$VALUES_SHA" ]; then
+            if [ -z "$COMPILED" ] || [ -z "$VALUES_SHA" ]; then
+              echo "❌ compiled_values and values_sha256 are set together or not at all" >&2
+              exit 1
+            fi
+            if [ -z "$PARAM_GITOPS_REF" ]; then
+              echo "❌ compiled_values requires gitops_ref: the chart is read at that commit" >&2
+              exit 1
+            fi
+            case "$VALUES_SHA" in
+              *[!0-9a-f]* | "" )
+                echo "❌ values_sha256 must be 64 lowercase hex characters" >&2
+                exit 1
+                ;;
+            esac
+            if [ "${#VALUES_SHA}" -ne 64 ]; then
+              echo "❌ values_sha256 must be 64 lowercase hex characters" >&2
+              exit 1
+            fi
+            case "$COMPILED" in
+              *[!A-Za-z0-9+/=]* )
+                echo "❌ compiled_values must be base64" >&2
+                exit 1
+                ;;
+            esac
+            if [ "${#COMPILED}" -gt 96000 ]; then
+              echo "❌ compiled_values is over 96000 characters" >&2
+              exit 1
+            fi
+          fi
+
           # Read only, and the repository is public, so no credential: this step
           # also runs a Helm release of tenant-chosen values in a tenant namespace.
           git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          if [ -n "$GITOPS_REF" ]; then
+            # Pin the values to the commit the plan was computed against. A
+            # commit that cannot be fetched fails the step: deploying the
+            # default branch instead would deploy values nobody approved.
+            git -C /tmp/mctl-gitops fetch --depth=1 origin "$GITOPS_REF"
+            git -C /tmp/mctl-gitops checkout --quiet --detach FETCH_HEAD
+            HEAD_SHA=$(git -C /tmp/mctl-gitops rev-parse HEAD)
+            if [ "$HEAD_SHA" != "$GITOPS_REF" ]; then
+              echo "❌ mctl-gitops checkout is ${HEAD_SHA}, expected ${GITOPS_REF}" >&2
+              exit 1
+            fi
+          fi
 
           CHART_PATH="/tmp/mctl-gitops/platform-gitops/helm-charts/base-service"
           SERVICE_VALUES="/tmp/mctl-gitops/platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
           PREVIEW_VALUES="/tmp/preview-values.yaml"
+          REWRITE_ARGS=""
+
+          if [ -n "$COMPILED" ]; then
+            # One source of values, never two: a service that already has a
+            # values.yaml at this commit deploys from it.
+            if [ -e "$SERVICE_VALUES" ]; then
+              echo "❌ ${TEAM}/${COMPONENT} already has a values.yaml at ${GITOPS_REF}; compiled_values is for services not in gitops yet" >&2
+              exit 1
+            fi
+            # Bounded: the decompressed values are at most 1 MiB.
+            printf '%s' "$COMPILED" | base64 -d | gzip -dc | head -c 1048577 > /tmp/compiled-values.yaml
+            if [ "$(wc -c < /tmp/compiled-values.yaml)" -gt 1048576 ]; then
+              echo "❌ compiled values are over 1 MiB" >&2
+              exit 1
+            fi
+            GOT_SHA=$(sha256sum /tmp/compiled-values.yaml | cut -d' ' -f1)
+            if [ "$GOT_SHA" != "$VALUES_SHA" ]; then
+              echo "❌ compiled values hash ${GOT_SHA} does not match values_sha256 ${VALUES_SHA}" >&2
+              exit 1
+            fi
+            SERVICE_VALUES="/tmp/compiled-values.yaml"
+            # The image is built from source by this workflow, so the values
+            # may only name that repository.
+            REWRITE_ARGS="--require-image-repository ghcr.io/${GITOPS_ORG}/${COMPONENT}"
+          fi
 
           python3 /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/rewrite_preview_values.py \
             --team "${TEAM}" --service "${COMPONENT}" \
-            --in "${SERVICE_VALUES}" --out "${PREVIEW_VALUES}"
+            --in "${SERVICE_VALUES}" --out "${PREVIEW_VALUES}" ${REWRITE_ARGS}
 
           # preview.yaml (namespace, RBAC, SecretStore) is applied by ArgoCD
           # from the tenant chart. Do not --create-namespace: that would skip
@@ -435,10 +908,27 @@ spec:
             exit 1
           fi
 
+          # A preview compiled from an intent has no standing service behind
+          # it, so one that does not come up is removed here rather than left
+          # for the reaper at its expiry. Covers the TLS Secret cert-manager
+          # leaves behind, as preview-delete does.
+          if [ -n "$COMPILED" ]; then
+            cleanup_failed_preview() {
+              rc=$?
+              if [ "$rc" -ne 0 ]; then
+                echo "preview ${RELEASE} failed (exit ${rc}); removing it" >&2
+                helm uninstall "${RELEASE}" -n "${NS}" --wait || true
+                kubectl delete secret "${RELEASE}-tls" -n "${NS}" --ignore-not-found || true
+              fi
+            }
+            trap cleanup_failed_preview EXIT
+          fi
+
           helm upgrade --install "${RELEASE}" "${CHART_PATH}" \
             --namespace "${NS}" \
             --values "${PREVIEW_VALUES}" \
             --set image.tag="${TAG}" \
+            --set-string image.digest="${DIGEST}" \
             --set ingress.enabled=true \
             --set ingress.className=traefik \
             --set "ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod" \

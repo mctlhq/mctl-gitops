@@ -22,7 +22,7 @@ resource "cloudflare_ruleset" "firewall_custom" {
       }
       description = "seerr — skip SBFM/BIC for in-cluster server-to-server calls (gitops#1089 item 8)"
       enabled     = true
-      expression  = "(ip.src.asnum eq 24940 and http.host in {\"secrets.mctl.ai\" \"ops.mctl.ai\" \"app.mctl.ai\" \"api.mctl.ai\" \"media.mctl.ai\" \"tg.mctl.ai\" \"workflows.mctl.ai\"})"
+      expression  = "(ip.src.asnum eq 24940 and http.host in {\"secrets.mctl.ai\" \"ops.mctl.ai\" \"app.mctl.ai\" \"api.mctl.ai\" \"media.mctl.ai\" \"tg.mctl.ai\" \"tg-preview.mctl.ai\" \"workflows.mctl.ai\"})"
       logging = {
         enabled = true
       }
@@ -55,6 +55,17 @@ resource "cloudflare_ruleset" "firewall_custom" {
       enabled     = true
       expression  = module.spoofed_crawlers.expression
       ref         = "block_spoofed_crawlers"
+    },
+    # RedLoop Stage 3 emergency kill-switch / security drill rule (#2388).
+    # Scoped strictly to staging-redloop.mctl.ai to allow immediate edge-level
+    # isolation without affecting any production hostname in this zone.
+    # Disabled by default; toggled only during authorized drill or incident.
+    {
+      action      = "block"
+      description = "staging-redloop: emergency kill switch / drill block"
+      enabled     = false
+      expression  = "(http.host eq \"staging-redloop.mctl.ai\")"
+      ref         = "block_staging_redloop_emergency"
     },
   ]
   zone_id = local.zone_id

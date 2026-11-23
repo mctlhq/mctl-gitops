@@ -10,10 +10,15 @@ refusal or an unknown, never a pass.
 Two independent halves:
   1. The staged package under deploy/staged/glovo-m1 must render, stay private
      where it must, and keep the fail-closed defaults.
-  2. A deny-only leak guard: no Glovo host, workload, image or assistant
-     namespace may appear in reconciled paths (platform-gitops/**, excluding
-     agents-state/). gate.yaml is informational and is NEVER consulted as an
-     unlock: a PR author can edit it, so it proves nothing.
+  2. A leak guard: no Glovo host, workload, image or assistant namespace may
+     appear in reconciled paths (platform-gitops/**, excluding agents-state/),
+     except an exact line listed for its exact file in ALLOWED_LINES. Each
+     activation PR adds only its own lines there, as its first commit, and
+     the reviewer reads that diff first (runbook "Leak guard at activation").
+     A matching path name, a matching line not in the set, or a match in a
+     file not in the map still refuses; a provenance image never passes.
+     gate.yaml is informational and is NEVER consulted as an unlock: a PR
+     author can edit it, so it proves nothing.
 """
 
 from __future__ import annotations
@@ -45,6 +50,259 @@ VALUES = {
 TENANT = "provider-tenant/values.yaml"
 SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
 
+# Exact lines (whitespace included) that may match LEAK in one reconciled file,
+# keyed by the path relative to the repository root. Empty until the first
+# activation PR; each activation PR adds only its own lines, removal PRs delete
+# them. Only lines that match LEAK are judged, so only those are listed: a
+# neighbouring line without a Glovo or assistants reference (an ingress
+# `paths:` entry such as `- /mcp`) needs no entry, and listing one would be a
+# dead entry. The self-test pins this both ways.
+ALLOWED_LINES: dict[str, frozenset[str]] = {
+    # Step D1: the Basket canary managed roles (mctlhq/mctl-api#1006).
+    "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml": frozenset({
+        "      - host mctl-api glovo_runtime all scram-sha-256",
+        "      - host mctl-api glovo_migrator all scram-sha-256",
+        "      - name: glovo_runtime",
+        "          name: glovo-runtime-db-creds",
+        "      - name: glovo_migrator",
+        "          name: glovo-migrator-db-creds",
+        # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+        "      - host mctl-glovo glovo_c2_runtime all scram-sha-256",
+        "      - host mctl-glovo glovo_c2_migrator all scram-sha-256",
+        "      - name: glovo_c2_runtime",
+        "          name: glovo-c2-runtime-db-creds",
+        "      - name: glovo_c2_migrator",
+        "          name: glovo-c2-migrator-db-creds",
+    }),
+    "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml": frozenset({
+        "  name: glovo-runtime-db-creds",
+        "    name: glovo-runtime-db-creds",
+        "        key: platform/mctl-api/glovo-runtime-database",
+        "  name: glovo-migrator-db-creds",
+        "    name: glovo-migrator-db-creds",
+        "        key: platform/mctl-api/glovo-migrator-database",
+        # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+        "  name: glovo-c2-runtime-db-creds",
+        "    name: glovo-c2-runtime-db-creds",
+        "        key: platform/mctl-glovo/database-runtime",
+        "  name: glovo-c2-migrator-db-creds",
+        "    name: glovo-c2-migrator-db-creds",
+        "        key: platform/mctl-glovo/database-migrator",
+        # Their namespaced store in platform-db (mctlhq/mctl-gitops#2759).
+        "    name: glovo-db-creds",
+    }),
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml": frozenset({
+        "  name: glovo-db-creds",
+        '          role: "glovo-db-creds"',
+        "            name: glovo-db-creds",
+    }),
+    # Step Z: the approval page client in zitadel-iac.
+    "platform-gitops/helm-charts/zitadel-iac/iac/mctl-api.tf": frozenset({
+        '    # The Glovo basket approval page client (mctl-api#1006). Nothing reads',
+        '    # stays unmounted unless GLOVO_BASKET_UI_ENABLED is "true" (it is unset).',
+        '    GLOVO_BASKET_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_basket.client_id',
+        '    GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret',
+        '  name       = "mctl-api-glovo-basket"',
+        '  redirect_uris               = ["https://api.mctl.ai/glovo/basket/approvals/callback"]',
+        '# The Glovo basket approval page (mctl-api#1006): an MCP client shows the',
+        '# basket owner a link to api.mctl.ai/glovo/basket/approvals/{id}, and the',
+        'resource "zitadel_application_oidc" "mctl_api_glovo_basket" {',
+    }),
+    "platform-gitops/helm-charts/zitadel-iac/iac/tests/mctl_api.tftest.hcl": frozenset({
+        '      "GLOVO_BASKET_UI_CLIENT_ID",',
+        '      "GLOVO_BASKET_UI_CLIENT_SECRET",',
+        '    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_BASKET_UI_CLIENT_ID"]) == "glovo-basket-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_BASKET_UI_CLIENT_SECRET"]) == "glovo-basket-client-secret"',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.access_token_type == "OIDC_TOKEN_TYPE_BEARER"',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_glovo_basket.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.dev_mode == false',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_glovo_basket.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.id_token_userinfo_assertion == true',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.name == "mctl-api-glovo-basket"',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_glovo_basket.org_id == "100000000000000001"',
+        '    condition     = zitadel_application_oidc.mctl_api_glovo_basket.redirect_uris == tolist(["https://api.mctl.ai/glovo/basket/approvals/callback"])',
+        '    error_message = "The Glovo basket keys must carry the mctl-api-glovo-basket client\'s credentials, never another flow\'s."',
+        '    error_message = "The client is named mctl-api-glovo-basket."',
+        '    error_message = "The only redirect URI must be https://api.mctl.ai/glovo/basket/approvals/callback."',
+        '    target = [zitadel_application_oidc.mctl_api_glovo_basket]',
+        '    target = zitadel_application_oidc.mctl_api_glovo_basket',
+        '    values = { client_id = "glovo-basket-client-id", client_secret = "glovo-basket-client-secret" }',
+        '# The client of the Glovo basket approval page (mctl-api#1006). The same',
+        'run "glovo_basket_client_is_a_confidential_pkce_web_client" {',
+    }),
+    "platform-gitops/helm-charts/zitadel-iac/values.yaml": frozenset({
+        '#   Glovo basket approval page, in the MCTL API project): no new action; a',
+        '#   mctl-api#1006 (mctl-api.tf: the mctl-api-glovo-basket web client of the',
+    }),
+    # Step W1: inert runtime DB env and the mctl-api ExternalSecrets.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml": frozenset({
+        '            - mctl-api-glovo-runtime-db',
+        '            GLOVO_DB_MIGRATION_ROLE: glovo_migrator',
+        '            GLOVO_DB_RUNTIME_ROLE: glovo_runtime',
+        '            GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"',
+        # Step B1: the basket MCP flags (mctl-api#1006).
+        '            GLOVO_ENABLED: "true"',
+        '            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp',
+        '            GLOVO_BASKET_MCP_ENABLED: "true"',
+        # Step B2: the approval page flag, its route and its chart slot.
+        '              - /glovo',
+        '            GLOVO_BASKET_UI_ENABLED: "true"',
+        '          glovoBasketUISecret: mctl-api-oidc-zitadel',
+        # C2 kill switch caller (mctlhq/mctl-glovo#11): the dark env of the
+        # control-caller credential wiring, gated by apiC2Control.
+        '            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"',
+        '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"',
+        '            GLOVO_C2_KILLSWITCH_ENABLED: "true"',
+        # C2 link step: the product host joins the CIMD allowlist, so the link
+        # helper's client document is accepted (no per-owner registration).
+        '            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev,glovo.mctl.ai"',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): mctl-api's
+        # consent routes and the shared cohort size, behind apiConsent.
+        '            {{- if .Values.mctlGlovo.apiConsent }}',
+        '            GLOVO_CONSENT_ENABLED: "true"',
+        '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
+        '            - mctl-api-glovo-consent',
+        # The link resource of the account-link token (this PR), behind linkLogin.
+        '            {{- if .Values.mctlGlovo.linkLogin }}',
+        '            GLOVO_LINK_RESOURCE: "https://{{ .Values.mctlGlovo.host }}/link"',
+    }),
+    # The host is reserved with the product's own namespace as the only owner
+    # (the ingress switch needs it); every other namespace stays refused.
+    # C2 kill switch caller: the refresher image repository (the tag is a
+    # separate line and never matches).
+    "platform-gitops/bootstrap/values.yaml": frozenset({
+        '  glovo.mctl.ai: [mctl-glovo]',
+        '    repository: ghcr.io/mctlhq/mctl-glovo',
+        # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the public host
+        # of the route (an owner decision) behind the ingress switch.
+        '  host: glovo.mctl.ai',
+        # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+        "mctlGlovo:",
+    }),
+    # C2 kill switch caller: the ExternalSecret of the control-caller key.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml": frozenset({
+        '        key: platform/mctl-glovo/control-caller',
+    }),
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml": frozenset({
+        '        GLOVO_DB_PASSWORD: "{{ `{{ .password }}` }}"',
+        '        GLOVO_DB_USER: "{{ `{{ .username }}` }}"',
+        '        key: platform/mctl-api/glovo-runtime-database',
+        '    name: mctl-api-glovo-runtime-db',
+        '  name: mctl-api-glovo-runtime-db',
+    }),
+    # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): the consent
+    # reader identity of mctl-api, behind apiConsent.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-consent.yaml": frozenset({
+        '{{- if .Values.mctlGlovo.apiConsent }}',
+        '  name: mctl-api-glovo-consent',
+        '    name: mctl-api-glovo-consent',
+        '        GLOVO_CONSENT_SERVICE_PROVIDER: "{{ `{{ .service_provider }}` }}"',
+        '        GLOVO_CONSENT_SERVICE_SUBJECT: "{{ `{{ .service_subject }}` }}"',
+        '        key: platform/mctl-api/glovo-consent',
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/argo-workflows/config/image-names.txt": frozenset({
+        "grant admins mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/infra-components/data/cnpg/shared/databases.yaml": frozenset({
+        "  name: mctl-glovo-db",
+        '  name: "mctl-glovo"',
+        '  owner: "glovo_c2_migrator"',
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml": frozenset({
+        "              kubernetes.io/metadata.name: mctl-glovo",
+        "              app.kubernetes.io/name: mctl-glovo",
+    }),
+    # C2 cluster service, part 1 (mctlhq/mctl-glovo#11)
+    "platform-gitops/release-bindings.yaml": frozenset({
+        "  ghcr.io/mctlhq/mctl-glovo: mctlhq/mctl-glovo",
+    }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml": frozenset({
+        "This file is the ONLY path the leak guard (scripts/validate-glovo-m1-staging.py,",
+        '{{- $app := "mctl-glovo" }}',
+        "{{- $v := .Values.mctlGlovo }}",
+        '{{- $rt := "glovo_c2_runtime" }}',
+        '{{- $tsTag := "tag:glovo-egress" }}',
+        "  repository: ghcr.io/mctlhq/mctl-glovo",
+        '        GLOVO_MIGRATE_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_DATABASE_URL: "postgresql://{{ `{{ .username | urlquery }}:{{ .password | urlquery }}@{{ .host }}:{{ .port }}/{{ .database }}` }}?sslmode=require"',
+        '        GLOVO_C2_AUDIT_KEY: "{{ `{{ .audit_key }}` }}"',
+        '        GLOVO_C2_ALLOWED_PRINCIPALS: "{{ `{{ .allowed_principals }}` }}"',
+        '        GLOVO_C2_CONTROL_SUBJECTS: "{{ `{{ .subjects }}` }}"',
+        '        GLOVO_C2_CONTROL_AUDIENCE: "{{ `{{ .audience }}` }}"',
+        '          command: ["glovo-migrate"]',
+        '            - {name: GLOVO_C2_ENABLED, value: "true"}',
+        '            - {name: GLOVO_C2_CAPACITY, value: {{ $capacity | quote }}}',
+        '            - {name: GLOVO_C2_CAP_LINK_ATTEMPTS_GLOBAL_HOUR, value: {{ $linkAttempts | quote }}}',
+        '            - {name: GLOVO_C2_KEEPALIVE_INTERVAL, value: {{ $keepalive | quote }}}',
+        '            - {name: GLOVO_LINK_TRUSTED_PROXIES, value: {{ $v.trustedProxies | quote }}}',
+        '            - {name: GLOVO_LINK_RESOURCE, value: {{ printf "https://%s/link" $v.host | quote }}}',
+        '            - {name: GLOVO_LINK_MAX_AUTH_AGE, value: {{ toString $v.linkMaxAuthAge | quote }}}',
+        '            - {name: GLOVO_VAULT_ADDR, value: "http://vault-active.vault.svc.cluster.local:8200"}',
+        "            - {name: GLOVO_VAULT_ROLE, value: {{ $app | quote }}}",
+        '            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}',
+        '            - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}',
+        '            - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}',
+        '            - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}',
+        '            - {name: GLOVO_C2_CONTROL_JWKS_URL, value: "https://auth.mctl.ai/oauth/v2/keys"}',
+    }),
+    # C2 cluster service, part 2: namespace, workload, switches (mctlhq/mctl-glovo#11)
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml": frozenset({
+        '      "mctl-glovo"',
+    }),
+}
+
+# Exact files whose PATH may match LEAK (the name check only). This is not an
+# unlock for their content: every line that matches LEAK in such a file still
+# needs its own exact entry in ALLOWED_LINES, and the provenance-image check
+# still applies. Exact relative paths only: no directory prefix and no
+# wildcard, so a sibling file, another directory or a renamed copy is refused.
+# C2-2: the bootstrap-owned namespace template of the cluster mctl-glovo
+# service (mctlhq/mctl-glovo#11). The service PR adds the file and its lines.
+ALLOWED_PATHS: frozenset[str] = frozenset({
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
+})
+
+
+# Files whose ALLOWED_LINES entries belong to the mctl-api control-caller
+# wiring (the C2 kill switch client), so the self-test can prove each of them.
+C2_API_CONTROL_FILES: tuple[str, ...] = (
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+    "platform-gitops/bootstrap/values.yaml",
+)
+
+# Files whose ALLOWED_LINES entries belong to the C2 cluster service, so the
+# self-test can prove each of them (mctlhq/mctl-glovo#11). Part 1: the
+# database, the peer policies and the release wiring.
+C2_SERVICE_FILES: tuple[str, ...] = (
+    "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/databases.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/secrets.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/secretstore.yaml",
+    "platform-gitops/infra-components/data/cnpg/shared/networkpolicy.yaml",
+    "platform-gitops/bootstrap/templates/core-infra/vault-netpol.yaml",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-netpol.yaml",
+    "platform-gitops/argo-workflows/config/image-names.txt",
+    "platform-gitops/release-bindings.yaml",
+    # Part 2: the namespace template, its AppProject destination and switches.
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml",
+    "platform-gitops/bootstrap/templates/projects/project-default.yaml",
+    "platform-gitops/bootstrap/values.yaml",
+)
+
 
 class Refused(Exception):
     pass
@@ -54,11 +312,17 @@ class Unknown(Exception):
     pass
 
 
-def _load(path: Path) -> Any:
+def _load(path: Path) -> dict:
+    """Every staged document is a mapping. An empty file (safe_load gives
+    None) or a list is unreadable, not an empty mapping: it is reported as
+    UNKNOWN instead of being read as "nothing set"."""
     try:
-        return yaml.safe_load(path.read_text())
+        doc = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as e:
         raise Unknown(f"cannot read {path}: {e}") from e
+    if not isinstance(doc, dict):
+        raise Unknown(f"{path}: expected a mapping, got {type(doc).__name__}")
+    return doc
 
 
 def _need(cond: bool, msg: str) -> None:
@@ -134,8 +398,16 @@ def check_provenance(root: Path) -> None:
             _need(bool(img.get(key)), f"provenance {name}.{key} missing")
 
 
-def leak_guard(root: Path) -> None:
-    """Deny-only. Ignores gate.yaml and every local marker on purpose."""
+def leak_guard(root: Path, allowed_lines: dict[str, frozenset[str]] | None = None,
+               allowed_paths: frozenset[str] | None = None) -> None:
+    """Deny unless the exact line is listed for the exact file. A path whose
+    name matches is refused unless it is exactly in ALLOWED_PATHS, which
+    exempts only the name, never the lines. Ignores gate.yaml and every local
+    marker on purpose."""
+    if allowed_lines is None:
+        allowed_lines = ALLOWED_LINES
+    if allowed_paths is None:
+        allowed_paths = ALLOWED_PATHS
     repos = []
     try:
         images = _load(root / STAGED / "provenance.yaml").get("images", {})
@@ -153,8 +425,14 @@ def leak_guard(root: Path) -> None:
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
             continue  # binary content cannot carry a values file
-        if LEAK.search(text) or LEAK.search(str(p.relative_to(top))) or any(r in text for r in repos):
-            raise Refused(f"Glovo/assistants reference in reconciled path {p.relative_to(root)}")
+        rel = str(p.relative_to(root))
+        name_leak = LEAK.search(str(p.relative_to(top))) and rel not in allowed_paths
+        if name_leak or any(r in text for r in repos):
+            raise Refused(f"Glovo/assistants reference in reconciled path {rel}")
+        allowed = allowed_lines.get(rel, frozenset())
+        for line in text.splitlines():
+            if LEAK.search(line) and line not in allowed:
+                raise Refused(f"Glovo/assistants reference in reconciled path {rel}")
 
 
 def _run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess:
@@ -198,11 +476,12 @@ def render_checks(root: Path) -> None:
         _need(k.returncode == 0, f"kubeconform failed for {p.name}")
 
 
-def run(root: Path, render: bool = True) -> int:
+def run(root: Path, render: bool = True, allowed: dict[str, frozenset[str]] | None = None,
+        allowed_paths: frozenset[str] | None = None) -> int:
     try:
         check_staged_values(root)
         check_provenance(root)
-        leak_guard(root)
+        leak_guard(root, allowed, allowed_paths)
         if render:
             render_checks(root)
     except Refused as e:
@@ -210,6 +489,11 @@ def run(root: Path, render: bool = True) -> int:
         return REFUSED
     except (Unknown, OSError) as e:
         print(f"UNKNOWN: {e}", file=sys.stderr)
+        return UNKNOWN
+    except (AttributeError, TypeError, KeyError) as e:
+        # A nested key of the wrong shape (`env: null`, `ingress: []`) cannot
+        # be judged either way, so it is UNKNOWN, never a traceback or a pass.
+        print(f"UNKNOWN: staged document has an unexpected shape: {e!r}", file=sys.stderr)
         return UNKNOWN
     print("glovo-m1: ok")
     return 0
@@ -229,10 +513,10 @@ def _edit(root: Path, rel: str, fn: Any) -> None:
 
 
 def selftest() -> int:
-    cases: list[tuple[str, int, Any]] = []
+    cases: list[tuple[str, int, Any, Any]] = []
 
-    def add(name: str, want: int, mutate: Any) -> None:
-        cases.append((name, want, mutate))
+    def add(name: str, want: int, mutate: Any, allowed: Any = None, paths: Any = None) -> None:
+        cases.append((name, want, mutate, allowed, paths))
 
     add("baseline passes", 0, lambda r: None)
     add("T2 host in reconciled labs values", REFUSED,
@@ -282,14 +566,178 @@ def selftest() -> int:
         lambda r: _edit(r, "provenance.yaml", lambda d: d["images"]["facade"].pop("sbom")))
     add("T6 gate.yaml missing", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").unlink())
     add("T6 gate.yaml unparseable", UNKNOWN, lambda r: (r / STAGED / "gate.yaml").write_text(": : :\n- ["))
+    for rel in (VALUES["facade"], VALUES["provider"], VALUES["control"], TENANT,
+                "provenance.yaml", "target-paths.yaml", "gate.yaml"):
+        add(f"empty {rel}", UNKNOWN, lambda r, rel=rel: (r / STAGED / rel).write_text(""))
+    add("provenance.yaml is a list", UNKNOWN, lambda r: (r / STAGED / "provenance.yaml").write_text("- a\n"))
+    add("facade env: null", UNKNOWN,
+        lambda r: _edit(r, VALUES["facade"], lambda d: d.__setitem__("env", None)))
+    add("provider ingress is a list", UNKNOWN,
+        lambda r: _edit(r, VALUES["provider"], lambda d: d.__setitem__("ingress", [])))
 
-    failed = 0
-    for name, want, mutate in cases:
+    # Exact-line allowlist (runbook "Leak guard at activation").
+    a_file = f"{RECONCILED}/services/labs/x/values.yaml"
+    a_line = "  - name: glovo_runtime"
+    allow = {a_file: frozenset({a_line})}
+    add("allowlist: listed line in listed file passes", 0,
+        lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n"), allow)
+    # Host block shape of activation step C: only the host line matches LEAK.
+    h_line = "      - host: glovo.mctl.ai"
+    h_block = f"hosts:\n{h_line}\n        paths:\n          - /mcp\n          - /.well-known/oauth-protected-resource\n"
+    add("allowlist: non-matching path lines under an allowed host need no entry", 0,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset({h_line})})
+    add("allowlist: the host line itself is still required", REFUSED,
+        lambda r: (r / a_file).write_text(h_block), {a_file: frozenset()})
+    add("allowlist: same line in another file refuses", REFUSED,
+        lambda r: (r / RECONCILED / "services/labs/y.yaml").write_text(f"roles:\n{a_line}\n"), allow)
+    add("allowlist: extra Glovo line next to an allowed one refuses", REFUSED,
+        lambda r: (r / a_file).write_text(f"roles:\n{a_line}\n  - name: glovo_extra\n"), allow)
+    add("allowlist: changed whitespace refuses", REFUSED,
+        lambda r: (r / a_file).write_text(f"roles:\n {a_line}\n"), allow)
+    add("allowlist: Glovo path name refuses even with allowed lines", REFUSED,
+        lambda r: (r / RECONCILED / "services/labs/glovo.yaml").write_text(f"{a_line}\n"),
+        {f"{RECONCILED}/services/labs/glovo.yaml": frozenset({a_line})})
+    add("allowlist: provenance image refuses even on an allowed line", REFUSED,
+        lambda r: (r / a_file).write_text("  repository: ghcr.io/mctlhq/glovo-provider-worker\n"),
+        {a_file: frozenset({"  repository: ghcr.io/mctlhq/glovo-provider-worker"})})
+    add("allowlist: forged gate.yaml unlocks nothing", REFUSED,
+        lambda r: (_edit(r, "gate.yaml", lambda d: d["phases"].update(
+            p1={"state": "approved", "approval": "https://github.com/x/y/issues/1"})),
+            (r / a_file).write_text("ns: mctl-assistants\n")), allow)
+    add("allowlist: real ALLOWED_LINES on an untouched tree passes", 0, lambda r: None)
+
+    # Exact-path allowlist (C2-2). The real constant is pinned first, then the
+    # behaviour is proven with it injected so the cases do not depend on it.
+    svc = "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml"
+    s_line = "  name: mctl-glovo"
+    s_allow = {svc: frozenset({s_line})}
+    s_paths = frozenset({svc})
+
+    def put(rel: str, text: str) -> Any:
+        def w(r: Path) -> None:
+            (r / rel).parent.mkdir(parents=True, exist_ok=True)
+            (r / rel).write_text(text)
+        return w
+
+    add("paths: allowed file with an allowed line passes", 0, put(svc, f"metadata:\n{s_line}\n"),
+        s_allow, s_paths)
+    add("paths: allowed path alone does not unlock its lines", REFUSED, put(svc, f"metadata:\n{s_line}\n"),
+        None, s_paths)
+    add("paths: allowed file with an extra Glovo line refuses", REFUSED,
+        put(svc, f"{s_line}\n  name: mctl-glovo-extra\n"), s_allow, s_paths)
+    add("paths: allowed file with changed whitespace refuses", REFUSED,
+        put(svc, f" {s_line}\n"), s_allow, s_paths)
+    add("paths: allowed file carrying a provenance image refuses", REFUSED,
+        put(svc, "  image: ghcr.io/mctlhq/glovo-provider-worker\n"), s_allow, s_paths)
+    add("paths: allowed file carrying the assistants namespace refuses", REFUSED,
+        put(svc, "  ns: mctl-assistants\n"), s_allow, s_paths)
+    for near in (
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo-secrets.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yml",
+        "platform-gitops/bootstrap/templates/mctl-platform/Mctl-Glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/sub/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yaml.bak",
+        "platform-gitops/services/admins/mctl-glovo/values.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo/mctl-glovo.yaml",
+    ):
+        add(f"paths: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"),
+            {near: frozenset()}, s_paths)
+    add("paths: near-miss with the allowed file's line entry still refuses", REFUSED,
+        put("platform-gitops/services/admins/mctl-glovo/values.yaml", f"{s_line}\n"),
+        {"platform-gitops/services/admins/mctl-glovo/values.yaml": frozenset({s_line})}, s_paths)
+    add("paths: a Glovo directory with an innocuous file name refuses", REFUSED,
+        put("platform-gitops/bootstrap/templates/mctl-glovo/other.yaml", "x: 1\n"), None, s_paths)
+    add("paths: an empty path set refuses the service template", REFUSED,
+        put(svc, "x: 1\n"), s_allow, frozenset())
+    add("paths: forged gate.yaml unlocks nothing for a near-miss path", REFUSED,
+        lambda r: (_edit(r, "gate.yaml", lambda d: d["phases"].update(
+            p1={"state": "approved", "approval": "https://github.com/x/y/issues/1"})),
+            put("platform-gitops/services/admins/mctl-glovo/values.yaml", "x: 1\n")(r)),
+        None, s_paths)
+
+    # Real default constants (no injection): widening or breaking the shipped
+    # ALLOWED_PATHS / ALLOWED_LINES must fail here, not only the injected cases.
+    add("real defaults: the allowed service template with innocuous content passes", 0,
+        put(svc, "x: 1\n"))
+    add("real defaults: the allowed service template with an unlisted Glovo line refuses", REFUSED,
+        put(svc, f"{s_line}-unlisted\n"))
+    for near in (
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo-secrets.yaml",
+        "platform-gitops/bootstrap/templates/mctl-platform/mctl-glovo.yml",
+        "platform-gitops/bootstrap/templates/mctl-platform/sub/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo.yaml",
+        "platform-gitops/bootstrap/templates/mctl-glovo/other.yaml",
+        "platform-gitops/services/admins/mctl-glovo/values.yaml",
+    ):
+        add(f"real defaults: near-miss {near} refuses", REFUSED, put(near, "x: 1\n"))
+
+    # The control-caller entries, proven on the real ALLOWED_LINES one file at
+    # a time and both ways (listed line passes in its own file only; an
+    # unlisted sibling, a whitespace change and the same line elsewhere refuse).
+    unlisted_api_files: list[str] = []
+    for rel in C2_API_CONTROL_FILES:
+        listed = sorted(x for x in ALLOWED_LINES.get(rel, frozenset()) if LEAK.search(x))
+        if not listed:
+            unlisted_api_files.append(rel)
+            continue
+        for one in listed:
+            add(f"api control entries: {rel}: {one.strip()[:40]}: a listed line passes", 0,
+                put(rel, f"x: 1\n{one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: an unlisted sibling refuses", REFUSED,
+                put(rel, f"{one}\n  glovo_unlisted_sibling: 1\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: changed whitespace refuses", REFUSED,
+                put(rel, f" {one}\n"))
+            add(f"api control entries: {rel}: {one.strip()[:40]}: the same line in another file refuses", REFUSED,
+                put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
+
+    # The exact lines the wiring needs are pinned, so dropping one (or the
+    # whole entry) fails here and not only on the real tree.
+    api_pins = (
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_KILLSWITCH_ENABLED: "true"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml",
+         '            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"'),
+        ("platform-gitops/bootstrap/templates/mctl-platform/mctl-api-c2-control.yaml",
+         '        key: platform/mctl-glovo/control-caller'),
+    )
+    missing_pins = [(f, ln) for f, ln in api_pins if ln not in ALLOWED_LINES.get(f, frozenset())]
+    for f, ln in missing_pins:
+        print(f"FAIL api control pin: {f}: {ln.strip()} is not in ALLOWED_LINES", file=sys.stderr)
+    failed = len(unlisted_api_files) + len(missing_pins)
+    for rel in unlisted_api_files:
+        print(f"FAIL api control entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
+    # The C2 cluster service entries (mctlhq/mctl-glovo#11), proven on the real
+    # ALLOWED_LINES, one file at a time and both ways: the listed line passes
+    # in its own file only, and an unlisted sibling, a whitespace change and
+    # the same line in another file all refuse.
+    unlisted_c2_files: list[str] = []
+    for rel in C2_SERVICE_FILES:
+        listed = sorted(ALLOWED_LINES.get(rel, frozenset()))
+        if not listed:
+            unlisted_c2_files.append(rel)
+            continue
+        one = next((x for x in listed if LEAK.search(x)), listed[0])
+        add(f"c2 entries: {rel}: a listed line passes", 0, put(rel, f"x: 1\n{one}\n"))
+        add(f"c2 entries: {rel}: an unlisted sibling line refuses", REFUSED,
+            put(rel, f"{one}\n  - name: glovo_unlisted_sibling\n"))
+        add(f"c2 entries: {rel}: changed whitespace refuses", REFUSED, put(rel, f" {one}\n"))
+        add(f"c2 entries: {rel}: the same line in another file refuses", REFUSED,
+            put("platform-gitops/services/labs/y.yaml", f"{one}\n"))
+
+    failed += len(unlisted_c2_files)
+    for rel in unlisted_c2_files:
+        print(f"FAIL c2 entries: {rel} has no listed lines in ALLOWED_LINES", file=sys.stderr)
+    pinned = ALLOWED_PATHS == {svc}
+    failed += not pinned
+    print(f"{'ok  ' if pinned else 'FAIL'} paths: ALLOWED_PATHS is exactly the one service template",
+          file=sys.stderr)
+    for name, want, mutate, allowed, paths in cases:
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _fixture(root)
             mutate(root)
-            got = run(root, render=False)
+            got = run(root, render=False, allowed=allowed, allowed_paths=paths)
         ok = got == want
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name}: exit {got}, want {want}", file=sys.stderr)

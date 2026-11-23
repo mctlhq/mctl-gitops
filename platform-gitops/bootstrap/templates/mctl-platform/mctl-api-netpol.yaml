@@ -33,6 +33,17 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: argo-workflows
+        # The C2 cluster service's server pod reads the consent decision
+        # from mctl-api (a GET on the consent read route) and mctl-api calls
+        # it back for the kill switch (egress is not restricted here). The
+        # server pod only, not the rest of its namespace.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-glovo
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-glovo
+              app.kubernetes.io/component: server
         # admins hosts platform workloads, not tenant apps: mctl-agent and the
         # agents worker drive mctl-api's operations/agents endpoints directly.
         # Carving this out is required — treating admins as a plain tenant here

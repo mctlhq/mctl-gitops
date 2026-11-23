@@ -19,3 +19,6 @@ files:
   netpol/worker-to-temporal.yaml:
     phase: p1
     target: decided in P1
+  netpol/mctl-api-egress.yaml:
+    phase: p1
+    target: decided in the egress gate (before P2 activation)

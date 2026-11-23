@@ -169,3 +169,8 @@ import {
   to = cloudflare_dns_record.anthropic_domain_verify
   id = "${local.zone_id}/98ade15758bb2ecaa791b0d5dc900529"
 }
+
+import {
+  to = cloudflare_dns_record.openai_business_profile_verify
+  id = "${local.zone_id}/a358965c14c4aeb5b06a28e1af0c7ff7"
+}

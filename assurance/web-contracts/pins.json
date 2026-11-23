@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "note": "Preview assurance pins for mctlhq/mctl-gitops#2929. Validated by report/build_report.py --check-pins before anything runs. Preview assurance only; not production conformance.",
+  "playwright_image": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+  "playwright_test_version": "1.64.1",
+  "nginx_image": "docker.io/nginx/nginx-unprivileged:1.31.9-alpine@sha256:60214a103e6f38e953ff957f34b1f2e97a9db801ab2df3821da955d0fe6cadd6",
+  "postgres_image": "docker.io/library/postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f",
+  "mctl_design": {
+    "commit": "6d82a6b239365213d6859f2794c2449af7dd4e1f",
+    "css_version": "0.21.0",
+    "also_verified_versions": [
+      "0.20.2"
+    ],
+    "contracts": [
+      {
+        "id": "web-header-a11y",
+        "version": "1.0.0",
+        "path": "docs/contracts/web-header-a11y.md"
+      },
+      {
+        "id": "web-asset-integrity",
+        "version": null,
+        "version_note": "the document at the pinned commit states no contract version",
+        "path": "docs/contracts/web-asset-integrity.md"
+      }
+    ],
+    "sheets": {
+      "0.21.0": {
+        "mctl.css": {
+          "sha256": "5970ec6855048f93812a21342db7ac7e3d37dab4ac15a6738d30ba0f74722e10",
+          "sha384": "sha384-7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5"
+        },
+        "global.css": {
+          "sha256": "365a64c7998b12879d218da4f2aa1dedc6fc4e606c2cba0f0b575fbca60070c3",
+          "sha384": "sha384-oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV"
+        },
+        "prose.css": {
+          "sha256": "4e8891f87875514e8f03804619b979802c805065fa030aefbbc64540cf5e4ec1",
+          "sha384": "sha384-EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W"
+        },
+        "site.css": {
+          "sha256": "a111f5bde21034bb8e2f68f5e4085529cac67a873fd76c896d980b6929819ba2",
+          "sha384": "sha384-XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr"
+        }
+      },
+      "0.20.2": {
+        "mctl.css": {
+          "sha256": "063ceae822d3b139c670fd2b687a00ff021cf2d75443995c14c3b19145324958",
+          "sha384": "sha384-3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ"
+        },
+        "global.css": {
+          "sha256": "cd78060bdc83c56508594fe20fd9302951130e8720604c547140c16f1762ff03",
+          "sha384": "sha384-QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm"
+        },
+        "prose.css": {
+          "sha256": "71536bf86e0d1edc1b9efb6d3fb5cc823826c0826c5790f3f26bdf0cd1a1ee0f",
+          "sha384": "sha384-iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4"
+        },
+        "site.css": {
+          "sha256": "d184836c17818edbe85923d356da872113f07cb8d088477796f39d0fc01ad31a",
+          "sha384": "sha384-qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj"
+        }
+      }
+    }
+  },
+  "fixture_hosts": [
+    "ui.fixture.test",
+    "site.fixture.test"
+  ],
+  "sites": [
+    {
+      "name": "mctl-web",
+      "gitops_tag": "7.24.0",
+      "image": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
+      "source_commit": null,
+      "breakpoint": 981,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
+      "observed_image_digest_resolved_for_tag": "7.24.0",
+      "breakpoint_note": "observed in consumer source at gitops tag 7.24.0 (app/components/AppHeader.vue: useMediaQuery('(min-width: 981px)')); the contract itself does not state it",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js",
+        "challenges.cloudflare.com/turnstile/v0/api.js",
+        "mctl.ai/api/signup-status"
+      ],
+      "expected_blocked_note": "requests the landing page makes to hosts the isolated run does not allow (analytics script, bot-check script, signup status call), observed in CI run 45166785569; each is aborted, never answered",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": ".mctl-site-burger",
+        "outside": "main .hero-block__actions button"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (CI capture, run 45147133024): outside is the first focusable element after the burger in DOM order, the hero primary button"
+    },
+    {
+      "name": "mctl-docs",
+      "gitops_tag": "0.1.73",
+      "image": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
+      "source_commit": null,
+      "breakpoint": 768,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
+      "observed_image_digest_resolved_for_tag": "0.1.73",
+      "breakpoint_note": "observed in the VitePress default theme source of the consumer checkout (VPNavBarHamburger and VPNavBarMenu switch at min-width: 768px; installed vitepress 1.6.4), not read from the served image at gitops tag 0.1.73; the contract itself does not state it. A wrong value shows up as failing B-1 or B cases.",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "selectors": {
+        "header": "header.VPNav",
+        "nav": "nav.VPNavBarMenu",
+        "links": "nav.VPNavBarMenu a.VPNavBarMenuLink",
+        "toggle": "button.VPNavBarHamburger",
+        "outside": "a.VPButton.brand",
+        "narrow": {
+          "nav": "#VPNavScreen",
+          "landmark": "#VPNavScreen nav.VPNavScreenMenu",
+          "links": "#VPNavScreen a.VPNavScreenMenuLink"
+        },
+        "wide": {
+          "nav": "nav.VPNavBarMenu",
+          "links": "nav.VPNavBarMenu a.VPNavBarMenuLink"
+        }
+      },
+      "selectors_note": "observed in the page served by the pinned image (probe run 45194844005) and the VitePress 1.6.4 theme source: a framework-native hamburger (contract 6.2) with an inline menu on wide and a panel #VPNavScreen that is rendered only while open (v-if), whose nav has no aria-label in the theme source. Only top-level links are listed: links inside collapsed groups (the Links flyout) are not part of this matrix. outside is the first focusable element after the header, the hero primary button."
+    },
+    {
+      "name": "mctl-telegram",
+      "gitops_tag": "0.143.0",
+      "image": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
+      "source_commit": null,
+      "breakpoint": 768,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
+      "observed_image_digest_resolved_for_tag": "0.143.0",
+      "breakpoint_note": "observed in consumer source (internal/ui/assets/components.css: the CSS-checkbox menu is enabled in @media (max-width: 767px)), read at the consumer checkout, not at the gitops tag 0.143.0; the contract itself does not state it. A wrong value shows up as failing B-1 or B cases.",
+      "env": {
+        "DATABASE_URL": "file:/tmp/wca/mctl-telegram.db?_pragma=journal_mode(WAL)",
+        "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
+        "TG_API_ID": "1",
+        "TG_API_HASH": "dummy",
+        "AUTH_MODE": "shared-hmac",
+        "AUTH_REQUIRED": "true",
+        "OAUTH_JWT_SECRET": "dummydummydummydummydummydummydummydummy"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only, none of them a URL (results.json embeds the pins and the report refuses to carry a URL). Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs.",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "selectors": {
+        "kind": "checkbox",
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#site-nav-toggle",
+        "click_toggle": "label.nav-burger",
+        "outside": "#copy-mcp-url"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): a visually hidden checkbox and its label drive the panel; outside is the first focusable element after the header, the copy button."
+    },
+    {
+      "name": "mctl-academy",
+      "gitops_tag": "0.1.101",
+      "image": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
+      "source_commit": null,
+      "breakpoint": 981,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
+      "observed_image_digest_resolved_for_tag": "0.1.101",
+      "breakpoint_note": "observed in the consumer source (client/src/components/AppNav.vue: the header carries mctl-site-header--drawer-wide and the component reads matchMedia('(min-width: 981px)')); the contract itself does not state it",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js",
+        "consumer-mctl-academy/api/auth/get-session"
+      ],
+      "expected_blocked_note": "stats.mctl.ai/insights.js: analytics script named in the served HTML. consumer-mctl-academy/api/auth/get-session: the client-rendered app asks its own session endpoint on every load; the guard treats /api/auth as sensitive and aborts it, so the app runs as a signed-out visitor whose session request got no answer. Both are aborted, never answered.",
+      "env": {
+        "BETTER_AUTH_SECRET": "dummydummydummydummydummydummydummydummy"
+      },
+      "env_note": "dummy value only. The image refuses to start in production without BETTER_AUTH_SECRET and without a database it can reach over TLS; the database is the sidecar below, and DATABASE_URL is built by run.sh for it, never written here. Found by starting the pinned image locally against a Postgres container.",
+      "sidecar": {
+        "postgres": {
+          "roles": [
+            "academy_readonly"
+          ]
+        }
+      },
+      "sidecar_note": "the app applies its own migrations at boot, and one of them needs the role academy_readonly to exist (in production a managed role provides it; the app's own CI creates it by hand).",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a.app-nav-link",
+        "toggle": ".mctl-site-burger",
+        "outside": "main :is(a[href], button):visible >> nth=0"
+      },
+      "selectors_note": "read from the consumer's header component (client/src/components/AppNav.vue), not from served HTML, because the page is a client-rendered app: burger .mctl-site-burger follows the nav in DOM order; only the top-level app-nav-link links are listed. outside is the first visible link or button in main, chosen without a keyboard walk and corrected after the first run if it is wrong."
+    },
+    {
+      "name": "mctl-alice",
+      "gitops_tag": "2.16.0",
+      "image": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
+      "source_commit": null,
+      "breakpoint": 981,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
+      "observed_image_digest_resolved_for_tag": "2.16.0",
+      "env": {
+        "OAUTH_DB_PATH": "/tmp/wca/oauth.db",
+        "TELEMETRY_DB_PATH": "/tmp/wca/telemetry.db"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only. The image keeps its SQLite files under ./data in a read-only root, so both database paths point at a tmpfs; observed in CI probe (mctl-alice start failure: unable to open database file).",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "breakpoint_note": "observed: the header carries mctl-site-header--drawer-wide, whose drawer applies below 981px in the shared site.css (max-width: 980px); the contract itself does not state it",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#nav-burger",
+        "outside": "a.btn-primary[href=\"/setup\"]"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): burger #nav-burger follows the nav in DOM order; outside is the first focusable element after the header, the primary hero link. The page also holds a language-switcher nav; the main nav is #site-nav."
+    },
+    {
+      "name": "seerrsense",
+      "gitops_tag": "1.14.4",
+      "image": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
+      "source_commit": null,
+      "breakpoint": 768,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
+      "observed_image_digest_resolved_for_tag": "1.14.4",
+      "env": {
+        "SEERRSENSE_AUTH_TOKEN": "dummydummydummydummydummydummydummydummy"
+      },
+      "env_note": "dummy value only. The image refuses to start without SEERRSENSE_AUTH_TOKEN; with it, started locally with no network, it listens on the forced PORT 8080 (the 8787 in its README is only the default).",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "breakpoint_note": "observed: the header has no drawer-wide class, so the drawer applies below 768px in the shared site.css (max-width: 767px); the contract itself does not state it",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#nav-burger",
+        "outside": "main a.btn-secondary"
+      },
+      "selectors_note": "observed in the page served by the pinned image: burger #nav-burger follows the nav in DOM order. outside is the first focusable element after the header on a real keyboard walk, the secondary hero link (the copy button in the served HTML is not focusable until script runs, so it is not used; first run 45204932387 showed the wrong choice)."
+    }
+  ]
+}

@@ -10,7 +10,7 @@
   `docs/runbooks/temporal-patch-marker-scan.md`. — DoD: the JSON contains `scanned_at`, and
   existing tests plus a new assertion pass.
 - [ ] 3. `tools/rollback_compat_check.py`: AST patch-id extraction (`patch_ids`), read-only
-  `git archive` materialisation of a ref, and `check()`. Verdicts are COMPATIBLE,
+  `git archive` materialisation of a ref, and `check()`. Verdicts are PATCH_COMPATIBLE (offline necessary condition, **not** rollback GO),
   INCOMPATIBLE and UNKNOWN, with stable reason codes, exit codes 0/3/2, and text and `--json`
   output. It makes no network calls. (Depends on 2.) — DoD: the tool runs against this tree
   with `--target a99c888` and a synthetic PRESENT report and gives INCOMPATIBLE for
@@ -37,7 +37,19 @@
   - relabel "Failed new worker" step 4 from the F2 evidence.
 
   DoD: no statement in the runbook contradicts ADR 026, every new row carries an evidence
-  label, and the PROD/UNVERIFIED caveats are kept.
+  label, and the PROD/UNVERIFIED caveats are kept. State explicitly that B4 remains FAIL and
+  `PATCH_COMPATIBLE` cannot override the release hold.
+
+## Separate follow-up gate (not authorised here)
+
+- [ ] L1. Specify a fail-closed GitOps/Argo enforcement change that binds scanned
+  histories, marker ids, running image digest, exact candidate and point-of-effect
+  revalidation/fencing across direct push and manual rollback paths. Track it in a
+  distinct implementation issue with independent owner approval. Do not report B4 as
+  passed merely because the offline checker or LOCAL matrix passes.
+- [ ] L2. In the owner handoff, separate `PATCH_COMPATIBLE` from proof of full Temporal
+  replay safety, operational worker start, dynamic config, release-gate enforcement, and
+  a safe emergency plan if the compatible worker itself fails to start.
 
 ## Tests
 
@@ -47,12 +59,12 @@
   pattern fails.
 - [ ] T2. Check verdicts on synthetic trees and reports:
   - removed id with PRESENT gives INCOMPATIBLE (exit 3);
-  - all ABSENT and fresh gives COMPATIBLE (exit 0);
+  - all ABSENT and fresh gives PATCH_COMPATIBLE (exit 0);
   - a missing report, `UNKNOWN > 0`, `listing_complete=false`, an MS-4 undated report, a stale
     report, a query narrowed by `WorkflowId`, or a query for the wrong workflow type each give
     UNKNOWN (exit 2) with the expected reason;
   - an unresolvable `workflow.patched` argument gives UNKNOWN;
-  - an empty `removed` set gives COMPATIBLE.
+  - an empty `removed` set gives PATCH_COMPATIBLE.
 - [ ] T3. Mutation set: removing the PRESENT branch, ranking UNKNOWN below INCOMPATIBLE,
   accepting an undated report, or ignoring `listing_complete` each turns at least one T2 case
   red.

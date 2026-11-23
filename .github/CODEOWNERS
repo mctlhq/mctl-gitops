@@ -91,3 +91,21 @@ platform-gitops/agent-platform/** @mashkovd
 # the pin fixture may change only together with a pinned bootstrap source.
 tests/test_bootstrap_source_pin.py @mashkovd
 tests/fixtures/bootstrap-source-pin.json @mashkovd
+
+# Argo CD AppProjects and sync-window guards
+# ---------------------------------------------------------------------------
+# An AppProject carries spec.syncWindows, sourceRepos and roles. A window
+# that matches the wrong applications (root-app, argocd-self-managed, or
+# anything in project `default`) cannot be reverted through GitOps, because
+# the ruleset bypass is gone: a bad merge means a manual live patch. The
+# validator and the render script are what bound where a window may land,
+# and app-project-consumers.json is the list they count against, so weakening
+# any of them is the same decision as editing a window.
+#
+# Like the entries above, the repository default already routes these paths;
+# this records the reason at the path. auto-merge.yml's protected_re lists
+# the same paths, so a claude/* PR touching them is never machine-merged.
+platform-gitops/bootstrap/templates/projects/ @mashkovd
+scripts/validate-argocd-sync-windows.py @mashkovd
+scripts/render-sync-window.py @mashkovd
+scripts/app-project-consumers.json @mashkovd

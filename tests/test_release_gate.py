@@ -44,6 +44,10 @@ MUTANTS = {
     "tag differences ignored": ("if len({str(t) for t in tags.values()}) > 1:", "if False:"),
     "repository ignored": ('if g.get("repository") and', "if False and"),
     "unreadable file is skipped": ('out.append(f"UNKNOWN: {p} image.tag unreadable: {type(exc).__name__}")\n                continue', "continue"),
+    "shape: settled digest with a different tag accepted": ("            if tag != ref_tag:\n                return", "            if False:\n                return"),
+    "shape: one tag with two digests accepted": ("        elif tag == ref_tag:\n            return", "        elif False:\n            return"),
+    "shape: tag-only bump over a stale ref accepted": ("    if rt < t:", "    if False:"),
+    "shape: non-semver tag without a digest accepted": ("    if t is None or rt is None:", "    if False:"),
     "unreadable required key is skipped": ('out.append(f"UNKNOWN: {r[\'path\']} {r[\'key\']} unreadable: {type(exc).__name__}")\n                continue', "continue"),
 }
 src = GATE.read_text()
@@ -69,11 +73,11 @@ for label, wf, first_write in (("release-deploy", rd, "with open(path, 'w')"), (
     bump = wf.find("- name: Bump image tag")
     check(f"{label}: PyYAML is installed before the bump", 0 < inst < bump)
 check("release-deploy: verify runs every push attempt, after the rebase, and is fatal",
-      re.search(r"release_gate\(\) \{\n\s+python3 scripts/release-gate\.py verify \|\| \{\n\s+echo[^\n]*\n\s+exit 1\n", rd)
+      re.search(r"release_gate\(\) \{\n\s+python3 scripts/release-gate\.py verify --policy-rev origin/main \|\| \{\n\s+echo[^\n]*\n\s+exit 1\n", rd)
       is not None and re.search(r"for attempt in 1 2 3 4 5; do\n\s+release_gate\n", rd) is not None
       and "verify || true" not in rd)
 check("gitops-bump: verify is the line right before git push",
-      re.search(r"release-gate\.py verify\n\s+git push", gb) is not None)
+      re.search(r"release-gate\.py verify --policy-rev origin/main\n\s+git push", gb) is not None)
 
 # 3b. The rollback workflow pushes one values file with the deploy key. It calls
 #     the shared guard script like every other writer; its behaviour (gated file,

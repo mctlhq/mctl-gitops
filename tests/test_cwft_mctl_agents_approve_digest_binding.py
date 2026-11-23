@@ -159,8 +159,109 @@ def t8(root, tmp):
     assert yaml.safe_load((pdir / ".status.yaml").read_text())["status"] == "accepted"
 
 
+GATED = "control:\n  requires_human_approval: true\n"
+
+
+def run_accepted(root, tmp, extra, approver="alice", digest_of_files=True):
+    pdir = run(SOURCE, root, tmp, "", status="accepted", extra=extra)
+    d = digest(pdir) if digest_of_files else "sha256:" + "1" * 64
+    return pdir, d
+
+
+def execute_as(source, root, tmp, expected, approver):
+    src = (source.replace("/workdir/mctl-gitops", str(root))
+           .replace("/tmp/refusal_code", str(tmp / "refusal_code"))
+           .replace("/tmp/status-out", str(tmp / "status-out")))
+    env = dict(os.environ, WORKFLOW_SERVICE="svc", WORKFLOW_SLUG="slug",
+               WORKFLOW_APPROVER=approver, WORKFLOW_EXPECTED_DIGEST=expected,
+               WORKFLOW_APPROVAL_REF="")
+    return subprocess.run(["sh", "-c", src], capture_output=True, text=True, env=env)
+
+
+def t9(root, tmp):
+    # gitops#1206: accepted + gated + no approval block -> approver recorded,
+    # status untouched, handoff written, retry is then a noop.
+    pdir, d = run_accepted(root, tmp, GATED)
+    r = execute_as(SOURCE, root, tmp, d, "alice")
+    assert r.returncode == 0 and r.stdout == "recorded", (r.stdout, r.stderr)
+    st = yaml.safe_load((pdir / ".status.yaml").read_text())
+    assert st["status"] == "accepted"
+    assert st["control"]["requires_human_approval"] is True
+    assert st["approval"]["approved_by"] == "alice"
+    assert st["approval"]["content_digest"] == d
+    handed = tmp / "status-out/platform-gitops/agents-state/svc/proposals/slug/.status.yaml"
+    assert handed.read_bytes() == (pdir / ".status.yaml").read_bytes()
+    r = execute_as(SOURCE, root, tmp, d, "bob")
+    assert r.returncode == 0 and r.stdout == "noop", (r.stdout, r.stderr)
+    assert yaml.safe_load((pdir / ".status.yaml").read_text())["approval"]["approved_by"] == "alice"
+
+
+def t10(root, tmp):
+    # An anonymous approver is refused, file untouched.
+    for who in ["unknown", "None", "null"]:
+        (tmp / "refusal_code").unlink(missing_ok=True)
+        pdir, d = run_accepted(root, tmp, GATED)
+        b = (pdir / ".status.yaml").read_bytes()
+        r = execute_as(SOURCE, root, tmp, d, who)
+        refused(r, tmp, pdir, b, "approval_approver_anonymous")
+
+
+def t11(root, tmp):
+    # Shapes that must NOT record: not demanded, falsey, existing approval,
+    # or content that differs from what was approved.
+    cases = {
+        "no control block": ("", True),
+        "explicit false": ("control:\n  requires_human_approval: false\n", True),
+        "quoted false with comment": ("control:\n  requires_human_approval: 'False'  # off\n", True),
+        "key outside control": ("other:\n  requires_human_approval: true\n", True),
+        "approval block present": (GATED + "approval:\n  approved_by: 'carol'\n", True),
+        "digest differs": (GATED, False),
+    }
+    for name, (extra, same) in cases.items():
+        (tmp / "refusal_code").unlink(missing_ok=True)
+        pdir, d = run_accepted(root, tmp, extra, digest_of_files=same)
+        b = (pdir / ".status.yaml").read_bytes()
+        r = execute_as(SOURCE, root, tmp, d, "alice")
+        refused(r, tmp, pdir, b, "approval_content_mismatch")
+
+
+def t12(root, tmp):
+    # An unrecognised value demands approval (fail closed).
+    pdir, d = run_accepted(root, tmp, "control:\n  requires_human_approval: maybe\n")
+    r = execute_as(SOURCE, root, tmp, d, "alice")
+    assert r.returncode == 0 and r.stdout == "recorded", (r.stdout, r.stderr)
+
+
+def t13(root, tmp):
+    # Mutation: dropping the "approval is demanded" condition must turn a
+    # not-demanded proposal from a refusal into a recorded approval.
+    cond = '[ "$(approval_demanded "$STATUS_FILE")" = "yes" ]'
+    assert cond in SOURCE
+    mutated = SOURCE.replace(cond, "true", 1)
+    pdir, d = run_accepted(root, tmp, "control:\n  requires_human_approval: false\n")
+    b = (pdir / ".status.yaml").read_bytes()
+    refused(execute_as(SOURCE, root, tmp, d, "alice"), tmp, pdir, b, "approval_content_mismatch")
+    (tmp / "refusal_code").unlink(missing_ok=True)
+    mut = execute_as(mutated, root, tmp, d, "alice")
+    assert mut.returncode == 0 and mut.stdout == "recorded", (mut.stdout, mut.stderr)
+
+
+def t14(root, tmp):
+    # The step-list gate must let `recorded` reach commit-and-push, and a
+    # rebase conflict must not read a bare `accepted` as "our approve landed".
+    steps = [s for t in doc["spec"]["templates"] if t["name"] == "approve-proposal"
+             for grp in t["steps"] for s in grp]
+    commit = [s for s in steps if s["name"] == "commit"][0]
+    assert commit["when"] == "{{steps.flip.outputs.result}} != noop", commit["when"]
+    cp = [t for t in doc["spec"]["templates"] if t["name"] == "commit-and-push"][0]
+    assert '"^  approved_by: "' in cp["script"]["source"]
+
+
 for n, f in [("T1 unbound proposed", t1), ("T2 unbound accepted", t2),
              ("T3 malformed", t3), ("T4 mismatch", t4), ("T5/T6 reviewed flip", t5),
-             ("T7 accepted mismatch", t7), ("T8 mutation", t8)]:
+             ("T7 accepted mismatch", t7), ("T8 mutation", t8),
+             ("T9 record on accepted", t9), ("T10 anonymous approver", t10),
+             ("T11 no-record shapes", t11), ("T12 unknown value fails closed", t12),
+             ("T13 mutation", t13), ("T14 step gate", t14)]:
     case(n, f)
 sys.exit(0)

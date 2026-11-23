@@ -32,6 +32,7 @@ locals {
   # IDs only: Cloudflare renames groups from time to time, and a rename does not
   # change what a token can do.
   pg = {
+    account_analytics_read        = "b89a480218d04ceb98b4fe57ca29dc1f"
     account_api_tokens_read       = "eb56a6953c034b9d97dd838155666f06"
     account_settings_read         = "c1fde68c7bcc44588cbb6ddbc16d6480"
     ai_gateway_read               = "4dc8917b4b40457d88d3035d5dadb054"
@@ -80,6 +81,8 @@ locals {
     zone_read                     = "c8fed203ed3043cba015a93ad1616f1f"
     zone_settings_read            = "517b21aee92c4d89936c976ba6e4be55"
     zone_settings_write           = "3030687196b94b638145a3953da2b699"
+    zone_transform_rules_read     = "211a4c0feb3e43b3a2d41f1443a433e7"
+    zone_transform_rules_write    = "0ac90a90249747bca6b047d97f0803e9"
     zone_waf_read                 = "dbc512b354774852af2b5a5f4ba3d470"
     zone_waf_write                = "fb6778dc191143babbfaa57993f1d275"
   }
@@ -97,6 +100,11 @@ locals {
     local.pg.zone_settings_write,
     local.pg.zone_waf_write,
   ]
+
+  # noindex.tf (gitops#2791) is the only zone root that manages a
+  # http_response_headers_transform ruleset, so only the mctl.ai apply token
+  # carries Transform Rules write. mctl.me and mctl.ru keep the shared list.
+  zone_apply_groups_mctl_ai = concat(local.zone_apply_groups, [local.pg.zone_transform_rules_write])
 
   # One entry per token. Names are not unique on Cloudflare (the dashboard's
   # R2 "Create API token" names every token "R2 Account Token"), so entries are
@@ -137,6 +145,7 @@ locals {
           local.pg.workers_routes_read,
           local.pg.zone_read,
           local.pg.zone_settings_read,
+          local.pg.zone_transform_rules_read,
           local.pg.zone_waf_read,
         ]
         resources = {
@@ -151,6 +160,13 @@ locals {
     {
       name     = "mctl-gitops-portal-read (CF_PORTAL_READ_TOKEN)"
       policies = [{ permission_groups = [local.pg.mcp_portals_read], resources = { (local.account) = "*" } }]
+    },
+    # r2-ops-budget CronJob (infra-components/observability/blackbox/
+    # r2-ops-budget.yaml): reads the GraphQL Analytics API for the cycle's R2
+    # operation counts. Value in Vault at platform/r2-ops-budget (api-token).
+    {
+      name     = "r2-ops-budget (mctl-gitops r2-ops-budget CronJob, read-only analytics)"
+      policies = [{ permission_groups = [local.pg.account_analytics_read], resources = { (local.account) = "*" } }]
     },
     # CF_APPLY_TOKEN_PORTAL (environment cloudflare-apply): apply of ../portal
     # and cloudflare-portal-health's re-snapshot job.
@@ -179,7 +195,7 @@ locals {
     # CF_APPLY_TOKEN_MCTL_AI / _MCTL_ME / _MCTL_RU: apply of ../zones/*.
     {
       name     = "mctl-gitops-apply-mctl-ai (cloudflare-iac #1111)"
-      policies = [{ permission_groups = local.zone_apply_groups, resources = { (local.zone.mctl_ai) = "*" } }]
+      policies = [{ permission_groups = local.zone_apply_groups_mctl_ai, resources = { (local.zone.mctl_ai) = "*" } }]
     },
     {
       name     = "mctl-gitops-apply-mctl-me (cloudflare-iac #1111)"
@@ -310,6 +326,13 @@ locals {
     {
       name     = "mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)"
       policies = [{ permission_groups = [local.pg.ai_gateway_run], resources = { (local.account) = "*" } }]
+    },
+    # mctl-glovo landing-worker.yml: `wrangler deploy` of the glovo-landing
+    # script (repository secret CLOUDFLARE_API_TOKEN). Scripts only: its
+    # route is owned by ../zones/mctl-ai/workers.tf, not by the deploy.
+    {
+      name     = "mctl-glovo-landing-worker deploy (mctl-glovo CLOUDFLARE_API_TOKEN)"
+      policies = [{ permission_groups = [local.pg.workers_scripts_write], resources = { (local.account) = "*" } }]
     },
     {
       name = "pelican-catalog-worker CI deploy"

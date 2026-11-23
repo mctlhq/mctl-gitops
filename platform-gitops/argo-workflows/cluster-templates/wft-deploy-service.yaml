@@ -6,7 +6,9 @@ metadata:
     workflows.argoproj.io/description: |
       Main deployment workflow: validate → build → check the image user
       → write Vault secrets → optionally provision database → generate
-      Helm manifests → commit to gitops repo → ArgoCD syncs.
+      Helm manifests → commit to gitops repo → ArgoCD syncs → health gate
+      (Synced and Healthy at the commit, pods on the built digest, ready,
+      stable; outputs health, health_url, argo_revision, image_digest).
 
       Actions:
         onboard      — first deploy: creates values.yaml, catalog-info.yaml
@@ -105,6 +107,11 @@ spec:
         value: "false"
       - name: skip_health_check
         value: "false"
+        # "true" removes the liveness and readiness probes from values.yaml,
+        # for a service with no HTTP health endpoint (a worker). It does NOT
+        # skip the post-sync health-gate step: that still requires Argo CD
+        # Synced and Healthy, every pod on the built digest, ready and without
+        # restarts; only the HTTP check has no path to ask (gitops#2653).
       - name: health_check_path
         value: ""
         # e.g. "/health" (empty = no override, chart default /healthz + /readyz used)
@@ -114,6 +121,15 @@ spec:
         value: ""
         # explicit image tag override (empty = derived from git_tag)
       - name: autoscaling_enabled
+        value: "false"
+      # Opt-in switch-off (gitops#1218). `autoscaling_enabled` cannot carry
+      # it: its default is "false" and every existing caller passes "false"
+      # on an ordinary deploy, so honouring it as "turn autoscaling off"
+      # would silently disable HPAs that were enabled earlier. "true" here
+      # sets autoscaling.enabled=false; with min_replicas=0 it also sets
+      # replicaCount=0 (stop the service). Conflicts with
+      # autoscaling_enabled=true and is rejected.
+      - name: autoscaling_disable
         value: "false"
       - name: min_replicas
         value: "1"
@@ -134,6 +150,29 @@ spec:
   templates:
     # ────────────────────────────────────────────────────────────────────────
     - name: deploy-pipeline
+      # What the platform observed after the sync (health-gate.sh): the
+      # workflow's own outputs, so mctl-api can read them from status.outputs.
+      # Set only when the gate passed; a failed gate fails the workflow.
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health}}"
+          - name: health_url
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.health_url}}"
+          - name: argo_revision
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.argo_revision}}"
+          - name: image_digest
+            valueFrom:
+              parameter: "{{tasks.health-gate.outputs.parameters.image_digest}}"
+          # The gitops commit this deploy pushed: what a rollback by revision
+          # restores (mctlhq/mctl-api#1048). From the commit task, not the
+          # gate, so it is known whatever the gate concludes.
+          - name: commit_sha
+            valueFrom:
+              parameter: "{{tasks.commit.outputs.parameters.commit_sha}}"
       dag:
         tasks:
           # Step 1: validate naming, team, service existence + resolve image_tag
@@ -317,7 +356,7 @@ spec:
           # Step 5: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
             dependencies: [commit]
-            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\""
+            when: "\"{{workflow.parameters.autoscaling_enabled}}\" == \"true\" || \"{{workflow.parameters.autoscaling_disable}}\" == \"true\""
             template: patch-autoscaling-values
 
           - name: refresh-apps-appset
@@ -329,6 +368,19 @@ spec:
                   value: "{{workflow.parameters.team_name}}"
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
+
+          # Step 6: post-sync health gate (gitops#2653). Green means the
+          # platform saw the new version running, not that a commit was
+          # pushed. Runs for every action and service type; skip_health_check
+          # does not skip it. After patch-autoscaling (a Skipped dependency
+          # counts as done) so its commit is part of what Argo CD syncs.
+          - name: health-gate
+            dependencies: [commit, refresh-apps-appset, patch-autoscaling]
+            template: health-gate
+            arguments:
+              parameters:
+                - name: commit_sha
+                  value: "{{tasks.commit.outputs.parameters.commit_sha}}"
 
     # ────────────────────────────────────────────────────────────────────────
     - name: patch-autoscaling-values
@@ -347,6 +399,10 @@ spec:
             value: "{{workflow.parameters.team_name}}"
           - name: PARAM_COMPONENT_NAME
             value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_AUTOSCALING_ENABLED
+            value: "{{workflow.parameters.autoscaling_enabled}}"
+          - name: PARAM_AUTOSCALING_DISABLE
+            value: "{{workflow.parameters.autoscaling_disable}}"
           - name: PARAM_MIN_REPLICAS
             value: "{{workflow.parameters.min_replicas}}"
           - name: PARAM_MAX_REPLICAS
@@ -395,6 +451,8 @@ spec:
           MIN="$PARAM_MIN_REPLICAS"
           MAX="$PARAM_MAX_REPLICAS"
           CPU="$PARAM_CPU_THRESHOLD"
+          ENABLED_PARAM="$PARAM_AUTOSCALING_ENABLED"
+          DISABLE_PARAM="$PARAM_AUTOSCALING_DISABLE"
           REPO="https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
@@ -414,6 +472,19 @@ spec:
                 ;;
             esac
           done
+
+          # Exactly one direction per run (gitops#1218). Both asked for is a
+          # contradiction, not something to resolve by picking one.
+          case "${DISABLE_PARAM}" in
+            true)
+              if [ "${ENABLED_PARAM}" = "true" ]; then
+                echo "❌ autoscaling_enabled=true and autoscaling_disable=true contradict each other" >&2
+                exit 1
+              fi
+              MODE=disable
+              ;;
+            *) MODE=enable ;;
+          esac
 
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
@@ -442,20 +513,66 @@ spec:
           MAX="$(strip_zeros "$MAX")"
           CPU="$(strip_zeros "$CPU")"
           export MIN MAX CPU
-          yq eval -i '
-            .autoscaling.enabled = true |
-            .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
-            .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
-            .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
-          ' "${VALUES}"
+          if [ "$MODE" = "disable" ]; then
+            # Turn the HPA off without creating a block that was never there.
+            if [ "$(yq eval '.autoscaling | tag' "${VALUES}")" != "!!null" ]; then
+              yq eval -i '.autoscaling.enabled = false' "${VALUES}"
+            fi
+            # min_replicas=0 with autoscaling off is the supported way to
+            # stop a service: the Deployment renders replicas from
+            # replicaCount, which the HPA bounds never touched. Any other
+            # min_replicas leaves replicaCount alone.
+            if [ "$MIN" = "0" ]; then
+              yq eval -i '.replicaCount = 0' "${VALUES}"
+            fi
+          else
+            # An HPA cannot take minReplicas 0 (the API server rejects it
+            # without the HPAScaleToZero gate). Rejected here, after the
+            # leading-zero strip so "00" cannot slip past, rather than
+            # committed and left to fail at sync.
+            if [ "$MIN" = "0" ]; then
+              echo "❌ min_replicas=0 is not valid with autoscaling enabled; to stop the service set autoscaling_disable=true with min_replicas=0" >&2
+              exit 1
+            fi
+            yq eval -i '
+              .autoscaling.enabled = true |
+              .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
+              .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
+              .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
+            ' "${VALUES}"
+          fi
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-deploy"
           git add "${VALUES}"
           git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
-          git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
-          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
-          git push
+          if [ "$MODE" = "disable" ]; then
+            git commit -m "chore: disable autoscaling for ${TEAM}/${COMPONENT} (min_replicas=${MIN})"
+          else
+            git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          fi
+          PUSHED=false
+          for i in $(seq 1 5); do
+            sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
+            if git push; then
+              PUSHED=true
+              break
+            fi
+            # A concurrent writer moved main. `git pull --rebase` must not run bare
+            # under `set -e`: a conflict would abort mid-rebase and skip the retry.
+            # Abort it so the next attempt starts from a clean worktree, and re-run
+            # the outgoing guard on the rebased commits (gitops#988, #999).
+            if ! git pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              echo "Rebase failed (attempt ${i}); retrying" >&2
+            fi
+          done
+          # Wrapping the rebase removed the `set -e` abort that used to stop an
+          # exhausted loop; without this check it would fall through as if pushed.
+          if [ "$PUSHED" != "true" ]; then
+            echo "git push failed after 5 attempts" >&2
+            exit 1
+          fi
       volumes:
         - name: deploy-key
           secret:
@@ -525,6 +642,72 @@ spec:
           # templates name the image <registry>/<component>.
           sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-user.sh check \
             --uid-out /tmp/image-user /tmp/mctl-gitops "$TEAM" "$COMPONENT" "$TAG" "${REGISTRY}/${COMPONENT}"
+      volumes:
+        - name: ghcr-credentials
+          secret:
+            secretName: ghcr-credentials
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: health-gate
+      inputs:
+        parameters:
+          - name: commit_sha
+      outputs:
+        parameters:
+          - name: health
+            valueFrom:
+              path: /tmp/health-gate/health
+          - name: health_url
+            valueFrom:
+              path: /tmp/health-gate/health_url
+          - name: argo_revision
+            valueFrom:
+              path: /tmp/health-gate/argo_revision
+          - name: image_digest
+            valueFrom:
+              path: /tmp/health-gate/image_digest
+      # The script's own deadline is HG_TIMEOUT (600s) plus the stability
+      # window; this is the backstop for a hung clone or kubectl call.
+      activeDeadlineSeconds: 900
+      script:
+        # kubectl, git, jq, yq and curl: what health-gate.sh needs.
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_COMMIT_SHA
+            value: "{{inputs.parameters.commit_sha}}"
+          # The tenant pull secret, to resolve the deployed tag to a digest.
+          - name: DOCKER_CONFIG_JSON
+            value: /secrets/ghcr/.dockerconfigjson
+        volumeMounts:
+          - name: ghcr-credentials
+            mountPath: /secrets/ghcr
+            readOnly: true
+        source: |
+          set -eu
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992); the script shape-checks them again.
+          mkdir -p /tmp/health-gate
+          echo unknown > /tmp/health-gate/health
+          for f in health_url argo_revision image_digest; do : > "/tmp/health-gate/$f"; done
+
+          # Read-only and public. Blobless but with full history: the gate
+          # checks that Argo CD's revision contains the deploy's commit, and
+          # reads the service's values at that commit.
+          git clone --filter=blob:none --no-checkout -q \
+            "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          git -C /tmp/mctl-gitops checkout -q origin/HEAD -- platform-gitops/argo-workflows/scripts
+
+          sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/health-gate.sh \
+            /tmp/mctl-gitops "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME" "$PARAM_COMMIT_SHA"
       volumes:
         - name: ghcr-credentials
           secret:
@@ -684,7 +867,7 @@ spec:
           for attempt in range(30):
               time.sleep(10)
               runs = api_request("GET",
-                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=5")
+                  f"/repos/{GITOPS_ORG}/{GITOPS_REPO}/actions/workflows/build-image.yaml/runs?per_page=100")
               for run in runs.get("workflow_runs", []):
                   if run.get("name", "") == run_name or build_id in run.get("name", ""):
                       run_id = run["id"]

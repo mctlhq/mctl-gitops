@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mctlhq/mctl-gitops/cli/mctl/internal/api"
@@ -14,7 +13,7 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a new service to the platform",
-	Long: `Deploy a new service via the mctl API. Supports both repo-based deploys and template-based onboard flows (--service-template).`,
+	Long:  `Deploy a new service via the mctl API. Supports both repo-based deploys and template-based onboard flows (--service-template).`,
 	Example: `  # Deploy a web service with ingress
   mctl deploy -t my-team -n my-api -r mctlhq/my-api -g v1.0.0 --host my-api.preview.mctl.ai
 
@@ -55,8 +54,8 @@ func init() {
 	deployCmd.Flags().StringVar(&deployDockerfile, "dockerfile", "Dockerfile", "Path to Dockerfile")
 	deployCmd.Flags().StringVar(&deployTemplate, "service-template", "default", "Service template to use, e.g. default or worker")
 	deployCmd.Flags().StringVar(&deployImageTag, "image-tag", "", "Pre-built image tag override (skip repo build)")
-	deployCmd.Flags().StringSliceVar(&deployEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
-	deployCmd.Flags().StringSliceVar(&deploySecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
+	deployCmd.Flags().StringArrayVar(&deployEnv, "env", nil, "Environment variable KEY=VALUE (repeatable)")
+	deployCmd.Flags().StringArrayVar(&deploySecret, "secret", nil, "Secret KEY=VALUE (repeatable)")
 	deployCmd.Flags().BoolVarP(&deployWait, "wait", "w", false, "Wait for workflow to complete")
 	deployCmd.Flags().StringVar(&deployPat, "pat", "", "Repository PAT for private repos (saved to Vault)")
 
@@ -76,6 +75,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	if deployTemplate != "default" && deployHost == "" {
 		deployHost = "auto"
+	}
+
+	envVars, err := joinKV("env", deployEnv)
+	if err != nil {
+		return err
+	}
+	secretVars, err := joinKV("secret", deploySecret)
+	if err != nil {
+		return err
 	}
 
 	token, err := auth.GetToken()
@@ -102,19 +110,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	inputs := map[string]string{
-		"action":            "onboard",
-		"team_name":         deployTeam,
-		"component_name":    deployName,
-		"component_type":    serviceType,
-		"dockerfile_repo": deployRepo,
-		"dockerfile_path": deployDockerfile,
-		"git_tag":           deployTag,
-		"image_tag":         deployImageTag,
-		"port":              deployPort,
-		"host":              deployHost,
-		"env_vars":          strings.Join(deployEnv, "\n"),
-		"secret_env_vars":   strings.Join(deploySecret, "\n"),
-		"service_template":  deployTemplate,
+		"action":           "onboard",
+		"team_name":        deployTeam,
+		"component_name":   deployName,
+		"component_type":   serviceType,
+		"dockerfile_repo":  deployRepo,
+		"dockerfile_path":  deployDockerfile,
+		"git_tag":          deployTag,
+		"image_tag":        deployImageTag,
+		"port":             deployPort,
+		"host":             deployHost,
+		"env_vars":         envVars,
+		"secret_env_vars":  secretVars,
+		"service_template": deployTemplate,
 	}
 
 	client := api.NewClient(token)

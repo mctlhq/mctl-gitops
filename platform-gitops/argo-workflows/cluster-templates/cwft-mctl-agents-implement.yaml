@@ -105,7 +105,7 @@ spec:
         # Bound subscription usage and blast radius. Set explicitly to 0 only
         # for an operator-reviewed manual batch.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.117.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -283,7 +283,20 @@ spec:
         # success.
         - - name: implement-fallback
             template: run-implementer
-            when: "{{steps.implement.status}} != Succeeded"
+            # Exit 45 is a refusal, not a failure worth a second run on the
+            # other account, which would reach the identical answer:
+            #   45  EXIT_BLOCKED_ONLY from run_implementer: only proposals
+            #       blocked on a missing approval, decided before any model
+            #       call (mctl-agents#349, gitops#1206)
+            # A no-commits result is NOT skipped: it is indistinguishable
+            # from a 429 / usage-limit result, which the fallback is for.
+            # Expression tag with an explicit default rather than a plain
+            # `{{steps...exitCode}}`: a pod-level Error (deadline, OOM,
+            # controller error) can leave the node without outputs, an
+            # unresolved plain tag would fail the whole step group, and the
+            # fallback must still run on exactly that path. `??` yields '0'
+            # there. Compared as strings; exitCode is one.
+            when: "{{=steps['implement'].status != 'Succeeded' && !((steps['implement'].exitCode ?? '0') in ['45'])}}"
             arguments:
               parameters:
                 - name: oauth-key
@@ -308,6 +321,11 @@ spec:
                   value: "{{steps.implement.status}}"
                 - name: fallback
                   value: "{{steps.implement-fallback.status}}"
+                # Only `implement`'s exit code: it always runs, whereas a
+                # Skipped implement-fallback has no outputs at all, so its
+                # exitCode could not be referenced on the happy path.
+                - name: primary_exit
+                  value: "{{=steps['implement'].exitCode ?? ''}}"
 
     # ── 1. Run implementer orchestrator ───────────────────────────────────
     # 1.20.0 makes GitHub authoritative, preserves every status field, and
@@ -703,6 +721,11 @@ spec:
                         fh.write(rel + "\n")
                         print("handing off DELETION of %s" % rel)
 
+            # No-commits is deliberately NOT mapped to a distinct exit code.
+            # run_implementer does not inspect ResultMessage.is_error, so a
+            # 429 / usage-limit result also ends as needs-triage / no-commits
+            # with no commits; the two are indistinguishable here, and the
+            # account-2 retry exists for exactly the quota case.
             sys.exit(rc)
             COLLECT
         env:
@@ -1285,6 +1308,8 @@ spec:
         parameters:
           - name: primary
           - name: fallback
+          - name: primary_exit
+            value: ""
       script:
         image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
@@ -1293,6 +1318,8 @@ spec:
             value: "{{inputs.parameters.primary}}"
           - name: PARAM_FALLBACK
             value: "{{inputs.parameters.fallback}}"
+          - name: PARAM_PRIMARY_EXIT
+            value: "{{inputs.parameters.primary_exit}}"
         source: |
           PRIMARY="$PARAM_PRIMARY"
           FALLBACK="$PARAM_FALLBACK"
@@ -1301,6 +1328,12 @@ spec:
             echo "✓ An attempt succeeded — workflow status reflects real work."
             exit 0
           fi
+          case "$PARAM_PRIMARY_EXIT" in
+            45)
+              echo "❌ Nothing was implemented: every accepted proposal is blocked on a missing approval (exit 45, not a quota failure)." >&2
+              echo "   Look for the blocked marker in the proposal's .status.yaml and approve it; the fallback was skipped on purpose." >&2
+              exit 1 ;;
+          esac
           echo "❌ Neither the primary attempt nor the account-2 fallback succeeded; inspect the durable needs-triage reason." >&2
           echo "   Most often the Claude five_hour/seven_day usage limit / HTTP 429 on both accounts, or token-2 unset." >&2
           exit 1
@@ -1308,6 +1341,9 @@ spec:
     # ── 3. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-shepherd.
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that

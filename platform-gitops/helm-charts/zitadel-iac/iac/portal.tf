@@ -89,7 +89,10 @@ resource "zitadel_application_oidc" "portal_oidc_provider" {
 # `zitadel-customer` (mctl-web#158): the same client, which adds the
 # customers organization and GitHub IdP scopes so ZITADEL goes straight to
 # GitHub. Backstage derives each provider's callback from its id, so the
-# entry has a handler of its own.
+# entry has a handler of its own. The third is the Google customer entry,
+# auth provider `zitadel-customer-google` (mctl-portal#231): again the same
+# client, with the Google IdP scope. Registered whether or not the Google IdP
+# is on; the portal serves that callback only once it is given the IdP id.
 resource "zitadel_application_oidc" "portal_ui" {
   org_id     = local.mctl_org_id
   project_id = zitadel_project.portal.id
@@ -102,6 +105,7 @@ resource "zitadel_application_oidc" "portal_ui" {
   redirect_uris = [
     "https://app.mctl.ai/api/auth/oidc/handler/frame",
     "https://app.mctl.ai/api/auth/zitadel-customer/handler/frame",
+    "https://app.mctl.ai/api/auth/zitadel-customer-google/handler/frame",
   ]
   access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
   dev_mode                    = false
@@ -144,14 +148,21 @@ resource "kubernetes_secret_v1_data" "portal_oidc" {
   # with both ids the portal offers customers "Sign in with GitHub"
   # (mctl-web#158), without it no customer entry. It is the IdP mctl-api's
   # identity hook knows as ZITADEL_HOOK_GITHUB_IDP_ID (customers.tf).
-  data = {
+  # AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID goes into zitadelCustomers.googleIdpId
+  # and is present only with the Google IdP on (customers_google_idp_enabled),
+  # as ZITADEL_HOOK_GOOGLE_IDP_ID is for mctl-api: the portal then also offers
+  # "Sign in with Google" (mctl-portal#231). Absent, the env var is unset and
+  # the portal offers no Google entry.
+  data = merge({
     OIDC_ZITADEL_CLIENT_ID            = zitadel_application_oidc.portal_oidc_provider.client_id
     OIDC_ZITADEL_CLIENT_SECRET        = zitadel_application_oidc.portal_oidc_provider.client_secret
     AUTH_OIDC_CLIENT_ID               = zitadel_application_oidc.portal_ui.client_id
     AUTH_OIDC_CLIENT_SECRET           = zitadel_application_oidc.portal_ui.client_secret
     AUTH_OIDC_CUSTOMERS_ORG_ID        = zitadel_org.customers.id
     AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID = zitadel_org_idp_github.customers.id
-  }
+    }, var.customers_google_idp_enabled ? {
+    AUTH_OIDC_CUSTOMERS_GOOGLE_IDP_ID = zitadel_org_idp_google.customers[0].id
+  } : {})
 
   field_manager = "zitadel-iac"
   # Created by Argo CD with no data; see forgejo.tf.

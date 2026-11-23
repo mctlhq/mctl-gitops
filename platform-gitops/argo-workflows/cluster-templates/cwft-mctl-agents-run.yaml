@@ -75,7 +75,7 @@ spec:
         # Required only when mode=single-service. Validated by the Python
         # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.117.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -809,7 +809,7 @@ spec:
         # its release (mctlhq/mctl-gitops#1980). The release bump rewrites this
         # line together with the agent_image default; CI requires the literal
         # and checks it against the run-bash min_image_version.
-        image: ghcr.io/mctlhq/mctl-agents:1.117.0
+        image: ghcr.io/mctlhq/mctl-agents:1.117.1
         securityContext:
           runAsNonRoot: true
           allowPrivilegeEscalation: false
@@ -1442,6 +1442,9 @@ spec:
     # exposed during the 2026-05-07 ESO triage. See plan
     # ~/.claude/plans/mctl-agents-daily-cron-visibility.md (G3).
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that

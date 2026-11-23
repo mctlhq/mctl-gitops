@@ -57,7 +57,7 @@ Identity and ownership
   one (`tenant_id`, `principal_id`, `install_id`, `install_revision`).
 - THE SYSTEM SHALL require `tenant_id` and a `prn_`-prefixed `principal_id`
   on every store method that reads or changes a connection, and SHALL
-  refuse (`invalid_input`) an empty tenant or a principal ID without the
+  refuse (`invalid_request`) an empty tenant or a principal ID without the
   `prn_` prefix.
 - WHILE a (`tenant_id`, `principal_id`) pair has a connection in a live
   state (`pending_handoff`, `pending_provider`, `active`) THE SYSTEM SHALL
@@ -71,7 +71,10 @@ Lifecycle
   `pending_handoff -> pending_provider|failed|expired|revoked`,
   `pending_provider -> active|failed|expired|revoked`,
   `active -> expired|failed|revoked`. `expired`, `failed` and `revoked`
-  are terminal.
+  are terminal. The edge `pending_provider -> active` is taken only inside
+  `ActivateTx`'s `pending_handoff -> pending_provider -> active` chain; in M1 a
+  connection resting in `pending_provider` leaves it only through `Transition` to
+  `failed`, `expired` or `revoked` (round 8).
 - IF a transition is not in that table THEN THE SYSTEM SHALL refuse it with
   `invalid_transition` and change nothing.
 - IF a transition names an `expected_version` that differs from the stored
@@ -93,9 +96,12 @@ Connect, reconnect, idempotency
   SYSTEM SHALL return the original connection with `replayed=true` and
   create nothing. IF the same key arrives with different arguments THEN THE
   SYSTEM SHALL refuse with `idempotency_key_reused`.
-- WHEN `Reconnect` runs THE SYSTEM SHALL, in one transaction, revoke the
-  owner's current connection (reason `superseded`) and create a connection
-  with a NEW `gcn_` ID. THE SYSTEM SHALL never reuse a connection ID.
+- WHEN `Reconnect` runs on a live prior connection THE SYSTEM SHALL, in one
+  transaction, end it through `endConnection` (reason `superseded`, purge and
+  `RevocationHook` included) and create a connection with a NEW `gcn_` ID. WHEN the
+  prior connection is terminal THE SYSTEM SHALL create a NEW `gcn_` linked by
+  `supersedes_id` and end nothing. THE SYSTEM SHALL never reuse a connection ID.
+  (amended (c))
 
 Revoke and reinstall atomicity
 - WHEN a connection is revoked THE SYSTEM SHALL set state `revoked`,
@@ -106,6 +112,40 @@ Revoke and reinstall atomicity
   state `uninstalled` (on revoke), and move every live connection of that
   tenant bound to an older revision to `revoked` with reason
   `install_revoked` or `install_reinstalled`.
+- WHEN any path ends a connection (`Revoke`, including reason
+  `membership_removed`, `RevokeInstall`, `Reinstall`, `Reconnect` with reason
+  `superseded`, or a `Transition` to a terminal state) THE SYSTEM SHALL call the installed `RevocationHook` with the ended ids in the
+  same transaction, after taking L1 and L2, and SHALL roll back if the hook fails.
+- WHILE no `RevocationHook` is installed THE SYSTEM SHALL report
+  `revocation_hook_missing` from `Ready`.
+- WHEN `LockOwnerShared` or `LiveConnectionTx` is called THE SYSTEM SHALL run on the
+  caller's transaction and SHALL NOT begin or commit one.
+- WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= clock_timestamp()` (database
+  clock at statement time, never `now()`, which is the transaction start; round 4) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
+  has run. (amended (c))
+- WHEN `LiveConnectionTx` or `LiveConnection` finds no live row THE SYSTEM SHALL read the owner's
+  most recent connection row and answer, together with that row, `connection_revoked` for
+  `revoked`, `connection_expired` for `expired`, and `no_connection` for `failed` or when
+  there is no row (round 8).
+- WHEN `ActivateTx` is called on a connection that is not `pending_handoff` THE SYSTEM SHALL write
+  nothing and answer `invalid_transition` for `pending_provider` and an unexpired `active`,
+  `connection_revoked` for `revoked`, `connection_expired` for `expired` and for an `active`
+  row past `expires_at`, `no_connection` for `failed`, and `not_found` for an absent or foreign
+  id, checking the state before the version (round 8, the codes of #961 §Activate).
+- WHEN `Transition` is called with `to = active` THE SYSTEM SHALL answer `invalid_request`
+  from every from-state (round 8).
+- THE SYSTEM SHALL take the audit actor of every mutating method from one defined source
+  (`Actor{PrincipalID, Kind}`, kinds `user|owner|admin|worker|system`); a `Transition` with no `Actor` and no authenticated worker principal in ctx (the principal `glovoWorkerGate` of #961 leaves there, from which `ActorFrom` derives kind `worker`), like any invalid actor, is
+  `invalid_request` with nothing written (round 8); there is no `system` fallback.
+- THE SYSTEM SHALL derive the HTTP status of every refusal written by `glovo.WriteError` from
+  `glovo.Status(code)`, and SHALL write an unregistered code as 503 `unavailable`; `Status(not_authorized)` is 403 and the 401 is written only by `glovo.WriteUnauthenticated` (round 8).
+- WHILE `GLOVO_DB_URL` is not set explicitly (the wiring slice passes `WithExplicitURL(false)`) THE SYSTEM SHALL report `not_ready`; it
+  SHALL NOT fall back to `AUDIT_DB_URL`. `NewStore` SHALL take the shared pool and open none of its own (round 3).
+- WHILE `current_user` differs from the configured runtime role, or has `rolsuper`, `rolcreaterole`, `rolcreatedb` or `rolbypassrls`, THE SYSTEM SHALL report `not_ready` from `Ready` (round 3).
+- THE SYSTEM SHALL create every object in the Postgres schema `glovo`, owned by the
+  migration role, and SHALL grant the one Glovo runtime role exactly the #959 rows of
+  mctl-api#957 design §6d.1 and the work-items role nothing. (amended (c); role
+  model confirmed by the owner 2026-11-09)
 - WHILE a `Connect` races a connection revoke or an install
   revoke/reinstall for the same tenant THE SYSTEM SHALL serialize them so
   that after both commit no live connection references a revoked install
@@ -121,8 +161,9 @@ Not-found indistinguishability
   three cases.
 - IF a caller reads a connection of its own that is terminal THEN THE
   SYSTEM SHALL return it with its state so that a later slice can answer
-  `connection_revoked` / `connection_expired`. A lookup with no live
-  connection for the owner returns `no_connection`.
+  `connection_revoked` / `connection_expired`. `LiveConnection` and
+  `LiveConnectionTx` return the live row, or the typed not-live code of the owner's most
+  recent row together with that row (round 8); `no_connection` when there is none.
 
 Audit
 - WHEN any install or connection state changes THE SYSTEM SHALL append
@@ -143,9 +184,13 @@ Secret reference
   KEK design as "crypto-shredding" in code or docs.
 
 Schema safety
-- WHEN the store starts THE SYSTEM SHALL apply its schema idempotently
-  under a schema advisory lock, creating only new `glovo_*` objects and
-  never altering or dropping an existing non-`glovo_*` table.
+- THE SYSTEM SHALL apply its schema only through `ApplySchema(ctx,
+  migrationConnStr, runtimeRole)` under the migration role, idempotently under a
+  schema advisory lock, creating only objects in schema `glovo` and never altering
+  or dropping any other object, refusing a schema or object owned by another role, a
+  recorded version above the compiled one and a runtime role name that fails
+  `^[a-z_][a-z0-9_]{0,62}$` (round 5). WHEN `NewStore` starts THE SYSTEM SHALL run no DDL,
+  check the recorded schema version and fail closed on a mismatch. (amended (c))
 
 ## Out of scope
 
@@ -170,14 +215,24 @@ Schema safety
   raises `install_revision` by one. Reinstalling after an uninstall also
   raises the revision. The alternative (new `install_id` per reinstall)
   is listed in design.md.
-- Audit retention period is not specified. This proposal defaults to 400
-  days (configurable on the store) and keeps install/connection rows
-  indefinitely. The owner should confirm.
+- Audit retention: the 400-day target is a documented obligation only.
+  Nothing in the store deletes or expires audit rows; deletion needs a
+  separate privileged maintenance design. Install and connection rows are
+  kept indefinitely. (Amended 2026-11-09: the store-configurable option is
+  withdrawn.)
 - Production wiring: the store is not constructed in `cmd/api/main.go` in
   this slice, so no schema reaches production until slice 4 wires it
   behind a feature flag. If the owner wants the schema deployed earlier,
   that is a one-line follow-up.
 - The deployed mctl-api configuration could not be observed (see
-  design.md, Deployed state checked). Which database URL slice 4 will use
-  (a new `GLOVO_DB_URL` or the existing `AUDIT_DB_URL` fallback) is left
-  to slice 4.
+  design.md, Deployed state checked). Resolved by owner decision A
+  (2026-11-09 (b)): `GLOVO_DB_URL` is required, names the same physical
+  database as the bridge and the work items, and never falls back to
+  `AUDIT_DB_URL`.
+- OPEN-959-1. Who detects that an owner lost tenant membership and calls
+  `RevokeForMembership` (a membership-change hook in the tenant role store,
+  or a sweeper). Until it exists, the #989 fence's live membership read is
+  the only guard.
+- OPEN-959-2. Provisioning of the migration and runtime roles (shared with
+  OPEN-985-6, OPEN-988-3, OPEN-989-2).
+- OPEN-959-3 (round 6; recommendation: add Go declarations once in design Types and task 1). Only `Connection` and `Install` have a field list (round 6 G4). `AuditEvent`, `ConnectResult`, `ConnectInput`, `GrantRow` and `Option` still need declarations (round 8: `Actor`, `ActorKind` and `RefusalEvent` are declared in design Types, and `Transition` has no default actor), and the place where a released `gsr_` ref is returned (a field on the ended `Connection` or a separate `[]SecretRef`) must be stated, so that #957 section 6d.4 "created by #959 task 1" is true.

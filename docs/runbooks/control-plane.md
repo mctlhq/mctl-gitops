@@ -63,9 +63,12 @@ Policy file: `infrastructure/k3s-preview/audit-policy.yaml`.
 - TokenReview/TokenRequest: Metadata only (bodies carry bearer tokens).
 - SubjectAccessReviews: RequestResponse.
 - Catch-all: Metadata.
-- Logs stay on the CP node at `/var/lib/rancher/k3s/server/logs/audit.log`
+- Logs live on the CP node at `/var/lib/rancher/k3s/server/logs/audit.log`
   (30-day rotation via `audit-log-maxage=30`, 100MiB files, 10 backups).
-  Shipping those files to Loki is not part of this control.
+  Promtail ships only the live `audit.log` to Loki as
+  `{job="kube-apiserver-audit"}` (Loki retention applies, 14d default); rotated
+  backups stay on the node. After a rollout, confirm the stream is non-empty:
+  an absent stream means the read was denied, not that nothing happened.
 
 From-zero rebuilds write the file in `preinstall_exec` and pass
 `kube-apiserver-arg` via `control_planes_custom_config`. On the live

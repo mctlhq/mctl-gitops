@@ -60,6 +60,167 @@ tests:
         exp_alerts: []
 
   # ---------------------------------------------------------------------
+  # ArgoCDApplicationOutOfSyncLong / ArgoCDApplicationDegraded
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a platform app OutOfSync for 2h fires
+    input_series:
+      - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
+        values: '1x130'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ArgoCDApplicationOutOfSyncLong
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: mctl-api
+              project: platform
+              dest_namespace: admins
+              dest_server: https://kubernetes.default.svc
+            exp_annotations:
+              summary: >-
+                ArgoCD application mctl-api OutOfSync for 1h
+              description: >-
+                admins/mctl-api has been
+                OutOfSync for 1h. Either auto-sync has exhausted retries
+                and the latest operation failed, or the app legitimately
+                has unsynced manual changes / ignored differences. Check
+                `argocd app get mctl-api` and the latest sync
+                operationState for the actual cause.
+
+  - interval: 1m
+    name: an app Degraded for 1h fires
+    input_series:
+      - series: 'argocd_app_info{name="labs-mctl-telegram",project="default",dest_namespace="labs",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: ArgoCDApplicationDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: labs-mctl-telegram
+              project: default
+              dest_namespace: labs
+              dest_server: https://kubernetes.default.svc
+            exp_annotations:
+              summary: >-
+                ArgoCD application labs-mctl-telegram has been Degraded for 30m
+              description: >-
+                labs/labs-mctl-telegram (project
+                default) on
+                https://kubernetes.default.svc is reporting Health=Degraded. Check
+                `argocd app get labs-mctl-telegram` for stuck resources.
+
+  # argocd_app_info carries operation="sync" only while a sync is in flight.
+  # During a retry loop the app flips between a series without the label and
+  # one with it. Matched bare, every flip is a new alert identity and `for:`
+  # starts over; the worker lived like this for 11 days with 48 separate
+  # firing windows. Here the label is present for minutes 30-34 only; the app
+  # has been OutOfSync continuously since minute 0, so at 70m the 1h hold has
+  # elapsed and exactly one alert, without an operation label, must be firing.
+  # Without the `max by (...)` the unlabelled series restarts at minute 35 and
+  # does not fire before minute 95, so this test is red against the old rule.
+  - interval: 1m
+    name: OutOfSync keeps one continuous alert while the operation label flaps
+    input_series:
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy"}'
+        values: '1x30 _x5 1x45'
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Healthy",operation="sync"}'
+        values: '_x30 1x5 _x45'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ArgoCDApplicationOutOfSyncLong
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: admins-mctl-agents-worker
+              project: tenant
+              dest_namespace: admins
+              dest_server: https://kubernetes.default.svc
+            exp_annotations:
+              summary: >-
+                ArgoCD application admins-mctl-agents-worker OutOfSync for 1h
+              description: >-
+                admins/admins-mctl-agents-worker has been
+                OutOfSync for 1h. Either auto-sync has exhausted retries
+                and the latest operation failed, or the app legitimately
+                has unsynced manual changes / ignored differences. Check
+                `argocd app get admins-mctl-agents-worker` and the latest sync
+                operationState for the actual cause.
+
+  # Degraded is volatile in the other label: sync_status flips while the app
+  # stays Degraded. Same shape, 35m Degraded with a Synced/OutOfSync flip at
+  # minute 10; the 30m hold must not restart.
+  - interval: 1m
+    name: Degraded keeps one continuous alert while sync_status flips
+    input_series:
+      - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Degraded"}'
+        values: '1x10 _x10 1x20'
+      - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="OutOfSync",health_status="Degraded"}'
+        values: '_x10 1x10 _x20'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ArgoCDApplicationDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: mctl-api
+              project: platform
+              dest_namespace: admins
+              dest_server: https://kubernetes.default.svc
+            exp_annotations:
+              summary: >-
+                ArgoCD application mctl-api has been Degraded for 30m
+              description: >-
+                admins/mctl-api (project
+                platform) on
+                https://kubernetes.default.svc is reporting Health=Degraded. Check
+                `argocd app get mctl-api` for stuck resources.
+
+  # sync_status=Unknown: the controller could not compute the diff (the
+  # worker sat in it for 450 minutes after the 2026-11-21 Argo CD upgrade and
+  # nothing fired). Both directions: 45m of Unknown fires, a 10m blip (what
+  # a refresh or restart looks like) and a plain Synced app do not.
+  - interval: 1m
+    name: an app with sync status Unknown for 45m fires
+    input_series:
+      - series: 'argocd_app_info{name="admins-mctl-agents-worker",project="tenant",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="Unknown",health_status="Healthy"}'
+        values: '1x50'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ArgoCDApplicationSyncUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: admins-mctl-agents-worker
+              project: tenant
+              dest_namespace: admins
+              dest_server: https://kubernetes.default.svc
+            exp_annotations:
+              summary: >-
+                ArgoCD application admins-mctl-agents-worker sync status Unknown for 30m
+              description: >-
+                admins/admins-mctl-agents-worker (project
+                tenant) has reported sync status Unknown for
+                30m: the controller cannot compute the diff, so drift on this
+                app is not being detected. Check the application conditions
+                (`argocd app get admins-mctl-agents-worker`) and the application
+                controller log for a comparison error.
+
+  - interval: 1m
+    name: a 10m Unknown blip and a Synced app do not fire the Unknown alert
+    input_series:
+      - series: 'argocd_app_info{name="valkey",project="platform",dest_namespace="valkey",dest_server="https://kubernetes.default.svc",sync_status="Unknown",health_status="Healthy"}'
+        values: '1x10 _x50'
+      - series: 'argocd_app_info{name="mctl-api",project="platform",dest_namespace="admins",dest_server="https://kubernetes.default.svc",sync_status="Synced",health_status="Healthy"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: ArgoCDApplicationSyncUnknown
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
   # NodeMemoryHeadroomLow (group mctl.node-health)
   #
   # The tier below NodeHighMemory. Both directions are asserted: a node at
@@ -266,17 +427,17 @@ tests:
   - interval: 1m
     name: usage at 44-46% of quota exported on both kubelet paths stays quiet
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '4294967296x20'
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
         values: '4294967296x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '0+330x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
         values: '0+330x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.memory"}'
         values: '9663676416x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.cpu"}'
         values: '12x20'
     alert_rule_test:
       - eval_time: 20m
@@ -289,13 +450,13 @@ tests:
   - interval: 1m
     name: usage above 85% of quota fires for the namespace
     input_series:
-      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_memory_working_set_bytes{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '8589934592x20'
-      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+      - series: 'container_cpu_usage_seconds_total{namespace="labs",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
         values: '0+660x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.memory"}'
         values: '9663676416x20'
-      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+      - series: 'kube_resourcequota{namespace="labs",resourcequota="labs-quota",type="hard",resource="limits.cpu"}'
         values: '12x20'
     alert_rule_test:
       - eval_time: 20m
@@ -303,17 +464,17 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              namespace: erpact
+              namespace: labs
             exp_annotations:
-              summary: Namespace erpact memory usage is at 88.89% of quota
+              summary: Namespace labs memory usage is at 88.89% of quota
       - eval_time: 20m
         alertname: TenantCPUQuotaHigh
         exp_alerts:
           - exp_labels:
               severity: warning
-              namespace: erpact
+              namespace: labs
             exp_annotations:
-              summary: Namespace erpact CPU usage is at 91.67% of quota
+              summary: Namespace labs CPU usage is at 91.67% of quota
 
   # ---------------------------------------------------------------------
   # UmamiRetentionStale / UmamiRetentionJobFailed

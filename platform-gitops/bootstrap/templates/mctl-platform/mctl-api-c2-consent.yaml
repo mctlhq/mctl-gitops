@@ -1,0 +1,34 @@
+{{- if .Values.mctlGlovo.apiConsent }}
+# The C2 consent reader identity for mctl-api's consent routes: the federated
+# service provider entry and the service subject allowed to read consent
+# (mctl-api validates both against MCTL_OIDC_PROVIDERS at --check-config).
+# OWNER: write the fields service_provider and service_subject at the Vault
+# key below before turning the switch on. The provider entry must be of kind
+# service. Consumed through envFromOptionalSecrets in mctl-api.yaml. Its own
+# file: a document gated by a leading directive cannot sit inside
+# mctl-api-secrets.yaml (yamllint reads the directive as YAML).
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-glovo-consent
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-glovo-consent
+    creationPolicy: Owner
+    template:
+      data:
+        GLOVO_CONSENT_SERVICE_PROVIDER: "{{ `{{ .service_provider }}` }}"
+        GLOVO_CONSENT_SERVICE_SUBJECT: "{{ `{{ .service_subject }}` }}"
+  data:
+    {{- range $f := list "service_provider" "service_subject" }}
+    - secretKey: {{ $f }}
+      remoteRef:
+        key: platform/mctl-api/glovo-consent
+        property: {{ $f }}
+    {{- end }}
+{{- end }}

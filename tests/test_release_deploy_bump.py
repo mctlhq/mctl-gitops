@@ -57,6 +57,19 @@ def run(tmp, vpath, vglob=""):
     )
 
 
+
+def trust_policy(tmp):
+    """The bump steps read the gate policy from origin/main (--policy-rev): give the
+    scratch checkout an origin/main that carries its policy file."""
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "platform-gitops/release-gates.yaml")
+    git("commit", "-qm", "policy", "--no-gpg-sign")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def fixture(tmp, *, exec_values=True, exec_has_image=True):
     base = tmp / "platform-gitops/services/admins"
     (base / "mctl-agents-worker").mkdir(parents=True)
@@ -76,9 +89,10 @@ def fixture(tmp, *, exec_values=True, exec_has_image=True):
     (tmp / "scripts").mkdir()
     shutil.copy(pathlib.Path("scripts/release-gate.py"), tmp / "scripts/release-gate.py")
     (tmp / "platform-gitops/release-gates.yaml").write_text(
-        "gates:\n  - name: unrelated\n    paths: [platform-gitops/services/none/values.yaml]\n"
+        "version_holds: []\ngates:\n  - name: unrelated\n    paths: [platform-gitops/services/none/values.yaml]\n"
         '    min_tag: "0.0.1"\n'
     )
+    trust_policy(tmp)
 
 
 P1 = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"
@@ -213,6 +227,84 @@ for good in ("1.35.0", "1.35.0-rc.1", "sha-abc123", "v1.2.3"):
             capture_output=True, text=True,
         )
         check(f"an ordinary tag ({good}) is accepted", r.returncode == 0, r.stderr)
+
+# 12-14: protections gitops-bump.yaml already had and release-deploy lacked
+# (mctl-gitops#2652). Each is also run with the protection removed, and must
+# then go wrong: a check that cannot fail is no check.
+SPLIT_VALUES = """image:
+  registry: ghcr.io
+  repository: mctlhq/mctl-agents
+  tag: 1.34.0
+"""
+SYMLINK_OFF = 'if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), normalized):'
+EDIT_CHECK_OFF = "if not only_tags_changed(content, out):"
+SPLIT_QUOTE_OFF = """out, n3 = p3.subn(lambda m: m.group(1) + ' "' + new_tag + '"', out)"""
+TAG_CHECK_OFF = "if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}', new_tag):"
+for anchor in (SYMLINK_OFF, EDIT_CHECK_OFF, SPLIT_QUOTE_OFF, TAG_CHECK_OFF):
+    check(f"anchor present once: {anchor[:50]}", SCRIPT.count(anchor) == 1)
+
+
+def run_script(tmp, script, vpath, tag="1.35.0"):
+    return subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp,
+        env={**os.environ, "TEAM": "admins", "SERVICE": "mctl-agents-worker",
+             "VALUES_PATH": vpath, "VALUES_GLOB": "",
+             "IMAGE_NAME": "ghcr.io/mctlhq/mctl-agents", "NEW_TAG": tag,
+             "GITHUB_ENV": str(tmp / "e"), "GITHUB_OUTPUT": str(tmp / "o")},
+        capture_output=True, text=True,
+    )
+
+
+def symlink_case(script):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        outside = tmp / "outside.yaml"
+        outside.write_text(VALUES)
+        link = tmp / "platform-gitops/services/admins/linked"
+        link.mkdir()
+        (link / "values.yaml").symlink_to(outside)
+        r = run_script(tmp, script, "platform-gitops/services/admins/linked/values.yaml")
+        return r.returncode, outside.read_text() != VALUES
+
+
+rc, wrote = symlink_case(SCRIPT)
+check("a symlinked values file is refused before writing", rc == 4 and not wrote, (rc, wrote))
+rc, wrote = symlink_case(SCRIPT.replace(SYMLINK_OFF, "if False:"))
+check("mutant caught: symlink check off, the file behind the link is written", wrote, rc)
+
+
+def split_case(script, tag):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        (tmp / P1).write_text(SPLIT_VALUES)
+        r = run_script(tmp, script, P1, tag)
+        import yaml
+        return r.returncode, yaml.safe_load((tmp / P1).read_text())["image"]["tag"]
+
+
+for tag in ("1042", "1e5", "1.10"):
+    rc, got = split_case(SCRIPT, tag)
+    check(f"a split-style file takes tag {tag} as a string", rc == 0 and got == tag, (rc, got))
+rc, got = split_case(SCRIPT.replace(SPLIT_QUOTE_OFF, "out, n3 = p3.subn(lambda m: m.group(1) + ' ' + new_tag, out)"), "1042")
+check("mutant caught: unquoted split tag turns 1042 into a number", got != "1042", (rc, got))
+
+
+def edit_case(script):
+    # With the tag check off, a tag carrying YAML reaches the rewriter: only the
+    # edit check is left to stop it.
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        r = run_script(tmp, script.replace(TAG_CHECK_OFF, "if False:"), P1, INJECTION)
+        return r.returncode, "privileged" in (tmp / P1).read_text()
+
+
+rc, wrote = edit_case(SCRIPT)
+check("an edit beyond image tags is refused before writing", rc == 7 and not wrote, (rc, wrote))
+rc, wrote = edit_case(SCRIPT.replace(EDIT_CHECK_OFF, "if False:"))
+check("mutant caught: edit check off, the injected YAML is written", wrote, rc)
 
 print()
 if failures:

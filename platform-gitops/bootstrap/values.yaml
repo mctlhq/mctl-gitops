@@ -403,6 +403,42 @@ securityCodeScanning:
   externalSecret: true
   receiver: true
 
+# The control-caller credential of the C2 kill switch (C2 epic):
+# lets mctl-api call the C2 service's kill switch endpoint with a ZITADEL
+# machine-user token that a refresher sidecar keeps fresh in a file
+# (mctl-api >= 4.164.0). All four switches are on since 2026-11-21
+# (#2856 chartSlots, #2858 enabled, #2861 killSwitch); the route is mounted,
+# but a PUT to it is a separate production action with its own owner GO.
+# Flip order, each its own reviewed PR; rollback is the reverse order:
+#   0. Prerequisites: mctlhq/mctl-gitops#2737 applied (machine user and the
+#      ConfigMap mctl-api-c2-machine-ids with control_scope exist); owner wrote
+#      Vault platform/<c2 service>/control-caller with user_id, key_id and key;
+#      the refresher image is released and its tag set below; the mctl-api chart
+#      pin carries extraContainers / extraVolumes / extraVolumeMounts.
+#   1. chartSlots + the chart pin move + the refresher tag and command.
+#   2. enabled: true (ExternalSecret, sidecar, URL and token file; the route
+#      stays dark). Confirm the Secret synced and the token file appears.
+#   3. killSwitch: true (mounts the route).
+# A pod with enabled while the Secret or the ConfigMap is missing cannot start
+# the sidecar and stays NotReady: do not flip enabled before step 0 is checked.
+apiC2Control:
+  enabled: true
+  killSwitch: true
+  # Must be true in the same PR that moves the mctl-api chart pin to a
+  # revision with the three slots above; the render refuses enabled without it.
+  chartSlots: true
+  refresherImage:
+    repository: ghcr.io/mctlhq/mctl-glovo
+    # The release flow does NOT bump this line (its values_path is the C2
+    # service template): move it by hand to a released tag. The refresher is
+    # the token-refresher command of the service image, so this normally
+    # follows the service tag. enabled refuses the unreleased placeholder
+    # 0.0.0-unreleased.
+    tag: "0.3.2"
+    # The control-caller refresher: a command of the service image above.
+    # enabled refuses an empty command.
+    command: ["token-refresher"]
+
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
 # publishes and promotes agent versions with it instead of the admin service
@@ -506,38 +542,8 @@ surfaceTelegramToken:
 #
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.
-externalManifestNamespaces:
-  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets will live in this
-  # chart, templates/erpact/externalsecrets.yaml, added by the erpact wiring
-  # (#1516) together with project erpact; never in that repository.
-  erpact:
-    secrets:
-      - clo-s3
-      - deployer-git
-      - deployer-secret
-      # R2 token for the copy's backups (bucket erpact-backups only).
-      - erpact-backup-r2
-      # OIDC client of the sites in ZITADEL, filled by the zitadel-iac Job;
-      # declared in infra-components/erpact/oidc-zitadel.yaml (#1501).
-      - erpact-oidc-zitadel
-      # Tenant users each Frappe site must have (e-mail, names, sites,
-      # roles; only users opted in with "frappe"), also from zitadel-iac.
-      - erpact-frappe-users
-      - mariadb-root
-    # No RBAC is bound to default in erpact. Project erpact (#1516) admits
-    # no Secret and no RBAC kind from the tenant's repository, so that
-    # repository can neither bind a Role to default nor mint a
-    # service-account-token Secret under an allowed name.
-    serviceAccounts:
-      - default
-    # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
-    # policy anchors it), so the repository cannot claim another tenant's
-    # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
-    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
-    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
-    # The apex erpact.online is not matched.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
+# None today: the only entry, tenant erpact, was removed with its namespace.
+externalManifestNamespaces: {}
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
@@ -572,6 +578,11 @@ reservedPlatformHosts:
   sso.mctl.ai: [zitadel]
   accounts.mctl.ai: [zitadel]
   api.mctl.ai: [mctl-api]
+  # Served outside the cluster through a Cloudflare tunnel since 2026-11-15.
+  # The owner is the product's own namespace, so that its ingress switch can
+  # render an Ingress; with that switch off nothing is created and no other
+  # namespace can claim the host.
+  glovo.mctl.ai: [mctl-glovo]
   app.mctl.ai: [backstage]
   ops.mctl.ai: [argocd]
   secrets.mctl.ai: [vault]
@@ -583,6 +594,8 @@ reservedPlatformHosts:
   # mctl-telegram, a platform product deployed in the labs tenant.
   tg.mctl.ai: [labs]
   tg-preview.mctl.ai: [labs]
+  # Dedicated synthetic staging endpoint for RedLoop Phase P2 security audits.
+  staging-redloop.mctl.ai: [redloop]
   # The Cloudflare MCP portal; never served from the cluster.
   mcp.mctl.ai: []
 
@@ -707,3 +720,66 @@ obiSpike:
     limits.cpu: "3"
     limits.memory: "3Gi"
     pods: "10"
+
+# C2 cluster service switches (the service's bootstrap template documents
+# each one). All false: only the namespace and its NetworkPolicies
+# render. Each flip is its own reviewed PR; rollback is flipping it back.
+mctlGlovo:
+  deploy: true
+  c2: true
+  allowlist: true
+  consent: true
+  control: true
+  # mctl-api's side of the consent read (the consent routes, their cap and the
+  # reader identity). Independent of the switches above so it can be lit
+  # first. The cutover runbook (docs/runbooks, C2 cutover) holds the order.
+  apiConsent: true
+  # Fresh sign-in on the link routes (the link audience and the maximum login
+  # age, two optional variables of the service). Off: both stay unset and the
+  # link preview and upload routes refuse every request. Needs c2.
+  linkLogin: true
+  # The public route to the service: an Ingress object, a Traefik source in
+  # the server policy and the trusted-proxies variable. Needs c2, host,
+  # trustedProxies and the host's reservedPlatformHosts owner. Rollback: false.
+  ingress: true
+  host: glovo.mctl.ai
+  # Source CIDRs the service trusts as proxies: the cluster pod CIDR (k3s
+  # default 10.42.0.0/16), not per-pod /32 entries, because Traefik pod IPs
+  # change on every restart and a stale entry silently collapses all clients
+  # into one per-IP bucket. Who can connect at all is decided by the server
+  # NetworkPolicy (the Traefik namespace, plus the control caller on its own
+  # path), not by this list. Required while ingress is on: the service keys
+  # its per-IP link limits on the address behind these proxies.
+  trustedProxies: "10.42.0.0/16"
+  # Longest age of the sign-in behind a link preview or upload (a Go duration,
+  # at most 15m). Read only while linkLogin is on.
+  linkMaxAuthAge: 5m
+  # The cohort size, read by BOTH the service and mctl-api's consent slots: one
+  # value so the two cannot drift. A whole number, 1..20. Raising it is an
+  # owner decision with its own reviewed PR, never a rider on another change.
+  # 10 (owner decision 2026-11-23, ahead of the two-principal proof): the cohort
+  # wide caps scale with it (requests 12 a minute -> 120, decrypts 10 an hour ->
+  # 100, keepalive budget 4 -> 40 an hour) and a size of ten reproduces the
+  # design defaults exactly. It admits nobody by itself: access is still the
+  # allowlist, which holds one principal, so exposure does not change. The
+  # per-principal caps do not scale. Rollback: set it back to 1.
+  capacity: 10
+  # Link attempts per hour for the whole service: the one-time code, the preview
+  # and the upload each count one, so a single link takes three. Left to the
+  # default (5 x capacity, which is 5 an hour for one user) a retry or two
+  # after a refused attempt exhausts it, and nothing can link until the oldest
+  # attempt ages out. 15 allows five complete links an hour for the owner-only
+  # stage; the per-address cap (10 an hour) is untouched. A whole number 1..300,
+  # 0 for the service default. Reached by the pod through its environment, so
+  # changing it rolls the pod.
+  linkAttemptsPerHour: 15
+  # Hosted keepalive (service 0.5.0): every interval the service refreshes
+  # each stored session chain through the same coordinator path as a tool call,
+  # so a chain does not expire while nobody reads. The first round runs a minute
+  # after the pod starts, with jitter. A refused chain is marked needs_relink
+  # and logged with an alert marker; nothing runs while the kill
+  # switch is on. The real refresh-chain lifetime is not measured, so 12h sits
+  # inside the 6-12h range that is safe against a day-long lifetime. Empty
+  # leaves it off; a whole number of hours 1h..24h. Single replica only. Reached
+  # by the pod through its environment, so changing it rolls the pod.
+  keepaliveInterval: "12h"

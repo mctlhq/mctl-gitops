@@ -8,7 +8,19 @@ spec:
   sources:
     # Helm chart from the mctl-api repository
     - repoURL: https://github.com/mctlhq/mctl-api.git
-      targetRevision: main
+      # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
+      # chart change merged to mctl-api main must not reach production without
+      # a GitOps change. a91f7fb4 is the 4.171.0 release commit (image live).
+      # With the current bootstrap values it renders the same objects as
+      # c5e5d6f9 (the 4.164.0 pin) except two things (helm template diff of
+      # the chart at the two commits): a new DEVLOOP_BEARER_APPROVE_ENABLED
+      # env with an empty value (the chart default; empty parses as off, so
+      # the live break-glass-off behaviour is unchanged) and one YAML comment.
+      # The chart also gains the extraContainers / extraVolumes /
+      # extraVolumeMounts slots (mctlhq/mctl-api bf7b27c, since 4.169.0) that
+      # apiC2Control needs, empty here. Move this pin in a reviewed PR, at a
+      # release commit whose image is deployed.
+      targetRevision: a91f7fb4a92e835f5f562f2cbab3ac2e2519c530
       path: helm
       helm:
         releaseName: mctl-api
@@ -42,12 +54,26 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.154.0"
+            tag: "4.175.0"
 
           ingress:
             enabled: true
             className: traefik
             tls: true
+            # Routes the basket approval page (served on api.mctl.ai under the
+            # extra path below) through Traefik. Empty by default in the chart
+            # (mctl-api#1017); set only together with the approval page flag.
+            # Rollback: delete this key.
+            extraPaths:
+              - /glovo
+              # Deploy approval page (mctlhq/mctl-api#1026, #1050): the
+              # fresh-login decide page for agent deploy plans. Rollback:
+              # delete this line together with DEPLOY_APPROVAL_UI_ENABLED.
+              - /deploy
+              # Release approval page (mctlhq/mctl-api#1022, #1093): the
+              # fresh-MFA owner decision on a release.grant. Rollback: delete
+              # this line together with RELEASE_APPROVAL_UI_ENABLED.
+              - /release
             hosts:
               - host: api.mctl.ai
 
@@ -63,10 +89,11 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
-            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
-            # is read only at container start.
-            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
+            # This rollout turns the release approval page on (mctl-api#1022):
+            # its client id and secret come from mctl-api-oidc-zitadel
+            # (mctl-gitops#2730) and the decider list from mctl-api-secrets,
+            # both read only at container start.
+            ROLLOUT_MARKER: "2026-11-22-cimd-link-helper-host"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
@@ -91,10 +118,15 @@ spec:
             # Rollback: set back to "shadow" (login decides again, the
             # principal path is still compared and counted).
             TENANT_AUTHZ_MODE: "principal"
-            # Platform admins by principal (mctlhq/mctl-api#377). Decides
-            # admin in `principal` mode; ADMIN_USERS above only matters on
-            # a rollback to shadow/legacy. A malformed id refuses startup.
-            ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+            # Platform admins by principal (mctlhq/mctl-api#377) come only from
+            # mctl-api-secrets (Vault platform/mctl-api/authz, property
+            # admin-principals) through envFromSecret: this repository is public,
+            # so principal ids are not set here. null, not a deleted line: the
+            # chart defaults ADMIN_PRINCIPALS to "", and an explicit empty env
+            # entry wins over envFrom (that crash-looped the rollout of #2696).
+            # null removes the key from the merged values, so no env entry is
+            # rendered. A malformed or missing id refuses startup.
+            ADMIN_PRINCIPALS: null
             # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
             # `false` closes the free-text approver relay: a service call to
             # mctl-agents-approve naming a different approver gets 400
@@ -212,7 +244,7 @@ spec:
             # user's own machine; www.cursor.com is Cursor's hosted agent
             # callback, the same class of entry as claude.ai and chatgpt.com.
             # Windsurf needs nothing here: it registers a loopback callback.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback,https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-*,https://oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-*,https://oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-*,https://oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-*"
             # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
             # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
             # 2026-09-26 after the `api` upstream moved to automatic (DCR)
@@ -249,7 +281,12 @@ spec:
             # their next sign-in), or remove all three lines.
             OAUTH_CIMD_ACCEPT: "true"
             OAUTH_CIMD_ADVERTISE: "true"
-            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev"
+            # Plus the product host that publishes the document of its own
+            # link helper (exact host; its Worker answers 404 for every other
+            # path, so only that one document can be fetched from it). Added
+            # for the C2 link step so the helper needs no registration of its
+            # own; see the C2 cutover runbook, step 9.
+            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev,glovo.mctl.ai"
             # Access-token audience, step B of mctlhq/mctl-api#805 (runbook
             # docs/access-token-signing.md). Since 4.125.0 every minted token
             # carries `aud` and a foreign `aud` is refused; aud-less HS256
@@ -284,6 +321,13 @@ spec:
             # it. A malformed value refuses startup. Read at start: adding an
             # id restarts the pod through this env change.
             ZITADEL_HOOK_CUSTOMER_CREATE_GITHUB_IDS: "268260640,334465501,47027422"
+            # Google sign-in (mctlhq/mctl-api#1079): "*" lets anyone with a
+            # Google account create a customers account (owner decision
+            # 2026-11-16). It creates an account only, never a workspace: the
+            # public workspace flow also needs SIGNUP_PUBLIC_WORKSPACES=true
+            # (mctlhq/mctl-api#1086), which stays unset. Needs mctl-api
+            # 4.163.0 or later; 4.162.0 would admit a workspace on "*".
+            ZITADEL_HOOK_CUSTOMER_CREATE_GOOGLE_SUBS: "*"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
@@ -325,6 +369,29 @@ spec:
             # pinning the operator CA; verify-full needs a copied CA secret
             # in this namespace (helm postgresCA) and can wait for CA sync.
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # The OAuth refresh/flow store. Same DSN as AUDIT_DB_URL, which is
+            # what cmd/api/main.go already falls back to, so nothing changes
+            # today: pgshared keys pools by the exact connection string, so an
+            # identical value reuses the audit pool rather than opening one.
+            # Explicit because a later activation step refuses to start on the
+            # fallback (mctl-api#1006, step B).
+            # Keep it byte-identical to AUDIT_DB_URL unless the OAuth store is
+            # deliberately moved.
+            OAUTH_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # Basket canary store (mctlhq/mctl-api#1006, step W): inert. The
+            # binary reads these three only when the feature flag is true,
+            # which no line here sets. $(VAR) expands keys of the optional
+            # runtime secret above; the password is random hex (URL-safe).
+            GLOVO_DB_URL: "postgresql://$(GLOVO_DB_USER):$(GLOVO_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            GLOVO_DB_RUNTIME_ROLE: glovo_runtime
+            GLOVO_DB_MIGRATION_ROLE: glovo_migrator
+            # Work items on the least-privilege login mctl_api_workitems (DML
+            # only; its grants come from the schema migrator, D2) instead of
+            # the AUDIT_DB_URL fallback to the legacy owner role. Read on every
+            # boot (cmd/api/main.go workItemsStoreSource). Rollback: delete
+            # this line; the store falls back to the legacy role, which keeps
+            # its grants.
+            WORK_ITEMS_DB_URL: "postgresql://$(WORKITEMS_DB_USER):$(WORKITEMS_DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
             # The lifecycle ownership store (ADR-010) gets its OWN database,
             # not mctl-api's: it is the source of truth for who may act on an
             # entity, and its neighbours in mctl-api -- the audit log, the
@@ -366,14 +433,108 @@ spec:
             # (envFromExtraSecret below). Without both the endpoint answers
             # 401/503 and nothing is published.
             EVENTS_VALKEY_URL: "redis://github-producer@valkey.platform-events.svc.cluster.local:6379/0"
+            # Basket MCP canary (mctlhq/mctl-api#1006). Fail-closed chain: the
+            # basket flag needs the feature flag, which needs the resource, the
+            # dedicated database (the *_DB_* lines above) and the explicit
+            # OAUTH_DB_URL; anything missing refuses the boot, never a half-on
+            # feature. "true"/"false" only. The pilot allowlist is not env: it
+            # stays empty until a platform admin adds a (team, principal) pair.
+            # Kill switch: remove the Ingress host first, then these lines.
+            GLOVO_ENABLED: "true"
+            GLOVO_MCP_RESOURCE: https://glovo.mctl.ai/mcp
+            GLOVO_BASKET_MCP_ENABLED: "true"
+            # The owner approval page (mctl-api#1007). Needs the chart slot
+            # below and the ZITADEL client; without them the page stays off
+            # and no approval_url is returned. Requires the basket flag above
+            # (else the boot is refused).
+            GLOVO_BASKET_UI_ENABLED: "true"
+            # Deploy approval page (mctlhq/mctl-api#1026): the tenant owner
+            # decides a deploy.apply plan only here, after a fresh ZITADEL
+            # login (prompt=login, max_age=0, PKCE); no bearer-token path
+            # decides that kind. Needs SELF_URL, the deployApprovalUISecret
+            # slot below and the /deploy extra path. If any input is missing
+            # (client id/secret, SELF_URL, principal mode, OAUTH_DB_URL,
+            # stores) the page stays off and the pod logs "deploy approval
+            # page disabled" at Error level; the boot is not refused.
+            # Rollback: delete this line and the /deploy extra path.
+            DEPLOY_APPROVAL_UI_ENABLED: "true"
+            {{- $c2 := default dict .Values.apiC2Control }}
+            {{- if $c2.enabled }}
+            # Kill switch caller (mctl-api >= 4.164.0, the kill switch client):
+            # the control endpoint of the C2 service and the file the token
+            # refresher sidecar below keeps fresh. The client re-reads the file
+            # on every call and a missing file only makes the call answer
+            # "unknown", so these two lines cannot fail a boot. Without the
+            # switch below they change nothing: the route stays dark.
+            # Rollback: set apiC2Control.enabled to false.
+            GLOVO_C2_CONTROL_URL: "http://mctl-glovo.mctl-glovo.svc:8080"
+            GLOVO_C2_CONTROL_TOKEN_FILE: "/var/run/secrets/c2-control/token"
+            {{- end }}
+            {{- if and $c2.enabled $c2.killSwitch }}
+            # Turns the kill switch route on. Needs the two lines above, or the
+            # boot is refused. Rollback: set apiC2Control.killSwitch to false.
+            GLOVO_C2_KILLSWITCH_ENABLED: "true"
+            {{- end }}
+            # Release grants (mctlhq/mctl-api#1022 S1): the release.grant
+            # ledger kind and its routes. An admin requests a grant for a
+            # version; mctl-api verifies the tag and the GHCR image itself
+            # (the package is public, so an anonymous pull token reads it).
+            # Reading grants is for admins and, later, the gitops release
+            # gate (S3). Nothing here consults them yet: release-gates.yaml
+            # still decides. Rollback: delete this line.
+            RELEASE_GRANTS_ENABLED: "true"
+            # Release approval page (mctlhq/mctl-api#1022 S2): the only place
+            # a release.grant is decided, after a fresh ZITADEL sign-in with a
+            # second factor (prompt=login, max_age=0, PKCE, amr must contain
+            # "mfa"), by a principal in RELEASE_APPROVAL_DECIDERS (Vault, via
+            # mctl-api-secrets) who is also an admin. Needs the grants flag
+            # above, SELF_URL, the releaseApprovalUISecret slot below and the
+            # /release extra path; if an input is missing the page stays off
+            # and the pod logs "release approval page disabled" at Error
+            # level. Rollback: delete this line and the /release extra path.
+            RELEASE_APPROVAL_UI_ENABLED: "true"
+            # Release windows (sync-window write path, mctl-api#1153-#1155):
+            # POST /api/v1/release/windows, the MFA decide page under
+            # /release/window-approvals (same OIDC client and deciders as the
+            # grant page above; its second redirect URI is in zitadel-iac,
+            # gitops#2905) and the execute step that dispatches
+            # release-window-pr.yml. Needs the work-items ledger and the GitOps
+            # GitHub credential; without them the routes stay off or answer
+            # 503. The window itself only opens a PR, nothing is merged or
+            # synced. Rollback: delete this line.
+            RELEASE_WINDOWS_ENABLED: "true"
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # Link consent routes and the consent read of the C2 service (its
+            # epic 11, C2-1c). The reader identity (service provider and
+            # subject) comes from the optional Secret below, so no identifier
+            # lives in this public repository. The cap is the one value the
+            # C2 service reads too (the capacity value in bootstrap/values.yaml).
+            # The store uses AUDIT_DB_URL. Read at container start: bump
+            # ROLLOUT_MARKER in the PR that flips this.
+            # Rollback: set the apiConsent switch back to false.
+            GLOVO_CONSENT_ENABLED: "true"
+            # Quoted: the release gate parses this block as YAML, and an
+            # unquoted inline directive is not a scalar there.
+            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
+            {{- end }}
+            {{- if .Values.mctlGlovo.linkLogin }}
+            # The account-link RFC 8707 resource (mctl-api >= 4.170.0, its
+            # link-resource document): mctl-api mints the link token (forced
+            # fresh login, no refresh token) for exactly this audience, and the
+            # C2 service checks the same value (the linkLogin switch sets it on
+            # the service side). Unset, the resource answers invalid_target and no
+            # link token can be issued. It is admitted only while the basket
+            # readiness holds, must be an absolute https URL and must differ from
+            # the MCP resource above, or the boot is refused. Read at container
+            # start; the env change itself rolls the pods.
+            # Rollback: set the linkLogin switch back to false.
+            GLOVO_LINK_RESOURCE: "https://{{ .Values.mctlGlovo.host }}/link"
+            {{- end }}
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
-          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
-          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret applied by
-          # hand in 2026-03 and created by nothing in this repository or in
-          # Vault; it is described in mctl-api-secrets.yaml now.
-          # mctlhq/mctl-gitops#1229, step 2 of 2.
+          # One secret, not two. The hand-applied `mctl-api-gitops-token`
+          # extra Secret is gone (mctlhq/mctl-gitops#1229).
           envFromSecret: mctl-api-secrets
           # Event producer credentials, in their own ExternalSecret so a
           # missing key cannot take DB_PASSWORD down with it
@@ -392,13 +553,18 @@ spec:
           # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
-            # The orchestrator DevLoop identity (mctlhq/mctl-api#963):
-            # MCTL_ORCHESTRATOR_DEVLOOP_PROVIDER/_SUBJECT, written by
-            # zitadel-iac (helm-charts/zitadel-iac/iac/orchestrator-devloop.tf).
-            # Optional: without it the mapping is off and the machine user is
-            # an ordinary OIDC caller with no admin access. Bump ROLLOUT_MARKER
-            # after the Job first writes it.
-            - mctl-api-orchestrator-devloop
+            # Basket canary DB logins (mctlhq/mctl-api#1006, step W). Optional,
+            # like the hook secret: a pod that starts before ESO syncs boots
+            # without them; the step that first consumes them bumps
+            # ROLLOUT_MARKER.
+            - mctl-api-glovo-runtime-db
+            - mctl-api-workitems-db
+            {{- if .Values.mctlGlovo.apiConsent }}
+            # The consent reader identity (mctl-api-secrets.yaml). Optional
+            # like its neighbours; with the switch on and the Secret missing
+            # the config guard refuses the release.
+            - mctl-api-glovo-consent
+            {{- end }}
             {{- if (default dict .Values.securityCodeScanning).receiver }}
             - mctl-api-security-code-scanning
             {{- end }}
@@ -409,11 +575,10 @@ spec:
           # a restart -- envFrom would capture it at container start and serve
           # an expired value within the hour.
           #
-          # From here GITOPS_REPO_TOKEN and GITOPS_ACTIONS_TOKEN in
-          # mctl-api-secrets become the fallback only: the file wins. They stay
-          # for now so this change is reversible by deleting one line, and are
-          # removed in a follow-up once the pod is observed running on the
-          # file.
+          # The file is the only GitHub credential for the mctl-gitops clone
+          # and the workflow dispatch. The static GITOPS_REPO_TOKEN and
+          # GITOPS_ACTIONS_TOKEN fallbacks were removed from mctl-api-secrets
+          # (mctlhq/mctl-gitops#1240).
           #
           # What this token is, measured rather than assumed
           # (mctlhq/mctl-api#307): one repository (mctl-gitops), contents
@@ -466,6 +631,38 @@ spec:
           # that one does need the keys: mctl-api refuses to start in those
           # modes without them. Rollback: delete this line.
           oauthZitadelSecret: mctl-api-oidc-zitadel
+
+          # DEVLOOP_DECIDE_CLIENT_ID / DEVLOOP_DECIDE_CLIENT_SECRET for the
+          # DevLoop decide page (mctlhq/mctl-api#964): the confidential
+          # `mctl-api-decide` client that zitadel-iac already writes into the
+          # same Secret (helm-charts/zitadel-iac/iac/mctl-api.tf). With them
+          # set, /devloop/decide/{workflow_id} serves instead of answering
+          # 503: the owner opens the link an MCP client hands out, signs in
+          # fresh with a second factor, and approves or rejects the bound
+          # grant. Optional refs: a Secret without the keys leaves the page
+          # off. Rollback: delete this line.
+          devLoopDecideSecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the approval page (mctlhq/mctl-api#1007):
+          # the confidential ZITADEL client that zitadel-iac writes into the
+          # same Secret (mctl-gitops#2626). Optional refs, so a Secret without
+          # the keys leaves the page off. Chart slot from mctl-api#1017.
+          # Rollback: delete this line and the approval page flag.
+          glovoBasketUISecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the deploy approval page
+          # (mctlhq/mctl-api#1026): the confidential ZITADEL client
+          # mctl-api-deploy-approval that zitadel-iac writes into the same
+          # Secret (mctl-gitops#2651). Optional refs. Chart slot from
+          # mctl-api#1050 (4.159.0). Rollback: delete this line and the flag.
+          deployApprovalUISecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the release approval page
+          # (mctlhq/mctl-api#1022): the confidential ZITADEL client
+          # mctl-api-release-approval that zitadel-iac writes into the same
+          # Secret (mctl-gitops#2730). Optional refs. Chart slot from
+          # mctl-api#1095 (4.164.0). Rollback: delete this line and the flag.
+          releaseApprovalUISecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
@@ -568,6 +765,75 @@ spec:
               - fixed
               - closed_by_user
           {{- end }}
+          {{- if $c2.enabled }}
+
+          # Token refresher for the kill switch caller. TODO(chart): the chart
+          # at the pinned revision has no extraContainers / extraVolumes /
+          # extraVolumeMounts slots (it ignores them silently). They are a
+          # separate mctl-api change; the render fails unless
+          # apiC2Control.chartSlots confirms the pin carries them.
+          #
+          # Contract (mctl-gitops#2736 consent refresher, same image, other
+          # command): signs a JWT-profile assertion (RFC 7523, iss = sub =
+          # user id, kid = key id) with KEY_FILE, exchanges it at
+          # ZITADEL_ISSUER/oauth/v2/token for ZITADEL_SCOPE, writes the access
+          # token atomically to TOKEN_FILE (mode 0644), renews at half of
+          # expires_in (the instance lifetime is 12 h) and exits non-zero if it
+          # cannot renew before expiry.
+          # The key is mounted 0444 because the chart sets no fsGroup and the
+          # kubelet writes secret files as root. Only the sidecar mounts the
+          # key volume; the main container mounts the c2-control-token volume
+          # alone, read-only, and never sees the key (mctl-gitops#2737).
+          extraContainers:
+            - name: c2-control-token-refresher
+              image: "{{ $c2.refresherImage.repository }}:{{ $c2.refresherImage.tag }}"
+              # The release gate strips whole-line directives and parses this
+              # block as YAML. An unquoted inline directive (toJson, or a bare
+              # list item) reads as a flow mapping, and as a mapping key it
+              # is unhashable: image.tag becomes unreadable and the gate
+              # answers UNKNOWN. Keep inline directives inside quotes. Command
+              # words must therefore not contain a double quote or backslash.
+              command:
+              {{- range $c2.refresherImage.command }}
+                - "{{ . }}"
+              {{- end }}
+              env:
+                - {name: ZITADEL_ISSUER, value: "https://auth.mctl.ai"}
+                - {name: TOKEN_FILE, value: "/var/run/secrets/c2-control/token"}
+                - {name: KEY_FILE, value: "/var/run/secrets/c2-control-key/key"}
+                - name: ZITADEL_USER_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: user_id}}
+                - name: ZITADEL_KEY_ID
+                  valueFrom: {secretKeyRef: {name: mctl-api-c2-control-caller, key: key_id}}
+                - name: ZITADEL_SCOPE
+                  valueFrom: {configMapKeyRef: {name: mctl-api-c2-machine-ids, key: control_scope}}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 64Mi}
+              volumeMounts:
+                - {name: c2-control-token, mountPath: /var/run/secrets/c2-control}
+                - {name: c2-control-key, mountPath: /var/run/secrets/c2-control-key, readOnly: true}
+          extraVolumes:
+            - name: c2-control-token
+              emptyDir: {medium: Memory, sizeLimit: 1Mi}
+            - name: c2-control-key
+              secret:
+                secretName: mctl-api-c2-control-caller
+                defaultMode: 0444
+                items:
+                  - {key: key, path: key}
+          extraVolumeMounts:
+            - {name: c2-control-token, mountPath: /var/run/secrets/c2-control, readOnly: true}
+          {{- end }}
 
           resources:
             requests:
@@ -612,6 +878,12 @@ spec:
         - /data
     - kind: ConfigMap
       name: mctl-api-orchestrator-devloop-ids
+      jsonPointers:
+        - /data
+    # Written by the zitadel-iac Job (c2-machine-users.tf): the ids of the C2
+    # machine users (infra-components/mctl-platform/mctl-api/c2-machine-users.yaml).
+    - kind: ConfigMap
+      name: mctl-api-c2-machine-ids
       jsonPointers:
         - /data
     # ESO admission webhook injects defaults absent in git, plus legacy

@@ -8,8 +8,14 @@ it as "$X" removes the exposure (gitops#1809).
 
 Scanned: `run:` of every step, and `with.script` of actions/github-script, in
 .github/workflows/*.y*ml and .github/actions/**/action.y*ml. Flagged contexts:
-inputs.*, github.event.*, github.head_ref. `env:`, `with:`, `if:` and
-`run-name:` are not script text and are not flagged.
+inputs, github.event, github.head_ref, and the whole `github` context (which
+contains the event), in any of the forms the expression language accepts:
+property or bracket access (`github.event['pull_request'].title`,
+`inputs['x']`), any letter case (context names are case-insensitive), and
+whole-object use (`toJSON(github.event)`, `toJSON(inputs)`).
+`github.event_name` and other `github.*` properties are not attacker text and
+are not flagged. `env:`, `with:`, `if:` and `run-name:` are not script text
+and are not flagged.
 
 Exit 1 on findings, 2 on unparseable YAML. Run with --selftest to prove the
 detector still detects.
@@ -26,7 +32,29 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.S)
-UNSAFE = re.compile(r"\b(inputs\.|github\.event\.|github\.head_ref\b)")
+# Applied to normalize()d text: lowercase, no whitespace, bracket access with a
+# string literal rewritten as property access.
+UNSAFE = re.compile(
+    r"(?<![\w.-])(?:"
+    r"inputs(?![\w-])"  # inputs.x, inputs['x'], toJSON(inputs)
+    r"|github\.event(?![\w-])"  # github.event.x, toJSON(github.event); not event_name
+    r"|github\.head_ref(?![\w-])"
+    r"|github(?![\w.-])"  # toJSON(github), github[...] with a non-literal index
+    r")"
+)
+BRACKET_LITERAL = re.compile(r"\[\s*(['\"])([^'\"\]]*)\1\s*\]")
+
+
+def normalize(expr: str) -> str:
+    """Canonical form of an expression body for the UNSAFE match.
+
+    Contexts and property names are case-insensitive, `a ['b']` is `a.b`, and
+    whitespace around `.` and `[` is legal; the old pattern matched only the
+    lower-case dotted form, so `github.event['pull_request'].title` and
+    `inputs['x']` passed (gitops bug report ch. 12).
+    """
+    text = BRACKET_LITERAL.sub(lambda m: "." + m.group(2), expr)
+    return re.sub(r"\s+", "", text).lower()
 
 
 def step_texts(step: dict):
@@ -60,7 +88,7 @@ def scan_file(path: Path, root: Path) -> list[str]:
             label = step.get("name") or step.get("id") or f"step[{i}]"
             for text in step_texts(step):
                 for m in EXPR.finditer(text):
-                    if UNSAFE.search(m.group(1)):
+                    if UNSAFE.search(normalize(m.group(1))):
                         out.append(
                             f"{rel} / {job} / {label}: run interpolates "
                             f"${{{{{m.group(1)}}}}}; bind it via env:"
@@ -98,13 +126,25 @@ def selftest() -> int:
         "single": "jobs:\n  j:\n    steps:\n      - run: echo ${{inputs.x}}\n",
         "event": "jobs:\n  j:\n    steps:\n      - run: echo \"${{ github.event.pull_request.title }}\"\n",
         "script": "jobs:\n  j:\n    steps:\n      - uses: actions/github-script@v7\n        with:\n          script: |\n            core.info('${{ inputs.x }}')\n",
+        # gitops bug report ch. 12 and the forms found while validating it.
+        "bracket event": "jobs:\n  j:\n    steps:\n      - run: echo ${{ github.event['pull_request'].title }}\n",
+        "bracket inputs": "jobs:\n  j:\n    steps:\n      - run: echo ${{ inputs['x'] }}\n",
+        "bracket github": "jobs:\n  j:\n    steps:\n      - run: echo ${{ github['event']['issue']['body'] }}\n",
+        "double-quoted bracket": "jobs:\n  j:\n    steps:\n      - run: echo ${{ inputs[\"x\"] }}\n",
+        "upper case": "jobs:\n  j:\n    steps:\n      - run: echo ${{ GITHUB.EVENT.pull_request.title }}\n",
+        "mixed case inputs": "jobs:\n  j:\n    steps:\n      - run: echo ${{ Inputs.x }}\n",
+        "head_ref bracket": "jobs:\n  j:\n    steps:\n      - run: echo ${{ github['head_ref'] }}\n",
+        "toJSON event": "jobs:\n  j:\n    steps:\n      - run: echo '${{ toJSON(github.event) }}'\n",
+        "toJSON inputs": "jobs:\n  j:\n    steps:\n      - run: echo '${{ toJSON(inputs) }}'\n",
+        "toJSON github": "jobs:\n  j:\n    steps:\n      - run: echo '${{ toJSON(github) }}'\n",
+        "spaced access": "jobs:\n  j:\n    steps:\n      - run: echo ${{ github . event . issue . title }}\n",
     }
     good = (
         "run-name: ${{ inputs.x }}\n"
         "jobs:\n  j:\n    if: ${{ inputs.x }}\n    steps:\n"
         "      - if: ${{ inputs.x }}\n        env:\n          X: ${{ inputs.x }}\n"
         "          Y: ${{ github.event.pull_request.title }}\n"
-        "        run: echo \"$X\" ${{ secrets.T }}\n"
+        "        run: echo \"$X\" ${{ secrets.T }} ${{ github.event_name }} ${{ github.sha }} ${{ github['repository'] }} ${{ steps.inputs.outputs.x }} ${{ needs.github.result }}\n"
         "      - uses: actions/checkout@v4\n        with:\n          ref: ${{ inputs.x }}\n"
     )
     ok = True

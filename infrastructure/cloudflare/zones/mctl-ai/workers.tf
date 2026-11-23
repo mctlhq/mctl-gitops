@@ -18,3 +18,55 @@ resource "cloudflare_workers_route" "landing_form_api" {
   pattern = "mctl.ai/api/*"
   script  = "mctl-landing-form"
 }
+
+# glovo.mctl.ai -- the landing page, served by the glovo-landing worker
+# (mctlhq/mctl-glovo, landing-worker/). Cloudflare matches a route pattern
+# against the WHOLE request URL, query string included, and a pattern may not
+# itself contain a query ("example.com/?x=*" is invalid), so "glovo.mctl.ai/"
+# matches the bare root only: "/?lang=en" (what the language switcher links
+# to) fell through to the tunnel origin and got a stale copy. The only way to
+# match a URL with a query is a trailing wildcard. Docs:
+# https://developers.cloudflare.com/workers/configuration/routing/routes/
+#
+# Hence three more routes. When several patterns match, the most specific
+# wins, and a route with no script makes matching requests bypass Workers:
+#   glovo.mctl.ai/*             -> glovo-landing  (root with a query; anything
+#                                  else reaches the worker, which answers 404,
+#                                  as the origin does for every other path)
+#   glovo.mctl.ai/mcp*          -> no script      (stays on the tunnel origin)
+#   glovo.mctl.ai/.well-known/* -> no script      (stays on the tunnel origin)
+#   glovo.mctl.ai/link*         -> no script      (the C2 link routes: /link,
+#                                  /link/code, /link/preview, /link/upload,
+#                                  /link/unlink; same origin as /mcp)
+# The origin serves only /, /mcp, /link* and /.well-known/*, so nothing else
+# is lost. The /link* route exists in git only: nothing is applied until the
+# owner dispatches the Cloudflare Apply (gitops#2732), and the origin answers
+# 404 on /link while the service is not deployed with C2 on.
+# scripts/validate-cloudflare-glovo-routes.py pins this set. Rollback: remove
+# the added resources; the origin serves the same page as a fallback.
+resource "cloudflare_workers_route" "glovo_landing" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/"
+  script  = "glovo-landing"
+}
+
+resource "cloudflare_workers_route" "glovo_landing_query" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/*"
+  script  = "glovo-landing"
+}
+
+resource "cloudflare_workers_route" "glovo_origin_mcp" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/mcp*"
+}
+
+resource "cloudflare_workers_route" "glovo_origin_well_known" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/.well-known/*"
+}
+
+resource "cloudflare_workers_route" "glovo_origin_link" {
+  zone_id = local.zone_id
+  pattern = "glovo.mctl.ai/link*"
+}

@@ -46,13 +46,14 @@ spec:
             severity: critical
             component: access-login
           annotations:
-            summary: "Cloudflare Access sign-in through ZITADEL is broken"
+            summary: "Cloudflare Access sign-in through an identity provider is broken"
             description: >-
               The Access login probe has found sign-in broken on two
-              consecutive runs: Access no longer intercepts the test
-              application, offers the IdP with a client id or callback Git does
-              not declare, or the IdP refuses the authorization request. Every
-              Access application offering ZITADEL is affected. The reason is in
+              consecutive runs: Access no longer intercepts a probed
+              application, offers an IdP (ZITADEL or Google) with a client id
+              or callback Git does not declare, or the IdP refuses the
+              authorization request. Every Access application offering that IdP
+              is affected. The log line starting BROKEN names which one, in
               the probe Job's log:
               kubectl -n monitoring logs job/<latest access-login-probe-*>.
               Re-check by hand: dispatch cloudflare-access-login-probe.yml.

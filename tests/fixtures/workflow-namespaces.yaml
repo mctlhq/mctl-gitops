@@ -48,7 +48,9 @@ other_repo_templates:
   - preview-delete
   - preview-deploy
   - preview-reaper
+  - promote-deployment
   - provision-database
   - retire-service
+  - rollback-revision
   - rollback-service
   - smoke-test

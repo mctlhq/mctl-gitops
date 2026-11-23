@@ -1,0 +1,92 @@
+# R2 Class A operations against the free tier, per billing cycle.
+#
+# R2 bills Class A operations in whole blocks of one million above a free
+# million per cycle: the 2026-10-22..11-21 cycle used 1.08M and cost $4.50 for
+# the 79,622 over the line (invoice IN-90323939). The dashboard's budget alert
+# is a dollar threshold, so it only fires after that block is billed.
+#
+# scripts/r2-ops-budget.py reads the cycle's R2 operations from the Cloudflare
+# GraphQL Analytics API and pushes the Class A count, the free tier and a
+# projection to the Pushgateway; vm-rules/r2-ops-budget.yaml alerts on them,
+# including on the check itself going quiet. Every 3 hours is plenty for a
+# figure that moves over days, and one GraphQL call is not an R2 operation.
+#
+# The token is read-only, Account Analytics -> Read on this account only, from
+# Vault through secrets/r2-ops-budget-externalsecret.yaml.
+#
+# The script arrives as a generated ConfigMap (r2-ops-budget-script.yaml), held
+# identical to scripts/r2-ops-budget.py by tests/test_r2_ops_budget_cronjob.py.
+#
+# The Job exits 0 once the outcome is pushed, for the reason
+# access-login-probe.yaml gives: the metrics carry the outcome, and a Job
+# failing on every unreadable figure would add KubeJobFailed as a duplicate.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: r2-ops-budget
+  namespace: monitoring
+  labels:
+    app: r2-ops-budget
+spec:
+  schedule: "17 */3 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Deadline and TTL as in access-login-probe.yaml: room for slow
+      # sockets and an uncached pull, and a failed Job that does not hold
+      # KubeJobFailed for a day after the next run recovered.
+      backoffLimit: 0
+      activeDeadlineSeconds: 180
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: r2-ops-budget
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: check
+              image: python:3.13.16-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+              command: ["python", "/check/r2-ops-budget.py"]
+              args:
+                - --account
+                - 6a09f637d20e1f66a8e9d45ebe778058
+                - --pushgateway
+                - http://prometheus-pushgateway.monitoring.svc:9091
+              env:
+                - name: CLOUDFLARE_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: r2-ops-budget
+                      key: CLOUDFLARE_API_TOKEN
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /check
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: r2-ops-budget-script

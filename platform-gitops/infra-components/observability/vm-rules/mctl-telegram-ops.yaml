@@ -82,6 +82,32 @@
 # namespace/service labels the labs-agent-worker-preview target carries
 # (service = <instance>-base-service); not re-queried live when written.
 #
+# Personal Assistant series (groups mctl-telegram-pa and
+# mctl-telegram-pa-catalog, mctlhq/mctl-telegram#1318 step G2a). Ported from
+# deploy/alerts/mctl-telegram.rules.yaml in mctl-telegram; expressions are the
+# source's, plus one selector. Every rule is pinned to the PREVIEW server:
+#
+#   {namespace="labs", service="labs-mctl-telegram-preview-base-service"}
+#
+# Queried in VictoriaMetrics on 2026-11-22: the preview server's `up` carries
+# job = service = labs-mctl-telegram-preview-base-service, namespace = labs.
+# The selector is not cosmetic. The PRODUCTION server
+# (labs-mctl-telegram-base-service) already exports mctl_pa_updates_total,
+# mctl_pa_outbox_total, mctl_pa_callback_answers_total and
+# mctl_pa_webhook_info_checks_total, pre-created at zero with the PA off. An
+# unscoped `sum(...)` would add a future production PA into preview's numbers
+# and page with nothing saying which bot it was, and an unscoped ratio or
+# average would let one instance's healthy samples mask the other's failure.
+# A production PA gets its own rules when it is enabled.
+#
+# On the same date NO mctl_pa_* series existed for the preview server, for two
+# reasons: PA_ENABLED is "false" there (the monitor and its gauges do not
+# start), and the preview scrape (mctl-telegram-agent-preview-monitor.yaml)
+# kept only mctl_agent_.*. That keep filter is widened to mctl_pa_.* in the
+# same change as these rules, otherwise they could never fire. Until the PA is
+# enabled on preview every rule below has no data and is silent by design;
+# absence of these series is not evidence that the PA is healthy.
+#
 # Routing is configured in bootstrap/templates/observability/monitoring.yaml,
 # on alertname — see the comment on the MctlAgentDeadLetter route there for
 # why the two communication-agent alerts must not reach an operator through
@@ -184,6 +210,43 @@ spec:
               flows or bot-scan traffic against /oauth/authorize.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramoauthpendingstuck"
 
+        - alert: MctlTelegramMemoryNearLimit
+          # Usage is read from the cAdvisor endpoint only: the kubelet exports
+          # container_memory_working_set_bytes a second time under /metrics/resource,
+          # and summing both would double the value (see mctl-alerts.yaml:19-23).
+          expr: |
+            (
+              sum by (namespace, pod) (
+                container_memory_working_set_bytes{
+                  namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service",
+                  metrics_path="/metrics/cadvisor"
+                }
+              )
+              /
+              sum by (namespace, pod) (
+                container_spec_memory_limit_bytes{
+                  namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"
+                }
+              )
+            ) > 0.85
+            and
+            sum by (namespace, pod) (
+              container_spec_memory_limit_bytes{
+                namespace="labs", pod=~"labs-mctl-telegram-base-service-.*", container="base-service"
+              }
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram pod {{ $labels.pod }} memory is above 85% of limit"
+            description: >-
+              Working set memory for pod {{ $labels.pod }} is at {{ $value | humanizePercentage }}
+              of its container memory limit. Each MTProto session consumes memory; this approaches
+              the OOM threshold. Consider increasing memory limit or pruning inactive sessions.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramnearcapacity"
+
     - name: mctl-telegram-bridge
       rules:
         # Counts registrations per daemon, not transitions of a shared gauge.
@@ -277,6 +340,82 @@ spec:
               server log is what names it ("bridge: authentication failed" /
               "bridge token: credential refused").
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlbridgeauthfailing"
+
+    - name: mctl-telegram-worker-auth
+      rules:
+        # mctl-telegram#1346/#1347: the worker-token revocation cache fails
+        # closed. Once its last good snapshot is older than 15s
+        # (localjwt.MaxRevocationSnapshotAge), every token that goes through
+        # that one shared cache (worker, pool, Local Bridge, agent job and PA
+        # job tokens) is refused with 401. A shared-pg outage longer than
+        # that therefore stops every agent worker. The bound is a promise to
+        # the owner; the response to this alert is restoring the database,
+        # never loosening it.
+        #
+        # Why the snapshot age and not the failure counter. Request traffic
+        # cannot carry this alert: an agent worker exits on its first 401
+        # (no credential reload, so retrying is pointless) and comes back
+        # only through CrashLoopBackOff, up to five minutes apart, and the PA
+        # worker stops. One or two crash-looping workers leave a 30-minute
+        # outage with almost no requests, so any rule on request-driven
+        # refresh failures stays silent. mctl-telegram#1360 adds a background
+        # refresher (every 5s, each read bounded by a 5s deadline) and exports
+        # mctl_worker_token_revocation_snapshot_age_seconds, computed at
+        # scrape time from when the served snapshot's read began, the same
+        # measure the 15s bound uses. It answers the question this alert
+        # asks, "are worker tokens being refused right now", without any
+        # traffic and without depending on how failures are counted. A
+        # healthy store keeps it under 10s (interval 5s + read deadline 5s),
+        # however slow the reads are within that deadline. A cache that has
+        # never loaded reports its own age, never 0, so a pod that starts
+        # into the outage pages too. mctl_worker_token_revocation_refresh_failures_total
+        # stays a diagnostic (runbook): with the refresher it rises at least
+        # once per 10s through an outage.
+        #
+        # `> 15` is the bound itself: the server refuses at age > 15s, so an
+        # age of exactly 15 refused nothing yet. max_over_time over [1m] (two
+        # 30s scrapes) holds a store that flaps between failing and healthy:
+        # tokens are refused in every minute, but an instant sample can land
+        # on a fresh snapshot and reset the hold. The window is shorter than
+        # the hold, as in MctlBridgeAuthFailing above, so one stale minute (a
+        # shared-pg failover) leaves the window inside the hold and cannot
+        # page. `max by (job)`: the worst pod; a restart starts a new series
+        # and the outage keeps paging across it. Time to page: about 5.5
+        # minutes after refusals begin.
+        #
+        # Absent series. The gauge exists only from the mctl-telegram
+        # release containing #1360, the first one after 0.140.0. 0.140.0
+        # itself already refuses tokens (#1347) but exports no gauge, so
+        # while it runs a shared-pg outage stops every agent worker and this
+        # rule pages nothing; that gap closes only when the release
+        # containing #1360 is deployed. Releases before 0.140.0 fail open.
+        # On any release without the gauge the rule has no data and is
+        # silent, so it never pages falsely. A server that is down or
+        # unscraped yields no data either; ServiceUnavailable (/healthz probe)
+        # and its absent() twin in blackbox-alerts.yaml cover that, and no
+        # absent() is added here (gitops#2277). The preview scrape keeps only
+        # mctl_agent_.*, so the series is production-only.
+        #
+        # severity critical: the impact is every agent worker refused at
+        # once, the same tier as ServiceUnavailable. Per the severity route
+        # (#1771) every critical alert pages on Telegram, which is not the
+        # path being broken here.
+        - alert: MctlWorkerTokenRevocationRefreshFailing
+          expr: max by (job) (max_over_time(mctl_worker_token_revocation_snapshot_age_seconds[1m])) > 15
+          for: 5m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram cannot refresh the worker-token revocation list; worker tokens are refused"
+            description: >-
+              The worker-token revocation snapshot reached {{ $value | humanizeDuration }}
+              in the last minute and has been past its 15-second bound for five
+              minutes. Past the bound every worker, pool, Local Bridge and job
+              token is refused with 401, so agent workers are stopped. The store
+              is the cause (shared-pg down, unreachable or hung): check the
+              database, not the bound.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlworkertokenrevocationrefreshfailing"
 
     - name: mctl-telegram-agent
       rules:
@@ -664,3 +803,218 @@ spec:
               of finished jobs, ended on a usage limit or an exhausted provider
               429 retry loop.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentproviderratelimithigh"
+
+    # Personal Assistant bot webhook and outbox (mctl-telegram#1313 slice d2,
+    # threat model T4). Every series below exists only while PA_ENABLED is
+    # true: the monitor and its gauges do not start otherwise, so none of
+    # these can fire where the PA is off. Preview-only: see the header for the
+    # selector and why every expression carries it. Severities are the
+    # source's: like MctlAgentActionsExecutingStuck, a preview-only rule here
+    # keeps critical when the impact is real (the preview bot serves real
+    # principals), and every critical pages on Telegram (#1771).
+    - name: mctl-telegram-pa
+      rules:
+        - alert: MctlPAWebhookInfoUnreadable
+          # Could not observe is not healthy (I9): a failed getWebhookInfo
+          # sets up to 0, never leaves the last good state in place. The
+          # average catches a monitor that fails every other check, which
+          # `up == 0 for 15m` never would.
+          expr: avg_over_time(mctl_pa_webhook_info_up{namespace="labs", service="labs-mctl-telegram-preview-base-service"}[30m]) < 0.8
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA bot getWebhookInfo is often unreadable (preview)"
+            description: >-
+              More than a fifth of the getWebhookInfo checks in the last 30
+              minutes failed, in a row or on and off. The webhook state (URL,
+              allowed_updates, delivery errors) is unknown, not healthy.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookinfounreadable"
+
+        - alert: MctlPAWebhookInfoStale
+          # Also catches a monitor that stopped checking while up stayed 1.
+          expr: time() - mctl_pa_webhook_info_last_success_timestamp_seconds{namespace="labs", service="labs-mctl-telegram-preview-base-service"} > 1800
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA bot webhook not checked successfully for 30 minutes (preview)"
+            description: >-
+              The last readable getWebhookInfo check is more than 30 minutes
+              old. Either every read fails or the monitor stopped running.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookinfostale"
+
+        - alert: MctlPAWebhookMisconfigured
+          # Two checks (5 minutes apart) must have seen the problem within
+          # 20 minutes. This counts checks, not samples: the problem gauge
+          # holds one check's value for the whole interval, so samples of it
+          # count scrapes and one bad check would already look like several.
+          # A URL that flips between checks, or an unreadable check in
+          # between, leaves the counter where it was and does not reset it.
+          # The second clause requires the problem gauge to have read 1 in
+          # the same window: after a scrape gap, VictoriaMetrics' increase()
+          # may count an old counter value from an earlier incident as new.
+          # Under Prometheus the first increment after the monitor starts is
+          # not counted (the first scrape already sees 1), so there the alert
+          # fires at the third bad check, not the second.
+          expr: |
+            max by (problem) (increase(mctl_pa_webhook_problem_checks_total{namespace="labs", service="labs-mctl-telegram-preview-base-service", problem=~"url_changed|allowed_updates_changed"}[20m])) >= 2
+              and on (problem)
+            max by (problem) (max_over_time(mctl_pa_webhook_problem{namespace="labs", service="labs-mctl-telegram-preview-base-service", problem=~"url_changed|allowed_updates_changed"}[20m])) == 1
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "PA bot webhook {{ $labels.problem }} (preview)"
+            description: >-
+              getWebhookInfo reports a webhook URL other than PA_WEBHOOK_URL,
+              or allowed_updates other than message and callback_query, at two
+              or more checks within 20 minutes, in a row or on and off. Updates
+              may be going to someone else.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookmisconfigured"
+
+        - alert: MctlPAWebhookSecretRejected
+          # Our webhook answers 401 only to a missing or wrong secret, and
+          # this is Telegram's own delivery failing, not a probe.
+          expr: max(max_over_time(mctl_pa_webhook_problem{namespace="labs", service="labs-mctl-telegram-preview-base-service", problem="secret_rejected"}[15m])) == 1
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "Telegram's PA webhook deliveries are rejected for the secret (preview)"
+            description: >-
+              getWebhookInfo's latest delivery error is a 401 from our webhook:
+              the secret_token Telegram sends does not match PA_WEBHOOK_SECRET.
+              No PA update is being processed.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhooksecretrejected"
+
+        - alert: MctlPAWebhookDeliveryErrors
+          # The problem is set only by a check that saw a new error, so the
+          # share of the window it was set is the share of checks that did.
+          expr: max(avg_over_time(mctl_pa_webhook_problem{namespace="labs", service="labs-mctl-telegram-preview-base-service", problem="delivery_error"}[30m])) > 0.5
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "Telegram keeps failing to deliver PA webhook updates (preview)"
+            description: >-
+              Most getWebhookInfo checks in the last 30 minutes found a new
+              delivery error. Updates are queuing at Telegram.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookdeliveryerrors"
+
+        - alert: MctlPAWebhookBacklog
+          expr: mctl_pa_webhook_pending_updates{namespace="labs", service="labs-mctl-telegram-preview-base-service"} > 100
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA webhook has {{ $value }} pending updates at Telegram (preview)"
+            description: >-
+              getWebhookInfo pending_update_count has stayed above 100 for 15
+              minutes: Telegram is not getting its deliveries accepted.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookbacklog"
+
+        - alert: MctlPAWebhookBadSecretBurst
+          expr: sum(increase(mctl_pa_updates_total{namespace="labs", service="labs-mctl-telegram-preview-base-service", outcome="bad_secret"}[15m])) > 20
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA webhook refused more than 20 requests for the secret in 15 minutes (preview)"
+            description: >-
+              Requests to /pa/bot/webhook without the right secret token. A
+              burst is either probing of a public URL or a secret mismatch;
+              MctlPAWebhookSecretRejected tells the two apart.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpawebhookbadsecretburst"
+
+        - alert: MctlPAOutboxUndelivered
+          # "refused" (a 403, or a 400 "chat not found": the principal
+          # blocked the bot or the chat is gone) is the principal's choice,
+          # not ours to page on. Every other 4xx except 429 is "failed".
+          expr: |
+            sum by (outcome) (increase(mctl_pa_outbox_total{namespace="labs", service="labs-mctl-telegram-preview-base-service", outcome=~"failed|unknown|claim_error"}[30m])) > 0
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA outbox: {{ $labels.outcome }} in the last 30 minutes (preview)"
+            description: >-
+              A PA reply or notice was not delivered (failed after its
+              retries, or its outcome is unknown and it is not resent), or the
+              outbox could not be read at all.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpaoutboxundelivered"
+
+    - name: mctl-telegram-pa-catalog
+      rules:
+        - alert: MctlPAPinDrift
+          # mctl-telegram#1315: a PA catalog server's live tools/list no
+          # longer matches the committed pin for a pinned tool (changed or
+          # missing). The dispatcher already denies the drifted tools (threat
+          # model I7); this is the human signal that the pin needs a reviewed
+          # update or the server was tampered with. Extra unpinned tools (tg's
+          # writes) are not drift. The gauge is absent, not 0, while the
+          # listing is unknown: MctlPAPinListingUnknown covers that case.
+          expr: |
+            max by (server) (mctl_pa_pin_drift{namespace="labs", service="labs-mctl-telegram-preview-base-service"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA catalog server {{ $labels.server }} differs from the committed pin (preview)"
+            description: >-
+              The live tools/list of {{ $labels.server }} differs from the
+              committed pin for at least one pinned tool. Those tools are
+              denied to Personal Assistant runs until the listing matches or
+              the pin is updated through a reviewed PR.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapindrift"
+
+        - alert: MctlPAPinListingUnknown
+          # Could not observe is not observed clean: with no fresh listing
+          # (failed, unparsable, or aged out of the 5-minute window) drift is
+          # unknown, the drift gauge is absent, and calls are refused as
+          # server_unavailable. An idle server also ages into unknown; that
+          # is true but not actionable, so the alert needs listing attempts
+          # that failed in the same 15 minutes. Refusals that never reach
+          # tools/list (flag_off, tool_not_in_set, job_stale, tool_cap) do
+          # not count: a server switched off is not an unobservable one.
+          # The idle case is decided here, explicitly, not by leaving a
+          # stale 0 in the drift gauge.
+          expr: |
+            max by (server) (mctl_pa_pin_listing_unknown{namespace="labs", service="labs-mctl-telegram-preview-base-service"}) > 0
+              and on (server)
+            sum by (server) (increase(mctl_pa_pin_listing_failures_total{namespace="labs", service="labs-mctl-telegram-preview-base-service", reason!="unauthorized"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA catalog server {{ $labels.server }} tools/list cannot be observed (preview)"
+            description: >-
+              Personal Assistant calls try to list {{ $labels.server }}, but
+              no tools/list of it could be read or parsed in the last 5
+              minutes, so pin drift is unknown and those calls are refused.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapinlistingunknown"
+
+        - alert: MctlPAPinListingUnauthorized
+          # mctl-telegram#1341 round 3: a refused token on tools/list is not
+          # "listing unknown" (it is one connection's problem), so it needs
+          # its own signal. 401s on a server for 30 minutes mean either users
+          # whose connection broke or a server that stopped accepting our
+          # tokens.
+          expr: |
+            sum by (server) (increase(mctl_pa_pin_listing_failures_total{namespace="labs", service="labs-mctl-telegram-preview-base-service", reason="unauthorized"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "PA catalog server {{ $labels.server }} keeps refusing connection tokens (preview)"
+            description: >-
+              tools/list on {{ $labels.server }} has answered 401 to
+              Personal Assistant connection tokens for 30 minutes. Those
+              calls are refused as server_refused.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlpapinlistingunauthorized"

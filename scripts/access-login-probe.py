@@ -15,6 +15,14 @@ endpoint, so this follows a browser's first steps without one:
   3. GET that link. The IdP must answer by starting a login (a redirect to its
      login UI), not with an error such as an unknown client.
 
+Two IdPs are probed: ZITADEL through the test application, and Google through
+media.mctl.ai, an application that still offers Google only. Google's client
+id is not declared in Git (the provider is managed in the Cloudflare
+dashboard, see infrastructure/cloudflare/README.md), so for it the probe cannot
+pin the id; it still requires the Access callback, a code flow and a Google
+client id on the link, and Google's own answer is what catches a deleted
+client: a redirect to its error page instead of its sign-in page.
+
 Nothing signs in, and no credential is held: every request is anonymous.
 Step 3 leaves one unfinished authorization request in the IdP, which expires
 on its own.
@@ -61,7 +69,11 @@ class Target:
     app_url: str
     authorize_url: str  # the IdP's authorization endpoint, scheme+host+path
     login_ui_path: str  # where a healthy IdP redirects to start a login
-    client_id_source: str  # file declaring the expected client id
+    client_id_source: str  # file declaring the expected client id; "" = not declared in Git
+    login_ui_param: str = "authRequest"  # query key a healthy redirect carries; "" = none required
+    error_path: str = ""  # where the IdP redirects to report a refused request
+    client_id_suffix: str = ""  # shape required of an undeclared client id
+    pkce: bool = True  # Access sends an S256 challenge to this IdP
 
 
 TARGETS = [
@@ -71,6 +83,17 @@ TARGETS = [
         authorize_url="https://auth.mctl.ai/oauth/v2/authorize",
         login_ui_path="/ui/v2/login/login",
         client_id_source=ZITADEL_IDP_TF,
+    ),
+    Target(
+        name="Google (media.mctl.ai)",
+        app_url="https://media.mctl.ai/",
+        authorize_url="https://accounts.google.com/o/oauth2/auth",
+        login_ui_path="/v3/signin/identifier",
+        client_id_source="",
+        login_ui_param="",
+        error_path="/signin/oauth/error",
+        client_id_suffix=".apps.googleusercontent.com",
+        pkce=False,
     ),
 ]
 
@@ -134,16 +157,22 @@ def idp_links(page: str, authorize_url: str) -> list[str]:
     return [l for l in links if l.split("?", 1)[0] == authorize_url]
 
 
-def judge_link(link: str, client_id: str) -> None:
+def judge_link(link: str, client_id: str | None, t: Target | None = None) -> None:
+    """client_id None: not declared in Git, so only its shape can be checked."""
+    pkce = t.pkce if t else True
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(link).query))
-    want = {
-        "client_id": client_id,
-        "redirect_uri": CALLBACK,
-        "response_type": "code",
-        "code_challenge_method": "S256",
-    }
+    want = {"redirect_uri": CALLBACK, "response_type": "code"}
+    if client_id is not None:
+        want["client_id"] = client_id
+    if pkce:
+        want["code_challenge_method"] = "S256"
     wrong = [f"{k}={q.get(k)!r} (want {v!r})" for k, v in want.items() if q.get(k) != v]
-    if not q.get("code_challenge"):
+    if client_id is None:
+        suffix = t.client_id_suffix if t else ""
+        cid = q.get("client_id", "")
+        if not cid or not cid.endswith(suffix):
+            wrong.append(f"client_id={cid!r} (want one ending {suffix!r})")
+    if pkce and not q.get("code_challenge"):
         wrong.append("no code_challenge")
     if wrong:
         raise Broken("Access sends the IdP a request Git does not describe: " + ", ".join(wrong))
@@ -155,15 +184,19 @@ def judge_authorize(status: int, location: str, body: str, t: Target) -> None:
         q = dict(urllib.parse.parse_qsl(loc.query))
         if "error" in q:
             raise Broken(f"IdP refused the authorization request: {q['error']}: {q.get('error_description', '')}")
-        if loc.path == t.login_ui_path and q.get("authRequest"):
+        if t.error_path and loc.path == t.error_path:
+            raise Broken(f"IdP redirected to its error page {redact(location)}: {q.get('authError', '')[:80]}")
+        if loc.path == t.login_ui_path and (not t.login_ui_param or q.get(t.login_ui_param)):
             return
         raise Unknown(f"IdP redirected somewhere unexpected: {redact(location)}")
-    if 400 <= status < 500:
+    if 400 <= status < 500 and status not in (408, 429):  # throttled is not refused
         raise Broken(f"IdP refused the authorization request: HTTP {status} {body[:200].strip()}")
     raise Unknown(f"IdP answered HTTP {status}")
 
 
-def resolve_client_id(t: Target, repo_root: str, override: str | None) -> str:
+def resolve_client_id(t: Target, repo_root: str, override: str | None) -> str | None:
+    if not t.client_id_source:
+        return None  # not declared in Git: nothing to read, nothing to override
     return override if override else expected_client_id(repo_root, t.client_id_source)
 
 
@@ -186,7 +219,7 @@ def probe(t: Target, repo_root: str, client_id: str | None = None) -> None:
         # this scraper missing changed markup as much as the IdP being gone.
         raise Unknown(f"found no link to {t.authorize_url} on the Access login page")
     for link in links:
-        judge_link(link, client_id)
+        judge_link(link, client_id, t)
 
     judge_authorize(*fetch(links[0]), t)
 
@@ -315,6 +348,29 @@ def selftest() -> int:
     case("without --client-id an unreadable repository is unknown",
          lambda: resolve_client_id(Target("t", "", "", "", "missing.tf"), "/nonexistent", None), Unknown)
 
+    g = next(x for x in TARGETS if urllib.parse.urlparse(x.authorize_url).hostname == "accounts.google.com")
+    gid = "830512585668-abc.apps.googleusercontent.com"
+    glink = (f"{g.authorize_url}?client_id={gid}&redirect_uri={urllib.parse.quote(CALLBACK, safe='')}"
+             "&response_type=code&state=s")
+    case("a Google link without PKCE is healthy", lambda: judge_link(glink, None, g), None)
+    case("a Google link with a foreign client id is broken",
+         lambda: judge_link(glink.replace(gid, "42"), None, g), Broken)
+    case("a Google link with no client id is broken",
+         lambda: judge_link(glink.replace(f"client_id={gid}&", ""), None, g), Broken)
+    case("a Google link with a different callback is broken",
+         lambda: judge_link(glink.replace("cloudflareaccess.com", "example.com"), None, g), Broken)
+    case("Google's sign-in page is healthy",
+         lambda: judge_authorize(302, "https://accounts.google.com/v3/signin/identifier?client_id=x", "", g), None)
+    case("Google's OAuth error page (deleted client) is broken",
+         lambda: judge_authorize(302, "https://accounts.google.com/signin/oauth/error?authError=abc", "", g),
+         Broken)
+    case("an unexpected Google redirect is unknown",
+         lambda: judge_authorize(302, "https://accounts.google.com/somewhere", "", g), Unknown)
+    case("Google answering 429 is unknown, not healthy", lambda: judge_authorize(429, "", "", g), Unknown)
+    case("a Google target ignores --client-id and reads no file",
+         lambda: None if resolve_client_id(g, "/nonexistent", "42") is None
+         else (_ for _ in ()).throw(Broken("wrong")), None)
+
     TARGETS_UNDER_TEST[:] = [Target(f"t{i}", "", "", "", "") for i in range(2)]
     for kinds, want in [((Unknown, Broken), 1), ((Broken, Unknown), 1),
                         ((None, Unknown), 2), ((None, KeyError), 2), ((None, None), 0)]:
@@ -341,11 +397,13 @@ def main() -> int:
     if a.client_id is not None and not a.client_id.isdigit():
         print(f"UNKNOWN --client-id {a.client_id!r} is not a numeric client id")
         code = 2
-    elif a.client_id and len(TARGETS) != 1:
+    elif a.client_id and sum(1 for t in TARGETS if t.client_id_source) != 1:
         # One override cannot serve several IdPs: each target declares its own
         # client id source. Refuse rather than probe a second IdP with the
-        # first one's id and call it broken.
-        print(f"UNKNOWN --client-id names one client id, but there are {len(TARGETS)} targets")
+        # first one's id and call it broken. Targets with no declared id
+        # ignore the override, so they do not count.
+        print("UNKNOWN --client-id names one client id, but "
+              f"{sum(1 for t in TARGETS if t.client_id_source)} targets declare one")
         code = 2
     else:
         check = (lambda t, root: probe(t, root, a.client_id)) if a.client_id else probe

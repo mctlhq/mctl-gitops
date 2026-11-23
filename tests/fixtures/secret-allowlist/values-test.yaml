@@ -6,10 +6,22 @@
 #   allow nothing of that kind (deny/10, deny/11, deny/14).
 # - loose has an unanchored hostPattern (deny/20).
 externalManifestNamespaces:
+  # The namespace name is a fixture name: the policy cases below were written
+  # against tenant erpact's entry, which bootstrap values no longer carry
+  # (the tenant was removed from the cluster), so the entry lives here.
   erpact:
+    secrets:
+      - clo-s3
+      - deployer-git
+      - deployer-secret
+      - erpact-backup-r2
+      - erpact-oidc-zitadel
+      - erpact-frappe-users
+      - mariadb-root
     serviceAccounts:
       - default
       - puller
+    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
   partial:
     serviceAccounts:
       - default

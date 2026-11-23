@@ -82,6 +82,10 @@ spec:
           # Managed-runtime pool worker (gitops#2345). Same port, path and
           # mctl_agent_.* keep filter; at 0 replicas it simply has no target.
           - labs-agent-worker-managed-preview
+          # Personal Assistant worker (mctlhq/mctl-telegram#1318, step G5).
+          # Same image and health port as the managed pool; it emits the
+          # mctl_agent_.* worker series that the keep filter below admits.
+          - labs-agent-worker-pa-preview
   namespaceSelector:
     matchNames:
       - labs
@@ -114,7 +118,16 @@ spec:
       # `up`, `scrape_duration_seconds` and the other synthetic series are
       # added by the scraper after metric relabeling and are unaffected, so
       # target health for these two workloads stays observable.
+      #
+      # mctl_pa_.* (mctlhq/mctl-telegram#1318 step G2a) is the Personal
+      # Assistant's own family, evaluated by the preview-scoped groups
+      # mctl-telegram-pa and mctl-telegram-pa-catalog in
+      # vm-rules/mctl-telegram-ops.yaml, which select this server by
+      # namespace and service. Every rule that reads mctl_pa_* carries that
+      # selector, so admitting the family cannot leak preview samples into a
+      # production-sized threshold the way the paragraph above describes.
+      # Without it here those rules would have no data and never fire.
       metricRelabelConfigs:
         - sourceLabels: [__name__]
-          regex: "mctl_agent_.*"
+          regex: "mctl_agent_.*|mctl_pa_.*"
           action: keep

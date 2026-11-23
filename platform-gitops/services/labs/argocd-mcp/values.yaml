@@ -1,0 +1,117 @@
+# Service: argocd-mcp
+# Team: labs
+# Chart: base-service
+#
+# Read-only Argo CD MCP server for the owner's private portal (mcp.mctl.ai).
+# It fills the read gaps api.mctl.ai does not cover (resource tree, application
+# events, live resources, workload logs). It is NOT a second way to change the
+# platform: writes go through GitOps, so the server runs with MCP_READ_ONLY=true
+# and its Argo CD account can only read (platform-gitops/argocd, account
+# `argocd-mcp`).
+#
+# Source: github.com/mashkovd/mcp-for-argocd, a fork of argoproj-labs/mcp-for-argocd
+# kept independent of this platform. Cloudflare Access is the OAuth authorization
+# server in front of it (infrastructure/cloudflare/account/argocd-mcp.tf); this pod
+# only verifies the assertion Access forwards.
+image:
+  repository: ghcr.io/mashkovd/mcp-for-argocd
+  tag: "0.9.1-portal.1"
+# The image's CMD is `http`; the entrypoint is `node dist/index.js`, so args replace
+# only the arguments. --stateless: no per-replica sessions to lose. The image binds
+# loopback by default, so the bind is explicit here; the Host allow list turns
+# Host validation on (the kubelet probe path /healthz is registered before it and
+# stays reachable by pod IP).
+args:
+  - http
+  - --stateless
+  - --bind-address
+  - 0.0.0.0
+  - --port
+  - "3000"
+  - --allowed-host-header
+  - argocd.mctl.ai
+service:
+  port: 3000
+backstage:
+  kubernetesId: argocd-mcp
+replicaCount: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+# Non-root on a read-only root filesystem (base-service hardening). The image runs
+# as uid 1000; runAsNonRoot is checked by kubelet against a numeric user only.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+env:
+  # Only read tools are registered. Pinned by a test in the source repository, which
+  # fails if a tool that is not annotated read-only is registered in this mode.
+  MCP_READ_ONLY: "true"
+  # Refuse to start unless the three MCP_AUTH_* values below are set, so a typo in
+  # their names cannot leave the listener unauthenticated.
+  MCP_AUTH_REQUIRED: "true"
+  # The Access team's signing keys and issuer (the same team projects-mcp uses).
+  MCP_AUTH_JWKS_URL: https://mbank.cloudflareaccess.com/cdn-cgi/access/certs
+  MCP_AUTH_ISSUER: https://mbank.cloudflareaccess.com
+  MCP_AUTH_TOKEN_HEADER: cf-access-jwt-assertion
+  # The AUD tag of the Access application argocd_mcp (terraform output
+  # argocd_mcp_aud). It has no default on purpose: an assertion minted for a
+  # different application would otherwise verify here. Quoted so YAML keeps it a
+  # string. If the Access application is ever recreated the AUD changes and the
+  # server answers 401 to everything until this is updated.
+  MCP_AUTH_AUDIENCE: "2bbae5e31329a202957bfd59fa7c47138bffbcc51a43a3811ce014ad50e44765"
+  # In-cluster: this is the pod calling Argo CD, not the portal. server.insecure is
+  # true in platform-gitops/argocd/values.yaml, so the Service speaks plain HTTP.
+  # Reaching it must not go through Cloudflare Access.
+  ARGOCD_BASE_URL: http://argocd-server.argocd.svc.cluster.local
+# ARGOCD_API_TOKEN, from Vault secret/data/teams/labs/argocd-mcp (key
+# ARGOCD_API_TOKEN). The token is minted for the `argocd-mcp` account:
+#   argocd --core account generate-token --account argocd-mcp
+externalSecret:
+  targetSecret: argocd-mcp-secrets
+  data:
+    - secretKey: ARGOCD_API_TOKEN
+      remoteKey: teams/labs/argocd-mcp
+      property: ARGOCD_API_TOKEN
+envFrom:
+  - secretRef:
+      name: argocd-mcp-secrets
+# /healthz is the one route that answers without an Access assertion, which is what
+# lets the kubelet reach it at all.
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 15
+ingress:
+  enabled: true
+  # argocd.mctl.ai is what the Access application secures. The generated labs- name
+  # is deliberately NOT here: it resolves to the same origin and is not covered by
+  # the Access application, which would make it a way around the authorization path.
+  hosts:
+    - argocd.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: argocd-mcp-tls
+      hosts:
+        - argocd.mctl.ai

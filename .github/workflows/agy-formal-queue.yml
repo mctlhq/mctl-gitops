@@ -1,0 +1,64 @@
+name: Agy formal review (merge queue)
+
+# The merge queue (mctlhq/.github#351) requires agy-formal-review on the
+# commit it builds. This run executes the workflow file from that commit,
+# which is PR content, so it holds no reviewer App key: it only asks the
+# trusted publisher in mctlhq/.github to review the queued commit.
+# The publisher treats every input as untrusted and re-checks the live queue
+# ref, the commit's parents and the PR head before posting anything. If this
+# dispatch fails, agy-formal-review never reports and the queue times the
+# entry out instead of merging it.
+#
+# The dispatch token comes from the mctl-gitops-dispatch App (actions:write
+# and metadata only, installed on mctl-gitops and mctlhq/.github), minted for
+# mctlhq/.github alone. Its key sits in the app-dispatch-queue environment,
+# whose branch policy admits only gh-readonly-queue/main/* refs: GitHub
+# creates those for a PR that already passed review and the required checks,
+# so a pull_request run from an arbitrary branch cannot read the key.
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: dispatch agy formal review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: app-dispatch-queue
+    steps:
+      - name: Mint a dispatch token for mctlhq/.github
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        # v3 inputs: client-id replaces the deprecated app-id, and
+        # permission-<name> narrows the token below the App's own grant.
+        with:
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: .github
+          permission-actions: write
+
+      - name: Dispatch the trusted formal review for the queued commit
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          # merge_group.head_ref is the full ref ("refs/heads/gh-readonly-queue/
+          # <base>/pr-<N>-<sha>"), the shape the publisher requires too.
+          re='^refs/heads/gh-readonly-queue/[A-Za-z0-9_.-]+/pr-([1-9][0-9]*)-[0-9a-f]{40}$'
+          if ! [[ "$HEAD_REF" =~ $re ]]; then
+            echo "::error::unexpected merge queue ref: $HEAD_REF"
+            exit 1
+          fi
+          gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main \
+            -f repository="$GITHUB_REPOSITORY" \
+            -f pr_number="${BASH_REMATCH[1]}" \
+            -f queue_head_ref="$HEAD_REF" \
+            -f queue_head_sha="$HEAD_SHA" \
+            -f queue_base_sha="$BASE_SHA"
+          echo "dispatched formal review for PR #${BASH_REMATCH[1]} queue commit $HEAD_SHA"

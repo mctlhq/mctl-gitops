@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.117.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -1425,6 +1425,9 @@ spec:
     # ── 4. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-implement.
     - name: notify-telegram
+      # A hung Telegram call must not pin the workflow (#568); the egress
+      # wait is ~90s, the send itself is seconds.
+      activeDeadlineSeconds: 300
       initContainers:
         # kube-router admits a new pod's IP into the proxy's ingress ipset a
         # few seconds after the pod starts; a first connection inside that

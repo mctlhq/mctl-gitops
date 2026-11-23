@@ -1,0 +1,71 @@
+name: RedLoop WAF Ruleset Verification (Gate 3)
+
+# One-shot, read-only Cloudflare Ruleset contract verification for RedLoop Phase P2 Gate 3 (#2388).
+#
+# Deliberately manual with environment approval.
+# Issues exactly one read-only GET operation to verify that:
+# 1. Existing credential CF_APPLY_TOKEN_MCTL_AI can read the live ruleset API.
+# 2. Zone ruleset 4bdd5c0da7004933b40aae8fd0d5ce78 contains target rule d8b4ea76eabc420e99146cafd9596801.
+# 3. Target rule attributes match invariants:
+#    - enabled == false (strictly inert kill switch)
+#    - ref == "block_staging_redloop_emergency"
+#    - action == "block"
+#    - expression == '(http.host eq "staging-redloop.mctl.ai")'
+#
+# Safety Invariants:
+# - Strictly HTTP GET: zero PATCH, POST, PUT, DELETE or OpenTofu operations.
+# - Protected environment: cloudflare-apply.
+# - Fails closed on any assertion mismatch or non-200 HTTP response.
+# - Safe evidence emission: never logs API token or full ruleset JSON.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/scripts/redloop-waf-verify.sh'
+      - '.github/workflows/redloop-waf-verify.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redloop-waf-verify
+  cancel-in-progress: false
+
+jobs:
+  pre-flight:
+    name: pre-flight self-test & syntax checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Self-test verification logic
+        run: |
+          REDLOOP_VERIFY_SELF_TEST=1 .github/scripts/redloop-waf-verify.sh
+
+  verify:
+    name: verify cloudflare ruleset contract
+    needs: pre-flight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: cloudflare-apply
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Execute read-only contract verification
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_APPLY_TOKEN_MCTL_AI }}
+          EVIDENCE_FILE: ${{ runner.temp }}/redloop_ruleset_contract_evidence.json
+        run: |
+          set -euo pipefail
+          .github/scripts/redloop-waf-verify.sh
+
+      - name: Upload contract evidence artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: redloop-ruleset-contract-evidence
+          path: ${{ runner.temp }}/redloop_ruleset_contract_evidence.json
+          if-no-files-found: warn

@@ -102,6 +102,73 @@ tests:
                 error-budget policy:
                 https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
 
+  # --- Minimum-volume guard (docs/slo.md, accepted 2026-11-21) ----------
+  # Three errors in an hour of about 33 calls are 9%, above the 7.2%
+  # fast-burn threshold, but below the 5-error floor, so nothing fires. With
+  # the `>= 5` clause removed this test is red.
+  - interval: 1m
+    name: fast burn stays quiet at 9% when the hour holds only 3 errors
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="ok"}'
+        values: "0+0.5x120"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="error"}'
+        values: "0x79 1x15 2x15 3x15"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts: []
+
+  # The same traffic with 6 errors in the hour: above the percentage AND at
+  # or over the floor, so it fires. This pins the floor from the other side:
+  # raising it above 6 turns this red.
+  - interval: 1m
+    name: fast burn fires at 16% when the hour holds 6 errors
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="ok"}'
+        values: "0+0.5x120"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="error"}'
+        values: "0x69 1x9 2x9 3x9 4x4 5x4 6x20"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: MCP tool availability fast burn (14.4x, 1h)"
+              description: >-
+                The MCP tool error rate over the last 1h is 16.67%, above the
+                7.2% fast-burn threshold — 14.4x the 99.5% availability
+                objective's budget. At this rate the 30-day error budget is
+                gone in about two days. Page the on-call engineer. SLO and
+                error-budget policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  # Not tested here: the rate() extrapolation of a lazily created error series
+  # (2026-11-18 16:20Z). promtool evaluates with the Prometheus engine, where
+  # increase() of a series whose only sample is in the window is 0, so the
+  # artefact cannot be reproduced and a test for it could only pass. It is
+  # covered by reading increase() instead of the recorded rate() ratio, which
+  # the two tests above pin through the 3-error and 6-error cases.
+
+  # Slow burn: 5 errors in 6 hours of about 100 calls is 5%, above 3.0%, but
+  # below the 10-error floor. The 4% test above (14 errors) is the firing
+  # side of this guard.
+  - interval: 1m
+    name: slow burn stays quiet at 5% when the window holds fewer than 10 errors
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+0.28x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0x59 1x59 2x59 3x59 4x59 5x59 6x70"
+    alert_rule_test:
+      - eval_time: 420m
+        alertname: MctlTelegramToolAvailabilitySlowBurn
+        exp_alerts: []
+
   # --- OAuth token endpoint --------------------------------------------
   # The SLO covers the token exchange and the Telegram callback, nothing else.
   # Drop the route selector and this test fires: the 500s here are on an

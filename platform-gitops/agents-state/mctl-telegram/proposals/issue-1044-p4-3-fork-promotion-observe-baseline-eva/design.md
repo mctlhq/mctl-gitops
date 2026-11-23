@@ -1,85 +1,160 @@
 # Design: issue-1044-p4-3-fork-promotion-observe-baseline-eva
 
+## Refreshed 2026-11-22
+
+This proposal was written 2026-11-01 against mctl-telegram HEAD `80583cb`
+(tag `0.121.1`). It was re-baselined on 2026-11-22 against `origin/main` of
+mctl-telegram at `0ef3857a` (merge of PR #1400; latest tag `0.142.0`, 30
+commits after it) and mctl-gitops `main` at `b63db307c`. Scope and intent are
+unchanged. S2 and S3 are still unimplemented on mctl-telegram main: there is
+no `agent-eval` audience, no eval table, no production caller of
+`ForkPromoted`, no `auth_time` claim, and neither
+`ASSISTANT_FORK_EVAL_ENABLED` nor `ASSISTANT_FORK_GUARDED_ENABLED`. What was
+re-baselined:
+
+- Every code anchor and the "Current state" section: new line numbers
+  (`events.go:110` is now `:113-119`, `policy.go:542-546` is now `:570-575`,
+  `actions.go:281,718` is now `:304,758`, `executor.go:384,752` is now
+  `:397,790`, `fake.go:363` is now `:385`, `service.go:315` is now `:356`,
+  `localjwt/issuer.go:413` is now `:431`, `main.go:1350` is now `:1450`,
+  `main.go:669-675` is now `:659-670`, `account.go:114` is now `:120`,
+  `server.go:1018` is now `:1041`, `config.go:470,556` is now `:511,805`),
+  the new `conformance.go` in S1, and the HEAD and tag references.
+- The deployed state: production tag `0.142.0`, preview `main-0ef3857`, a
+  second pool-mode agent worker on preview and `MANAGED_RUNTIME_ENABLED` on.
+- The token-audience design, against the `pa-job` audience (#1313, #1315),
+  the managed-runtime pool credential (ADR 0008) and the revocation snapshot
+  bound (#1346) that landed after the first draft. This changed the
+  `agent-eval` claim shape (its own claims, not `JobID`), the claim route's
+  credential rule (pool credential allowed, as for `/jobs/claim`), the
+  refusal of eval claims in `Provider` and in `checkPoolShape`, and the worker
+  poll order. See "Cross-cutting edits and non-regression" below.
+- Requirements and tasks: the claim route's open question, new EARS criteria,
+  and task-level acceptance checks for the cross-cutting edits. S3's
+  authority-widening safeguards are unchanged.
+
+Anchors are as of `0ef3857a`. They drift: re-read them before implementing.
+
 ## Current state
 
 The accepted design is in `docs/assistants/adr-forks.md`, sections
 "Promotion (P4.3)" and "P4.3 decisions". It splits the work into slices S1,
 S2 and S3. This proposal implements that design. It does not reopen it.
 
-What exists in the clone (HEAD `80583cb`):
+What exists on mctl-telegram `origin/main` (`0ef3857a`, tag base `0.142.0`;
+all paths and line numbers below were read from that commit on 2026-11-22):
 
 - **Fork documents and rules (P4.2).** `internal/assistant/fork.go`:
   `BuildFork`, `ValidateFork` (the fork may only narrow its base), `ForkBump`
   (patch = instructions only, minor = authority diff) and `NextForkVersion`.
   Every version has its own digest.
 - **Storage.** `internal/db/agent_schema.go` creates `assistant_forks`
-  (SQLite and PG). The primary key is `(user_id, name, version)`, there is a
-  unique index on `(user_id, digest)`, `document_encrypted` holds the
-  document, and `promotion TEXT NOT NULL DEFAULT 'observe'`.
-  `internal/db/assistant_forks.go` has `ForkPromotionObserve`, the per-account
-  fork lock `beginForkTx`, `InsertAssistantFork`, `GetAssistantForkByDigest`,
-  `DeleteAssistantFork` and `InstallAgentFork`. Only `observe` is ever
-  written.
+  (SQLite at `:852`, PG at `:1227`). The primary key is
+  `(user_id, name, version)`, there is a unique index on
+  `(user_id, digest)`, `document_encrypted` holds the document, and
+  `promotion TEXT NOT NULL DEFAULT 'observe'`.
+  `internal/db/assistant_forks.go` has `ForkPromotionObserve` (`:26`), the
+  per-account fork lock `beginForkTx` (`:80`), `InsertAssistantFork` (`:156`),
+  `GetAssistantForkByDigest` (`:252`), `ListAssistantForks` (`:288`),
+  `DeleteAssistantFork` (`:319`) and `InstallAgentFork` (`:363`). Only
+  `observe` is ever written.
 - **Install path.** In `internal/assistantinstall/forks.go`,
-  `checkForkInstall` refuses `db.AgentModeGuarded` for any fork with
-  `MsgForkObserveOnly` ("P4.2 has no promotion"). `storeFork` always writes
-  `ForkPromotionObserve` and alerts the owner with `forkNotice`. It is called
-  from `service.go:315`.
-- **Claim.** `internal/agentapi/events.go:106-113` refuses a fork claim when
-  forks are disabled or `a.Mode == db.AgentModeGuarded`
-  (`errForkNotRunnable`, answered with 503). `lookupFork` renders a fork from
-  `(user_id, digest)` and re-runs `ValidateFork`.
-- **Policy.** `internal/agent/policy/policy.go:82-88` declares
+  `checkForkInstall` (`:162-168`) refuses `db.AgentModeGuarded` for any fork
+  with `MsgForkObserveOnly` (`:30`, "P4.2 has no promotion"). `storeFork`
+  (`:274`) always writes `ForkPromotionObserve` and alerts the owner with
+  `forkNotice`. `checkForkInstall` is called from `service.go:356`.
+- **Claim.** `accountInstructions` in `internal/agentapi/events.go:113-119`
+  refuses a fork claim when forks are disabled or
+  `a.Mode == db.AgentModeGuarded` (`errForkNotRunnable`, `:93`; answered with
+  503 in `handleClaimJobs`, `:349`). `lookupFork` (`:198`) renders a fork from
+  `(user_id, digest)` and re-runs `ValidateFork`. A managed-runtime pool
+  credential claims through `handlePoolClaim` (`:468`), which renders each
+  account's instructions through the same path before claiming.
+- **Policy.** `internal/agent/policy/policy.go:83-89` declares
   `Input.ForkPromoted`. The comment there says no production caller sets it
-  yet. Lines 542-546 treat guarded on an unpromoted fork as observe.
-  `policy.Evaluate` is called from `internal/agentapi/actions.go:281` and
-  `:718`, from `internal/agent/executor/executor.go:384` and `:752` (the
-  send-time check), and from `internal/agenteval/fake.go:363` (the dry run,
-  which sets `ForkPromoted`).
+  yet (`docs/spikes/assistant-builder-ui-reference.md:158` repeats this).
+  Lines 570-575 treat guarded on an unpromoted fork as observe.
+  `policy.Evaluate` is called from `internal/agentapi/actions.go:304` and
+  `:758`, from `internal/agent/executor/executor.go:397` and `:790` (the
+  send-time check), and from `internal/agenteval/fake.go:385` (the dry run,
+  which sets `ForkPromoted` at `:395`). None of the four production call
+  sites sets `ForkPromoted`.
 - **S1 is merged.** `internal/agenteval` contains `suite.go` (suites,
   `HarnessVersion = "agenteval/1"`, `ErrNoSuite`, `Fixture.ExpectedDecision`),
   `target.go` (`Prepare`, `ErrNothingToPromote`, `Adaptation.CheckLeads`),
-  `fake.go` (a `Task` that serves the fake agent API and the guarded dry run),
-  `score.go` (`Score`, `Report`) and `binding.go` (`RunBinding`, `BindingFor`,
-  `Check`, `ErrBindingMismatch`). Suites live in
-  `assistants/hr-recruiter/eval/{0.1.0,0.1.1}` and are pinned by
-  `activeSuiteDigests` in `agenteval_test.go`. The opt-in C1 harness in
-  `internal/agentworker/eval_test.go` uses the same package.
-- **Tokens.** Agent audiences are `bridge`, `agent` and `agent-job`
-  (`internal/auth/localjwt/issuer.go:413` `derivedAudiences`). `agent-job` is
-  bound to one job and attempt (`internal/agentapi/binding.go`,
-  `jobTokenAudience` in `events.go:264`). The provider is built in
-  `cmd/server/main.go:1350` `selectAgentJobProvider`. There is no `agent-eval`
-  audience and no `auth_time` claim: grep finds neither `AuthTime` nor
-  `auth_time`.
-- **Web.** The manage routes are mounted in `cmd/server/main.go:669-675`
-  behind `manageAuth`. `isBrowserSignIn` (`internal/web/account.go:114`)
+  `fake.go` (a `Task`, `NewTask` at `:68`, that serves the fake agent API and
+  the guarded dry run), `score.go` (`Score`, `Report`), `binding.go`
+  (`RunBinding`, `BindingFor`, `Check`, `ErrBindingMismatch`) and
+  `conformance.go` (a queue of suite fixtures served as the claim side of the
+  agent API, so a worker can be run against the C1 suite as a black box).
+  Suites live in `assistants/hr-recruiter/eval/{0.1.0,0.1.1}` and are pinned
+  by `activeSuiteDigests` in `agenteval_test.go:28`. `TestNoPathToEffects`
+  (`:604`) guards that the package has no path to the executor or Telegram.
+  The opt-in C1 harness in `internal/agentworker/eval_test.go` uses the same
+  package.
+- **Tokens.** Credential audiences are `bridge`, `agent`, `agent-job`,
+  `agent-pool` (`internal/auth/localjwt/issuer.go:431` `derivedAudiences`,
+  which `needsRevocationCheck` reads) and `pa-job` (`localjwt/pajob.go:24`,
+  deliberately not in `derivedAudiences`: `Provider` refuses any token with
+  the audience or a PA claim, `hasPAJobClaims`, `issuer.go:336`, and only
+  `PAJobVerifier` accepts it, checking revocation by the inherited pool jti).
+  `agent-job` is bound to one job and attempt through the signed claims
+  `JobID`/`JobAttempt`/`ConversationID`/`JobTools` (`issuer.go:92-101`,
+  `internal/agentapi/binding.go`, `jobTokenAudience` at `events.go:271`).
+  `agent-pool` is claim-only: `checkPoolShape` (`localjwt/pool.go:65`)
+  refuses a pool token with job claims, and `requireNotPool`
+  (`agentapi/binding.go:123`) wraps every `/api/agent/v1` route except
+  `POST /jobs/claim`. The agent providers are built in `cmd/server/main.go`
+  (`selectAgentProvider` `:1468`, `selectAgentJobProvider` `:1450`, chained
+  at `:816`, `wireManagedPool` at `:841`, mounted at `:846`). The worker-token
+  revocation cache is one shared `RevocationCache` (`cmd/server/main.go:551`)
+  whose snapshot is bounded by `MaxRevocationSnapshotAge` (15 s,
+  `localjwt/revocation.go:34`): past that bound every worker-token check fails
+  as unverifiable (#1346). There is no `agent-eval` audience and no
+  `auth_time` claim: grep finds neither `AuthTime` nor `auth_time`.
+- **Personal Assistant (#1313, #1318).** The PA worker is a separate mode of
+  the same binary (`AGENT_WORKER_PA`, `cmd/agent-worker/main.go:104-111`,
+  `agentworker.PAWorker.loop` in `parunner.go`). It claims with the pool
+  credential from `POST /api/pa/v1/jobs/claim` and calls the server's tool
+  executor with `pa-job` tokens. It does not run `agentworker.Worker.Loop`,
+  and the PA run loop is built in `cmd/server/pa_wiring.go`. Preview has
+  `PA_ENABLED=false`.
+- **Web.** The manage routes are mounted in `cmd/server/main.go:659-670`
+  behind `manageAuth`. `isBrowserSignIn` (`internal/web/account.go:120`)
   identifies the self-connect credential. The self-connect token is minted
-  by `ExchangeConnect` (`internal/oauth/server.go:1018`) and never gets a
+  by `ExchangeConnect` (`internal/oauth/server.go:1041`) and never gets a
   refresh token. There are no fork, eval or promotion pages.
 - **Config.** `AssistantForksEnabled` / `ASSISTANT_FORKS_ENABLED`
-  (`internal/config/config.go:470,556`) is wired in `main.go:653,831`.
+  (`internal/config/config.go:511,805`) is wired in `main.go:642,827`.
   `ASSISTANT_FORK_EVAL_ENABLED` and `ASSISTANT_FORK_GUARDED_ENABLED` do not
   exist.
 - **Migrations.** New columns use `addColumnIfMissing` in
   `internal/db/agent_schema.go`. New tables go in `agentSchemaSQLite` and
-  `agentSchemaPG`. Purge is `purgeAgentData` in `internal/db/agent_domain.go`.
+  `agentSchemaPG`. Purge is `purgeAgentData` in `internal/db/agent_domain.go:769`.
+- **Sweepers.** `cmd/server/main.go:419-436` starts the `internal/sweeper`
+  loops (`Sessions`, `AuditLog`, `RefreshTokens`, `AgentRetention`,
+  `JobLeads`).
 
-Deployed state checked:
+Deployed state checked in mctl-gitops `main` (`b63db307c`),
+`platform-gitops/services/labs/`:
 
-- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: image tag
-  `0.121.1`, `AUTH_MODE: local-jwt`, `AGENT_ENABLED: "true"`,
+- `mctl-telegram/values.yaml`: image tag `0.142.0`, `AGENT_ENABLED: "true"`,
   `ASSISTANT_REGISTRY_ENABLED: "true"`. No `ASSISTANT_FORK*` variable is set,
   so forks are off in production (the default is false).
-- `services/labs/mctl-telegram-preview/values.yaml`: tag `main-80583cb`, the
-  same agent and registry flags, no `ASSISTANT_FORK*` variable.
-- `services/labs/agent-worker-preview/values.yaml`: the only agent-worker
-  deployment. It points at the preview server, with `AGENT_MAX_BUDGET_USD
-  "0.50"` and `AGENT_WORKER_CONCURRENCY "2"`. The services list under `labs`
-  has no production agent worker. So today an eval run can only execute on
-  preview, which matches the S2 exit criterion "one real run on preview".
+- `mctl-telegram-preview/values.yaml`: tag `main-0ef3857`, the same agent and
+  registry flags, `MANAGED_RUNTIME_ENABLED: "true"`, `PA_ENABLED: "false"`, no
+  `ASSISTANT_FORK*` variable.
+- `agent-worker-preview/values.yaml` (account `agent` token,
+  `AGENT_MAX_BUDGET_USD "0.50"`, `AGENT_WORKER_CONCURRENCY "2"`) and
+  `agent-worker-managed-preview/values.yaml` (`AGENT_POOL_MODE: "true"`,
+  `AGENT_MAX_BUDGET_USD "0.25"`, concurrency 1), both on `main-0ef3857`
+  and both pointing at the preview server. The services list under `labs`
+  has no production agent worker and no PA worker. So today an eval run can
+  only execute on preview, which matches the S2 exit criterion "one real run
+  on preview".
 - I did not call the mctl MCP tools. The gitops checkout was enough for
-  config. I did not observe runtime status or logs.
+  config. I did not observe runtime status or logs, and I did not run the
+  mctl-telegram tests.
 
 ## Proposed solution
 
@@ -117,26 +192,62 @@ both flags are off by default.
    name@version. The server reads the row and derives the digest, base and
    suite. It calls `agenteval.Prepare` up front so that `ErrNoSuite` and
    `ErrNothingToPromote` refuse before a row is written.
-4. **Token audience.** Add `agent-eval` to `derivedAudiences`, with
-   claims `EvalRunID` and `EvalTaskAttempt`, mirroring `JobID`/`JobAttempt`.
-   Add `selectAgentEvalProvider` in `main.go`. The existing `/api/agent/v1`
-   middleware keeps `ExpectedAudience: "agent"` / `"agent-job"`, so it
-   refuses `agent-eval`. The eval routes accept only `agent-eval`.
+4. **Token audience.** Add `agent-eval` to `derivedAudiences`
+   (`issuer.go:431`) so the revocation check always runs for it. Its claims
+   are new and its own: `EvalRunID` and `EvalTaskAttempt`. They do not reuse
+   `JobID`/`JobAttempt`, because `jobBound` (`agentapi/binding.go`) and
+   `checkPAJobShape` read those as "a real or PA job credential". The token
+   inherits the claiming worker credential's `jti` and `orig_iat`, as
+   `mintJobToken` does, so revoking the worker revokes its eval tokens. Add
+   `selectAgentEvalProvider` next to `selectAgentJobProvider` in `main.go`
+   and chain it only for the eval routes, never into `agentProvider`. Three
+   refusals mirror what #1313 did for `pa-job`:
+   - `Provider.Authenticate` refuses a token with the `agent-eval` audience or
+     an eval claim (a `hasEvalClaims` next to `hasPAJobClaims`), whatever its
+     audience policy is. With `OAUTH_JWT_AUDIENCE` unset the audience check
+     passes any audience, so without this an eval token would act as the
+     account's Telegram identity on every `Provider`-guarded surface.
+   - `checkPoolShape` (`pool.go:65`) refuses a pool token with eval claims.
+   - A new `EvalVerifier`, modelled on `PAJobVerifier`, is the only acceptor:
+     exact audience, exact shape, run and attempt bound, revocation checked
+     with the inherited jti.
+
+   The existing `/api/agent/v1` middleware keeps accepting only `agent`,
+   `agent-job` and `agent-pool`, so it refuses `agent-eval`. The eval task
+   routes accept only `agent-eval`. The PA routes (`/api/pa/v1`) keep
+   accepting only `pa-job`, so neither side can reach the other.
 5. **Worker routes.** In a new `internal/agentapi/eval.go`:
-   - `POST /api/agent/v1/eval/claim` takes the `agent` worker token. It
-     answers 204 while any real job is claimable, and 204 when the flag is
-     off. Otherwise it claims one task, renders the fork via the existing
-     `lookupFork` and `agenteval.Prepare`, and returns the job envelope with
-     an `agent-eval` token.
+   - `POST /api/agent/v1/eval/claim` is registered beside `/jobs/claim`, as
+     the second route a pool credential may call (add it to `requireNotPool`'s
+     exception). It accepts the account `agent` token and the managed `agent-pool`
+     credential; both preview workers use one of them. An account token may
+     claim only tasks of its own account. A pool credential may claim tasks of
+     any account, with the same round-robin discipline as `handlePoolClaim`.
+     It answers 204 while any real job is claimable for the caller's scope
+     (the same candidate query the real claim uses), and 204 when
+     `ASSISTANT_FORK_EVAL_ENABLED` is off, `ASSISTANT_FORKS_ENABLED` is off or
+     `AGENT_KILL_SWITCH` is on. Otherwise it claims one task, renders the fork
+     via the existing `lookupFork` and `agenteval.Prepare` (the rendered
+     instructions never come from the request), and returns a job envelope
+     with an `agent-eval` token. The "real queue empty" check and the task
+     claim must run as one decision per request, so a real job arriving
+     between them is served on the next poll; an eval task never delays a real
+     job by more than one poll interval.
    - `/api/agent/v1/eval/tasks/{id}/...` is served by `agenteval.NewTask(...)`
-     rebuilt from the stored task. It has no executor or Telegram dependency,
-     which `TestNoPathToEffects` already guards.
+     rebuilt from the stored task, behind the `EvalVerifier`. It has no
+     executor or Telegram dependency, which `TestNoPathToEffects` already
+     guards. The task routes live outside `Register`'s `toolGate` and outside
+     `requireNotPool`, because `Register` mounts only `agent`/`agent-job`
+     identities.
 
    On the final fixture the server calls `agenteval.Score` and writes
    `passed` or `failed`. The worker never reports a verdict.
-6. **Worker.** `internal/agentworker/worker.go` polls `eval/claim` only
-   when its real claim returned nothing. It runs the task through the same
-   invoker. It needs no new config.
+6. **Worker.** `agentworker.Worker.Loop` (`worker.go:172`) polls `eval/claim`
+   only when its real claim returned no job and a slot is free. It runs the
+   eval task through the same invoker. `PAWorker.loop` (`parunner.go`) is not
+   changed: the PA worker is a separate process mode that does not run
+   `Worker.Loop`, and it never polls `eval/claim`. The eval path needs no new
+   worker config.
 7. **Alerts and audit.** On start and finish, the owner gets a bot-chat
    notice (fork ref, run id, verdict) and an audit row with the same fields,
    never text.
@@ -179,17 +290,21 @@ both flags are off by default.
    Promote requires `isBrowserSignIn`, `account:manage`, `AuthTime` within
    15 minutes, the ticked box and the typed slug. Revoke requires only
    `account:manage`.
-5. **The four conditional refusals.** Each reads
-   `ForkPromoted(user, digest)`. A lookup error reads as false, and the
+5. **The four conditional refusals, through one helper.** Each reads
+   `ForkPromoted(user, digest)` through a single helper
+   (`forkRunsGuarded(ctx, store, flag, userID, profile) bool`, in a small
+   package the four sites already import, for example `internal/assistant`
+   or `internal/db`), so no site can compute "promoted" its own way. A lookup error reads as false, and the
    result is ANDed with the `ASSISTANT_FORK_GUARDED_ENABLED` flag.
    - `checkForkInstall` (`assistantinstall/forks.go`) allows guarded when the
      pinned digest is promoted. It also refuses a pin move to an unpromoted
      digest while the mode is guarded.
-   - The claim (`agentapi/events.go:110`) refuses guarded only when the fork
-     is not promoted.
-   - `actions.go:281,718` set `policy.Input.ForkPromoted`. `policy.Evaluate`
+   - The claim (`accountInstructions`, `agentapi/events.go:113-119`, which
+     `handleClaimJobs` and `handlePoolClaim` both go through) refuses guarded
+     only when the fork is not promoted.
+   - `actions.go:304,758` set `policy.Input.ForkPromoted`. `policy.Evaluate`
      stays pure.
-   - `executor.go:752` (send time) and `:384` set `ForkPromoted` the same
+   - `executor.go:790` (send time) and `:397` set `ForkPromoted` the same
      way, so an auto-send queued before a revocation is held.
 6. **Notices.** `forkNotice` keeps saying a new version runs in observe.
    Promote and revoke send their own notice and audit entry. Update
@@ -201,6 +316,51 @@ Why this way: it is the owner-accepted ADR. The server renders, scores and
 binds, so the worker or the user cannot forge a pass. One package
 (`agenteval`) serves both the harness and production. Every gate is
 re-checked in the same transaction that changes state.
+
+### Cross-cutting edits and non-regression
+
+Four edits reach code that live Personal Assistant, managed-runtime and
+worker-revocation slices also use. The design keeps each additive and
+refusing by default, and the tasks carry an explicit acceptance check for it.
+
+1. **`localjwt` audience (`agent-eval`).** Compared with `pa-job`: `pa-job`
+   is not in `derivedAudiences` because `Provider` refuses it before the
+   revocation check. `agent-eval` is the opposite case: it is minted from a
+   worker credential and must be revoked with it, so it goes into
+   `derivedAudiences`, and the revocation path reads its inherited `jti`.
+   The change to `needsRevocationCheck` only adds a match for a new audience
+   string, so the result for `bridge`, `agent`, `agent-job`, `agent-pool` and
+   `pa-job` tokens is unchanged. Because `MaxRevocationSnapshotAge` (#1346)
+   fails worker-token checks closed when the snapshot is stale, eval tokens
+   inherit that: a stale snapshot refuses the eval route, never allows it.
+   No new cache or TTL is introduced.
+2. **Eval claim route.** The pool credential is claim-only today
+   (`requireNotPool`). The exception list grows by exactly one route,
+   `POST /eval/claim`, and `pool_claim_only` stays the refusal for every
+   other route. `handlePoolClaim`, `handleClaimJobs` and
+   `/api/pa/v1/jobs/claim` are not edited. The eval claim must not take the
+   `managed` per-account in-flight cap or the managed budget ledger, and an
+   eval task spends from a separate budget line (see Platform impact), so a
+   managed account's real jobs are never starved by an eval.
+3. **Worker polling order.** Real claim first, eval claim only on an empty
+   result. In pool mode the real claim already walks the candidate order, so
+   the eval poll adds one request per empty poll window, not per job. The PA
+   worker mode is untouched.
+4. **One helper for the four fork-guarded refusal sites.** A promotion lookup
+   error reads as "not promoted" at every site, and the helper is pure over
+   its inputs, so `policy.Evaluate` keeps its purity and the PA policy paths
+   (which never set a fork profile) are not reached.
+
+Acceptance check, stated as a task-level criterion: with
+`ASSISTANT_FORK_EVAL_ENABLED` and `ASSISTANT_FORK_GUARDED_ENABLED` off, the
+existing agentapi, localjwt, managed-runtime and PA test suites
+(`internal/auth/localjwt`, `internal/agentapi`, `internal/pa`,
+`cmd/server` PA and pool wiring tests, `internal/agentworker` including
+`parunner_test.go`) pass unmodified, and a new table test proves that every
+token audience (`agent`, `agent-job`, `agent-pool`, `pa-job`, `bridge`,
+`agent-eval`) gets the same accept or refuse answer on every route group
+before and after the change, except the new eval routes. A PA slice must not
+need a test edit to keep passing.
 
 ## Alternatives
 
@@ -233,17 +393,21 @@ re-checked in the same transaction that changes state.
   claim.
 - **Cost.** Eval runs spend the platform's model budget through the worker
   credential pool. The worst case is bounded by 20 runs per day, times the
-  fixture count, times `AGENT_MAX_BUDGET_USD` per task ($0.50 on preview).
+  fixture count, times `AGENT_MAX_BUDGET_USD` per task ($0.50 on the account
+  worker, $0.25 on the managed worker, on preview). Eval tasks must not be
+  charged to a managed account's daily budget.
   Eval claims yield to real jobs.
 - **Load.** Each `policy.Evaluate` call site adds one indexed lookup by
   `(user_id, digest)`, made only when the profile runs a fork in guarded
   mode.
 - **Risks and mitigations.**
   - *An eval token reaches a real route.* Mitigation: separate audience
-    providers, plus a test that every `/api/agent/v1` route refuses
-    `agent-eval`.
+    providers, `Provider` and `checkPoolShape` refuse eval claims, and a test
+    that every `/api/agent/v1` and `/api/pa/v1` route refuses `agent-eval`.
+  - *An eval change regresses a live PA or managed slice.* Mitigation: the
+    non-regression criterion above, with the existing suites unmodified.
   - *A stale promotion survives a revocation in the send queue.* Mitigation:
-    the send-time check at `executor.go:752` reads the promotion.
+    the send-time check at `executor.go:790` reads the promotion.
   - *Model output leaks the instructions into storage.* Mitigation: the
     report schema has no text fields, and a test asserts no fixture output
     string is persisted.

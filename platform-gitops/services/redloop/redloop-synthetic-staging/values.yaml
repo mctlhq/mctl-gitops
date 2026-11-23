@@ -1,0 +1,246 @@
+# Service: redloop-synthetic-staging
+# Team: redloop
+# Chart: base-service
+#
+# Phase P2 — Chainguard Wolfi image (Gate 4 CVE remediation)
+# Scan evidence: run #44048121064 — 0 CRITICAL, 0 HIGH, CVE-2026-111497 CLEAN
+# See: .github/workflows/redloop-image-scan.yml (PR #2728, merge 1e927341)
+
+image:
+  # Switched from nginxinc/nginx-unprivileged (1 CRITICAL: CVE-2026-111497 / brotli-libs)
+  # to Chainguard Wolfi (nginx 1.31.8, 0 CVEs at all severities).
+  # The digest is a single-platform linux/amd64 OCI manifest (not an index),
+  # created 2026-11-15T22:10:17Z, and it is the image the Gate 4 scan covered.
+  #
+  # It is pulled from the GHCR mirror, not from Docker Hub. Upstream
+  # (docker.io/chainguard/nginx) publishes only "latest", which has already
+  # moved on, so Docker Hub may garbage-collect this digest.
+  # .github/workflows/mirror-image.yaml (#2758, run 44146416635) copied it byte
+  # for byte, so the mirror has the identical digest. The package is public, so
+  # the tenant needs no pull secret. Entry: platform-gitops/images/mirrors.yaml.
+  #
+  # Kubernetes pulls by digest. The tag is for humans and cannot move the
+  # pin.
+  repository: ghcr.io/mctlhq/chainguard-nginx
+  tag: "1.31.8-20261115"
+  digest: "sha256:d1007c59cae10bf40b014b8597443f0f945a9728ff91eb05b0ced0809de9fc98"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  containerPort: 8080
+
+backstage:
+  kubernetesId: redloop-synthetic-staging
+
+automountServiceAccountToken: false
+
+# Chainguard nginx runs as UID/GID 65532 (user: nginx, defined in /etc/passwd).
+# nginx-unprivileged used 101; updated to match the Chainguard image USER.
+# runAsNonRoot is preserved via containerSecurityContext below.
+podSecurityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Writable paths under readOnlyRootFilesystem. Taken from `nginx -V` and the
+# image's nginx.conf at the pinned digest:
+#   /run               pid /run/nginx.pid, lock /run/nginx.lock
+#   /var/lib/nginx/tmp client_body, proxy, fastcgi, uwsgi and scgi temp paths
+#                      (all five compiled in under this directory)
+#   /tmp               chart default, unused by nginx
+# Each emptyDir starts empty and hides the image's directory. nginx (uid
+# 65532) creates nginx.pid and the five *_temp subdirectories itself at
+# startup. This was observed with empty tmpfs mounts and a read-only root.
+# Logs need no volume. /var/log/nginx/{access,error}.log are symlinks to
+# /dev/stdout and /dev/stderr, and the image's CMD passes `-e /dev/stderr`.
+# Without that flag nginx would try the compiled-in default error log
+# /var/lib/nginx/logs/error.log and print a non-fatal [alert] on the
+# read-only root. The chart sets no command/args, so the image CMD stays in
+# effect.
+writablePaths:
+  - /tmp
+  - /run
+  - /var/lib/nginx/tmp
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+env:
+  APP_ENV: staging
+  SERVICE_NAME: redloop-synthetic-staging
+
+# Zero Secrets or Database Dependencies
+externalSecret: {}
+envFrom: []
+dbSecret: null
+
+ingress:
+  enabled: false
+  hosts:
+    - staging-redloop.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # Per-client rate limit for Gate 4 (extraObjects below). The value is
+    # <namespace>-<middleware name>@kubernetescrd. The chart overwrites this
+    # key when ingress.forwardAuth.enabled is true, so enabling forwardAuth
+    # here would silently drop the limit. Keep forwardAuth off, or chain both
+    # middlewares by hand.
+    traefik.ingress.kubernetes.io/router.middlewares: redloop-redloop-staging-ratelimit@kubernetescrd
+  tls:
+    - secretName: redloop-synthetic-staging-tls
+      hosts:
+        - staging-redloop.mctl.ai
+
+# No startupProbe, and the chart defaults of timeoutSeconds 1 and
+# failureThreshold 3 are kept. These numbers come from a local Docker run of
+# the pinned amd64 image under emulation on arm64 with --cpus 0.1, which is
+# pessimistic:
+#   - time from `docker run` to the first /healthz 200 was 0.9-1.9 s over 5
+#     cold starts;
+#   - /healthz latency was at most 0.17 s over 20 requests.
+# Readiness then passes on its first or second attempt (3 s delay). Liveness
+# would need 3 failures in a row, more than 25 s after start.
+probes:
+  liveness:
+    path: /healthz
+    port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  readiness:
+    path: /healthz
+    port: 8080
+    initialDelaySeconds: 3
+    periodSeconds: 5
+
+configMaps:
+  redloop-synthetic-staging-conf:
+    default.conf: |
+      server {
+          listen 8080;
+          server_name staging-redloop.mctl.ai;
+
+          # Response hardening for every location, including the 404 catch-all
+          # ("always"). nginx inherits add_header from the server block only into
+          # locations that define none of their own, so no location below may add a
+          # header, or it silently drops all of these.
+          # CSP and HSTS stay intentionally absent: they are the fixture's seeded
+          # findings for scanner detection (see location = /). Triage of the Gate 4
+          # GO-1 baseline: mctl-gitops#2769.
+          server_tokens off;
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header X-Frame-Options "DENY" always;
+          # Permissions-Policy disables only the five features listed; features
+          # not named here keep their browser defaults.
+          add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+
+          # Synthetic landing page for passive crawling
+          location = / {
+              default_type text/html;
+              # Note: Intentionally omit CSP and HSTS to verify scanner detection
+              return 200 '<!DOCTYPE html><html><head><title>MCTL RedLoop Staging</title></head><body><h1>Synthetic Security Audit Fixture</h1><p>Dedicated staging target for Phase P2 audit verification.</p></body></html>\n';
+          }
+
+          # Health endpoint for blackbox exporter and readiness probes
+          location = /healthz {
+              default_type application/json;
+              return 200 '{"status":"healthy","service":"redloop-synthetic-staging","env":"staging"}\n';
+          }
+
+          # Standard static assets
+          location = /robots.txt {
+              default_type text/plain;
+              return 200 "User-agent: *\nDisallow: /admin\n";
+          }
+
+          location /static/ {
+              default_type application/javascript;
+              return 200 'console.log("synthetic staging asset");\n';
+          }
+
+          # Catch-all 404 for unapproved paths
+          location / {
+              default_type text/plain;
+              return 404 "Not Found\n";
+          }
+      }
+
+extraVolumes:
+  - name: nginx-conf
+    configMap:
+      name: redloop-synthetic-staging-conf
+
+extraVolumeMounts:
+  # The image's only server block is /etc/nginx/conf.d/nginx.default.conf
+  # (listen 8080, server_name localhost). nginx.conf includes
+  # conf.d/*.conf. Mounting over that exact file name replaces it, so
+  # `nginx -T` shows a single 8080 server.
+  # If the ConfigMap were mounted as default.conf instead, both servers would
+  # load. default.conf sorts first, so ours would become the default server,
+  # but the image's server still matches Host "localhost" by name. Requests
+  # with that Host (curl localhost:8080, kubectl port-forward) would then
+  # return 404 on /healthz, while probes, which send the pod IP as Host,
+  # would pass. Reproduced locally at the pinned digest.
+  - name: nginx-conf
+    mountPath: /etc/nginx/conf.d/nginx.default.conf
+    subPath: default.conf
+
+# Gate 4 rate limit (docs/runbooks/redloop-gate4-roe.md). Cloudflare cannot
+# enforce this: zone mctl.ai is on the Free plan, which allows one rate-limit
+# rule, and that rule's expression may match only on path and verified-bot
+# fields, not on the host. The limit therefore lives at Traefik and applies to
+# this router only.
+#
+# It renders only together with the Ingress (renderIf), so while
+# ingress.enabled is false nothing is created. The Middleware and the router
+# annotation above appear and disappear in the same sync.
+#
+# Clients are keyed on CF-Connecting-IP, which Cloudflare sets. Keying on the
+# remote address instead would put every visitor behind the same Cloudflare
+# edge IP into one bucket. The websecure entrypoint admits only Cloudflare
+# ranges (traefik/cloudflare-origin), but that does NOT make the header
+# unforgeable. cloudflare-origin-allowlist.yaml.tpl notes that an in-cluster
+# client can reach Traefik directly with its own PROXY header, and such a
+# client can then set any CF-Connecting-IP. Requests through Cloudflare,
+# including through another customer's zone (the allowlist's other open gap),
+# carry a value Cloudflare overwrites. The limit is therefore a per-client
+# backstop, not an access control.
+#
+# The counters live in each Traefik replica's memory (no Redis configured).
+# There are 3 replicas today, and the HPA allows 3-10. The effective ceiling
+# for one client is therefore 10 req/s times the number of replicas its
+# connections land on, which is 30-100 req/s, not 10.
+#
+# 10 req/s average and a burst of 20, per client and per replica. That is
+# twice the RoE scanner ceiling of 5 req/s even if every request of a
+# keep-alive scanner lands on one replica, so a scanner that follows the RoE
+# never hits it. It is a backstop against a runaway scanner, not the budget.
+# The budget is the RoE rate, enforced by the tester, and the fixture's
+# protection is its 100m CPU limit plus the RedLoop* alerts.
+extraObjects:
+  - renderIf: '{{ .Values.ingress.enabled | toString | eq "true" }}'
+    apiVersion: traefik.io/v1alpha1
+    kind: Middleware
+    metadata:
+      name: redloop-staging-ratelimit
+      namespace: redloop
+    spec:
+      rateLimit:
+        average: 10
+        period: 1s
+        burst: 20
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP

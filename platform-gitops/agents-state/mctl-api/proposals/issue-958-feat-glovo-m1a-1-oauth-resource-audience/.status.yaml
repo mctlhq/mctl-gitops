@@ -1,10 +1,10 @@
-status: proposed
-updated_at: '2026-11-08T15:29:17Z'
+status: review-stuck
+updated_at: '2026-11-09T12:25:27Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-89c4ffbbcd87b73a
-  trace_id: f742ab85bd99b983cbf35ddde7044ec0
-  agent: issue-investigator
+  context_id: ex-de9b75ee95c4f774
+  trace_id: 9070b77eae76a0b19045600156166fc4
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -18,3 +18,46 @@ context:
   content_hash: sha256:88a2fbedbb42035c65b6b44c6f7106be60daca9d33cab761f414367fb4eaf5bd
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-11-09T01:56:43Z'
+  content_digest: sha256:b12896819257d170a3fa86d83ac7002886915ae2674826134ea265a948554bc5
+  digest_binding: reviewed
+  approval_ref: aar_aa4af4b82ee54169a9c786e42d77fb3c
+attempt:
+  id: 85663dae557a7f0f2801fab7d7f4f70ff52c7740fbf08d90c7a2ea46cdb290d5
+  started_at: '2026-11-09T01:58:41Z'
+  expires_at: '2026-11-09T04:08:41Z'
+  finished_at: '2026-11-09T02:07:02Z'
+pr: https://github.com/mctlhq/mctl-api/pull/977
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-f1658e5d
+  authoritative:
+    completion_id: ic-0c0e1a34dcb76725
+    content_hash: sha256:0c0e1a34dcb76725163be2460961fa560ce9769043473f76ba978cd64ad66b30
+    proposal_digest: sha256:b12896819257d170a3fa86d83ac7002886915ae2674826134ea265a948554bc5
+    attempt_id: 85663dae557a7f0f2801fab7d7f4f70ff52c7740fbf08d90c7a2ea46cdb290d5
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 7dec6747c4fa08cbd3277faeab3e8c9eb782cb6d
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+github:
+  state: open
+  head_sha: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
+  observed_at: '2026-11-09T11:39:27Z'
+refusals: 3
+refusals_head: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Reviewer text 1 is an approval, not a defect:
+  it says "Verdict: approved (0 P1, 0 P2, 0 P3)" and lists all previous findings as
+  fixed. The two minor notes (glovo.WriteError has no nil guard but has no callers
+  yet; refusal metric label uses supportAudienceRouteClass) are explicitly marked
+  "not blocking" and deferrable to the slice that adds Glovo routes, so out of scope
+  here.'

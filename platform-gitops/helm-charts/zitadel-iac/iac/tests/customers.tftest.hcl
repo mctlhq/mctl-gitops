@@ -16,6 +16,9 @@ mock_provider "kubernetes" {}
 variables {
   smtp_password        = "test"
   customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
+  # Production turns the Google IdP on (customers_rollout.auto.tfvars.json),
+  # which tofu test also loads; the mocked client stands in for Vault.
+  customers_google_idp = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
   platform_admins = jsonencode({
     admin = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
   })
@@ -381,6 +384,43 @@ run "customer_login_error_explains_invitation_entry" {
   }
 }
 
+# With the Google IdP on, the shared failure page must name both IdPs: a
+# GitHub-only hint sent the first Google sign-in (2026-11-17) to check a
+# GitHub email. With it off, Google must not be mentioned.
+run "customer_login_error_names_enabled_idps" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  variables {
+    customers_google_idp_enabled = true
+  }
+  assert {
+    condition = (
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "GitHub or Google account") &&
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.accountNotFound.description, "GitHub or Google")
+    )
+    error_message = "With the Google IdP on, idp.loginError and idp.accountNotFound must name GitHub and Google."
+  }
+}
+
+run "customer_login_error_github_only_when_google_off" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  variables {
+    customers_google_idp_enabled = false
+  }
+  assert {
+    condition = (
+      !strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "Google") &&
+      !strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.accountNotFound.description, "Google")
+    )
+    error_message = "With the Google IdP off, the failure pages must not mention Google."
+  }
+}
+
 run "customers_get_authentication_without_project_roles" {
   command = plan
   plan_options {
@@ -496,5 +536,133 @@ run "customer_lifecycle_is_scoped_to_customer_user_management" {
       zitadel_project.customer_lifecycle.has_project_check == true
     )
     error_message = "Lifecycle credentials must be JWT machine credentials outside customers, with only customer-org user management."
+  }
+}
+
+# The Google IdP (mctlhq/mctl-api#1079) switched off: no IdP, GitHub alone
+# in the login policy, and no Google IdP id for mctl-api's hook.
+run "google_idp_off_adds_nothing" {
+  command = plan
+  variables {
+    customers_google_idp_enabled = false
+  }
+  plan_options {
+    target = [
+      zitadel_login_policy.customers,
+      kubernetes_secret_v1_data.mctl_api_zitadel_hook,
+    ]
+  }
+
+  assert {
+    condition     = length(zitadel_org_idp_google.customers) == 0
+    error_message = "The Google IdP must not exist unless customers_google_idp_enabled is set."
+  }
+  assert {
+    condition     = length(zitadel_login_policy.customers.idps) == 1
+    error_message = "With Google off, GitHub must be the only IdP of customers."
+  }
+  assert {
+    condition     = !contains(keys(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data), "ZITADEL_HOOK_GOOGLE_IDP_ID")
+    error_message = "With Google off, mctl-api must not be told a Google IdP id."
+  }
+}
+
+run "google_idp_on_links_nothing_and_reaches_the_hook" {
+  command = plan
+  variables {
+    customers_google_idp_enabled      = true
+    customers_google_idp              = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
+    identity_hook_create_gate_enabled = true
+    identity_hook_intent_enabled      = true
+  }
+  plan_options {
+    target = [
+      zitadel_org_idp_google.customers,
+      zitadel_login_policy.customers,
+      kubernetes_secret_v1_data.mctl_api_zitadel_hook,
+    ]
+  }
+
+  assert {
+    condition = (
+      zitadel_org_idp_google.customers[0].is_linking_allowed == false &&
+      zitadel_org_idp_google.customers[0].auto_linking == "AUTO_LINKING_OPTION_UNSPECIFIED" &&
+      zitadel_org_idp_google.customers[0].is_creation_allowed == true &&
+      zitadel_org_idp_google.customers[0].is_auto_creation == true
+    )
+    error_message = "A Google identity must never attach to an existing account; creation follows the intent hook."
+  }
+  assert {
+    condition     = toset(zitadel_org_idp_google.customers[0].scopes) == toset(["openid", "email", "profile"])
+    error_message = "The Google IdP asks for openid, email and profile only."
+  }
+  assert {
+    condition     = length(zitadel_login_policy.customers.idps) == 2
+    error_message = "With Google on, customers offers GitHub and Google."
+  }
+  assert {
+    condition     = contains(keys(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data), "ZITADEL_HOOK_GOOGLE_IDP_ID")
+    error_message = "With Google on, mctl-api's hook must be told the Google IdP id, or its gate refuses every Google account."
+  }
+}
+
+run "google_idp_needs_its_credentials" {
+  command = plan
+  variables {
+    customers_google_idp_enabled      = true
+    customers_google_idp              = ""
+    identity_hook_create_gate_enabled = true
+    identity_hook_intent_enabled      = true
+  }
+  plan_options {
+    target = [zitadel_org_idp_google.customers]
+  }
+  expect_failures = [zitadel_org_idp_google.customers]
+}
+
+run "google_idp_needs_the_intent_hook_and_the_gate" {
+  command = plan
+  variables {
+    customers_google_idp_enabled      = true
+    customers_google_idp              = jsonencode({ client_id = "g-id", client_secret = "g-secret" })
+    identity_hook_create_gate_enabled = true
+    identity_hook_intent_enabled      = false
+  }
+  plan_options {
+    target = [zitadel_org_idp_google.customers]
+  }
+  expect_failures = [zitadel_org_idp_google.customers]
+}
+
+run "google_idp_credentials_are_complete_or_absent" {
+  command = plan
+  variables {
+    customers_google_idp = jsonencode({ client_id = "g-id", client_secret = "" })
+  }
+  plan_options {
+    target = [zitadel_login_policy.customers]
+  }
+  expect_failures = [var.customers_google_idp]
+}
+
+# Production runs with the Google IdP on (customers_rollout.auto.tfvars.json,
+# mctlhq/mctl-api#1079): GitHub and Google in the login policy, and the IdP
+# id reaches mctl-api's hook.
+run "production_has_the_google_idp" {
+  command = plan
+  plan_options {
+    target = [
+      zitadel_login_policy.customers,
+      kubernetes_secret_v1_data.mctl_api_zitadel_hook,
+    ]
+  }
+
+  assert {
+    condition     = length(zitadel_org_idp_google.customers) == 1 && length(zitadel_login_policy.customers.idps) == 2
+    error_message = "Production offers GitHub and Google on the customers organization."
+  }
+  assert {
+    condition     = contains(keys(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data), "ZITADEL_HOOK_GOOGLE_IDP_ID")
+    error_message = "Production tells mctl-api's hook the Google IdP id."
   }
 }
