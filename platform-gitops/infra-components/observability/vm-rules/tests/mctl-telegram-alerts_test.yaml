@@ -493,17 +493,17 @@ tests:
     name: HighToolLatency ignores a slow pod when the job as a whole is fast
     input_series:
       # Pod a: 1 call/min, 2 of 60 slow in the last hour. Pod b: 2 calls/min, all fast.
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0+1x50 50x2 51+1x38'
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="b"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="b"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="b",tool="get_messages"}'
         values: '0+2x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="b",tool="get_messages",le="5"}'
         values: '0+2x90'
     alert_rule_test:
       - eval_time: 90m
@@ -514,11 +514,11 @@ tests:
     name: HighToolLatency stays quiet on fewer than 20 calls an hour, even if all are slow
     input_series:
       # 15 calls over the hour (one every 4 minutes), none under 5s.
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+0.25x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0x90'
     alert_rule_test:
       - eval_time: 90m
@@ -529,13 +529,13 @@ tests:
     name: HighToolLatency leaves slow calls explained by flood waits to the flood-wait signals
     input_series:
       # 60 calls/h, 12 of them slow (0.2/min), and as many FLOOD_WAIT events.
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0+0.8x90'
-      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+0.2x90'
     alert_rule_test:
       - eval_time: 90m
@@ -549,11 +549,11 @@ tests:
     name: HighToolLatency fires on slow calls with no flood waits, and no flood series at all
     input_series:
       # 60 calls/h, 12 slow, no mctl_telegram_flood_wait_events_total series.
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0+0.8x90'
     alert_rule_test:
       - eval_time: 90m
@@ -562,6 +562,7 @@ tests:
           - exp_labels:
               severity: warning
               job: labs-mctl-telegram-base-service
+              namespace: labs
               tool: get_messages
             exp_annotations:
               summary: "mctl-telegram: get_messages calls are slow without a flood wait"
@@ -579,15 +580,15 @@ tests:
   - interval: 1m
     name: HighToolLatency fires when flood events explain only part of the slow calls
     input_series:
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0+0.8x90'
-      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+0.1x90'
-      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="list_dialogs"}'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="list_dialogs"}'
         values: '0+1x90'
     alert_rule_test:
       - eval_time: 90m
@@ -596,6 +597,7 @@ tests:
           - exp_labels:
               severity: warning
               job: labs-mctl-telegram-base-service
+              namespace: labs
               tool: get_messages
             exp_annotations:
               summary: "mctl-telegram: get_messages calls are slow without a flood wait"
@@ -615,17 +617,17 @@ tests:
     name: HighToolLatency does not judge a pod in its first hour
     input_series:
       # Pod a: up throughout, 1 call/min, all fast. Pod b: started at 50m, 1 call/min, all slow.
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="a"}'
         values: '1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages"}'
         values: '0+1x90'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="a",tool="get_messages",le="5"}'
         values: '0+1x90'
-      - series: 'up{job="labs-mctl-telegram-base-service",pod="b"}'
+      - series: 'up{job="labs-mctl-telegram-base-service",namespace="labs",pod="b"}'
         values: '_x50 1x40'
-      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages"}'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",namespace="labs",pod="b",tool="get_messages"}'
         values: '_x50 0+1x40'
-      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages",le="5"}'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",namespace="labs",pod="b",tool="get_messages",le="5"}'
         values: '_x50 0x40'
     alert_rule_test:
       - eval_time: 90m
