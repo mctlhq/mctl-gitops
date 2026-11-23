@@ -357,10 +357,15 @@ env:
   # mirror production so existing preview clients keep working once CIMD is
   # advertised. Rollback: drop the three OAUTH_CIMD_* lines and the profile
   # record; removing the entry also cuts off that client's refreshes.
+  # A profile binds to the EXACT client_id, and an AgentsPodium client_id ends
+  # in the server name chosen in the pod dashboard. The first hosted test used
+  # a name with no profile and was issued the full user scope set with
+  # scope_ceiling_applied=false (mctl-telegram#1401): the path-scoped allowlist
+  # admits the client, only a profile limits it. Add one entry per server name.
   OAUTH_CIMD_ACCEPT: "true"
   OAUTH_CIMD_ADVERTISE: "true"
   OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
-  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
 ingress:
   enabled: true
   hosts:
