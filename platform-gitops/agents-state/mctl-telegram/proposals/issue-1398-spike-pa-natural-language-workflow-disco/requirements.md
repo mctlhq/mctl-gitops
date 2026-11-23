@@ -10,7 +10,7 @@ The deliverable is a research package, not code. It contains:
 - a product model and Telegram storyboard;
 - an options matrix with a recommendation;
 - a proposed (non-production) versioned workflow and authority contract;
-- a safety and negative-test matrix in which every scenario is UNTESTED;
+- a safety and negative-test matrix in which every scenario is NOT_EXECUTED;
 - a staged experiment with go/no-go gates.
 
 It matters because ADR 0011 already reserves the `scheduled` and `event` triggers on `ExecutionContext` (`internal/pa/context.go`) but defers routines to Phase 4 (HOLD). A careless routine design would bypass consent, taint, budgets or the per-dispatch revalidation that Phase 1 builds.
@@ -59,9 +59,18 @@ At fire time **mctl-api** rechecks owner/tenant identity, automation state/versi
 
 **Recommendation:** BOUNDED_HYBRID means PA drafting/consent/delivery adapter over the **already decided** mctl-api control plane; **DEFER** Phase-4 runtime implementation. No new scheduler, OAuth layer, PA execution store or alternate assistant.
 
+### Additional normative safeguards (Claude P2; research-only, not production)
+
+- WHEN comparing architecture alternatives THE SYSTEM SHALL evaluate `PA_EXTENSION`, `CATALOG_COMPOSER`, `BOUNDED_HYBRID` and `DEFER` against control-plane ownership, consent, safety, cost and reuse. It SHALL show why a PA-owned scheduler/store and Catalog-owned MTProto authority are rejected, choose **BOUNDED_HYBRID as PA adapter over already-decided EXTEND_MCTL_API** for design, and **DEFER** implementation pending owner GO and the #322 gates.
+- WHEN a draft or scheduled execution is compiled THE SYSTEM SHALL allow **only pinned read-only `tg` tools** in its scheduler-facing tool contract. No Telegram send/forward/pin/delete, Alice control/Quasar, arbitrary MCP tool or generic `write` tool may be included; a model's suggestion, a saved skill, a memory item or an external result cannot create or widen grants. All external tool/model content remains **tainted (T5/I6)** and is rendered via the existing safe-text/URL-neutralization boundary (`safetext.Render` where applicable); tainted content has **no write path** or destination override in this first slice.
+- WHEN the platform refuses admission, a tool dispatch or a result delivery THE SYSTEM SHALL **audit a typed refusal receipt** with verified principal, `au_` and `occurrence_key` where admitted, stage, reason, source-status and cost metadata, without tokens or private message content. It SHALL notify **only the original verified principal** via the PA bot when notification is still authorized; otherwise it SHALL retain an inspectable sanitized refusal for that principal's next verified session and MUST NOT bypass a delivery fence to send the notice.
+- WHEN a workflow is **edited to narrow** selected peers, tools, allowed delivery identity/channel, model/data-flow consent or run budget THE SYSTEM SHALL treat the edit as an immediate authority reduction for *all admitted in-flight runs*: the next tool dispatch and outbound send MUST be fenced if they exceed the new policy, even if the run holds a previously admitted definition version and valid old consent. Remove-peer and lower-budget examples MUST appear in the negative-test matrix. Expanded rights require separate user approval and fresh digest; either edit changes version but MUST NOT alter the already claimed occurrence key.
+- WHEN an occurrence is claimed THE SYSTEM SHALL retain a durable tombstone for **at least the authenticated source's replay horizon** after WorkItem cleanup. The pinned mctl-api `automation/v1` contract currently proposes `DefaultTombstoneHorizon=30 days`, but the real webhook/source horizon is **UNKNOWN** and must be confirmed; any longer horizon requires longer retention and an owner-approved limit. A missing claim store or unknown unsafe replay horizon MUST fail closed; a redelivery within retention returns the same `wi_`, without new budget reservation, tool call or notification.
+- WHEN testing this proposal THE SYSTEM SHALL include simulated prompt injection, tainted write attempts, refusal-receipt/notice handling, edit-narrowing during execution and send, cross-version retry, tombstone/claim-crash and all Phase-1 gates, each initially **NOT_EXECUTED**. No live user content, runtime change or implementer is authorized.
+
 Experiment and handoff:
 
-- THE SYSTEM SHALL design a synthetic Daily Brief test. Its only data sources SHALL be the pinned `tg` read tools of `internal/pa/catalog/pin.json`, and its only delivery SHALL be a PA bot message to the same principal. Its negative-case matrix SHALL cover at least the cases listed in issue #1398, each marked UNTESTED.
+- THE SYSTEM SHALL design a synthetic Daily Brief test. Its only data sources SHALL be the pinned `tg` read tools of `internal/pa/catalog/pin.json`, and its only delivery SHALL be a PA bot message to the same principal. Its negative-case matrix SHALL cover at least the cases listed in issue #1398, each marked NOT_EXECUTED.
 - THE SYSTEM SHALL rank 2-4 alternative jobs by five criteria: evidence, activation friction, repeat usage, safety and cost.
 - THE SYSTEM SHALL define these metrics without numeric thresholds:
   - D1 first useful task;
