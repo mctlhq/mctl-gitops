@@ -1,6 +1,6 @@
 # Tasks: issue-1379-spike-ai-product-discovery-grok-bot-benc
 
-Revision 2. All tasks are docs-only and research-only. No task starts before an independent re-review and owner approval. The intake authorizes nothing: no implementer run, no report PR, and no live test. Every vendor, account or OAuth action listed below is NOT-EXECUTED.
+Revision 3 (2026-11-23). Remaining tasks are docs-only/research-only and need independent re-review and owner approval. The already owner-observed Grok (grok.com) connection on 2026-11-22 is historical evidence, NOT a newly executed test. No implementer, report PR or live test is authorized.
 
 - [ ] 1. Re-pin the baseline at report time.
   - Record the mctl-telegram SHA, the mctl-gitops SHA, and the production and preview image tags.
@@ -23,7 +23,7 @@ Revision 2. All tasks are docs-only and research-only. No task starts before an 
   — DoD: each step has its preconditions, its request shape, its exact expected HTTP or JSON-RPC result and timing, and its audit or metric entry, and is marked `NOT-EXECUTED`. The access token after a revoke is expected to stay valid until it expires (<=1h). The plan says it does not prove vendor E2E.
 - [ ] 5. Vendor interoperability test plan (depends on 2, 3): report section 5, with rows for Grok Bot, Townie, and optionally Grok Chat and Cursor IDE.
 
-  — DoD: every row records its registration strategy, callback host and URI, `resource`, PKCE, the requested and granted scopes, `initialize`, `tools/list`, the identity read, a synthetic read, negatives and audit. All rows are BLOCKED or `NOT-EXECUTED` until a separate owner GO. The live-test preconditions are listed: stable `client_id`, `core-readonly` plus a minimum-read ceiling, no admin, groups, write or account scopes, token scopes verified without logging values. Dynamic-id clients are BLOCKED.
+  — DoD: every row records its registration strategy, callback host and URI, `resource`, PKCE, the requested and granted scopes, `initialize`, `tools/list`, the identity read, a synthetic read, negatives and audit. Preserve historic Grok Web OWNER_OBSERVED_WORKS. All NEW Grok Bot attribution and restricted security tests are BLOCKED or `NOT-EXECUTED` until a separate owner GO. The live-test preconditions are listed: stable `client_id`, `core-readonly` plus a minimum-read ceiling, no admin, groups, write or account scopes, token scopes verified without logging values. Dynamic-id clients are BLOCKED.
 - [ ] 6. External-client threat model (depends on 2, 3): report section 6.
 
   — DoD: a control-by-control table of what applies and what does not for a direct MCP client, with the Grok Bot sharing and boundary quotes. Alice is limited to `iot:view` with no device or control step. Unverified claims are `UNKNOWN`. The mctl-alice code is marked as not read unless it is read at a pinned SHA.
@@ -49,8 +49,16 @@ Revision 2. All tasks are docs-only and research-only. No task starts before an 
 - [ ] T3. A grep of the new file finds no numeric Telegram id from gitops, no Cloudflare account path, no Vault path and no real handle. Only the personas Alice, Bob, Carol and Dana appear.
 - [ ] T4. A reviewer checks every `VENDOR-DOCUMENTED` cell against its URL and date. No Grok Bot capability is derived from `grok.com` or Cursor admission.
 - [ ] T5. Every revocation expectation matches `handleRevoke` and `SECURITY.md`. No step expects an immediate 401 for an issued access token.
-- [ ] T6. Every test step reads `NOT-EXECUTED` or `BLOCKED`, and the findings template is empty.
+- [ ] T6. Every future test step reads `NOT-EXECUTED` or `BLOCKED`; the 2026-11-22 Grok observation retains its historical evidence class. The findings template is empty.
 
 ## Rollback
 
 The change is docs-only. Revert the report commit, or close its PR unmerged. No runtime, flag, OAuth, gitops, account or vendor state is touched, so nothing else needs to be undone.
+
+## Revision 3 additions (research-only, not executed)
+
+- [ ] 10. Reconcile the 2026-11-22 Grok working matrix and PR #1393 with #1381's staged audit. Distinguish owner-observed works from scripted repro and from Grok Bot-specific client attribution. DoD: no successful Grok test is erased, no unsupported Bot claim introduced.
+- [ ] 11. Source-classify Grok Bot Remote HTTPS OAuth client identity, skills/routines, Hermes skills, dots and Gemini. DoD: a claim/date/URL/evidence ledger and explicit UNKNOWNs; no vendor account access.
+- [ ] 12. Add an admin-scope leakage/least-privilege decision record based on #1381, and design an isolated synthetic negative test plan. DoD: fixed client identity and explicit scope ceiling required before any separate owner-authorized test; never re-run unrestricted production OAuth or widen policy.
+- [ ] 13. Reconcile PA GitOps: preview flags off, dedicated worker replicaCount zero, production distinct; phase gates unproven. DoD: paths and pinned SHAs, desired-state label, no claim of live PA readiness.
+- [ ] T7. Check no .status.yaml, flags, credentials, deployment, user data, app account, implementer or OAuth allowlist was changed by this revision.
