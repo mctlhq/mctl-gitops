@@ -326,19 +326,26 @@ env:
   PA_ENABLED: "true"
   PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
   PA_KEK_MODE: local
-  # Each capability flag is explicit, so turning PA_ENABLED on later turns
-  # on chat only. Tools and the tg server go on together in a later step;
-  # writes and the alice server stay off on preview.
-  PA_EXTERNAL_TOOLS_ENABLED: "false"
+  # Each capability flag is explicit. Step G6 (owner GO) turns tools and the
+  # tg server on together: an allowlisted user can link their own Telegram
+  # account through the Mini App and the model may call the pinned tg READ
+  # tools, each one executed server-side. Writes and the alice server stay
+  # off on preview. Rollback: PA_EXTERNAL_TOOLS_ENABLED "false" stops every
+  # tool call at the next dispatch (re-read per call), PA_SERVER_TG_ENABLED
+  # "false" also closes linking.
+  PA_EXTERNAL_TOOLS_ENABLED: "true"
   PA_WRITES_ENABLED: "false"
-  PA_SERVER_TG_ENABLED: "false"
+  PA_SERVER_TG_ENABLED: "true"
   PA_SERVER_ALICE_ENABLED: "false"
   # The tg server is this instance's own authorization server and MCP
   # endpoint; the values are its published metadata
   # (/.well-known/oauth-authorization-server and
-  # /.well-known/oauth-protected-resource/mcp). PA_BOT_USERNAME and
-  # PA_MINI_APP_NAME are added with the tg-server step: they exist only once
-  # the bot is created, and nothing reads them before then.
+  # /.well-known/oauth-protected-resource/mcp); config.LoadPATools refuses to
+  # start if they do not match what the server publishes. The linking flow
+  # opens the Mini App t.me/<PA_BOT_USERNAME>/<PA_MINI_APP_NAME>, whose
+  # BotFather URL is PA_APP_URL.
+  PA_BOT_USERNAME: mctl_pa_preview_bot
+  PA_MINI_APP_NAME: link
   PA_APP_URL: https://tg-preview.mctl.ai/pa/link/app
   PA_SERVER_TG_CLIENT_ID: pa-preview
   PA_SERVER_TG_ISSUER: https://tg-preview.mctl.ai
