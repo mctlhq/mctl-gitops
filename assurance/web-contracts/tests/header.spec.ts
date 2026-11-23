@@ -49,6 +49,7 @@ const FIXTURES: Record<string, Target> = {
   'fixture-reference': { url: `${BASE}/header/reference.html`, bp: 768, kind: 'button', sel: BUTTON_SEL },
   'fixture-reference-wide': { url: `${BASE}/header/reference-wide.html`, bp: 981, kind: 'button', sel: BUTTON_SEL },
   'fixture-checkbox': { url: `${BASE}/header/checkbox.html`, bp: 768, kind: 'checkbox', sel: CHECKBOX_SEL },
+  'fixture-reset': { url: `${BASE}/header/reset.html`, bp: 768, kind: 'button', sel: BUTTON_SEL },
 };
 
 function viewportWidth(vp: string, bp: number): number {
@@ -107,23 +108,35 @@ async function outline(loc: ReturnType<Page['locator']>) {
 }
 const hasRing = (o: { style: string; width: number }) => o.style !== 'none' && o.width > 0;
 
-async function durations(p: Page, t: Target): Promise<number[]> {
-  return p.evaluate(([headSel, navSel, linkSel, togSel]) => {
-    const out: number[] = [];
-    const add = (el: Element | null, pseudo?: string) => {
+/** The transitions and animations that would actually RUN on the panel and on the toggle's icon lines (its ::before
+ *  and ::after): exactly the selectors of the site.css prefers-reduced-motion block that the contract names as the
+ *  implementation. The toggle element itself is not measured: its default transition-property is `all`, so any global
+ *  duration reset would count a change that is not the panel opening. A transition counts when its property is not
+ *  none and duration plus delay is above zero, an animation when its name is not none and its duration is above zero. transition-property: none means nothing runs at any duration,
+ *  so a global `transition-duration: 0.01ms !important` reset on top of `transition: none` is correctly not counted. */
+async function running(p: Page, t: Target): Promise<string[]> {
+  return p.evaluate(([navSel, togSel]) => {
+    const out: string[] = [];
+    const num = (x: string) => parseFloat(x) || 0;
+    const add = (el: Element | null, label: string, pseudo?: string) => {
       if (!el) return;
       const cs = getComputedStyle(el, pseudo);
-      for (const part of cs.transitionDuration.split(',')) out.push(parseFloat(part));
-      for (const part of cs.animationDuration.split(',')) out.push(parseFloat(part));
+      const props = cs.transitionProperty.split(',').map((x) => x.trim());
+      const durs = cs.transitionDuration.split(',').map(num);
+      const dels = cs.transitionDelay.split(',').map(num);
+      props.forEach((prop, i) => {
+        const d = durs[i % durs.length], dl = dels[i % dels.length];
+        if (prop !== 'none' && d + dl > 0) out.push(`${label}${pseudo || ''} transition ${prop} ${d}s+${dl}s`);
+      });
+      const names = cs.animationName.split(',').map((x) => x.trim());
+      const ad = cs.animationDuration.split(',').map(num);
+      names.forEach((name, i) => { if (name !== 'none' && ad[i % ad.length] > 0) out.push(`${label}${pseudo || ''} animation ${name} ${ad[i % ad.length]}s`); });
     };
-    const head = document.querySelector(headSel);
-    add(head); add(head, '::before'); add(head, '::after');
-    add(document.querySelector(navSel));
-    document.querySelectorAll(linkSel).forEach((a) => add(a));
+    add(document.querySelector(navSel), 'nav');
     const tog = document.querySelector(togSel);
-    add(tog); add(tog, '::before'); add(tog, '::after');
+    add(tog, 'toggle', '::before'); add(tog, 'toggle', '::after');
     return out;
-  }, [t.sel.header, t.sel.nav, t.sel.links, t.sel.toggle]);
+  }, [t.sel.nav, t.sel.toggle]);
 }
 
 // ------------------------------------------------------------------ behaviours
@@ -358,16 +371,14 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   },
 
   15: async ({ wca, t, width }) => {
-    // Precondition: with no reduced-motion preference the page does animate, so a zero below is a
-    // measured zero and not a page that never animated.
+    // Precondition: with no reduced-motion preference something on the panel or toggle does run, so an empty
+    // list below is a measured absence and not a page that never animated.
     const base = await load(wca, t, width, { reducedMotion: 'no-preference' });
-    expect(Math.max(...(await durations(base, t))), 'detector precondition: motion exists without the preference').toBeGreaterThan(0);
+    expect((await running(base, t)).length, 'detector precondition: a transition runs on the panel or the toggle icon without the preference').toBeGreaterThan(0);
     const p = await load(wca, t, width, { reducedMotion: 'reduce' });
-    const closed = await durations(p, t);
-    expect(closed.every((x) => x === 0), `closed: every transition duration is zero, got ${closed}`).toBe(true);
+    expect(await running(p, t), 'closed: no transition or animation runs on the panel or the toggle').toEqual([]);
     await openPanel(p, t, width);
-    const open = await durations(p, t);
-    expect(open.every((x) => x === 0), `open: every transition duration is zero, got ${open}`).toBe(true);
+    expect(await running(p, t), 'open: no transition or animation runs on the panel or the toggle').toEqual([]);
   },
 
   16: async ({ wca, t, width }) => {

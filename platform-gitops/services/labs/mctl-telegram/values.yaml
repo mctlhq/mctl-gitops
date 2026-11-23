@@ -147,7 +147,16 @@ env:
   # their next sign-in.
   OAUTH_CIMD_ACCEPT: "true"
   OAUTH_CIMD_ADVERTISE: "true"
-  OAUTH_CIMD_ALLOWED_HOSTS: chatgpt.com,claude.ai,vscode.dev,www.town.com
+  # agentspodium.com: hosted Hermes agents (mctl-telegram#1401). Admission is
+  # path-scoped to ONE pod (mctl-telegram 0.144.0, #1404): an entry with a path
+  # admits only client_ids under that prefix, so other pods on the host stay
+  # refused. A profile binds to the EXACT client_id, and an AgentsPodium
+  # client_id ends in the server name chosen in the pod dashboard, so add one
+  # profile per server name. Without a profile a client gets the full user scope
+  # surface (verified on tg-preview), so never admit a path without its profile.
+  # Rollback: drop the entry and the profile record; removing the entry also
+  # cuts off that client's refreshes.
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
   # Client tool profiles (mctl-telegram 0.87.0, docs/design/core-profiles.md,
   # runbook "Client tool profiles"): a token minted for a listed client sees
   # only that profile's tools, re-resolved at every refresh. Town is bound by
@@ -157,7 +166,7 @@ env:
   # refused once and must authorize again; they age out by 2026-11-21.
   # Rollback: drop the record; the client returns to its scope surface at its
   # next refresh.
-  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgprod.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR

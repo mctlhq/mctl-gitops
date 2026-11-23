@@ -196,4 +196,11 @@ version is served with its pinned sha-256, that an unpinned version is blocked, 
   Tab from the toggle, because that route depends on the DOM order HDR-7 covers. What is asserted after the
   Escape or the link click (the panel closes, focus is on the toggle or the navigation target) is unchanged,
   and the `no-escape` and `focus-lost` negative controls still FAIL.
+- **HDR-15** measures transitions that would actually run, on the panel (`nav`) and the toggle's icon lines
+  (`::before`, `::after`): exactly the selectors of the `prefers-reduced-motion` block in `site.css`, which the
+  contract names as the implementation. A transition runs when its `transition-property` is not `none` and
+  duration plus delay is above zero (an animation: name not `none`, duration above zero). A global
+  `transition-duration: 0.01ms !important` reset on top of `transition: none` therefore does not count; the
+  `fixture-reset` case proves that, and the `motion-ignored` control proves a real transition still FAILs. The
+  detector precondition (something runs without the preference) turns a detector that measures nothing red.
 
