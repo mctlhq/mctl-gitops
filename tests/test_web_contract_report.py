@@ -157,19 +157,19 @@ check("a negative control that FAILs is healthy and exits 0",
 check("a detected control does not mark a failure", res["summary"]["failed_cases"] == [], res)
 
 # --- URL sanitization -------------------------------------------------------------
-dirty = "https://user:pw@evil.example/a/b?token=SECRET#frag"
+dirty = "https://zq7user:zq7pw@evil.example/a/b?zq7token=ZQ7SECRET#zq7frag"
 rc, res, mx, _ = report([case("T-URL")], [("T-URL", "fail", f"GET {dirty} blocked")])
 blob = json.dumps(res) + (mx or "")
 check("URL is reduced to host and path", "evil.example/a/b" in blob, blob[:300])
 check("query, fragment and userinfo are stripped everywhere",
-      not any(s in blob for s in ("SECRET", "frag", "user:pw", "token=")), blob[:300])
+      not any(s in blob for s in ("ZQ7SECRET", "zq7frag", "zq7user:zq7pw", "zq7token=")), blob[:300])
 
-rc, res, mx, _ = report([case("T-BS")], [("T-BS", "fail", "GET http://evil.example\\@h.test/p?token=SECRET x")])
+rc, res, mx, _ = report([case("T-BS")], [("T-BS", "fail", "GET http://evil.example\\@h.test/p?zq7token=ZQ7SECRET x")])
 check("a URL with a backslash is not trusted: reduced to a placeholder",
-      "[unparseable-url]" in json.dumps(res) and "SECRET" not in json.dumps(res) + (mx or ""), res)
-rc, res, mx, _ = report([case("T-PS")], [("T-PS", "fail", "GET ftp://u:pw@h.test/x//y and //h.test/z?q=SECRET")])
+      "[unparseable-url]" in json.dumps(res) and "ZQ7SECRET" not in json.dumps(res) + (mx or ""), res)
+rc, res, mx, _ = report([case("T-PS")], [("T-PS", "fail", "GET ftp://zq7u:zq7pw@h.test/x//y and //h.test/z?q=ZQ7SECRET")])
 check("non-http and scheme-relative URLs are reduced too",
-      not any(x in json.dumps(res) for x in ("pw", "SECRET", "u:")), res)
+      not any(x in json.dumps(res) for x in ("zq7pw", "ZQ7SECRET", "zq7u:")), res)
 
 # --- outputs ----------------------------------------------------------------------
 with tempfile.TemporaryDirectory() as d:
@@ -574,6 +574,39 @@ for entry in ("a.test/x\n", "a.test/../x", "a.test//x", "a..test/x", "a.test/x/.
 rc, res, mx, _ = report([case("G-2")], [("G-2", "error", "guard-blocked (host-not-allowlisted): x.test/a.js")])
 check("a guard error thrown mid-test by Wca.get keeps the older wording (it ran before any assertion)",
       "errored before its assertion" in next(r for r in res["results"] if r["id"] == "G-2")["reason"], res)
+
+# ---- declared dummy env and tmpfs for a consumer start (pins.json sites[].env / sites[].tmpfs)
+def check_pins_with(label, field, value, ok):
+    pins_x = pins_with(lambda p: next(x for x in p["sites"] if x["name"] == "mctl-alice").__setitem__(field, value))
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "pins.json"
+        f.write_text(json.dumps(pins_x))
+        rc, out, err = run("--check-pins", "--pins", f)
+        check(label, (rc == 0) if ok else (rc == 3 and field in (out + err)), (rc, out, err))
+
+
+check_pins_with("a plain dummy env is accepted", "env", {"OAUTH_DB_PATH": "/tmp/wca/oauth.db", "TG_API_ID": "1",
+                "DATABASE_URL": "file:/tmp/wca/x.db?_pragma=journal_mode(WAL)", "PUBLIC_BASE_URL": "https://site.fixture.test"}, True)
+for label, env in (("a lower-case name", {"db_path": "x"}), ("PORT, which the harness forces", {"PORT": "9"}),
+                   ("a value with '@' (credentials in a URL)", {"DATABASE_URL": "postgres://u:p@h/db"}),
+                   ("a value with a space or shell metacharacter", {"A": "x y"}), ("a value with a quote", {"A": "x'y"}),
+                   ("an empty value", {"A": ""}), ("a non-string value", {"A": 1}), ("a list instead of a mapping", ["A=b"]),
+                   ("a value with a trailing newline", {"A": "x\n"}), ("a value with a semicolon", {"A": "a;b"})):
+    check_pins_with(f"env with {label} is rejected", "env", env, False)
+pins_url = pins_with(lambda p: next(x for x in p["sites"] if x["name"] == "mctl-alice").__setitem__("env", {"PUBLIC_BASE_URL": "https://tg.real-host.com"}))
+with tempfile.TemporaryDirectory() as d:
+    f = pathlib.Path(d) / "pins.json"
+    f.write_text(json.dumps(pins_url))
+    rc, out, err = run("--check-pins", "--pins", f)
+    check("an env URL to a non-fixture host is rejected by the existing URL scan", rc == 3 and "non-fixture host" in (out + err), (rc, out, err))
+check_pins_with("a plain tmpfs path is accepted", "tmpfs", ["/tmp/wca", "/var/data"], True)
+for label, t in (("a relative path", ["tmp/x"]), ("a dot-dot segment", ["/tmp/../etc"]), ("a single dot segment", ["/tmp/./x"]),
+                 ("a bare dot", ["/."]), ("a dot under /proc", ["/proc/."]), ("a dot under /dev", ["/dev/."]),
+                 ("a path below /proc", ["/proc/sys/x"]), ("a path below /sys", ["/sys/fs"]), ("a path below /dev", ["/dev/shm"]),
+                 ("the root", ["/"]), ("/proc", ["/proc"]), ("/sys", ["/sys"]), ("/dev", ["/dev"]),
+                 ("a mount option injected", ["/tmp/x:rw,exec"]), ("a duplicate", ["/tmp/a", "/tmp/a"]),
+                 ("five paths", ["/a", "/b", "/c", "/d", "/e"]), ("a trailing newline", ["/tmp/x\n"]), ("a string", "/tmp/x")):
+    check_pins_with(f"tmpfs with {label} is rejected", "tmpfs", t, False)
 
 if failures:
     print("\n".join(failures))

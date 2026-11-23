@@ -241,3 +241,14 @@ HDR-13 on a narrow viewport gives each panel link focus directly instead of walk
 reason as HDR-8 and HDR-12: the visibility of the focus indicator does not depend on DOM order, which HDR-7 owns.
 On a wide viewport the Tab walk stays. The toggle's own indicator is still checked after a real Tab from the brand.
 
+
+## Declared dummy environment for a consumer (`env`, `tmpfs`)
+
+Some consumer images need a few variables or a writable path to start under the hardened run (read-only root, all
+capabilities dropped). `sites[].env` maps upper-case names to plain placeholder values and `sites[].tmpfs` lists up to
+four absolute paths mounted as small tmpfs (`noexec,nosuid,nodev`, 16 MiB). Both are checked before anything runs:
+`PORT` is reserved (the harness forces 8080), values use a small shell-inert character set that excludes `@` (so
+credentials cannot ride in a URL) and any URL in the file must still point at a fixture host, and a tmpfs path may not
+be `/` or lie in or below `/proc`, `/sys` or `/dev`, contain a `.` or `..` segment, or carry mount options. The file is public: only
+placeholders belong here, never a real secret. The declared values are appended after the harness defaults. A site that
+still does not start stays NOT-RUN with the last three sanitized log lines as the reason.

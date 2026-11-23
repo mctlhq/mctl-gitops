@@ -191,6 +191,10 @@ def check_pins(pins):
         eb = s.get("expected_blocked", [])
         if not isinstance(eb, list) or not all(isinstance(e, str) and valid_expected_blocked(e) for e in eb):
             bad.append(f"sites[{n}].expected_blocked: must be a list of exact host/path strings (no scheme, query or wildcard)")
+        if not valid_env(s.get("env", {})):
+            bad.append(f"sites[{n}].env: must map upper-case names (not {ENV_RESERVED}) to short plain values without '@'")
+        if not valid_tmpfs(s.get("tmpfs", [])):
+            bad.append(f"sites[{n}].tmpfs: must be at most 4 distinct absolute paths without dot segments, not /, /proc, /sys or /dev")
         if mode == "not-run" and not (isinstance(s.get("not_run_reason"), str) and s["not_run_reason"].strip()):
             bad.append(f"sites[{n}]: mode not-run needs a not_run_reason")
 
@@ -379,6 +383,31 @@ def derive(case, runs, site_pins):
 FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 # host/path exactly as the guard logs it: lowercase host, then a path; never a scheme, query, port or wildcard
 EXPECTED_BLOCKED_RE = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9._~/-]*")
+
+
+# Dummy environment a consumer image may be started with. Names are upper-case identifiers; PORT is forced by the
+# harness. Values are a small, shell-inert character set and never carry credentials in a URL ('@' is refused). A real
+# secret never belongs here: the file is public and the values are test placeholders. '@' is outside the value
+# character set, so credentials in a URL cannot be written.
+ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+ENV_VALUE_RE = re.compile(r"[A-Za-z0-9._:/=?&()+,-]{1,200}")
+ENV_RESERVED = ("PORT",)
+TMPFS_RE = re.compile(r"/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+
+
+def valid_env(env):
+    return (isinstance(env, dict)
+            and all(isinstance(k, str) and ENV_NAME_RE.fullmatch(k) and k not in ENV_RESERVED
+                    and isinstance(v, str) and ENV_VALUE_RE.fullmatch(v)
+                    for k, v in env.items()))
+
+
+def valid_tmpfs(paths):
+    return (isinstance(paths, list) and len(paths) <= 4
+            and all(isinstance(p, str) and TMPFS_RE.fullmatch(p)
+                    and not any(seg in (".", "..") for seg in p.split("/"))
+                    and p.split("/")[1] not in ("proc", "sys", "dev")
+                    for p in paths) and len(set(paths)) == len(paths))
 
 
 def valid_expected_blocked(entry):

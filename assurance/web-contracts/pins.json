@@ -133,7 +133,20 @@
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
       "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "observed_image_digest_resolved_for_tag": "0.143.0",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit",
+      "env": {
+        "DATABASE_URL": "file:/tmp/wca/mctl-telegram.db?_pragma=journal_mode(WAL)",
+        "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
+        "TG_API_ID": "1",
+        "TG_API_HASH": "dummy",
+        "AUTH_MODE": "shared-hmac",
+        "AUTH_REQUIRED": "true",
+        "OAUTH_JWT_SECRET": "dummydummydummydummydummydummydummydummy"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only, none of them a URL (results.json embeds the pins and the report refuses to carry a URL). Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs."
     },
     {
       "name": "mctl-academy",
@@ -148,7 +161,7 @@
         "sensitive"
       ],
       "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "not_run_reason": "consumer image refuses to start without DATABASE_URL (it will not run on an in-memory store in production), and a database service is not part of this harness; promoted only if a decision is made to provide one (observed by starting the pinned image locally, not in CI)",
       "observed_image_digest": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
       "observed_image_digest_resolved_for_tag": "0.1.101"
     },
@@ -167,7 +180,15 @@
       "mode": "not-run",
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
       "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
-      "observed_image_digest_resolved_for_tag": "2.16.0"
+      "observed_image_digest_resolved_for_tag": "2.16.0",
+      "env": {
+        "OAUTH_DB_PATH": "/tmp/wca/oauth.db",
+        "TELEMETRY_DB_PATH": "/tmp/wca/telemetry.db"
+      },
+      "tmpfs": [
+        "/tmp/wca"
+      ],
+      "env_note": "dummy values only. The image keeps its SQLite files under ./data in a read-only root, so both database paths point at a tmpfs; observed in CI probe (mctl-alice start failure: unable to open database file)."
     },
     {
       "name": "seerrsense",
@@ -184,7 +205,11 @@
       "mode": "not-run",
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
       "observed_image_digest": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
-      "observed_image_digest_resolved_for_tag": "1.14.4"
+      "observed_image_digest_resolved_for_tag": "1.14.4",
+      "env": {
+        "SEERRSENSE_AUTH_TOKEN": "dummydummydummydummydummydummydummydummy"
+      },
+      "env_note": "dummy value only. The image refuses to start without SEERRSENSE_AUTH_TOKEN; with it, started locally with no network, it listens on the forced PORT 8080 (the 8787 in its README is only the default)."
     }
   ]
 }
