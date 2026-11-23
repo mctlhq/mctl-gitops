@@ -33,12 +33,15 @@ def green():
     return [run_for(n) for n in REQ.split(",")] + [run_for("claude-review / review")]
 
 
-def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="release-window/w-1", state="open",
+def run_script(*, script_text=None, kind=None, additions=1, deletions=0, author=APP, head_repo="o/r", head_ref=None,
+               state="open",
                merged="false", pr_ok=True, files=(TARGET,), changed=None, prev="", files_ok=True, cur=HEAD,
                pr_head=HEAD, expect=HEAD, target=TARGET, gstate="OPEN", decision="APPROVED", on_head=1,
                review_ok=True, runs=None, total=None, runs_ok=True, wait_seconds=100000):
     """Run the wait script with a fake gh. Returns (rc, outputs, log)."""
     runs = green() if runs is None else runs
+    if head_ref is None:
+        head_ref = "release-window-removal/w-1" if kind == "remove" else "release-window/w-1"
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
         (d / "scripts").mkdir()
@@ -47,7 +50,8 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
         (d / "info").write_text(json.dumps({
             "head": {"sha": pr_head, "ref": head_ref, "repo": {"full_name": head_repo} if head_repo else None},
             "changed_files": len(files) if changed is None else changed, "user": {"login": author},
-            "state": state, "merged": merged == "true", "node_id": "PRID"}))
+            "state": state, "merged": merged == "true", "node_id": "PRID",
+            "additions": additions, "deletions": deletions}))
         (d / "listing").write_text("".join(f"{f}\t{prev}\n" for f in files))
         (d / "review").write_text(f"{cur} {gstate} {decision} {on_head}\n")
         (d / "runs").write_text("\n".join(json.dumps(r) for r in runs))
@@ -76,6 +80,8 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
         out.write_text("")
         env = {"PATH": f"{bin_}:{os.environ['PATH']}", "GH_TOKEN": "x", "REPO": "o/r", "PR": "7", "EXPECT_HEAD": expect,
                "TARGET": target, "GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(d), "WAIT_SECONDS": str(wait_seconds)}
+        if kind is not None:
+            env["WINDOW_KIND"] = kind
         r = subprocess.run(["bash", str(d / "scripts/release-window-enqueue-wait.sh")], env=env,
                            capture_output=True, text=True, timeout=60, cwd=d)
         assert not (d / "enqueue").exists(), "the wait script must never enqueue itself"
@@ -134,6 +140,22 @@ def cases(script_text=None):
         ("an unreadable check list is refused", lambda: refused(runs_ok=False), True),
         ("a truncated check list is refused", lambda: refused(total=len(green()) + 3), True),
         ("the deadline is a refusal", lambda: refused(runs=pending, wait_seconds=0), True),
+        # Removal: the same gate with its own branch prefix and a deletions-only diff.
+        ("removal: approved, green, pure deletion on its own branch -> ready",
+         lambda: ready(kind="remove", additions=0, deletions=8), True),
+        ("removal: one deleted line is enough", lambda: ready(kind="remove", additions=0, deletions=1), True),
+        ("removal: a diff with an added line is refused", lambda: refused(kind="remove", additions=1, deletions=8), True),
+        ("removal: a diff with no deleted line is refused", lambda: refused(kind="remove", additions=0, deletions=0), True),
+        ("removal: unreadable line counts are refused", lambda: refused(kind="remove", additions="null", deletions="null"), True),
+        ("removal: an addition branch is refused", lambda: refused(kind="remove", additions=0, deletions=8,
+                                                                   head_ref="release-window/w-1"), True),
+        ("addition: a removal branch is refused", lambda: refused(head_ref="release-window-removal/w-1"), True),
+        ("removal: a human author is refused", lambda: refused(kind="remove", additions=0, deletions=8, author="mashkovd"), True),
+        ("removal: a second file is refused", lambda: refused(kind="remove", additions=0, deletions=8, files=(TARGET, "README.md")), True),
+        ("removal: the default project template is refused",
+         lambda: refused(kind="remove", additions=0, deletions=8, files=(other,), target=other), True),
+        ("an unknown kind is refused", lambda: refused(kind="both", additions=0, deletions=8), True),
+        ("a kind with a different case is refused", lambda: refused(kind="Remove", additions=0, deletions=8), True),
         ("no approval by the deadline is a refusal", lambda: refused(on_head=0, wait_seconds=0), True),
     ]
 
@@ -142,7 +164,7 @@ MUTANTS = {
     "pushed head not compared": ('[ "$head_sha" = "$EXPECT_HEAD" ] ||', 'true ||'),
     "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),
     "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||'),
-    "branch check dropped": ("case \"$head_ref\" in release-window/?*) ;;", "case \"$head_ref\" in *) ;;"),
+    "branch check dropped": ('case "$head_ref" in "${BRANCH_PREFIX}"?*) ;; *)', 'case "$head_ref" in *) ;; *)'),
     "target shape unchecked": ('|| die "\'${TARGET}\' is not the apps or platform project template; not enqueueing."', '|| true'),
     "file count ignored": ('[ "$expected" = 1 ] ||', 'true ||'),
     "file list not compared to the target": ('[ "$files" = "${TARGET}"$\'\\t\' ] ||', 'true ||'),
@@ -153,6 +175,10 @@ MUTANTS = {
     "not-ready verdict accepted": ("    case \"$rc\" in\n      0)", "    case \"$rc\" in\n      0|10|11|12)"),
     "a failed check waits": ('*) die "#${PR} is not mergeable: ${verdict}" ;;', '*) echo waiting ;;'),
     "deadline ignored": ('if [ "$SECONDS" -ge "$deadline" ]; then', 'if false; then'),
+    "branch prefix not kind-bound": ('case "$head_ref" in "${BRANCH_PREFIX}"?*) ;; *)', 'case "$head_ref" in release-window*) ;; *)'),
+    "added lines allowed in a removal": ('[ "$additions" = 0 ] && [ "$deletions" -ge 1 ] ||', '[ "$deletions" -ge 0 ] ||'),
+    "removal may delete nothing": ('[ "$additions" = 0 ] && [ "$deletions" -ge 1 ] ||', '[ "$additions" = 0 ] ||'),
+    "unknown kind falls through": ("*) die \"WINDOW_KIND must be add or remove", "*) BRANCH_PREFIX='release-window' ; : die \"WINDOW_KIND must be add or remove"),
 }
 
 

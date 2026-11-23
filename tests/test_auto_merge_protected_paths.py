@@ -71,6 +71,10 @@ PROTECTED = [
     ".github/workflows/release-window-pr.yml",
     "scripts/release-window-insert.py",
     "tests/test_release_window_pr.py",
+    ".github/workflows/release-window-removal-pr.yml",
+    "tests/test_release_window_removal.py",
+    "tests/test_release_window_enqueue.py",
+    "scripts/release-window-enqueue-wait.sh",
 ]
 NOT_PROTECTED = [
     "README.md",
@@ -91,6 +95,8 @@ NOT_PROTECTED = [
     "scripts/app-project-consumers.json.orig",
     ".github/workflows/release-window-pr.yml.orig",
     "scripts/release-window-insert.py.bak",
+    ".github/workflows/release-window-removal-pr.yml.orig",
+    "tests/test_release_window_removal.py.bak",
 ]
 
 
@@ -188,7 +194,7 @@ def main():
     # The workflow must actually use the variable.
     assert 'grep -E "$protected_re"' in WF.read_text()
     # MUTANTS: removing the release-gate entries must turn rows red.
-    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers", "release-window-pr", "release-window-insert", "release_window"]
+    gate_alts = ["release-gate", "release-gates", "release-bump", "release_bump", "cluster-templates", "workflows", "tests/test_", "templates/projects", "sync-window", "app-project-consumers", "release-window-pr", "release-window-removal-pr", "release-window-insert", "release-window-enqueue-wait", "release_window", "release_window_removal"]
     for needle in gate_alts:
         parts = pat.split("|")
         kept = [a for a in parts if needle not in a]

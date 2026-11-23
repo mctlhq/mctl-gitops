@@ -6,8 +6,10 @@ The AppProject templates are Helm templates (`{{ .Values... }}`), so they are
 edited as text, never loaded and dumped. The caller re-renders the chart and
 checks that exactly this window arrived; this script only places the text.
 
-  release-window-insert.py hash PROJECT    window JSON on stdin -> sha256 hex
-  release-window-insert.py insert FILE     window JSON on stdin, edits FILE
+  release-window-insert.py hash PROJECT         window JSON on stdin -> sha256 hex
+  release-window-insert.py hash-remove PROJECT  the same window, for a REMOVAL -> sha256 hex
+  release-window-insert.py insert FILE          window JSON on stdin, edits FILE
+  release-window-insert.py remove FILE          window JSON on stdin, deletes that one window from FILE
   release-window-insert.py --selftest
 
 The canonical form behind `hash` is
@@ -22,6 +24,15 @@ another. A window that is not a JSON object is refused.
   * `syncWindows: []`, a flow-style value, or a file whose last non-blank line
     ends in a template control action: refused. A shape this script does not recognise
     is exit 2, never a guess.
+`remove` (release-window-removal-pr.yml) deletes exactly one block, the one whose
+parsed content equals the window (same keys, same values, same list order). No
+match, more than one match, a comment or blank line between items, or a block
+that does not parse is exit 2. When that was the last window the `syncWindows:`
+key goes with it, together with the two lines `insert` writes above it when it
+creates the key, so insert followed by remove returns the file byte for byte.
+The removal hash is over {"action":"remove","project":P,"window":W}: an approval
+to add a window cannot be spent as an approval to lift it, or the reverse.
+
 Exit: 0 done, 2 refused or unreadable.
 """
 
@@ -56,6 +67,17 @@ def window_hash(project: str, window: object) -> str:
     if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", project):
         raise Refuse("the project must be a lowercase DNS-style name")
     body = json.dumps({"project": project, "window": json.loads(canonical(window))},
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def removal_hash(project: str, window: object) -> str:
+    """sha256 of {"action":"remove","project":P,"window":W}, canonical. The
+    action is in the hashed bytes, so an approval to add the window is a
+    different number from an approval to remove it."""
+    if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", project):
+        raise Refuse("the project must be a lowercase DNS-style name")
+    body = json.dumps({"action": "remove", "project": project, "window": json.loads(canonical(window))},
                       sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode()).hexdigest()
 
@@ -110,6 +132,67 @@ def insert(text: str, window: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+_CREATED_COMMENT = "  # Sync windows (proposal issue-2828): deny-only, never in project default."
+
+
+def remove(text: str, window: dict) -> str:
+    """Delete the one window block equal to `window`; refuse anything else."""
+    canonical(window)
+    lines = text.split("\n")
+    while lines and lines[-1] == "":
+        lines.pop()
+    starts = [i for i, ln in enumerate(lines) if _KEY.match(ln)]
+    if len(starts) != 1:
+        raise Refuse("expected exactly one `  syncWindows:` key, found %d" % len(starts))
+    i = starts[0]
+    rest = _KEY.match(lines[i]).group(1).strip()
+    if rest and not rest.startswith("#"):
+        raise Refuse(f"`syncWindows:` has an inline value ({rest!r}); only a block list is edited")
+    end = i + 1
+    while end < len(lines):
+        ln = lines[end]
+        if ln.strip() != "" and len(ln) - len(ln.lstrip(" ")) <= 2:
+            break
+        end += 1
+    block = lines[i + 1:end]
+    if not block:
+        raise Refuse("`syncWindows:` has no block items")
+    if any(b.strip() == "" or b.lstrip().startswith("#") for b in block):
+        raise Refuse("a blank or comment line inside `syncWindows:`; not guessing item boundaries")
+    item_indent = min(len(b) - len(b.lstrip(" ")) for b in block)
+    if not all((b[item_indent:].startswith("- ") or len(b) - len(b.lstrip(" ")) > item_indent) for b in block):
+        raise Refuse("`syncWindows:` items are not a plain block list")
+    item_starts = [k for k, b in enumerate(block) if len(b) - len(b.lstrip(" ")) == item_indent]
+    if not item_starts or item_starts[0] != 0 or not all(block[k].lstrip().startswith("- ") for k in item_starts):
+        raise Refuse("`syncWindows:` items are not a plain block list")
+    bounds = list(zip(item_starts, item_starts[1:] + [len(block)]))
+    want = json.loads(canonical(window))
+    hits = []
+    for a, b in bounds:
+        chunk = "\n".join(x[item_indent:] for x in block[a:b])
+        try:
+            parsed = yaml.safe_load(chunk)
+        except yaml.YAMLError as e:
+            raise Refuse(f"an item of `syncWindows:` does not parse: {e}") from e
+        if not (isinstance(parsed, list) and len(parsed) == 1):
+            raise Refuse("an item of `syncWindows:` is not a single list entry")
+        if parsed[0] == want:
+            hits.append((a, b))
+    if len(hits) != 1:
+        raise Refuse("the window matches %d items of `syncWindows:`, need exactly 1" % len(hits))
+    a, b = hits[0]
+    if len(bounds) > 1:
+        out = lines[:i + 1 + a] + lines[i + 1 + b:]
+    else:
+        # The last window: drop the key, and the two lines insert writes above
+        # it, but only when they are exactly what insert writes.
+        lo = i
+        if i >= 2 and lines[i - 1] == _CREATED_COMMENT and lines[i - 2] == "":
+            lo = i - 2
+        out = lines[:lo] + lines[end:]
+    return "\n".join(out) + "\n"
+
+
 def _selftest() -> int:
     ok = True
 
@@ -146,6 +229,40 @@ def _selftest() -> int:
         check("refused: window that is not an object", False)
     except Refuse:
         check("refused: window that is not an object", True)
+    # insert then remove returns the file byte for byte, for the created key and
+    # for a list of more than one.
+    check("insert then remove is the identity (key created)", remove(insert(base, w), w) == base)
+    two = insert(insert(base, w), {**w, "applications": ["labs-web"]})
+    check("removing the first of two leaves the second",
+          yaml.safe_load(remove(two, w).replace("{{ .Values.r }}", "r"))["spec"]["syncWindows"] == [{**w, "applications": ["labs-web"]}])
+    check("removing the second of two is the file with one window", remove(two, {**w, "applications": ["labs-web"]}) == insert(base, w))
+    check("the template action is untouched by remove", "- {{ .Values.r }}" in remove(two, w))
+    check("remove matches by value, not key order", remove(insert(base, w), dict(reversed(list(w.items())))) == base)
+    for label, text, win in (
+            ("no such window", insert(base, w), {**w, "duration": "2h"}),
+            ("same window with another list order", insert(base, {**w, "applications": ["a", "b"]}), {**w, "applications": ["b", "a"]}),
+            ("a window with an extra key", insert(base, {**w, "manualSync": True}), w),
+            ("two identical windows", insert(insert(base, w), w), w),
+            ("no syncWindows key", base, w),
+            ("inline empty list", "spec:\n  syncWindows: []\n", w),
+            ("a comment inside the block", "spec:\n  syncWindows:\n    # c\n    - kind: deny\n", w),
+            ("a blank line inside the block", insert(insert(base, w), w).replace("\n    - kind", "\n\n    - kind", 1), w),
+            ("duplicate key", "spec:\n  syncWindows:\n    - a: 1\n  syncWindows:\n    - b: 2\n", w),
+            ("unparseable item", "spec:\n  syncWindows:\n    - kind: [deny\n", w)):
+        try:
+            remove(text, win)
+            check(f"remove refused: {label}", False)
+        except Refuse:
+            check(f"remove refused: {label}", True)
+    try:
+        remove(base, ["x"])
+        check("remove refused: window that is not an object", False)
+    except Refuse:
+        check("remove refused: window that is not an object", True)
+    check("removal hash differs from the add hash", removal_hash("apps", w) != window_hash("apps", w))
+    check("removal hash does not depend on key order", removal_hash("apps", w) == removal_hash("apps", dict(reversed(list(w.items())))))
+    check("removal hash changes with the project", removal_hash("apps", w) != removal_hash("platform", w))
+    check("removal hash changes with the window", removal_hash("apps", w) != removal_hash("apps", {**w, "duration": "49h"}))
     a, b = window_hash("apps", w), window_hash("apps", dict(reversed(list(w.items()))))
     check("hash does not depend on key order", a == b and len(a) == 64)
     check("hash changes with the window", a != window_hash("apps", {**w, "duration": "49h"}))
@@ -164,6 +281,17 @@ def main(argv: list[str]) -> int:
     try:
         if len(argv) == 3 and argv[1] == "hash":
             print(window_hash(argv[2], json.load(sys.stdin)))
+            return 0
+        if len(argv) == 3 and argv[1] == "hash-remove":
+            print(removal_hash(argv[2], json.load(sys.stdin)))
+            return 0
+        if len(argv) == 3 and argv[1] == "remove":
+            window = json.load(sys.stdin)
+            with open(argv[2], encoding="utf-8") as fh:
+                text = fh.read()
+            new = remove(text, window)
+            with open(argv[2], "w", encoding="utf-8") as fh:
+                fh.write(new)
             return 0
         if len(argv) == 3 and argv[1] == "insert":
             window = json.load(sys.stdin)

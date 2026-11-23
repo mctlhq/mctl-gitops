@@ -412,6 +412,7 @@ jobs:
         run: |
           python3 tests/test_release_window_pr.py
           python3 tests/test_release_window_enqueue.py
+          python3 tests/test_release_window_removal.py
 
       - name: Tenant-class templates and Secret readers, by credential name
         run: |
