@@ -57,6 +57,10 @@ def header_cases():
                     if (site, hdr) in KNOWN_GAPS:
                         c["known_gap"] = KNOWN_GAPS[(site, hdr)]
                 cases.append(c)
+    # a positive control of the HDR-15 detector's meaning: the global 0.01ms reset on top of transition: none must PASS
+    cases.append({"id": "WCA-H-HDR15-fixture-reset-landing-375", "site": "fixture-reset", "kind": "case",
+                  "contract_id": "HDR-15", "gate": None, "hdr": 15, "route_class": "landing",
+                  "viewport": "375", "provenance": "[PREVIEW]", "exception": None})
     for site, (code, classes) in CONSUMERS.items():
         for rc, letter in classes.items():
             for hdr, vps in sorted(HDR_VIEWPORTS.items()):

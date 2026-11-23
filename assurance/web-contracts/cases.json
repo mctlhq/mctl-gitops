@@ -1410,6 +1410,18 @@
    "exception": null
   },
   {
+   "id": "WCA-H-HDR15-fixture-reset-landing-375",
+   "site": "fixture-reset",
+   "kind": "case",
+   "contract_id": "HDR-15",
+   "gate": null,
+   "hdr": 15,
+   "route_class": "landing",
+   "viewport": "375",
+   "provenance": "[PREVIEW]",
+   "exception": null
+  },
+  {
    "id": "WCA-H-HDR1-mctl-web-landing-B-1",
    "site": "mctl-web",
    "kind": "case",
