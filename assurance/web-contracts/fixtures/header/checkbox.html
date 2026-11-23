@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkbox header</title>
+<!-- CSS-checkbox header: the pattern the contract describes for a Go server with no forced
+     JS (checkbox toggle, no script at all). TEST-ONLY fixture for mctl-gitops#2929: a
+     reference target for the registered exceptions EX-1 and EX-2, never a consumer row.
+     Stylesheets come from the pinned mctl-design archive served by the fixture origin. -->
+<link rel="stylesheet" href="http://ui.fixture.test:8080/0.21.0/mctl.css">
+<link rel="stylesheet" href="http://ui.fixture.test:8080/0.21.0/site.css">
+<style>
+  .cb-toggle { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; appearance: none; }
+  .cb-label { display: none; flex: none; position: relative; z-index: 3; box-sizing: border-box;
+    width: 40px; height: 40px; margin-left: auto; cursor: pointer; color: var(--surface-fg); }
+  .cb-label::before, .cb-label::after { content: ''; position: absolute; left: 10px; right: 10px; top: 50%;
+    height: 2px; margin-top: -1px; background: currentColor; }
+  .cb-label::before { transform: translateY(-4px); }
+  .cb-label::after { transform: translateY(4px); }
+  .cb-label span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .cb-toggle:focus-visible + .cb-label { outline: 2px solid var(--focus-ring, currentColor); outline-offset: 2px; }
+  .mctl-site-nav a:focus-visible { outline: 2px solid var(--focus-ring, currentColor); outline-offset: 2px; }
+  .cb-scrim { display: none; }
+  @media (min-width: 768px) { .cb-toggle { display: none; } }
+  @media (max-width: 767px) {
+    .cb-label { display: inline-block; }
+    .mctl-site-nav { position: fixed; top: 0; right: 0; z-index: 2; box-sizing: border-box;
+      flex-direction: column; align-items: flex-start; gap: 20px; width: 70%; max-width: 300px; height: 100dvh;
+      padding: calc(var(--site-header-height) + 16px) 24px 24px; background: var(--surface-bg);
+      border-left: 1px solid var(--surface-line); visibility: hidden; transform: translateX(100%);
+      transition: transform var(--mctl-motion-duration-base, 200ms) ease, visibility 0s linear var(--mctl-motion-duration-base, 200ms); }
+    .cb-toggle:checked ~ .mctl-site-nav { visibility: visible; transform: translateX(0); transition-delay: 0s; }
+    .cb-toggle:checked ~ .cb-scrim { display: block; position: fixed; inset: 0; z-index: 1; background: var(--overlay-scrim, rgba(0, 0, 0, 0.4)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mctl-site-nav { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header id="site-header" class="mctl-site-header">
+  <div class="mctl-site-header__inner mctl-site-container">
+    <a class="mctl-site-brand" href="checkbox.html?r=home"><span class="mctl-site-brand__accent">m</span>ctl</a>
+    <input type="checkbox" id="nav-toggle" class="cb-toggle">
+    <label for="nav-toggle" class="cb-label"><span>Menu</span></label>
+    <nav id="site-nav" class="mctl-site-nav" aria-label="Primary">
+      <a href="checkbox.html?r=home" aria-current="page">Home</a>
+      <a href="checkbox.html?r=docs">Docs</a>
+      <a href="checkbox.html?r=pricing">Pricing</a>
+    </nav>
+    <label for="nav-toggle" class="cb-scrim" aria-hidden="true"></label>
+  </div>
+</header>
+<main id="main" class="mctl-site-container">
+  <h1>Checkbox header fixture</h1>
+  <p><a id="outside-link" href="checkbox.html?r=outside">Outside content link</a></p>
+</main>
+</body>
+</html>

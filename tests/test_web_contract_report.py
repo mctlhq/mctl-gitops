@@ -216,6 +216,15 @@ rc, res, _, _ = report([case("T-ST")], [], junit_text=
     '<testsuites><testsuite><testcase name="T-ST" status="skipped"/></testsuite></testsuites>')
 check("a status=skipped attribute is NOT-RUN with its reason", status_of(res, "T-ST") == "NOT-RUN"
       and res["results"][0]["reason"].startswith("skipped"), res)
+# Playwright's JUnit reporter carries the skip reason in <properties>, not on <skipped>
+rc, res, _, _ = report([case("T-PW")], [], junit_text=
+    '<testsuites><testsuite><testcase name="T-PW"><properties><property name="skip" value="breakpoint unknown '
+    'see https://mctl.ai/x?q=1"/></properties><skipped></skipped></testcase></testsuite></testsuites>')
+check("a Playwright skip reason is kept and sanitized", status_of(res, "T-PW") == "NOT-RUN"
+      and "breakpoint unknown" in res["results"][0]["reason"] and "q=1" not in res["results"][0]["reason"], res)
+for name in ("fixture-checkbox", "fixture-reference-wide", "fixture-broken"):
+    rc, res, _, err = report([case("T-FX", site=name)], [("T-FX", "pass", "")])
+    check(f"{name} is an accepted fixture site", rc == 0 and status_of(res, "T-FX") == "PASS", (rc, err))
 
 rc, res, _, _ = report([case("G-A", site="mctl-web"), case("G-B", site="mctl-web")],
                        [("G-A", "pass", ""), ("G-B", "fail", "x")], pins=pins_with(to_image))

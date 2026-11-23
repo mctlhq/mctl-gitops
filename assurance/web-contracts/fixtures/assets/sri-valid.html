@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRI valid</title>
+<!-- Valid sha384, crossorigin anonymous, ACAO star. TEST-ONLY fixture for mctl-gitops#2929. The integrity value was recomputed from the
+     pinned mctl-design archive (see manifest-0.21.0.test-only.json); the G1 case re-checks it. -->
+<link rel="stylesheet" href="http://ui.fixture.test:8080/0.21.0/site.css" integrity="sha384-XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr" crossorigin="anonymous">
+</head>
+<body>
+<header id="site-header" class="mctl-site-header"><div class="mctl-site-header__inner"><a class="mctl-site-brand" href="#home">fixture</a></div></header>
+<main><h1 id="readable">Readable without the sheet</h1><p>This text is plain HTML and must stay readable whether or not the stylesheet loads.</p></main>
+</body>
+</html>
