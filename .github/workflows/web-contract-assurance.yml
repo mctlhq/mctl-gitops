@@ -1,0 +1,65 @@
+name: web-contract-assurance
+
+# Preview assurance for the mctl-design web contracts (mctlhq/mctl-gitops#2929).
+# Advisory evidence only: this is NOT a required check and must not be added to
+# the main-protection ruleset. A green run proves the harness and the pinned
+# fixtures, plus whichever consumers pins.json marks `mode: image`; a consumer
+# still `not-run` is reported as NOT-RUN, never as passing.
+#
+# No secrets are used. The job runs untrusted-by-default browser code, so it
+# gets a read-only token and nothing else: pull_request (not
+# pull_request_target) means a PR from a fork also runs without secrets.
+
+on:
+  pull_request:
+    paths:
+      - 'assurance/web-contracts/**'
+      - 'tests/test_web_contract_report.py'
+      - '.github/workflows/web-contract-assurance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-contract-assurance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assurance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Unit tests of the fail-closed report
+        run: python3 tests/test_web_contract_report.py
+
+      # run.sh does its own pin check, catalogue check, host-side npm ci and
+      # image pulls BEFORE it isolates the network, then runs the browser with
+      # no egress. Its exit code is the verdict (0 ok, 1 FAIL, 2 control did not
+      # FAIL, 3 bad input or pin, 4 guard, 5 setup or incomplete run); the step
+      # fails on any non-zero code and the artifact is uploaded regardless.
+      - name: Isolated run and report
+        run: assurance/web-contracts/run.sh
+
+      - name: Step summary
+        if: always()
+        run: |
+          if [ -f assurance-out/matrix.md ]; then
+            cat assurance-out/matrix.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No matrix was produced: the run stopped before the report (see the step log)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload assurance output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-contract-assurance
+          path: assurance-out/
+          retention-days: 7
+          if-no-files-found: warn

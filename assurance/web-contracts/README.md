@@ -19,7 +19,8 @@ syncs nothing, and changes no consumer repository, CSP, Cloudflare or package pi
 | `tests/*.spec.ts`, `tests/guard.ts`, `playwright.config.ts`, `package.json`, `package-lock.json` | present: `@playwright/test` 1.64.1, `playwright-core` 1.64.1 and `@axe-core/playwright` 4.14.0, exact |
 | `run.sh` | present: isolated run, report, guard counters, cleanup by name |
 | `../../tests/test_web_contract_report.py` | present: fail-closed mapping tests (no browser) |
-| workflow, spike document, consumer promotion | NOT present yet (later PRs) |
+| `../../.github/workflows/web-contract-assurance.yml` | present: runs `run.sh` on PRs touching these paths and on demand; read-only token, no secrets, 7-day artifact, not a required check |
+| spike document, consumer promotion | NOT present yet (later PRs) |
 
 ## Reproduce
 
