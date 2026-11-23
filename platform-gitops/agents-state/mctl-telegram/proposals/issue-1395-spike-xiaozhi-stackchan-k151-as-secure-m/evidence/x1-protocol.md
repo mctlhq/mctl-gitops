@@ -25,6 +25,8 @@ Important upstream URLs:
 - https://github.com/m5stack/StackChan/tree/28b9f0c8bd6acd81cb3c70f1a93c3e373b39d400
 - https://github.com/xinnan-tech/xiaozhi-esp32-server/tree/3219a2803906d71e6613d1f9de6af2e41109ee14
 
+B2 hardening tracker: https://github.com/mctlhq/mctl-telegram/issues/1411.
+
 ### Explicit unknowns (do not claim resolved)
 
 1. K151 **factory firmware** URL override and cloud-free initial activation without reflashing: `m5stack/StackChan/firmware/main/Kconfig.projbuild:1-20` confirms the StackChan source build's default OTA endpoint is the vendor URL and is build-configurable, **not** proof that a retail preloaded device exposes reconfiguration without a flash.
