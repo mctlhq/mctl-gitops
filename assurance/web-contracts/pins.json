@@ -4,6 +4,7 @@
   "playwright_image": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
   "playwright_test_version": "1.64.1",
   "nginx_image": "docker.io/nginx/nginx-unprivileged:1.31.9-alpine@sha256:60214a103e6f38e953ff957f34b1f2e97a9db801ab2df3821da955d0fe6cadd6",
+  "postgres_image": "docker.io/library/postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f",
   "mctl_design": {
     "commit": "6d82a6b239365213d6859f2794c2449af7dd4e1f",
     "css_version": "0.21.0",
@@ -165,7 +166,7 @@
     {
       "name": "mctl-academy",
       "gitops_tag": "0.1.101",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
       "source_commit": null,
       "breakpoint": 981,
       "route_classes": [
@@ -174,10 +175,35 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image refuses to start without DATABASE_URL (it will not run on an in-memory store in production), and a database service is not part of this harness; promoted only if a decision is made to provide one (observed by starting the pinned image locally, not in CI)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
-      "observed_image_digest_resolved_for_tag": "0.1.101"
+      "observed_image_digest_resolved_for_tag": "0.1.101",
+      "breakpoint_note": "observed in the consumer source (client/src/components/AppNav.vue: the header carries mctl-site-header--drawer-wide and the component reads matchMedia('(min-width: 981px)')); the contract itself does not state it",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the HTML served by the pinned image (read locally from the running image); aborted, never answered. Further entries are added only after a run shows them.",
+      "env": {
+        "BETTER_AUTH_SECRET": "dummydummydummydummydummydummydummydummy"
+      },
+      "env_note": "dummy value only. The image refuses to start in production without BETTER_AUTH_SECRET and without a database it can reach over TLS; the database is the sidecar below, and DATABASE_URL is built by run.sh for it, never written here. Found by starting the pinned image locally against a Postgres container.",
+      "sidecar": {
+        "postgres": {
+          "roles": [
+            "academy_readonly"
+          ]
+        }
+      },
+      "sidecar_note": "the app applies its own migrations at boot, and one of them needs the role academy_readonly to exist (in production a managed role provides it; the app's own CI creates it by hand).",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a.app-nav-link",
+        "toggle": ".mctl-site-burger",
+        "outside": "main :is(a[href], button):visible >> nth=0"
+      },
+      "selectors_note": "read from the consumer's header component (client/src/components/AppNav.vue), not from served HTML, because the page is a client-rendered app: burger .mctl-site-burger follows the nav in DOM order; only the top-level app-nav-link links are listed. outside is the first visible link or button in main, chosen without a keyboard walk and corrected after the first run if it is wrong."
     },
     {
       "name": "mctl-alice",

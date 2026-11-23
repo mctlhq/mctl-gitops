@@ -276,3 +276,16 @@ directory again (`/tokens.css%2F`), and `.json`, `.html`, `.php` and extensionle
 - HDR-7 is the same catalogued gap for `mctl-alice` and `seerrsense` as for `mctl-web` (the toggle follows the panel in
   DOM order in all three, mctl-design#233). `mctl-telegram`'s checkbox header carries the two checkbox gaps (HDR-4 Enter,
   HDR-11 state after resize, mctl-design#234).
+
+## A database for a consumer that needs one (`sidecar`)
+
+Some consumer images refuse to start in production without a database (mctl-academy: it will not run on an in-memory
+store). `sites[].sidecar` is `{"postgres": {"roles": [...]}}`: `run.sh` starts a disposable Postgres on the same isolated
+network from the digest-pinned `postgres_image`, with a tmpfs instead of a volume, a read-only root, all capabilities
+dropped, throw-away credentials known only to that run, and TLS with a certificate generated inside the container (an app
+that always connects with SSL in production needs it). It then creates the listed roles by name, as the app's own CI
+does for a role that production provides, and passes the connection string to the consumer as `DATABASE_URL`. No SQL and
+no connection string is read from `pins.json`: only role names matching `[a-z_][a-z0-9_]*`, at most four. The app applies
+its own migrations at boot. If the sidecar does not become ready, or a role cannot be created, the site is NOT-RUN with
+that reason and the consumer is not started. The sidecar container is named `<prefix>-<site>-db`, carries the run label,
+and is removed with the others at the end of the run.

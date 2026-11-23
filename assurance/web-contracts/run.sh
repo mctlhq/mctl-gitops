@@ -93,6 +93,10 @@ python3 "$HERE/report/gen_cases.py" --check || exit 3
 
 PW_IMAGE=$(pin "d['playwright_image']")
 NGINX_IMAGE=$(pin "d['nginx_image']")
+POSTGRES_IMAGE=$(pin "d['postgres_image']")
+# Sites that need a database: 'name role role ...' per line (pins.json sites[].sidecar.postgres.roles, format-checked).
+PG_LINES=$(pin "'\n'.join(s['name']+' '+' '.join(s['sidecar']['postgres'].get('roles',[])) for s in d['sites'] if s['mode']=='image' and s.get('sidecar',{}).get('postgres'))")
+pg_roles_for() { while read -r n roles; do [ "$n" = "$1" ] && { printf '%s\n' "$roles"; return 0; }; done <<<"$PG_LINES"; return 1; }
 COMMIT=$(pin "d['mctl_design']['commit']")
 CONSUMER_LINES=$(pin "'\n'.join(s['name']+' '+s['image'] for s in d['sites'] if s['mode']=='image')")
 # Declared dummy environment and writable tmpfs for one site (pins.json sites[].env / sites[].tmpfs, format-checked
@@ -139,6 +143,7 @@ else
   ensure_image() { docker image inspect "$1" >/dev/null 2>&1 || docker pull -q "$1" >/dev/null || die "cannot get image $1"; }
   ensure_image "$PW_IMAGE"
   ensure_image "$NGINX_IMAGE"
+  [ -n "$PG_LINES" ] && ensure_image "$POSTGRES_IMAGE"
   while read -r name image; do [ -n "${name:-}" ] && ensure_image "$image"; done <<<"$CONSUMER_LINES"
 fi
 
@@ -153,7 +158,7 @@ fi
 if [ "$DRY" = 0 ]; then
   # a pre-existing container with one of our names is never touched: refuse before creating anything
   names=("$ORIGIN" "$RUNNER" "$PREFIX-probe")
-  while read -r name image; do [ -n "${name:-}" ] && names+=("$PREFIX-$name"); done <<<"$CONSUMER_LINES"
+  while read -r name image; do [ -n "${name:-}" ] && names+=("$PREFIX-$name" "$PREFIX-$name-db"); done <<<"$CONSUMER_LINES"
   for n in "${names[@]}"; do
     if docker container inspect "$n" >/dev/null 2>&1; then
       die "container $n already exists; refusing to touch it (set WCA_PREFIX to a free prefix)"
@@ -197,12 +202,47 @@ while read -r name image; do
   CREATED_CONTAINERS+=("$c" "$PREFIX-probe")
   EXTRA=()
   while IFS= read -r a; do [ -n "$a" ] && EXTRA+=("$a"); done <<<"$(site_extra_args "$name")"
+  # A site that refuses to start without a database gets a disposable Postgres on the same isolated network: the
+  # pinned image, a tmpfs instead of a volume, throw-away credentials known only to this run, and TLS with a
+  # certificate generated inside the container (some apps always connect with SSL in production). The roles the
+  # app's own migrations expect are created before it starts, as the app's CI does.
+  PGREASON=""
+  if roles=$(pg_roles_for "$name"); then
+    pgc=$PREFIX-$name-db
+    pgalias=$alias-db
+    CREATED_CONTAINERS+=("$pgc")
+    dk run -d --name "$pgc" --network "$NET" --network-alias "$pgalias" --pull=never --label "wca.run=$RUN_ID" \
+      --user 999:999 --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 256m \
+      --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,uid=999,gid=999,mode=700,size=128m \
+      --tmpfs /var/run/postgresql:rw,nosuid,nodev,uid=999,gid=999,size=8m \
+      --tmpfs /tmp:rw,nosuid,nodev,uid=999,gid=999,size=32m \
+      -e POSTGRES_USER=wca -e POSTGRES_PASSWORD=wca -e POSTGRES_DB=wca --entrypoint sh "$POSTGRES_IMAGE" -c \
+      'mkdir -p /tmp/pg && openssl req -new -x509 -days 1 -nodes -subj /CN=pg -keyout /tmp/pg/server.key -out /tmp/pg/server.crt 2>/dev/null && chmod 600 /tmp/pg/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/pg/server.crt -c ssl_key_file=/tmp/pg/server.key' >/dev/null || true
+    if [ "$DRY" = 0 ]; then
+      PGREASON="database sidecar did not become ready within 60 s"
+      for _ in $(seq 1 30); do
+        if [ "$(docker inspect -f '{{.State.Running}}' "$pgc" 2>/dev/null)" != "true" ]; then PGREASON="database sidecar exited"; break; fi
+        if docker exec "$pgc" pg_isready -U wca -d wca >/dev/null 2>&1; then PGREASON=""; break; fi
+        sleep 2
+      done
+      if [ -z "$PGREASON" ]; then
+        for r in $roles; do
+          docker exec "$pgc" psql -U wca -d wca -v ON_ERROR_STOP=1 -qc "CREATE ROLE \"$r\" LOGIN;" >/dev/null 2>&1 || PGREASON="database sidecar: could not create role $r"
+        done
+      fi
+    fi
+    EXTRA+=(-e "DATABASE_URL=postgres://wca:wca@$pgalias:5432/wca")
+  fi
   # the site's declared dummy environment comes after the defaults; PORT is reserved, so it cannot override it
-  dk run -d --name "$c" --network "$NET" --network-alias "$alias" "${HARDEN[@]}" --memory 384m \
-    -e NODE_ENV=production -e PORT=8080 -e OAUTH_CLIENT_ID=dummy -e OAUTH_CLIENT_SECRET=dummy \
-    -e TELEGRAM_BOT_TOKEN=dummy -e SESSION_SECRET=dummy ${EXTRA[@]+"${EXTRA[@]}"} "$image" >/dev/null || true
+  if [ -z "$PGREASON" ]; then
+    dk run -d --name "$c" --network "$NET" --network-alias "$alias" "${HARDEN[@]}" --memory 384m \
+      -e NODE_ENV=production -e PORT=8080 -e OAUTH_CLIENT_ID=dummy -e OAUTH_CLIENT_SECRET=dummy \
+      -e TELEGRAM_BOT_TOKEN=dummy -e SESSION_SECRET=dummy ${EXTRA[@]+"${EXTRA[@]}"} "$image" >/dev/null || true
+  fi
   healthy=false; reason="did not answer on port 8080 within 60 s"
-  if [ "$DRY" = 0 ]; then
+  if [ -n "$PGREASON" ]; then
+    reason="$PGREASON"
+  elif [ "$DRY" = 0 ]; then
     for _ in $(seq 1 20); do
       if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != "true" ]; then reason="container exited"; break; fi
       if docker run --rm --name "$PREFIX-probe" --network "$NET" "${HARDEN[@]}" "$PW_IMAGE" node -e \
