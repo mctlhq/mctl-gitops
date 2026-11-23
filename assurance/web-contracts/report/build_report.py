@@ -40,7 +40,7 @@ SITES = ("mctl-web", "mctl-docs", "mctl-telegram", "mctl-academy", "mctl-alice",
 MODES = ("image", "fixture-only", "not-run")
 SHEETS = ("mctl.css", "global.css", "prose.css", "site.css")
 # non-consumer sites that cases/controls may name: reference targets, never a consumer row
-FIXTURE_SITES = ("fixture-reference", "fixture-reference-wide", "fixture-checkbox", "fixture-broken")
+FIXTURE_SITES = ("fixture-reference", "fixture-reference-wide", "fixture-checkbox", "fixture-reset", "fixture-broken")
 FIXTURE_HOSTS = ("ui.fixture.test", "site.fixture.test")  # allowlist lives here, not in the checked file
 # fullmatch everywhere: "$" would accept a trailing newline, and \d accepts non-ASCII digits
 DIGEST_REF = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
