@@ -222,7 +222,9 @@ while read -r name image; do
       PGREASON="database sidecar did not become ready within 60 s"
       for _ in $(seq 1 30); do
         if [ "$(docker inspect -f '{{.State.Running}}' "$pgc" 2>/dev/null)" != "true" ]; then PGREASON="database sidecar exited"; break; fi
-        if docker exec "$pgc" pg_isready -U wca -d wca >/dev/null 2>&1; then PGREASON=""; break; fi
+        # TCP, not the unix socket: the official entrypoint first runs a temporary init server that listens on the
+        # socket only, so a socket probe can report ready before the real TLS server exists
+        if docker exec "$pgc" pg_isready -h 127.0.0.1 -U wca -d wca >/dev/null 2>&1; then PGREASON=""; break; fi
         sleep 2
       done
       if [ -z "$PGREASON" ]; then
