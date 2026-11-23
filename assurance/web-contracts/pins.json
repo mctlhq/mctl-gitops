@@ -72,7 +72,7 @@
       "gitops_tag": "7.24.0",
       "image": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
       "source_commit": null,
-      "breakpoint": null,
+      "breakpoint": 981,
       "route_classes": [
         "landing",
         "content",
@@ -83,7 +83,15 @@
       "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
       "observed_image_digest_resolved_for_tag": "7.24.0",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+      "breakpoint_note": "observed in consumer source at gitops tag 7.24.0 (app/components/AppHeader.vue: useMediaQuery('(min-width: 981px)')); the contract itself does not state it",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": ".mctl-site-burger",
+        "outside": "main .hero-block__actions button"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (CI capture, run 45147133024): outside is the first focusable element after the burger in DOM order, the hero primary button"
     },
     {
       "name": "mctl-docs",
