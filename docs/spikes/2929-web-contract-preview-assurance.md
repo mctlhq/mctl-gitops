@@ -71,6 +71,22 @@ requests were aborted, which the report never counts as a compliance claim.
 `B-1` is one pixel below the consumer's breakpoint and `B` is the breakpoint.
 Cells that are blank were not catalogued for that viewport.
 
+### Six-site matrix (main run `45242480598`, head `85b8235eb`)
+
+| Site | PASS | FAIL | NOT-RUN | EXCEPTION-PENDING |
+|---|---|---|---|---|
+| mctl-web | 29 | 4 | 6 | 0 |
+| mctl-docs | 19 | 18 | 2 | 0 |
+| mctl-telegram | 20 | 6 | 19 | 8 |
+| mctl-academy | 19 | 18 | 2 | 0 |
+| mctl-alice | 21 | 12 | 20 | 0 |
+| seerrsense | 29 | 8 | 16 | 0 |
+
+66 consumer findings, 0 harness failures, no compliance claim for any site
+(every site had PASS cases that ran with declared blocks). The run is a manual
+dispatch on `main`; the workflow itself runs on pull requests and on demand,
+not on pushes to `main`.
+
 ## 3. Findings about the consumer
 
 Both are evidence about `mctl-web` at tag `7.24.0` in a preview run, not a
@@ -96,7 +112,7 @@ reference fixtures PASS, negative controls FAIL).
 | HDR-7 on `mctl-web` | NOT-RUN, "observed gap, no exception registered" | The toggle follows the panel in DOM order, as it does in the reference markup of the contract itself. Filed as mctl-design#233. The mechanism converts the failure of that one assertion into NOT-RUN and nothing else. |
 | HDR-14 on `mctl-web` | NOT-RUN | No in-app route link is declared: the header holds section anchors, and the harness never guesses a route from an href. A site declares `selectors.routes` or the step is not run. |
 | HDR-4 and HDR-11 for checkbox headers | open question | The contract's behavioural equivalents for a CSS checkbox header may not be expressible; whether to file a mctl-design issue is pending the owner. |
-| `mctl-docs`, `mctl-telegram`, `mctl-academy`, `mctl-alice`, `seerrsense` | NOT-RUN, every case | Consumer image not yet exercised in CI; each is promoted after a healthy start on the internal network. |
+| `mctl-docs`, `mctl-telegram`, `mctl-academy`, `mctl-alice`, `seerrsense` | promoted to `mode: image` | Each starts healthy on the internal network and runs the header cases; per-site results are in the six-site table of section 2. `mctl-academy` needs a disposable Postgres sidecar and one declared own-host block (section 5). |
 
 No exception has been registered or signed off for any site. A site that
 needs one needs an explicit entry and sign-off, not a quiet NOT-RUN.
@@ -187,8 +203,7 @@ separate issues.
 
 | Item | Owner |
 |---|---|
-| Grant `mctl-gitops` Actions access to the `mctl-docs` package, then promote `mctl-docs` | repo owner (package settings) |
-| Decide promotion of `mctl-telegram`, `mctl-academy`, `mctl-alice` (may need a database or environment) and `seerrsense` (listens on 8787 while the run forces `PORT=8080`) | owner, per site |
+| Triage the per-site consumer findings in the six-site table (one issue per site, only when the owner opens it); `mctl-academy` `outside` selector is a first guess and may need correcting | owner, per site |
 | HDR-7 vs reference markup (mctl-design#233) | mctl-design |
 | Whether to file a mctl-design issue for the checkbox-header gap (HDR-4, HDR-11) | owner |
 | HDR-12 and HDR-16 in `mctl-web` | `mctl-web`, only when the owner opens an issue |
