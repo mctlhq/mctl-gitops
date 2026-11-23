@@ -28,7 +28,7 @@ It matters because ADR 0011 already reserves the `scheduled` and `event` trigger
 
 Baseline and evidence:
 
-- WHEN the spike report is produced THE SYSTEM SHALL pin the mctl-telegram commit (`9877b1d68ef7d2d969992023bd5fb49fe7835db6`) and the mctl-gitops commit (`876a44144760e4bf9ca181b6f104cec06dc3fc7a`) it was measured against.
+- WHEN the report is produced THE SYSTEM SHALL cite the current 2026-11-23 pinned evidence from design.md, explicitly preserving historical 2026-11-22 pins and separating GitOps desired, live Argo and R1–R6 user results.
 - WHEN the report states a capability THE SYSTEM SHALL label it VERIFIED_CODE, VERIFIED_DEPLOYMENT, DESIGNED_ONLY or UNKNOWN, and cite the file, test, gitops path or tool call behind the label.
 - IF a source could not be read THEN THE SYSTEM SHALL label the claim UNKNOWN, never absent or disabled.
 - THE SYSTEM SHALL include a relationship diagram covering four surfaces: the PA (`internal/pa`), the Assistant Catalog / `AssistantInstall` (`internal/assistant`, `internal/assistantinstall`), the automation control plane (mctlhq/.github#318) and `mctl-agents`.
@@ -44,30 +44,20 @@ Product model:
 
 Architecture and contract:
 
-- THE SYSTEM SHALL compare PA_EXTENSION, CATALOG_COMPOSER, BOUNDED_HYBRID and DEFER. For each it SHALL give dependency owners, build-vs-reuse evidence and a recommendation.
-- THE SYSTEM SHALL propose a versioned workflow spec and authority contract, marked "proposed, not production". It SHALL bind to:
-  - the principal;
-  - the consent version;
-  - connection ids and `authority_revision`;
-  - the pinned tool names, schema hashes and description hashes;
-  - the selected peers;
-  - the schedule and time zone;
-  - the delivery recipient (the principal only);
-  - the budget ceilings;
-  - the spec digest.
-- WHILE a workflow is active THE SYSTEM SHALL revalidate, before every execution and every dispatch, everything an interactive run revalidates today:
-  - the `PA_*` switches;
-  - the per-principal disable and consent;
-  - the connection state and revision;
-  - the catalog pin and a fresh `tools/list`;
-  - the budget reservation;
-  - the audit append.
-- IF any binding no longer matches THEN THE SYSTEM SHALL refuse the run, record a refusal receipt and notify the principal. It SHALL NOT run with the current values.
-- WHEN a trigger fires more than once for the same occurrence THE SYSTEM SHALL produce at most one execution for that occurrence, using an idempotency key derived from the workflow id, the version and the occurrence instant.
-- IF a retrieval fails THEN THE SYSTEM SHALL report the brief as incomplete. A failed read SHALL NOT be counted as "no matching messages".
-- IF the outcome of a delivery is unknown THEN THE SYSTEM SHALL record `outcome_unknown` and SHALL NOT resend automatically.
-- WHILE any tool output is in a run THE SYSTEM SHALL treat the run as tainted (threat model T5). A tainted workflow run SHALL have no write path, and the scheduler-facing contract SHALL carry no write tool.
-- THE SYSTEM SHALL map scheduling to the canonical trigger authority of mctlhq/.github#318 (Temporal). It SHALL NOT propose an in-process scheduler in mctl-telegram, a new agent runtime, a new MCP auth layer or a memory database separate from the #1325 design.
+### Canonical automation authority (P1-01 — required)
+The approved research decision [mctlhq/.github#318](https://github.com/mctlhq/.github/issues/318) is **EXTEND_MCTL_API**; planning epic [#322](https://github.com/mctlhq/.github/issues/322) and [mctl-api automation/v1](https://github.com/mctlhq/mctl-api/blob/3233f6c0a00437f73021570d8a16253d2bcd524b/docs/automation-contract.md) fix ownership. mctl-api alone owns standing **AutomationDefinition `au_`**, owner/tenant, trigger, lifecycle and Temporal reconciliation; every occurrence maps to one `wi_ → xr_ → we_`. **AutomationRun is a query VIEW**, not a new PA-owned `pa_workflow_runs` table. PA owns Telegram-verified draft UX, `pa-data-flow/v1` consent, selected peers, PA connection revisions and executor/outbox adapter. No second PA `pa_workflows` standing-intent authority, scheduler, memory DB or independent run ledger. The automation contract is **contract-only**, not deployed implementation; #322 and its owner gates remain required.
+
+A proposed `PAWorkflowDraft/v1alpha1` contains user-originated intent, selected read-only peers, PA connection IDs/`authority_revision`, consent, pinned tool schema/description hashes, budget, schedule/time zone suggestion, principal-only PA-bot delivery and immutable draft digest; a skill is only non-authoritative instructions. A verified Telegram callback authorizes *requesting* canonical activation. The future authenticated mctl-api bridge uses a registered server-side automation template and verified `SurfaceIdentityLink`/PA principal proof; neither model nor client controls `au_`, owner/tenant, credentials or Temporal workflow type. No PA token/raw private chat may leak into Temporal histories.
+
+### Canonical occurrence / replay (P1-02 — required)
+Use [mctl-api occurrence.go:74–101](https://github.com/mctlhq/mctl-api/blob/3233f6c0a00437f73021570d8a16253d2bcd524b/internal/automation/contract/occurrence.go#L74-L101): domain-separated length-prefixed `OccurrenceKey(au_id, trigger_kind, source)`; source is scheduled UTC RFC3339Nano instant or authenticated event producer/type/stable event ID. **Definition version MUST NOT be in the deduplication key** (otherwise same fire replayed across edits executes twice). Snapshot admitted version separately. Claim `(tenant,au_id,occurrence_key)` durably; retain a tombstone after WorkItem cleanup; duplicate yields original `wi_` and `replayed:true`, with no second reservation, model execution or delivery, while conflicting reuse fails with typed 409. Durable claim is a future `automation-api-store` gate, not proof of live behavior.
+
+### Scheduled identity, authority and in-flight semantics (P2)
+`internal/pa/context.go` currently accepts **only NewInteractive(VerifiedUpdate)** and requires a conversation ID/budget; `pa_jobs` keys interactive Bot `UpdateID`; conversations have 24h TTL. An authenticated future canonical occurrence **cannot impersonate** an interactive update or reuse its expired conversation. Specify a server-verified principal bridge, per-occurrence bounded scheduled context, fresh ledger hold and principal-only PA Bot API outbox with `outcome_unknown` no-blind-resend handling; all are DESIGNED_ONLY.
+
+At fire time **mctl-api** rechecks owner/tenant identity, automation state/version, policy, usage authority and budget. At every PA tool dispatch and outbound delivery **mctl-telegram** independently rechecks consent, principal disable, `PA_*` flags, connection `authority_revision`, token scopes, tool pin/catalog drift, taint, budget and audit, failing closed. Editing a definition makes a new version; an already admitted old-version read-only run may finish only while its unchanged grants remain valid. **Pause, revoke, withdraw consent, disconnect, principal disable, schema drift or authority-revision change must fence the NEXT DISPATCH AND SEND even mid-run**. Neither a schedule, skill nor memory item grants tool authority. Failed read is `incomplete`, not a successful empty result.
+
+**Recommendation:** BOUNDED_HYBRID means PA drafting/consent/delivery adapter over the **already decided** mctl-api control plane; **DEFER** Phase-4 runtime implementation. No new scheduler, OAuth layer, PA execution store or alternate assistant.
 
 Experiment and handoff:
 
@@ -94,16 +84,13 @@ Experiment and handoff:
 
 - Matt Pocock "VECTOR": the primary material (https://x.com/mattpocockuk/status/2123810087361810663) was not fetched in this run. Its claims and the acronym's meaning are UNKNOWN and must be verified from the original source before the report cites them.
 - "Unanswered" semantics: `telegram.Message` (`internal/telegram/messages.go`) exposes `id`, `peer`, `from`, `text`, `date` and media. It has no outgoing flag and no reply-to id, and `get_unread_messages` is not in the PA pin. Unread is not the same as unanswered. Should the pilot redefine the job as "messages addressed to me since my last message in each selected chat", or does it need a pin change for a reply-to field, which requires a reviewed catalog PR and a tg change?
-- The trigger authority contract of mctlhq/.github#318 (Temporal schedule ownership, delivery semantics, cross-repo signal into mctl-telegram) was not readable from this clone. It is UNKNOWN.
-- Phase 1 evidence (refreshed 2026-11-23): production GitOps has no PA variables; preview HAS configured PA variables but PA_ENABLED=false, PA_EXTERNAL_TOOLS_ENABLED=false, PA_SERVER_TG_ENABLED=false and PA_WRITES_ENABLED=false. Dedicated agent-worker-pa-preview has replicaCount 0. S1 manifest does not currently show gap entries, but #1317 and R1-R6 #1319 are open; no user-exercised PA run is verified.
+- The #318 decision and mctl-api automation/v1 contract ARE AVAILABLE; only automation store/Temporal runtime/PA identity bridge implementation and live outcomes remain UNKNOWN. #322 owns this work, not PA.
+- Phase 1 evidence is updated below: read-only PA preview flags and worker now on in GitOps, three services Healthy/Synced in Argo, but user R1–R6 results and Phase-4 automation execution are unverified.
 - Whether the Assistant Catalog `Definition` / `Install` split (`internal/assistant/assistant.go`) should host PA workflow definitions needs a #1002/#1280 owner view. This spike only recommends a narrow adapter.
 - The delivery identity for the brief is the PA bot (Bot API). Can the brief be sent outside the 24-hour conversation context, given that Bot API private chats need a prior `/start`? Answer: yes, once the principal has started the bot. Note, though, that the PA output path (`internal/pa/output`) is today only reached from a reply to a job.
 
-## Revision 2: personal agent skills, routines and product benchmark (2026-11-23)
+## Revision 3: research evidence and decisions (2026-11-23)
 
-- WHEN evaluating the user journey THE SYSTEM SHALL compare Grok Bot, Hermes Agent, dots, Gemini and MCTL PA, separating source-backed vendor capabilities from VERIFIED_CODE and deployed/flagged status. Grok Bot product reference: https://docs.x.ai/grok-bot/skills-routines-and-automations ; Hermes: https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md . Reference existing benchmark owner #1379; do not duplicate it.
-- THE SYSTEM SHALL distinguish three artifacts: (1) reusable **skill/template** with instructions, digest, provenance and safe success checks but NO OAuth authority; (2) **workflow instance** with selected read-only source IDs, approved schedule, delivery bound to principal, consent and pinned authorities; (3) **personal memory** with inspect/edit/delete, provenance and retention, owned by Phase 4 #1325. A user correction can SUGGEST a new skill version but cannot self-activate, acquire scopes or bypass PA approval.
-- THE SYSTEM SHALL design two simulated journeys: interactive read-only Telegram question with one successful tool call; and Daily Brief draft -> explicit source selection -> versioned skill/spec -> synthetic dry-run -> activation confirmation -> deterministic occurrence -> receipts -> pause/edit/revoke. Scheduled execution remains DESIGNED_ONLY and HOLD.
-- THE SYSTEM SHALL prohibit treating unread messages as unanswered; tool errors MUST be incomplete/error, not empty result. Negative tests include stale client authority_revision, revoked consent, tainted source prompt injection, changing catalog pin, duplicate schedule event, wrong recipient, DST, budget exhaustion and disconnect during a run.
-- THE SYSTEM SHALL distinguish third-party **Grok (grok.com)** E2E already OWNER_OBSERVED_WORKS on 2026-11-22 (#1381/#1393) from distinct Grok Bot product attribution UNKNOWN. These are MCP distribution facts, NOT evidence of a deployed MCTL PA or working scheduled workflows. An earlier test using an MCTL admin account inherited admin scopes and does not prove a read-only safety gate.
-- The owner decision remains BOUNDED_HYBRID for research / DEFER for implementation until Phase 1 exit and #318 trigger-contract evidence. Metrics: D1 first useful task, activation opt-in, D7 successful repeat, task success/eligible occurrence, costs, denial/approval and revocation, with non-invented measurement definitions. All Phase 2-4 HOLDs remain.
+**Current pinned evidence (2026-11-23):** mctl-telegram `ecbce7732fc2915a2a72dc21f1d1d2e9f8713d73`, mctl-gitops `869582d33b66f5eb36de29ff9b52c487f2631ed4`, mctl-api `3233f6c0a00437f73021570d8a16253d2bcd524b`, .github `60e9db522f18299e73dac23fffedfe5b4ce81930`. GitOps preview: image `main-6623542`, `PA_ENABLED=true`, `PA_EXTERNAL_TOOLS_ENABLED=true`, `PA_SERVER_TG_ENABLED=true`, `PA_WRITES_ENABLED=false`, `PA_SERVER_ALICE_ENABLED=false`, PA worker `replicaCount=1`; production `0.145.0`, no PA flags. Read-only live Argo checks 18:01–18:03Z were Healthy/Synced for these three services; this does not prove PA R1–R6 user success. #1317/#1319 remain open; S1 manifest body has no gaps. Older `9877b1d/876a441` and preview-disabled states are HISTORICAL, not current.
+
+A Grok (grok.com) owner-observed OAuth+MCP connection on 2026-11-22 (#1381/#1393) is NOT a Grok Bot build attribution or MCTL PA workflow success. Grok Bot's saved skill→routine UX, Hermes skill management, dots proactive work and Gemini scheduling are vendor/product patterns (sources and dated quotes in #1379), not existing PA permissions or deployments. Separate non-authoritative skill/template and future inspectable memory from PAWorkflowDraft and canonical mctl-api `au_`. Keep #1325 Phase-4 and #1048 connector security gates. Synthetic Daily Brief must test cross-version replay, event-source identity, claim crash/tombstones, wrong/expired principal link, 24h conversation expiry, revoked consent mid-run, tool pin drift, prompt injection, unknown send outcome, budget failure, DST and cross-tenant authority. Research-only, no implementer or rollout.
