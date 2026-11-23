@@ -37,7 +37,8 @@ const HEIGHT = 800;
 // is only meaningful for a site that has route links.
 interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string; landmark?: string }
 class NoRouteLinks extends Error {}
-interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel }
+// after: the selectors of the viewport a narrow case grows into (HDR-11), when they differ per viewport
+interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel; after?: Sel }
 
 const BUTTON_SEL: Sel = {
   header: '#site-header', nav: '#site-nav', links: '#site-nav a', routes: '#site-nav a', toggle: '.mctl-site-burger',
@@ -293,8 +294,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     const p = await load(wca, t, width);
     await openPanel(p, t, width);
     await p.setViewportSize({ width: t.bp, height: HEIGHT });
-    await expect(nav(p, t)).toBeVisible();
-    expect(await nav(p, t).evaluate((e) => getComputedStyle(e).position), 'inline nav, not the fixed drawer').not.toBe('fixed');
+    // past B the inline navigation may be a different element from the narrow panel (selectors.wide)
+    const wideNav = p.locator((t.after ?? t.sel).nav);
+    await expect(wideNav).toBeVisible();
+    expect(await wideNav.evaluate((e) => getComputedStyle(e).position), 'inline nav, not the fixed drawer').not.toBe('fixed');
     await expect(p.locator(t.sel.clickToggle)).toBeHidden();
     // the checkbox's :checked state cannot be cleared by CSS alone: that, and the panel reopening on
     // return to narrow, are the two observations the HDR-11 known_gap describes
@@ -400,7 +403,9 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   16: async ({ wca, t, width }) => {
     const p = await load(wca, t, width, { javaScript: false });
     const count = await p.locator(t.sel.links).count();
-    expect(count).toBeGreaterThan(0);
+    // a panel that script renders on open has no links in the DOM at all without JavaScript: the contract's
+    // "links stay reachable" is then not met, and the message says why instead of a bare count
+    expect(count, 'no panel link exists in the page without JavaScript').toBeGreaterThan(0);
     const ctl = p.locator(t.sel.clickToggle);
     const reach = async () => {
       const bad: string[] = [];
@@ -453,18 +458,21 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expect
   if (!st) return { skip: 'consumer status unknown (not observed): run.sh recorded nothing for this site' };
   if (!st.healthy || !st.url) return { skip: `image did not start: ${sanitize(st.reason || 'no reason recorded')}` };
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
-  const s = site.selectors as Record<string, string>;
+  // top-level selectors are strings; narrow and wide, when declared, are objects of strings
+  const s = site.selectors as Record<string, any>;
   // a CSS checkbox header declares kind 'checkbox' and the element a user clicks (the label) as click_toggle;
   // the default stays a native button, where the toggle is also what is clicked
   const kind = s.kind === 'checkbox' ? 'checkbox' : 'button';
   // A header whose markup differs by viewport (a framework with an inline menu on wide and a separate panel on
   // narrow) declares selectors.narrow and selectors.wide; nav, links and landmark are read from the one matching
   // the case's viewport, falling back to the top-level selectors.
-  const per = ((vp === 'B-1' || vp === '375') ? site.selectors.narrow : site.selectors.wide) as Record<string, string> | undefined;
-  const pick = (k: string): string => per?.[k] ?? s[k];
-  return { t: { url: st.url, bp: site.breakpoint as number, kind,
-    sel: { header: s.header, nav: pick('nav'), links: pick('links'), routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside,
-           landmark: per?.landmark ?? s.landmark } }, vp,
+  const isNarrow = vp === 'B-1' || vp === '375';
+  const build = (per: Record<string, string> | undefined): Sel => ({
+    header: s.header, nav: per?.nav ?? s.nav, links: per?.links ?? s.links, routes: s.routes, toggle: s.toggle,
+    clickToggle: s.click_toggle ?? s.toggle, outside: s.outside, landmark: per?.landmark ?? s.landmark });
+  const sel = build(isNarrow ? s.narrow : s.wide);
+  const after = isNarrow && s.wide ? build(s.wide) : undefined;
+  return { t: { url: st.url, bp: site.breakpoint as number, kind, sel, after }, vp,
     expected: site.expected_blocked ?? [] };
 }
 
