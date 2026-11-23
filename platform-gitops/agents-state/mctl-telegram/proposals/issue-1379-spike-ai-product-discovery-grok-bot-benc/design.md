@@ -107,7 +107,7 @@ These are summaries from one fetch each. Task 2 re-reads every page and records 
   - access to the user's personal Telegram chats is not mentioned.
 - Not fetched yet: `town.com/docs`, `town.com/product`, `docs.x.ai/grok-bot/skills-routines-and-automations`, and the Grok Bot security, pricing and FAQ pages. Task 2 fetches them, or records them as `UNKNOWN`.
 
-### Deployed state checked
+### Deployed state checked (HISTORICAL 2026-11-21 baseline; superseded by Revision 3 for PA flags and current image tags)
 
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml` (production `tg`, gitops `a967430`):
   - image `0.141.0`;
