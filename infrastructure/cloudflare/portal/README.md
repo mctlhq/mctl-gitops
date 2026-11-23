@@ -35,7 +35,7 @@ exists to stand in for it (#1382).
 
 | Resource | Managed fields | `ignore_changes` | Write-only / `interactive-secret-bootstrap` | Runtime state excluded |
 | --- | --- | --- | --- | --- |
-| `cloudflare_zero_trust_access_ai_controls_mcp_portal.mcp` (`mcp-portal.tf`) | `hostname`, `name`, `description`, `secure_web_gateway`, `code_mode`, `allow_code_mode`, `servers[]` (`server_id`, `default_disabled`, `on_behalf`, `updated_prompts`, `updated_tools` built from `allowlists/`) | none | none | the synced catalogue `tools`, unreadable in provider 5.24 |
+| `cloudflare_zero_trust_access_ai_controls_mcp_portal.mcp` (`mcp-portal.tf`) | `hostname`, `name`, `description`, `secure_web_gateway`, `code_mode`, `servers[]` (`server_id`, `default_disabled`, `on_behalf`, `updated_prompts`, `updated_tools` built from `allowlists/`) | none | none | the synced catalogue `tools`, unreadable in provider 5.24 |
 | `cloudflare_zero_trust_access_ai_controls_mcp_server.tg` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
 | `cloudflare_zero_trust_access_ai_controls_mcp_server.api` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
 | `cloudflare_zero_trust_access_ai_controls_mcp_server.seerrsense` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
@@ -74,17 +74,23 @@ What watches it instead: `.github/workflows/cloudflare-portal-health.yml`
 - `secure_web_gateway`: whether the portal routes its traffic through
   Cloudflare Gateway. This is the Phase 2 subject (`mctlhq/.github#43`,
   `#1181`), and `false` is the baseline the POC returns to.
-- `code_mode` / `allow_code_mode`: pinned `off`/`false`. Phase 2 must leave
+- `code_mode`: pinned `off`. Phase 2 must leave
   Code Mode untouched, and "untouched" can only be checked if something
   records what it was. A drift here means the portal grew an execution
   surface nobody decided on.
   - `code_mode` is one of `off`, `opt_in`, `default_on`, `enforced`. It
     defaults to `opt_in` when omitted on create, so leaving it unpinned is
     not the same as leaving it off.
-  - The two fields must agree. The API answers `7001: code_mode and
-    allow_code_mode disagree` otherwise (measured).
-  - `allow_code_mode` is deprecated in provider 5.24, but it is restated:
-    left out, it plans as `(known after apply)`.
+  - `allow_code_mode` is deliberately not in config. It is deprecated in
+    provider 5.24 (and still is in 5.29.0, so a bump does not remove the
+    warning), and the provider schema documents that `false` maps to
+    `code_mode: off` and that the two must agree (the API answers `7001:
+    code_mode and allow_code_mode disagree` otherwise, measured). Pinning
+    `code_mode = "off"` therefore pins both: if the portal grows Code Mode,
+    `code_mode` drifts and the plan shows it. What is lost is only an
+    independent check of the legacy boolean, which the API derives from
+    `code_mode`. In a plan that already has some other change it renders as
+    `allow_code_mode = (known after apply)`; that is cosmetic.
 - `name` / `description`: copied from the live object at import. The
   description still says "Phase 0: tg only". Correcting it is a separate,
   visible change.
