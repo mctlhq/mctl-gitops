@@ -157,19 +157,19 @@ check("a negative control that FAILs is healthy and exits 0",
 check("a detected control does not mark a failure", res["summary"]["failed_cases"] == [], res)
 
 # --- URL sanitization -------------------------------------------------------------
-dirty = "https://user:pw@evil.example/a/b?token=SECRET#frag"
+dirty = "https://zq7user:zq7pw@evil.example/a/b?zq7token=ZQ7SECRET#zq7frag"
 rc, res, mx, _ = report([case("T-URL")], [("T-URL", "fail", f"GET {dirty} blocked")])
 blob = json.dumps(res) + (mx or "")
 check("URL is reduced to host and path", "evil.example/a/b" in blob, blob[:300])
 check("query, fragment and userinfo are stripped everywhere",
-      not any(s in blob for s in ("SECRET", "frag", "user:pw", "token=")), blob[:300])
+      not any(s in blob for s in ("ZQ7SECRET", "zq7frag", "zq7user:zq7pw", "zq7token=")), blob[:300])
 
-rc, res, mx, _ = report([case("T-BS")], [("T-BS", "fail", "GET http://evil.example\\@h.test/p?token=SECRET x")])
+rc, res, mx, _ = report([case("T-BS")], [("T-BS", "fail", "GET http://evil.example\\@h.test/p?zq7token=ZQ7SECRET x")])
 check("a URL with a backslash is not trusted: reduced to a placeholder",
-      "[unparseable-url]" in json.dumps(res) and "SECRET" not in json.dumps(res) + (mx or ""), res)
-rc, res, mx, _ = report([case("T-PS")], [("T-PS", "fail", "GET ftp://u:pw@h.test/x//y and //h.test/z?q=SECRET")])
+      "[unparseable-url]" in json.dumps(res) and "ZQ7SECRET" not in json.dumps(res) + (mx or ""), res)
+rc, res, mx, _ = report([case("T-PS")], [("T-PS", "fail", "GET ftp://zq7u:zq7pw@h.test/x//y and //h.test/z?q=ZQ7SECRET")])
 check("non-http and scheme-relative URLs are reduced too",
-      not any(x in json.dumps(res) for x in ("pw", "SECRET", "u:")), res)
+      not any(x in json.dumps(res) for x in ("zq7pw", "ZQ7SECRET", "zq7u:")), res)
 
 # --- outputs ----------------------------------------------------------------------
 with tempfile.TemporaryDirectory() as d:

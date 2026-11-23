@@ -139,7 +139,6 @@
         "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
         "TG_API_ID": "1",
         "TG_API_HASH": "dummy",
-        "PUBLIC_BASE_URL": "https://site.fixture.test",
         "AUTH_MODE": "shared-hmac",
         "AUTH_REQUIRED": "true",
         "OAUTH_JWT_SECRET": "dummydummydummydummydummydummydummydummy"
@@ -147,7 +146,7 @@
       "tmpfs": [
         "/tmp/wca"
       ],
-      "env_note": "dummy values only. Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs."
+      "env_note": "dummy values only, none of them a URL (results.json embeds the pins and the report refuses to carry a URL). Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs."
     },
     {
       "name": "mctl-academy",
