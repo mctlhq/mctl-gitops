@@ -39,7 +39,8 @@ DISCLAIMER = "preview assurance only; not production conformance"
 SITES = ("mctl-web", "mctl-docs", "mctl-telegram", "mctl-academy", "mctl-alice", "seerrsense")
 MODES = ("image", "fixture-only", "not-run")
 SHEETS = ("mctl.css", "global.css", "prose.css", "site.css")
-FIXTURE_SITES = ("fixture-reference",)  # non-consumer sites that cases/controls may name
+# non-consumer sites that cases/controls may name: reference targets, never a consumer row
+FIXTURE_SITES = ("fixture-reference", "fixture-reference-wide", "fixture-checkbox", "fixture-broken")
 FIXTURE_HOSTS = ("ui.fixture.test", "site.fixture.test")  # allowlist lives here, not in the checked file
 # fullmatch everywhere: "$" would accept a trailing newline, and \d accepts non-ASCII digits
 DIGEST_REF = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
@@ -324,6 +325,11 @@ def load_junit(path):
             if el is not None:
                 outcome = label
                 message = el.get("message") or (el.text or "").strip().split("\n")[0]
+                if label == "skipped" and not message:
+                    # Playwright's JUnit reporter carries a skip reason as <property name="skip">
+                    for prop in tc.iterfind("properties/property"):
+                        if prop.get("name") == "skip":
+                            message = prop.get("value") or ""
                 break
         out.setdefault(name, []).append((outcome, message))
     return out
