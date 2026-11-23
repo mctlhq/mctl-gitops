@@ -6,6 +6,14 @@ on:
   schedule:
     - cron: "7 5 * * 1"
 
+# Supersede stale PR runs (mctlhq/mctl-gitops#2993); the weekly schedule run
+# gets its own group and is never cancelled.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('security-pr-{0}', github.event.pull_request.number)
+        || format('security-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 

@@ -106,6 +106,16 @@ on:
         description: "Full commit SHA of the source the image was built from"
         value: ${{ jobs.build.outputs.revision }}
 
+# Only preview builds dispatched by preview-deploy (build_id prefix
+# `preview-deploy`) supersede each other for the same team, component and ref
+# (mctlhq/mctl-gitops#2993). Release (`rd-*`), deploy-service and hand builds get
+# a per-run group and are never cancelled.
+concurrency:
+  group: >-
+    ${{ startsWith(inputs.build_id, 'preview-deploy')
+        && format('build-image-preview-{0}-{1}-{2}', inputs.team_name, inputs.component_name, inputs.git_ref)
+        || format('build-image-{0}', github.run_id) }}
+  cancel-in-progress: ${{ startsWith(inputs.build_id, 'preview-deploy') }}
 env:
   REGISTRY: ghcr.io
   # Image vulnerability scan after the push (mctlhq/mctl-gitops#332).

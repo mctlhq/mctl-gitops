@@ -18,6 +18,13 @@ on:
       - 'platform-gitops/**'
       - '.github/workflows/yamllint.yml'
 
+# Supersede stale runs for the same PR or ref (mctlhq/mctl-gitops#2993).
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('yamllint-pr-{0}', github.event.pull_request.number)
+        || format('yamllint-{0}', github.ref) }}
+  cancel-in-progress: true
 permissions:
   contents: read
 
