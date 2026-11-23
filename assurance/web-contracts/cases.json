@@ -5087,6 +5087,18 @@
    "id": "WCA-A-ISO-guard-oauth-path",
    "gate": "ISO",
    "behaviour": "guard-oauth-path"
+  },
+  {
+   "site": "fixture-reference",
+   "kind": "case",
+   "contract_id": null,
+   "route_class": null,
+   "viewport": null,
+   "provenance": "[PREVIEW]",
+   "exception": null,
+   "id": "WCA-A-ISO-guard-design-host",
+   "gate": "ISO",
+   "behaviour": "guard-design-host"
   }
  ]
 }

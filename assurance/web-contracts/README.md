@@ -149,3 +149,21 @@ Provenance tags per cell: `[CODE]`, `[CONFIG]`, `[PREVIEW]`, `[LIVE]` or `not-ru
   production host, OAuth/connect/manage/consent/callback route, real credential or cookie.
 - Fixtures label themselves reference targets, never a consumer row.
 - Not a required check; revert the PR to remove it.
+
+## Substituted hosts (consumer pages)
+
+A consumer page references the design sheets on the production CDN host (`ui.mctl.ai`) and web fonts on
+`fonts.googleapis.com` / `fonts.gstatic.com`. None of them is reachable from the internal network, and
+without the sheets a consumer renders unstyled, so every layout case would fail for a harness reason.
+The guard therefore answers exactly two kinds of request locally instead of sending them anywhere:
+
+- `https://ui.mctl.ai/<pinned version>/<sheet>.css` (GET, no port, no userinfo, versions from
+  `pins.json` `mctl_design`, sheets `mctl|global|prose|site`) is served from the pinned mctl-design bytes,
+  the same bytes whose sha-256 `pins.json` records. Any other path on that host is blocked.
+- GET requests to the two font hosts get an empty `text/css` response, so no web font is ever loaded.
+  Font metrics can therefore differ from production; a layout case that depends on them is not evidence.
+
+These requests are counted as `substituted` in `guard.jsonl` and summed into `substitutions.json`; they
+are never counted as requests that reached the host. The claim is "nothing left the network", not
+"nothing was requested". Case `WCA-A-ISO-guard-design-host` proves the decision table, the pinned-bytes
+sha-256 and that an unpinned version is blocked.

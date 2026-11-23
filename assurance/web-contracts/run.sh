@@ -104,7 +104,7 @@ else
   if [ -n "${WCA_WORK:-}" ]; then WORK=$WCA_WORK; mkdir -p "$WORK"; else WORK=$(mktemp -d); OWN_WORK=1; fi
   mkdir -p "$OUT"
   rm -rf "$OUT/junit.xml" "$OUT/guard.jsonl" "$OUT/consumers.json" "$OUT/results.json" "$OUT/matrix.md" \
-         "$OUT/network.txt" "$OUT/test-results" "$OUT/consumer-html"
+         "$OUT/network.txt" "$OUT/test-results" "$OUT/consumer-html" "$OUT/substitutions.json"
 
   # pinned mctl-design bytes: a read-only git archive of the pinned commit
   ARCH=$WORK/arch
@@ -259,7 +259,7 @@ set -e
 # guard counters: could not observe is never "zero"; a missing or unreadable log is an error
 GUARD_RC=0
 python3 - "$OUT/guard.jsonl" "$OUT/junit.xml" <<'PY' || GUARD_RC=$?
-import json, sys
+import json, os, sys
 import xml.etree.ElementTree as ET
 path, junit = sys.argv[1:3]
 try:
@@ -278,12 +278,19 @@ if len(rows) != executed:
 unexpected = sum(r["unexpected_blocked"] for r in rows)
 probes = sum(len(r["blocked"]) - r["unexpected_blocked"] for r in rows)
 hosts = {}
+subst = {}
 for r in rows:
     for h, n in r["hosts"].items():
         hosts[h] = hosts.get(h, 0) + n
+    for h, n in r.get("substituted", {}).items():
+        subst[h] = subst.get(h, 0) + n
+# requests answered locally (pinned design sheets, empty font sheets): evidence for the report, not requests that left the network
+with open(os.path.join(os.path.dirname(path), "substitutions.json"), "w") as fh:
+    json.dump({"answered_locally_per_host": subst,
+               "note": "design sheets served from the pinned mctl-design bytes; font stylesheets answered empty; none of these requests reached the host"}, fh, indent=2)
 # Only requests the browser contexts issued through the route guard are counted here; the
 # network itself (docker --internal) is the enforcement, this is an in-band tripwire.
-print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, expected probe aborts {probes}, "
+print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, answered locally {subst}, expected probe aborts {probes}, "
       f"unexpected blocked {unexpected}", file=sys.stderr)
 sys.exit(4 if unexpected else 0)
 PY
