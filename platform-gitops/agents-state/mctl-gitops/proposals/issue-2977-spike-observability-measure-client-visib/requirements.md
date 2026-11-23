@@ -125,8 +125,8 @@ instrumentation.
 
 - Running any live probe, including a 1 Hz probe against preview or production,
   during the spike.
-- Enabling Traefik access logs, Cloudflare Logpush, new VMProbes, new alerts or a new
-  dashboard.
+- Changing already-configured Traefik access logs, enabling Cloudflare Logpush,
+  deploying new VMProbes/alerts or a new dashboard.
 - Changing `strategy.type: Recreate`, replica counts or readiness probe settings of
   mctl-telegram or mctl-telegram-preview.
 - MTProto session ownership/fencing (mctl-telegram#1115), DB retry/readiness and
