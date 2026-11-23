@@ -130,7 +130,7 @@ exactly the six sites.
 | Status | Meaning |
 | --- | --- |
 | `PASS` | a JUnit testcase for the catalogued case executed and passed, on a site whose pins mode is `image` (or a fixture target) |
-| `FAIL` | the testcase executed and failed; the run exits 1 and makes no compliance claim |
+| `FAIL` | the testcase executed and failed; no compliance claim. On a fixture or harness case the run exits 1; on a consumer case it is a finding (exit 0, listed under `summary.consumer_findings`, annotated in the workflow) |
 | `NOT-RUN` | missing testcase, skipped, error before the assertion, or pins mode not `image`; always carries a reason; never PASS |
 | `EXCEPTION-PENDING` | the testcase passed but the case is a registered exception (EX-1, EX-2, EX-3) awaiting owner sign-off; never PASS |
 
@@ -227,4 +227,17 @@ proves each of those, and was mutation-verified (honouring a declared sensitive 
 
 HDR-2 counts the control selected as the toggle that has the role and an accessible name, not every named button on
 the page (the same page-wide scope mistake as HDR-1).
+
+## Verdict split: harness failure or consumer finding
+
+The job is red when the harness itself is broken: a fixture case FAILs (exit 1), a negative control does not FAIL
+(exit 2), an input or pin is rejected (3), the guard cannot account for the run (4) or setup or completeness fails
+(5). A consumer case that FAILs is evidence about the consumer, not a broken run: the exit code stays 0, there is
+still no compliance claim, `results.json` lists the ids under `summary.consumer_findings` (and `harness_failures`
+separately), the matrix header counts both, and the workflow raises a warning annotation per run so a finding is not
+hidden behind a green job. Merging a consumer promotion therefore does not turn the advisory check red.
+
+HDR-13 on a narrow viewport gives each panel link focus directly instead of walking to it with Tab, for the same
+reason as HDR-8 and HDR-12: the visibility of the focus indicator does not depend on DOM order, which HDR-7 owns.
+On a wide viewport the Tab walk stays. The toggle's own indicator is still checked after a real Tab from the brand.
 

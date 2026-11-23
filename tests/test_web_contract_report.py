@@ -235,8 +235,14 @@ for name in ("fixture-checkbox", "fixture-reference-wide", "fixture-broken"):
 
 rc, res, _, _ = report([case("G-A", site="mctl-web"), case("G-B", site="mctl-web")],
                        [("G-A", "pass", ""), ("G-B", "fail", "x")], pins=pins_with(to_image))
-check("a failing case on one site cancels the claim of another compliant site",
-      rc == 1 and res["summary"]["compliance_claim"] is False, res)
+check("a consumer FAIL is a finding: exit 0, no compliance claim, listed as a consumer finding and not a harness failure",
+      rc == 0 and res["summary"]["compliance_claim"] is False and res["summary"]["consumer_findings"] == ["G-B"]
+      and res["summary"]["harness_failures"] == [] and res["summary"]["failed_cases"] == ["G-B"], (rc, res["summary"]))
+rc, res, _, err = report([case("G-A", site="mctl-web"), case("G-F", site=FIXTURE_SITE)],
+                         [("G-A", "pass", ""), ("G-F", "fail", "x")], pins=pins_with(to_image))
+check("a fixture FAIL is a harness failure: exit 1, no claim, not a consumer finding",
+      rc == 1 and res["summary"]["compliance_claim"] is False and res["summary"]["harness_failures"] == ["G-F"]
+      and res["summary"]["consumer_findings"] == [], (rc, res["summary"], err))
 rc, res, _, _ = report([case("G-A", site="mctl-web"), case("G-F", site=FIXTURE_SITE)],
                        [("G-A", "pass", ""), ("G-F", "fail", "x")], pins=pins_with(to_image))
 check("the failing case is on another site, so mctl-web is compliant yet no claim is made",

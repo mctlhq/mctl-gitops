@@ -447,7 +447,9 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
     artifact_sha = sha256_file(artifact) if artifact else None
     site_pins = {s["name"]: s for s in pins["sites"]}
 
-    results, control_problem, fail = [], False, False
+    # fail = a harness case FAILed (a fixture, a control, the guard); findings = a consumer case FAILed. Both make
+    # "no compliance claim"; only a harness failure is a broken run (exit 1), a finding is evidence about the consumer
+    results, control_problem, fail, findings = [], False, False, False
     if not any(c.get("kind", "case") == "negative-control" for c in cases):
         # no controls catalogued = the "every control must FAIL" guarantee is silently off
         control_problem = True
@@ -472,7 +474,10 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
                                  ("passed" if status in ("PASS", "EXCEPTION-PENDING") else "did not run"))
                 control_problem = True
         elif status == "FAIL":
-            fail = True
+            if c["site"] in SITES:
+                findings = True
+            else:
+                fail = True
         results.append(row)
 
     per_site = {}
@@ -492,7 +497,7 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
         if r["gate"] and r["kind"] == "case":
             g = gates.setdefault(r["gate"], {s: 0 for s in STATUSES})
             g[r["status"]] += 1
-    any_fail = fail or control_problem
+    any_fail = fail or findings or control_problem
     summary_subst = substitution_summary(subst)
     # an entry declared for a site that ran but never seen in the run is stale or mistyped; for a site that did not
     # run, or when no record was given, it is unknown, never "fine"
@@ -516,6 +521,10 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
            "sites": per_site, "gates": gates, "results": results,
            "summary": {"compliance_claim": not any_fail and any(s["compliant"] for s in per_site.values()),
                        "failed_cases": [r["id"] for r in results if r["kind"] == "case" and r["status"] == "FAIL"],
+                       "harness_failures": [r["id"] for r in results if r["kind"] == "case" and r["status"] == "FAIL"
+                                            and r["site"] not in SITES],
+                       "consumer_findings": [r["id"] for r in results if r["kind"] == "case" and r["status"] == "FAIL"
+                                             and r["site"] in SITES],
                        "broken_controls": [r["id"] for r in results if r.get("control") == "BROKEN"]
                                        + ([] if any(r["kind"] == "negative-control" for r in results)
                                           else ["<no negative control catalogued>"]),
@@ -527,8 +536,10 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
         print("negative control did not FAIL: scaffolding cannot detect failure", file=sys.stderr)
         return 2
     if fail:
-        print("a catalogued case FAILed: no compliance claim", file=sys.stderr)
+        print("a catalogued harness case FAILed: no compliance claim", file=sys.stderr)
         return 1
+    if findings:
+        print("consumer finding(s): a consumer case FAILed, the harness itself is sound; no compliance claim", file=sys.stderr)
     return 0
 
 
@@ -555,6 +566,7 @@ def render_matrix(doc):
          f"mctl-design: `{doc['pins']['mctl_design']['commit']}` (css {doc['pins']['mctl_design']['css_version']})  ",
          f"Playwright image: `{doc['pins']['playwright_image']}`  ",
          f"Summary: {doc['summary']['statement']}  ",
+         f"Consumer findings (FAIL): {len(doc['summary']['consumer_findings'])}; harness failures: {len(doc['summary']['harness_failures'])}  ",
          f"Substituted requests: {_cell(doc['substitutions']['statement'])}"
          + (f" (answered locally {_cell(json.dumps(doc['substitutions']['totals'], sort_keys=True))})" if doc['substitutions']['totals'] else "")
          + (f" (declared blocked {_cell(json.dumps(doc['substitutions']['expected_blocked'], sort_keys=True))})" if doc['substitutions']['expected_blocked'] else ""), "",
