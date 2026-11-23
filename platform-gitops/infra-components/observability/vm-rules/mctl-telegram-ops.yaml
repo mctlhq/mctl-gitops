@@ -825,7 +825,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA bot getWebhookInfo is often unreadable"
+            summary: "PA bot getWebhookInfo is often unreadable (preview)"
             description: >-
               More than a fifth of the getWebhookInfo checks in the last 30
               minutes failed, in a row or on and off. The webhook state (URL,
@@ -840,7 +840,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA bot webhook not checked successfully for 30 minutes"
+            summary: "PA bot webhook not checked successfully for 30 minutes (preview)"
             description: >-
               The last readable getWebhookInfo check is more than 30 minutes
               old. Either every read fails or the monitor stopped running.
@@ -867,7 +867,7 @@ spec:
             severity: critical
             service: mctl-telegram
           annotations:
-            summary: "PA bot webhook {{ $labels.problem }}"
+            summary: "PA bot webhook {{ $labels.problem }} (preview)"
             description: >-
               getWebhookInfo reports a webhook URL other than PA_WEBHOOK_URL,
               or allowed_updates other than message and callback_query, at two
@@ -883,7 +883,7 @@ spec:
             severity: critical
             service: mctl-telegram
           annotations:
-            summary: "Telegram's PA webhook deliveries are rejected for the secret"
+            summary: "Telegram's PA webhook deliveries are rejected for the secret (preview)"
             description: >-
               getWebhookInfo's latest delivery error is a 401 from our webhook:
               the secret_token Telegram sends does not match PA_WEBHOOK_SECRET.
@@ -898,7 +898,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "Telegram keeps failing to deliver PA webhook updates"
+            summary: "Telegram keeps failing to deliver PA webhook updates (preview)"
             description: >-
               Most getWebhookInfo checks in the last 30 minutes found a new
               delivery error. Updates are queuing at Telegram.
@@ -911,7 +911,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA webhook has {{ $value }} pending updates at Telegram"
+            summary: "PA webhook has {{ $value }} pending updates at Telegram (preview)"
             description: >-
               getWebhookInfo pending_update_count has stayed above 100 for 15
               minutes: Telegram is not getting its deliveries accepted.
@@ -923,7 +923,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA webhook refused more than 20 requests for the secret in 15 minutes"
+            summary: "PA webhook refused more than 20 requests for the secret in 15 minutes (preview)"
             description: >-
               Requests to /pa/bot/webhook without the right secret token. A
               burst is either probing of a public URL or a secret mismatch;
@@ -940,7 +940,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA outbox: {{ $labels.outcome }} in the last 30 minutes"
+            summary: "PA outbox: {{ $labels.outcome }} in the last 30 minutes (preview)"
             description: >-
               A PA reply or notice was not delivered (failed after its
               retries, or its outcome is unknown and it is not resent), or the
@@ -964,7 +964,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA catalog server {{ $labels.server }} differs from the committed pin"
+            summary: "PA catalog server {{ $labels.server }} differs from the committed pin (preview)"
             description: >-
               The live tools/list of {{ $labels.server }} differs from the
               committed pin for at least one pinned tool. Those tools are
@@ -992,7 +992,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA catalog server {{ $labels.server }} tools/list cannot be observed"
+            summary: "PA catalog server {{ $labels.server }} tools/list cannot be observed (preview)"
             description: >-
               Personal Assistant calls try to list {{ $labels.server }}, but
               no tools/list of it could be read or parsed in the last 5
@@ -1012,7 +1012,7 @@ spec:
             severity: warning
             service: mctl-telegram
           annotations:
-            summary: "PA catalog server {{ $labels.server }} keeps refusing connection tokens"
+            summary: "PA catalog server {{ $labels.server }} keeps refusing connection tokens (preview)"
             description: >-
               tools/list on {{ $labels.server }} has answered 401 to
               Personal Assistant connection tokens for 30 minutes. Those
