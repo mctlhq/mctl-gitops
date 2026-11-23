@@ -120,20 +120,20 @@
     {
       "name": "mctl-telegram",
       "gitops_tag": "0.143.0",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "source_commit": null,
-      "breakpoint": null,
+      "breakpoint": 768,
       "route_classes": [
         "landing",
         "content",
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
       "observed_image_digest_resolved_for_tag": "0.143.0",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit",
+      "breakpoint_note": "observed in consumer source (internal/ui/assets/components.css: the CSS-checkbox menu is enabled in @media (max-width: 767px)), read at the consumer checkout, not at the gitops tag 0.143.0; the contract itself does not state it. A wrong value shows up as failing B-1 or B cases.",
       "env": {
         "DATABASE_URL": "file:/tmp/wca/mctl-telegram.db?_pragma=journal_mode(WAL)",
         "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -146,7 +146,21 @@
       "tmpfs": [
         "/tmp/wca"
       ],
-      "env_note": "dummy values only, none of them a URL (results.json embeds the pins and the report refuses to carry a URL). Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs."
+      "env_note": "dummy values only, none of them a URL (results.json embeds the pins and the report refuses to carry a URL). Found by starting the pinned image locally with no network and reading its boot guard messages: it refuses a non-loopback bind with AUTH_MODE=local-dev, wants a 64-hex ENCRYPTION_KEY (an all-zero placeholder, not a secret), and AUTH_MODE=local-jwt needs OIDC discovery over the network, so shared-hmac with a placeholder OAUTH_JWT_SECRET is used. The database is a SQLite file on a tmpfs.",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "selectors": {
+        "kind": "checkbox",
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#site-nav-toggle",
+        "click_toggle": "label.nav-burger",
+        "outside": "#copy-mcp-url"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): a visually hidden checkbox and its label drive the panel; outside is the first focusable element after the header, the copy button."
     },
     {
       "name": "mctl-academy",
@@ -168,7 +182,7 @@
     {
       "name": "mctl-alice",
       "gitops_tag": "2.16.0",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
       "source_commit": null,
       "breakpoint": 981,
       "route_classes": [
@@ -177,8 +191,8 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
       "observed_image_digest_resolved_for_tag": "2.16.0",
       "env": {
@@ -188,12 +202,25 @@
       "tmpfs": [
         "/tmp/wca"
       ],
-      "env_note": "dummy values only. The image keeps its SQLite files under ./data in a read-only root, so both database paths point at a tmpfs; observed in CI probe (mctl-alice start failure: unable to open database file)."
+      "env_note": "dummy values only. The image keeps its SQLite files under ./data in a read-only root, so both database paths point at a tmpfs; observed in CI probe (mctl-alice start failure: unable to open database file).",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "breakpoint_note": "observed: the header carries mctl-site-header--drawer-wide, whose drawer applies below 981px in the shared site.css (max-width: 980px); the contract itself does not state it",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#nav-burger",
+        "outside": "a.btn-primary[href=\"/setup\"]"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): burger #nav-burger follows the nav in DOM order; outside is the first focusable element after the header, the primary hero link. The page also holds a language-switcher nav; the main nav is #site-nav."
     },
     {
       "name": "seerrsense",
       "gitops_tag": "1.14.4",
-      "image": null,
+      "image": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
       "source_commit": null,
       "breakpoint": 768,
       "route_classes": [
@@ -202,14 +229,27 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
       "observed_image_digest_resolved_for_tag": "1.14.4",
       "env": {
         "SEERRSENSE_AUTH_TOKEN": "dummydummydummydummydummydummydummydummy"
       },
-      "env_note": "dummy value only. The image refuses to start without SEERRSENSE_AUTH_TOKEN; with it, started locally with no network, it listens on the forced PORT 8080 (the 8787 in its README is only the default)."
+      "env_note": "dummy value only. The image refuses to start without SEERRSENSE_AUTH_TOKEN; with it, started locally with no network, it listens on the forced PORT 8080 (the 8787 in its README is only the default).",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the landing page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "breakpoint_note": "observed: the header has no drawer-wide class, so the drawer applies below 768px in the shared site.css (max-width: 767px); the contract itself does not state it",
+      "selectors": {
+        "header": "header.mctl-site-header",
+        "nav": "#site-nav",
+        "links": "#site-nav a",
+        "toggle": "#nav-burger",
+        "outside": "#copy-url"
+      },
+      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): burger #nav-burger follows the nav in DOM order; outside is the first focusable element after the header, the copy button."
     }
   ]
 }

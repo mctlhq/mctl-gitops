@@ -2465,7 +2465,8 @@
    "route_class": "landing",
    "viewport": "B-1",
    "provenance": "not-run",
-   "exception": null
+   "exception": null,
+   "known_gap": "a native checkbox does not toggle on Enter (only Space); HDR-4 requires both keys and the contract registers no exception for it"
   },
   {
    "id": "WCA-H-HDR4-mctl-telegram-landing-375",
@@ -2477,7 +2478,8 @@
    "route_class": "landing",
    "viewport": "375",
    "provenance": "not-run",
-   "exception": null
+   "exception": null,
+   "known_gap": "a native checkbox does not toggle on Enter (only Space); HDR-4 requires both keys and the contract registers no exception for it"
   },
   {
    "id": "WCA-H-HDR5-mctl-telegram-landing-B-1",
@@ -2633,7 +2635,8 @@
    "route_class": "landing",
    "viewport": "B-1",
    "provenance": "not-run",
-   "exception": null
+   "exception": null,
+   "known_gap": "CSS alone cannot clear :checked when the viewport grows past B, so the panel reopens on return to narrow; the contract registers no exception for HDR-11"
   },
   {
    "id": "WCA-H-HDR12-mctl-telegram-landing-B-1",

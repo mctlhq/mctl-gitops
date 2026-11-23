@@ -533,6 +533,10 @@ def with_mctl_web_blocks(entries):
         site = next(x for x in p["sites"] if x["name"] == "mctl-web")
         site["mode"], site["image"], site["not_run_reason"] = "image", site["observed_image_digest"], None
         site["expected_blocked"] = entries
+        # these cases are about this one site: the live declarations of the others must not leak into them
+        for other in p["sites"]:
+            if other is not site:
+                other["expected_blocked"] = []
     return pins_with(m)
 
 

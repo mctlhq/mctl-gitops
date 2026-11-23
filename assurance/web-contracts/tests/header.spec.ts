@@ -443,8 +443,11 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expect
   if (!st.healthy || !st.url) return { skip: `image did not start: ${sanitize(st.reason || 'no reason recorded')}` };
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
   const s = site.selectors as Record<string, string>;
-  return { t: { url: st.url, bp: site.breakpoint as number, kind: 'button',
-    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp,
+  // a CSS checkbox header declares kind 'checkbox' and the element a user clicks (the label) as click_toggle;
+  // the default stays a native button, where the toggle is also what is clicked
+  const kind = s.kind === 'checkbox' ? 'checkbox' : 'button';
+  return { t: { url: st.url, bp: site.breakpoint as number, kind,
+    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside } }, vp,
     expected: site.expected_blocked ?? [] };
 }
 
