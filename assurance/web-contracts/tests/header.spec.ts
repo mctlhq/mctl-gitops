@@ -35,7 +35,7 @@ const HEIGHT = 800;
 // `routes` selects the links that are in-app ROUTES (a client navigation moves the current marker). It is declared,
 // never guessed from an href: a section anchor or an external link is not a route, and HDR-14's route-change step
 // is only meaningful for a site that has route links.
-interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string }
+interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string; landmark?: string }
 class NoRouteLinks extends Error {}
 interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel }
 
@@ -144,21 +144,24 @@ type Ctx = { wca: Wca; t: Target; width: number; narrow: boolean; c: CaseDef };
 const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   1: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
-    // the declared panel navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
-    // as a language switcher, is not "the navigation landmark" the contract asks to be named
-    const navs = p.locator(t.sel.header).locator(t.sel.nav);
-    await expect(navs).toHaveCount(1);
-    const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
-      || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
-    expect(label.trim(), 'navigation landmark has an accessible name').not.toBe('');
     const axe = async () => (await new AxeBuilder({ page: p }).include(t.sel.header).analyze()).violations.map((v) => `${v.id}:${v.nodes.length}`);
+    // narrow-closed first: a panel some frameworks render only while open is not in the DOM yet
     if (narrow) {
       expect(await axe(), 'axe, narrow-closed').toEqual([]);
       await openPanel(p, t, width);
     }
+    // the declared navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
+    // as a language switcher, is not "the navigation landmark" the contract asks to be named. A header whose panel
+    // container is not itself the nav declares selectors.landmark.
+    const lm = t.sel.landmark ?? t.sel.nav;
+    const navs = p.locator(t.sel.header).locator(lm);
+    await expect(navs).toHaveCount(1);
+    const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
+      || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
+    expect(label.trim(), 'navigation landmark has an accessible name').not.toBe('');
     // the header region's landmark (AC-1: "inspect the header navigation landmark"); a named landmark elsewhere on the
     // page, in content or the footer, is not the header's
-    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(t.sel.nav))).toHaveCount(1);
+    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(lm))).toHaveCount(1);
     expect(await axe(), 'axe on the header region').toEqual([]);
   },
 
@@ -454,8 +457,14 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expect
   // a CSS checkbox header declares kind 'checkbox' and the element a user clicks (the label) as click_toggle;
   // the default stays a native button, where the toggle is also what is clicked
   const kind = s.kind === 'checkbox' ? 'checkbox' : 'button';
+  // A header whose markup differs by viewport (a framework with an inline menu on wide and a separate panel on
+  // narrow) declares selectors.narrow and selectors.wide; nav, links and landmark are read from the one matching
+  // the case's viewport, falling back to the top-level selectors.
+  const per = ((vp === 'B-1' || vp === '375') ? site.selectors.narrow : site.selectors.wide) as Record<string, string> | undefined;
+  const pick = (k: string): string => per?.[k] ?? s[k];
   return { t: { url: st.url, bp: site.breakpoint as number, kind,
-    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside } }, vp,
+    sel: { header: s.header, nav: pick('nav'), links: pick('links'), routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside,
+           landmark: per?.landmark ?? s.landmark } }, vp,
     expected: site.expected_blocked ?? [] };
 }
 
