@@ -1,0 +1,34 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: argocd-mcp
+  namespace: labs
+  description: "Read-only Argo CD MCP server for the private portal (mcp.mctl.ai)"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-argocd-mcp
+    backstage.io/kubernetes-id: argocd-mcp
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-argocd-mcp
+    github.com/source-repo: mashkovd/mcp-for-argocd
+    # Deploys are deliberate: the image comes from a personal fork, so a new tag is a
+    # decision about what code runs next to Argo CD, not an automatic bump.
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-argocd-mcp
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mashkovd/mcp-for-argocd
+      title: Source Repository
+      icon: github
+    # Behind Cloudflare Access (ZITADEL), reached through the portal.
+    - url: https://argocd.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
