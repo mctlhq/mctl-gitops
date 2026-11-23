@@ -38,39 +38,54 @@
 - `vm-rules/mctl-telegram-slo.yaml`: the SLIs are app-scoped (recorded from the
   app's own metrics). A request that never reaches a pod is invisible to them.
 
-### Ingress and edge
+### Ingress and edge — P1-1 corrected
 
-- `platform-gitops/bootstrap/templates/observability/traefik-podscrape.yaml`: Traefik
-  metrics are scraped per pod every 30 s. `traefik_service_request_duration_seconds_bucket`
-  is dropped. `traefik_service_requests_total` (by service and code) and the
-  entrypoint histogram are kept. The file's own comment records that Traefik
-  **access logs are off** (2026-10-06). The Traefik HelmChartConfig
-  (`infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl`)
-  has no `accessLog` key, so they are still off. A 30 s counter delta can show that
-  503s happened for the backend in a window. It cannot show when, and it shows
-  nothing if no client sent a request.
-- The Traefik websecure entrypoint carries the `traefik-cloudflare-origin`
-  middleware (same file). Only traffic that arrived through Cloudflare reaches a
-  router, so any probe must use the public hostname, not the origin IP.
-- `infrastructure/cloudflare/zones/mctl-ai/firewall.tf`: SBFM/BIC is skipped for
-  `ip.src.asnum eq 24940` (Hetzner) on `tg.mctl.ai` and `tg-preview.mctl.ai`. A
-  probe that egresses from the cluster is therefore not bot-challenged. A probe
-  from a GitHub-hosted runner is not covered by this rule.
-- No `logpush` resource exists under `infrastructure/cloudflare/zones/mctl-ai/`.
-  Cloudflare analytics access for this run was not observed.
+- `traefik-podscrape.yaml` scrapes Traefik counters every 30 s and
+  drops `traefik_service_request_duration_seconds_bucket`. Its October 6
+  comment that access logs were off is historical and **stale**.
+- `infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl`
+  currently configures **`accessLog.enabled: true`**, JSON,
+  `filters.statusCodes: "400-599"`, `retryAttempts: true`, and
+  `queryParameters.defaultMode: drop`. Commits `74265995863411c72642d420f223b244aa39ad42`
+  and `0679c43e4f1eacdaf0148724ca9a70a95fb41545`
+  established this on 2026-10-29. Configuration is **not evidence** of
+  running flags or ingested Loki data: those remain `not observed` until
+  verified read-only. The old comment must not override the current manifest.
+- The log filter captures 400–599 **requests reaching Traefik**, not
+  successful 2xx requests or Cloudflare-side failures, and does not prove
+  availability during zero traffic. Counters sampled every 30 s cannot
+  resolve 10–20 s blackouts; runtime-verified 5xx access log events could
+  give more accurate error-event timestamps (still not a continuous outage).
+- The configured log fields retain `Cf-Connecting-Ip`, `Cf-Ray` and
+  User-Agent while dropping Authorization/Cookie, RequestLine and query
+  parameters. Protect these identifiers: never paste raw IPs, full ray IDs,
+  headers or correlated user agents into test fixtures, GitHub issues or
+  spike output. Aggregate/redact before public evidence.
+- `firewall.tf` skips Cloudflare SBFM/BIC for traffic from Hetzner
+  ASN24940 to `tg.mctl.ai`/`tg-preview.mctl.ai`. An in-cluster
+  probe exercises the public route but a **privileged trusted-ASN path**,
+  not a representative external client. Healthy control-target traffic
+  cannot rule out subject-specific WAF challenges.
+- No `logpush` Terraform resource found under the mctl-ai Cloudflare
+  zone; actual analytics/Logpush entitlements and external monitors
+  remain **not observed**, not proven absent.
 
 ### Retention
 
 - VictoriaMetrics: `retentionPeriod: "28d"`
   (`platform-gitops/bootstrap/templates/observability/monitoring.yaml`).
 - Loki: `retention_period: 336h` (14 d)
-  (`platform-gitops/bootstrap/templates/observability/loki.yaml`). Pod
-  lifecycle lines older than 14 d are gone, which is why the 0.143.0 rollout cannot
-  be reconstructed from application logs.
-- kube-state-metrics is enabled (`monitoring.yaml`, `kube-state-metrics` /
-  `kubeStateMetrics`), so `kube_pod_status_ready` samples exist at scrape
-  resolution. No Kubernetes event exporter was found, so events live only for the
-  cluster's event TTL.
+  (`platform-gitops/bootstrap/templates/observability/loki.yaml`). Configured 14-day retention does not explain the unobserved 0.143.0
+  window **on the same day of deployment**. The sampled 1000-line Loki query
+  returned only newer records starting ~09:30Z: `query_truncated_or_unverified`,
+  not `retention_expired`. Check an earlier bounded UTC/pod query if permitted;
+  otherwise keep it `not observed`.
+- kube-state-metrics is **configured enabled** (`monitoring.yaml`,
+  `kube-state-metrics` / `kubeStateMetrics`); the actual
+  `kube_pod_status_ready` series and sampling history were **not observed**
+  at runtime. No event exporter was found in the searched GitOps paths,
+  but live event-retention behavior remains unverified. Pod Ready does not
+  prove EndpointSlice or Traefik backend propagation.
 
 ### Deployed state checked:
 
@@ -93,15 +108,16 @@
   use, and the actual `probe_success` history for past rollouts (no VM query tool in
   this run). All are recorded under Open questions in requirements.md.
 
-### What each signal proves (the table the spike document must carry)
+### What each signal proves — revised inventory
 
-| Observation | Source | Proves | Cannot prove | Resolution / uncertainty |
+| Signal | Source / evidence | Proves | Does NOT prove | Cadence and gaps |
 |---|---|---|---|---|
-| Pod lifecycle gap | Loki `shutdown signal received` -> `listening` | No new process was listening during the span | That clients failed, or for how long (readiness, endpoints, Traefik and edge add or remove time) | Log timestamp ms. The meaning is wrong for downtime. 14 d retention |
-| Kubernetes unready / endpoint absent | kube-state-metrics `kube_pod_status_ready`, events | The Service had no ready endpoint at sampled instants | Edge behaviour, or what a client got | Scrape interval (+/- one interval). Events expire after about 1 h |
-| Ingress 5xx | `traefik_service_requests_total{code=~"5.."}` | At least N 5xx left Traefik for the backend within a 30 s bucket | Timing inside the bucket. Zero 5xx with zero traffic means nothing | 30 s, counter resets on Traefik restart. Access logs off |
-| Edge 5xx/52x | Cloudflare analytics or Logpush | Clients hit edge errors (52x = origin unreachable) | Unknown availability. Not observed in this run | Plan-dependent (not observed) |
-| External client availability | Outside-in probe through the public hostname | The full path failed or succeeded at each attempt | Behaviour between attempts, at other colos/regions, or on the MCP/OAuth paths | Interval + timeout + clock offset (see the contract below) |
+| Pod lifecycle | Loki SIGTERM and `listening` | Process transition timestamps | HTTP 503 duration | Millisecond log time; not request evidence |
+| Pod readiness | KSM `kube_pod_status_ready` | Pod readiness at sampled instants | EndpointSlice propagation or client reachability | Scrape sampled |
+| EndpointSlice / ingress endpoint | K8s watch, Traefik dynamic backend state (if readable) | Actual routing membership when inspected | Cloudflare or real user response | **Not observed**; cannot infer from pod readiness |
+| Traefik 4xx/5xx | JSON 400–599 access logs configured enabled; 30s counters | Errors for traffic that reaches Traefik | 2xx brackets, absent-traffic health, edge-side errors | Loki runtime not observed; 30s counters |
+| Cloudflare 52x / WAF | Edge records or probe headers | Per-request edge failure/challenge | Continuous/global failure | Analytics not observed |
+| Synthetic outside-in | Bounded public probe | Per-vantage outcome at sampled times | Between-sample availability, other ASNs, colos, MCP/OAuth | Interval, timeout, clock and trusted-ASN bias |
 
 ## Proposed solution
 
@@ -133,54 +149,67 @@ A stdlib-only Python 3 module with a CLI (`estimate.py <attempts.jsonl> --window
 <meta.json>`) that reads attempt records and prints one JSON report. It does no
 network I/O, and a test enforces that (requirements.md).
 
-**Attempt record (JSONL, one per probe attempt):**
+**Attempt schema** (JSONL): `run_id`, `target`, `role`
+(subject/control), `vantage` (kind, ASN, region), `seq`, UTC
+`scheduled_at`/`sent_at`/`received_at`, timeout, HTTP status,
+cache status, redirect count, sanitized colo suffix, outcome.
+Outcomes: `ok`, `origin_5xx` (ONLY with independently verified
+origin attribution), `http_5xx_unattributed` (502/503/504 without
+attribution), `edge_52x` (520-527), `http_403`, `http_429`,
+`edge_challenge` (only with CF mitigation evidence), `timeout`,
+`connect_error`, `tls_error`, `dns_error`,
+`probe_local_error`, `other`. Challenge/403/429 never silently
+count as proven origin 503. Store no raw client IP or full Cf-Ray.
 
-```
-schema: "rollout-probe-attempt/v1"
-run_id, vantage {id, kind: in-cluster|runner|external, asn, region}
-target: "https://tg-preview.mctl.ai/readyz" | control target
-role: "subject" | "control"
-seq, scheduled_at, sent_at, received_at   (RFC3339 UTC, ms; received_at null on timeout)
-timeout_ms
-outcome: ok|origin_5xx|edge_52x|timeout|connect_error|tls_error|dns_error|probe_local_error|other
-http_status (nullable), cf_ray (header only), cf_cache_status, redirect_count (must be 0)
-```
+**Window metadata**: source tag/SHA, image digest, GitOps commit, Argo
+revision, old/new pod UID, UTC lifecycle timestamps, probe vantage
+and ASN (trusted or untrusted), interval, maximum gap, timeout,
+clock offset + evidence/uncertainty, and optional separately evidenced
+`single_contiguous_blackout_assumption`.
 
-**Window metadata (one per rollout):** release tag, source SHA, image digest, GitOps
-commit, Argo application, Argo sync revision and start/finish, old and new pod
-name/UID, Loki lifecycle timestamps (shutdown, listening), clock offset estimate and
-its source (`ntp`/`http-date`/`unknown`), interval_ms, max_gap_ms and
-clock_tolerance_ms.
+**Estimator contract — P1-2 corrected:**
 
-**Algorithm (subject attempts, sorted by `sent_at`):**
+1. `http_observations`: sort subject attempts by `sent_at`; L is
+   last successful attempt before first failure F, E last failure,
+   N first success after E. Each result is observed during
+   `[sent_at,received_at]` or `[sent_at,sent_at+timeout]`.
+   Report per-class counts and **descriptive**
+   `failure_event_envelope` (F.sent through E.end). It is **NOT
+   a lower bound on continuous downtime**. `status: measured`
+   means sufficient sampled event coverage, **not** a proved blackout.
+   With all-success samples and adequate coverage, report
+   `no_outage_observed` = *no failed sample*, not zero true downtime.
+2. `continuous_blackout`: default `status: unknown`.
+   Even adjacent errors can hide a brief recovery, so discrete
+   failures cannot prove uninterrupted outage. Conditional
+   single-incident onset/recovery intervals are allowed ONLY if a
+   separately justified `single_contiguous_blackout_assumption`
+   is provided and no intervening success exists:
+   `conditional_lower=max(0,E.sent-F.end-2*clock_uncertainty)`;
+   `conditional_upper=max(0,N.end-L.sent+2*clock_uncertainty)`.
+   This is **model-dependent**, NOT a guaranteed bound on real
+   downtime. `precision_target_met` is null without justification,
+   otherwise is a model-resolution check, not an accuracy guarantee.
+3. If any success occurs between F and E (even another colo),
+   `pattern: intermittent`, count transitions, keep only the
+   descriptive failure envelope, and `continuous_blackout:
+   unknown/intermittent_success`. Fixture: 503 t=0, success t=5,
+   503 t=10 must **never** claim 10s continuous failure.
+4. Fail closed to machine-readable `unknown`: missing L or N,
+   coverage gaps (including all-success windows), control failure,
+   probe-local failures, untrusted clocks, cache HIT/STALE/UPDATING
+   or ambiguous route cache policy, redirect, and unsupported
+   continuity assumption. A healthy control target does not prove
+   target-specific WAF is absent.
+5. `lifecycle` is a separate object; never derive `http_outage`
+   from SIGTERM → listening. +/-1–2s is a possible **conditional
+   sampling resolution** for a specific 1Hz/2s-timeout model, not
+   a real-world continuous-blackout guarantee. No high-frequency
+   live probe is authorized by this spike.
 
-- `first_error` F is the first non-ok attempt. `last_error` E is the last non-ok
-  attempt. `old_last_success` L is the last ok attempt before F. `new_first_success`
-  N is the first ok attempt after E.
-- For an attempt's observation instant, use `[sent_at, received_at]`. On a timeout,
-  use `[sent_at, sent_at + timeout_ms]`.
-- Lower bound = `max(0, E.sent_at - F.end) - 2*|clock_offset_uncertainty|`, floored
-  at 0. The path was certainly failing at some instant in F's interval and in E's.
-- Upper bound = `N.received_at - L.sent_at + 2*|clock_offset_uncertainty|`.
-- Report the midpoint +/- half-width, and `precision_target_met = half_width <= 2000 ms`.
-- If successes occur between F and E, set `pattern: intermittent` (for example
-  concurrent edge paths or colos) and report the envelope plus a transition count.
-- Lifecycle duration (`listening - shutdown`) is reported under `lifecycle` and is
-  never used in the HTTP bounds.
-
-**Fail-closed `unknown` reasons:** `no_success_before` (L missing),
-`no_success_after` (N missing), `coverage_gap` (a gap > max_gap between
-consecutive attempts anywhere in `[L, N]`, or anywhere in the window when no failure
-was seen, which is why `no_outage_observed` needs full coverage),
-`control_failed` (a control-target attempt failed between L and N, so the vantage
-point or network failed, not the subject), `probe_local_error`,
-`clock_untrusted` (offset unknown or > tolerance), `edge_cache_served`,
-`redirect_followed`.
-
-With 1 Hz attempts, a 2 s timeout, ~100 ms latency and a clock offset known to
-50 ms, the width is about 2.3 s (half-width about 1.2 s). That is the only
-configuration in which the issue's +/-1-2 s target is claimed. The harness fixtures
-must show it, and must also show that a 10 s timeout breaks it.
+**Offline safety:** stdlib-only estimator, no network I/O. AST
+forbidden-import scan is defense-in-depth; test with a fail-fast
+network/socket guard too (not an AST-only isolation claim).
 
 ### 3. Fixtures and tests
 
@@ -196,18 +225,19 @@ Design matrix summary:
 
 | Option | Precision for a 10-20 s gap | Cost | Bias / risk | Failure domain |
 |---|---|---|---|---|
-| A Release-scoped 1 Hz probe | about +/-1-2 s (proven only by harness parameters) | ~2 req/s for ~6 min per rollout (subject + control), under 1 MB of records | One vantage/colo, synthetic path only (`/readyz`, not MCP/OAuth) | In-cluster vantage shares the cluster. Control target detects that |
-| B Traefik counters + Cloudflare 5xx | 30 s buckets at best. Cannot separate "no traffic" from "available" | Logs: enabling access logs or Logpush is a new pipeline (excluded here) | Traffic-dependent. Absent requests look like availability | Traefik counters in-cluster. Cloudflare off-cluster (not observed) |
+| A Release-scoped 1 Hz probe | +/-1–2s **conditional model sampling resolution**, not true downtime guarantee | ~2 req/s for ~6min per rollout | Trusted ASN24940 one-colo synthetic path; hidden recoveries | Shares cluster failure domain; control cannot rule out WAF |
+| B **Existing configured Traefik JSON 400–599 logs** + counters + optional CF data | Individual error events IF runtime verified, 30s counters, no success brackets | Reuse configured access logs, Cloudflare read access not observed | Traffic dependent, absent traffic != availability, sensitive IP/ray | Traefik in-cluster; CF availability unknown |
 | C Existing 60 s probe + lifecycle + KSM | Cannot bound a sub-60 s outage (may see 0 or 1 failed sample) | Zero | Systematic under-reporting. Lifecycle gap misread as downtime | In-cluster |
-| D Hybrid A + B + C correlation | A's precision plus attribution (edge 52x vs origin 503) | A + reading existing counters. Cloudflare part depends on access not yet verified | As A, with better attribution | Mixed |
+| D Hybrid A + **verified** B logs + lifecycle | A's conditional sampling plus ingress attribution | Bounded probes + existing configured logs | Still no continuous/global availability proof | Mixed failure domains |
 
-Provisional decision: **`RELEASE_SCOPED_PROBE`**, with existing-telemetry
-correlation (Loki lifecycle, kube-state-metrics readiness, Traefik 5xx counters,
-`cf-ray` to `edge_request_id`) as attribution only. Upgrade to
-`HYBRID_EDGE_AND_PROBE` only if the open question on Cloudflare analytics access is
-answered positively. `REUSE_CURRENT_TELEMETRY` is rejected by option C's row.
-`EXTERNAL_MONITOR_REQUIRED` is not warranted: the failure under study is pod-scoped,
-not cluster-scoped.
+Provisional decision: **`RELEASE_SCOPED_PROBE`**, potentially
+**`HYBRID_EDGE_AND_PROBE`** once the already-configured Traefik
+400–599 JSON access logs have been verified live in redacted Loki.
+A hybrid does not require Cloudflare Analytics, but any optional
+Cloudflare edge evidence needs separate verified entitlements and
+granularity. Existing 60s probes alone cannot establish short outages.
+Neither probe nor ingress logs alone prove continuous real-client
+availability; record model assumptions and vantage limitations.
 
 Draft follow-up issue (text only, filed after owner GO): "Run the release-scoped
 probe for one `mctl-telegram-preview` rollout". Scope: a one-shot Argo Workflow in
@@ -215,9 +245,13 @@ probe for one `mctl-telegram-preview` rollout". Scope: a one-shot Argo Workflow 
 `https://mctl.ai/` at 1 Hz with a 2 s timeout from T-60 s to T+180 s around a
 preview sync, at most 10 minutes total. It writes JSONL to the workflow log archive
 and a summary to Pushgateway, and runs `estimate.py`. It adds no VMProbe, alert or
-dashboard. Preview acceptance: five preview rollouts produce `status: measured` or
-an explained `unknown`, the half-width is <= 2 s in at least 4 of 5, and there are
-zero challenged (403/429) attempts. Production use needs a separate GO.
+dashboard. Preview acceptance: five bounded preview rollouts have
+documented sampled outcomes (`measured`, `no_outage_observed` or
+specific `unknown`); stable probe cadence, cache bypass and 403/429
+classification; no real client writes. +/-2s is tested as a
+**conditional sampling-resolution goal**, not presumed true blackout
+accuracy. Do not infer continuous downtime from sample failures
+without independent evidence. Production use requires a separate GO.
 
 ## Alternatives
 
@@ -225,10 +259,11 @@ zero challenged (403/429) attempts. Production use needs a separate GO.
   deployed probe (not authorized), multiplies samples for every minute of the day
   to serve a few minutes per release, and shares the blackbox 10 s module timeout,
   which by itself breaks the precision target.
-- **Enable Traefik access logs or Cloudflare Logpush now (option B as primary).**
-  Dropped because it is a new log pipeline (explicitly excluded), it is
-  traffic-dependent so it cannot separate absence of traffic from availability, and
-  its Cloudflare side was not observable in this run.
+- **Enable a new Traefik logging pipeline or Cloudflare Logpush now.**
+  Traefik access logs are already **configured on**, so verify that
+  runtime ingestion first. New logging/Logpush is out of research scope;
+  even existing 400–599 lines lack 2xx success brackets and say nothing
+  about availability in an idle window.
 - **Infer downtime from lifecycle + readiness only (option C).** Dropped because
   the #1108 record already shows `/readyz` 503 beyond `listening`. Lifecycle is a
   lower-level proxy and would misreport.
@@ -243,14 +278,17 @@ zero challenged (403/429) attempts. Production use needs a separate GO.
   runs a unit test.
 - Resource impact: none at runtime. CI adds well under a second of Python.
 - Risks and mitigations:
-  - The estimator is mistaken for a probe. Mitigation: no-network import guard test,
-    and the spike doc states STATUS: NO LIVE PROBE.
-  - Overclaimed precision. Mitigation: `precision_target_met` is computed, fixtures
-    show the 10 s-timeout case failing it, and the doc forbids reporting lifecycle
-    as downtime.
-  - A future runner-based probe gets bot-challenged. Mitigation: recorded as an open
-    question. The draft follow-up uses an in-cluster vantage covered by the AS24940
-    skip rule, with a control target.
+  - The estimator is mistaken for a probe. Mitigation: static AST check plus test-scoped fail-fast network guard,
+    and spike doc STATUS: NO LIVE PROBE.
+  - Overclaimed precision. Mitigation: keep the observed failure
+    envelope descriptive, model-bound duration explicitly conditional
+    on an independent continuity hypothesis; test t0/t5/t10 and
+    hidden-recovery counterexamples. Lifecycle is separate.
+  - A runner may be WAF-challenged, while in-cluster ASN24940 is
+    a privileged path. Mitigation: classify 403/429 and challenges,
+    note target-specific WAF cannot be ruled out by a healthy control,
+    and forbid extrapolation to ordinary external users without
+    independent vantage evidence.
   - Adding a CI step to a required workflow. Mitigation: if the queue's required
     `validate` check is a concern, the step can instead go into an existing shard
     job. Either way it is a pure unit test with no secrets.
