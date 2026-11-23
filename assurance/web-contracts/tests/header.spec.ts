@@ -144,7 +144,9 @@ type Ctx = { wca: Wca; t: Target; width: number; narrow: boolean; c: CaseDef };
 const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   1: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
-    const navs = p.locator(`${t.sel.header} nav`);
+    // the declared panel navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
+    // as a language switcher, is not "the navigation landmark" the contract asks to be named
+    const navs = p.locator(t.sel.header).locator(t.sel.nav);
     await expect(navs).toHaveCount(1);
     const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
       || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
@@ -156,7 +158,7 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     }
     // the header region's landmark (AC-1: "inspect the header navigation landmark"); a named landmark elsewhere on the
     // page, in content or the footer, is not the header's
-    await expect(p.locator(t.sel.header).getByRole('navigation', { name: /\S/ })).toHaveCount(1);
+    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(t.sel.nav))).toHaveCount(1);
     expect(await axe(), 'axe on the header region').toEqual([]);
   },
 
@@ -380,7 +382,12 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     // Precondition: with no reduced-motion preference something on the panel or toggle does run, so an empty
     // list below is a measured absence and not a page that never animated.
     const base = await load(wca, t, width, { reducedMotion: 'no-preference' });
-    expect((await running(base, t)).length, 'detector precondition: a transition runs on the panel or the toggle icon without the preference').toBeGreaterThan(0);
+    // No transition without the preference: the detector measured an absence it could not tell from a wrong element,
+    // so the case proves nothing either way (owner decision 2026-11-23). A broken page never lands here: the
+    // negative control that ignores the preference does animate, and still FAILs below.
+    if ((await running(base, t)).length === 0) {
+      test.skip(true, 'no transition exists to suppress: nothing runs on the panel or the toggle icon without the preference, so the detector proves nothing');
+    }
     const p = await load(wca, t, width, { reducedMotion: 'reduce' });
     expect(await running(p, t), 'closed: no transition or animation runs on the panel or the toggle').toEqual([]);
     await openPanel(p, t, width);

@@ -42,6 +42,9 @@ KNOWN_GAPS = {
     # mctl-telegram's public chrome is the same CSS-checkbox pattern as the fixture, so the same two limits apply
     ("mctl-telegram", 4): "a native checkbox does not toggle on Enter (only Space); HDR-4 requires both keys and the contract registers no exception for it",
     ("mctl-telegram", 11): "CSS alone cannot clear :checked when the viewport grows past B, so the panel reopens on return to narrow; the contract registers no exception for HDR-11",
+    # mctl-alice and seerrsense use the same shared header component: the burger follows the nav in their served markup too
+    ("mctl-alice", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
+    ("seerrsense", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
     # observed in the consumer markup and in the mctl-design reference stories alike: the burger follows the nav
     ("mctl-web", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
 }
