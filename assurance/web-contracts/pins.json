@@ -102,20 +102,41 @@
     {
       "name": "mctl-docs",
       "gitops_tag": "0.1.73",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
       "source_commit": null,
-      "breakpoint": null,
+      "breakpoint": 768,
       "route_classes": [
         "landing",
         "content",
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
       "observed_image_digest_resolved_for_tag": "0.1.73",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+      "breakpoint_note": "observed in the VitePress default theme source of the consumer checkout (VPNavBarHamburger and VPNavBarMenu switch at min-width: 768px; installed vitepress 1.6.4), not read from the served image at gitops tag 0.1.73; the contract itself does not state it. A wrong value shows up as failing B-1 or B cases.",
+      "expected_blocked": [
+        "stats.mctl.ai/insights.js"
+      ],
+      "expected_blocked_note": "analytics script named in the page served by the pinned image (CI capture, probe run 45194844005); aborted, never answered. Further entries are added only after a run shows them.",
+      "selectors": {
+        "header": "header.VPNav",
+        "nav": "nav.VPNavBarMenu",
+        "links": "nav.VPNavBarMenu a.VPNavBarMenuLink",
+        "toggle": "button.VPNavBarHamburger",
+        "outside": "a.VPButton.brand",
+        "narrow": {
+          "nav": "#VPNavScreen",
+          "landmark": "#VPNavScreen nav.VPNavScreenMenu",
+          "links": "#VPNavScreen a.VPNavScreenMenuLink"
+        },
+        "wide": {
+          "nav": "nav.VPNavBarMenu",
+          "links": "nav.VPNavBarMenu a.VPNavBarMenuLink"
+        }
+      },
+      "selectors_note": "observed in the page served by the pinned image (probe run 45194844005) and the VitePress 1.6.4 theme source: a framework-native hamburger (contract 6.2) with an inline menu on wide and a panel #VPNavScreen that is rendered only while open (v-if), whose nav has no aria-label in the theme source. Only top-level links are listed: links inside collapsed groups (the Links flyout) are not part of this matrix. outside is the first focusable element after the header, the hero primary button."
     },
     {
       "name": "mctl-telegram",

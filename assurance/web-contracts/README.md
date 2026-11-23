@@ -276,3 +276,14 @@ directory again (`/tokens.css%2F`), and `.json`, `.html`, `.php` and extensionle
 - HDR-7 is the same catalogued gap for `mctl-alice` and `seerrsense` as for `mctl-web` (the toggle follows the panel in
   DOM order in all three, mctl-design#233). `mctl-telegram`'s checkbox header carries the two checkbox gaps (HDR-4 Enter,
   HDR-11 state after resize, mctl-design#234).
+
+## Selectors that differ by viewport (`selectors.narrow`, `selectors.wide`)
+
+A header whose markup changes with the viewport (a framework with an inline menu on wide and a separate panel on narrow,
+possibly rendered only while open) declares `selectors.narrow` and `selectors.wide`, each with `nav` and `links`, and
+optionally `landmark`: the element that must be the named navigation when the panel container (`nav`, also the target of
+`aria-controls`) is not itself a `<nav>`. The case's viewport picks the set (`B-1` and `375` narrow, `B` and `1280` wide);
+anything missing falls back to the top-level selectors. HDR-1 opens the panel first on narrow because a panel rendered on
+open is not in the DOM before that, and HDR-11 looks for the inline navigation with the wide set after growing past B.
+A result of FAIL on a framework-native hamburger that does not close on Escape or on an outside click is the observation
+that makes the contract's conditional exception EX-3 apply; it stays FAIL until the owner signs the exception off.
