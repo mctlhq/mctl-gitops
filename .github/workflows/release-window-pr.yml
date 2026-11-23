@@ -69,14 +69,16 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: release-window-pr
-  cancel-in-progress: false
-
 jobs:
   open-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Serialises only the opening, which takes seconds. enqueue-window can wait
+    # up to 50 minutes and must stay outside any group: GitHub keeps one pending
+    # run per group, so a third dispatch would cancel a second, MFA-approved one.
+    concurrency:
+      group: release-window-pr
+      cancel-in-progress: false
     # Only a dispatch run of this file on main can enter the environment that
     # holds the App key.
     if: github.ref == 'refs/heads/main'

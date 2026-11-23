@@ -91,6 +91,10 @@ def problems(text):
     if set(job.get("outputs", {})) != {"pr", "head"}:
         out.append("open-pr must hand the PR number and the pushed head to enqueue-window, nothing else")
     out += enqueue_problems(doc["jobs"].get("enqueue-window", {}))
+    if doc.get("concurrency") is not None or doc["jobs"].get("enqueue-window", {}).get("concurrency") is not None:
+        out.append("enqueue-window must stay outside any concurrency group (it waits up to 50 minutes)")
+    if (job.get("concurrency") or {}).get("group") != "release-window-pr" or (job.get("concurrency") or {}).get("cancel-in-progress") is not False:
+        out.append("open-pr is not serialised in the release-window-pr group without cancelling")
     if job.get("environment") != "app-gitops-pr":
         out.append("job is not in the app-gitops-pr environment")
     if job.get("if") != "github.ref == 'refs/heads/main'":
@@ -157,7 +161,9 @@ def mutants(text):
     yield "environment dropped", sub("    environment: app-gitops-pr\n", "")
     yield "main-only guard dropped", sub("    if: github.ref == 'refs/heads/main'\n", "")
     yield "job write grant", sub("    permissions:\n      contents: read\n    outputs:", "    permissions:\n      contents: write\n    outputs:")
-    yield "workflow-level grant", sub("permissions: {}\n\nconcurrency", "permissions:\n  contents: write\n\nconcurrency")
+    yield "workflow-level grant", sub("permissions: {}\n\njobs:", "permissions:\n  contents: write\n\njobs:")
+    yield "workflow-level concurrency again", sub("jobs:\n  open-pr:", "concurrency:\n  group: release-window-pr\n  cancel-in-progress: false\n\njobs:\n  open-pr:")
+    yield "enqueue-window in the group", sub("    timeout-minutes: 50\n", "    timeout-minutes: 50\n    concurrency:\n      group: release-window-pr\n")
     yield "input interpolated into a script", sub('[[ "$BASE_SHA" =~', '[[ "${{ inputs.base_sha }}" =~')
     yield "force push", sub('git push origin "HEAD:refs/heads/${branch}"', 'git push --force origin "HEAD:refs/heads/${branch}"')
     yield "push to main", sub('git push origin "HEAD:refs/heads/${branch}"', 'git push origin "HEAD:refs/heads/main"')

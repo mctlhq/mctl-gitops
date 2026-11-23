@@ -128,7 +128,7 @@ while :; do
     echo "waiting for an approval on ${head_sha} (review decision ${decision})"
   fi
   if [ "$SECONDS" -ge "$deadline" ]; then
-    die "#${PR} was not approved and green within $((WAIT_SECONDS / 60)) minutes; not enqueueing. Once it is approved and green, re-run only this failed enqueue-window job, or re-enqueue by hand (docs/runbooks/mctl-api-release-hold.md, merge queue stall); never re-run ledger-gate or publish-pr."
+    die "#${PR} was not approved and green within $((WAIT_SECONDS / 60)) minutes; not enqueueing. Once it is approved and green, re-run only the failed enqueue-window job (never open-pr: it refuses the existing branch), or enqueue by hand with tools/merge-gitops-pr.sh ${PR}."
   fi
   sleep 30
 done
