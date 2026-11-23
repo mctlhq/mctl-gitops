@@ -757,7 +757,13 @@ mctlGlovo:
   # The cohort size, read by BOTH the service and mctl-api's consent slots: one
   # value so the two cannot drift. A whole number, 1..20. Raising it is an
   # owner decision with its own reviewed PR, never a rider on another change.
-  capacity: 1
+  # 10 (owner decision 2026-11-23, ahead of the two-principal proof): the cohort
+  # wide caps scale with it (requests 12 a minute -> 120, decrypts 10 an hour ->
+  # 100, keepalive budget 4 -> 40 an hour) and a size of ten reproduces the
+  # design defaults exactly. It admits nobody by itself: access is still the
+  # allowlist, which holds one principal, so exposure does not change. The
+  # per-principal caps do not scale. Rollback: set it back to 1.
+  capacity: 10
   # Link attempts per hour for the whole service: the one-time code, the preview
   # and the upload each count one, so a single link takes three. Left to the
   # default (5 x capacity, which is 5 an hour for one user) a retry or two
