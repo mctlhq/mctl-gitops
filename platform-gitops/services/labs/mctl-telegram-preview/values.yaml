@@ -335,7 +335,10 @@ env:
   # "false" also closes linking.
   PA_EXTERNAL_TOOLS_ENABLED: "true"
   PA_WRITES_ENABLED: "false"
-  PA_SERVER_TG_ENABLED: "true"
+  # G7 kill-switch drill (owner GO 2026-11-24, mctlhq/mctl-telegram#1318):
+  # off for the drill, to see a tool call refused and linking closed on the
+  # deployed service. The next drill PR turns it back on.
+  PA_SERVER_TG_ENABLED: "false"
   PA_SERVER_ALICE_ENABLED: "false"
   # The tg server is this instance's own authorization server and MCP
   # endpoint; the values are its published metadata
