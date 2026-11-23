@@ -46,7 +46,7 @@ export interface Pins {
   mctl_design?: { css_version: string; also_verified_versions?: string[];
                   sheets?: Record<string, Record<string, { sha256: string }>> };
   sites: Array<{ name: string; mode: string; breakpoint: number | null; not_run_reason?: string; image: string | null;
-                 selectors?: Record<string, string> }>;
+                 selectors?: Record<string, string>; expected_blocked?: string[] }>;
 }
 export interface CaseDef {
   id: string; site: string; kind?: string; contract_id?: string | null; gate?: string | null;
@@ -161,12 +161,20 @@ export class Wca {
   readonly seen: Record<string, number> = {};
   /** Requests answered locally (see Substituted hosts): per host, never counted as reaching it. */
   readonly substituted: Record<string, number> = {};
+  /** Requests a site is DECLARED to make to hosts the allowlist refuses (pins.json expected_blocked): still aborted,
+   *  never answered, but not a failure of the test. Counted per host+path and reported. */
+  readonly expectedBlocked: Record<string, number> = {};
+  private expected = new Set<string>();
   private hosts = allowedHosts();
   private versions = pinnedDesignVersions();
   /** Set by a test that probes the guard on purpose; those aborts are expected. */
   probe = false;
 
   constructor(private browser: Browser, private info: TestInfo) {}
+
+  /** Exact host+path entries only. Honoured solely for a host the allowlist refuses; a sensitive path, an
+   *  unparseable URL or any entry that is not an exact match stays an unexpected block. */
+  expectBlocked(entries: string[]): void { this.expected = new Set(entries); }
 
   private note(url: string, d: Decision): void {
     if (d.allow) {
@@ -214,6 +222,12 @@ export class Wca {
         return;
       }
       const d = decide(url, this.hosts);
+      if (!d.allow && d.reason === 'host-not-allowlisted' && this.expected.has(sanitize(url))) {
+        const key = sanitize(url);
+        this.expectedBlocked[key] = (this.expectedBlocked[key] || 0) + 1;
+        await route.abort('blockedbyclient');
+        return;
+      }
       this.note(url, d);
       if (d.allow) await route.continue();
       else await route.abort('blockedbyclient');
@@ -240,7 +254,7 @@ export class Wca {
     for (const c of this.contexts) await c.close().catch(() => undefined);
     fs.mkdirSync(OUT, { recursive: true });
     fs.appendFileSync(path.join(OUT, 'guard.jsonl'), JSON.stringify({
-      test: this.info.title, hosts: this.seen, substituted: this.substituted, blocked: this.blocked,
+      test: this.info.title, hosts: this.seen, substituted: this.substituted, expected_blocked: this.expectedBlocked, blocked: this.blocked,
       unexpected_blocked: this.blocked.filter((b) => !b.expected).length,
     }) + '\n');
   }
