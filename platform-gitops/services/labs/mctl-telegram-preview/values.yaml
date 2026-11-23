@@ -308,6 +308,13 @@ env:
   # synced: config.Load refuses PA_ENABLED=true without the bot token and
   # webhook secret, and strategy is Recreate, so the order matters.
   # Production keeps every PA flag off.
+  # Step G3 (owner GO): PA_ENABLED "true" turns on chat only (consent,
+  # conversation, budget holds); every capability flag below stays off and
+  # no PA worker runs yet (agent-worker-pa-preview replicaCount 0). The
+  # server never calls setWebhook: the operator registers the webhook (O6)
+  # right before this lands, or the webhook monitor reports url_changed and
+  # MctlPAWebhookMisconfigured pages within two checks. Rollback: this flag
+  # back to "false"; pa_outbox rows stay readable by every build >= #1352.
   #
   # ENV is the deployment tier the local KEK checks (PA_KEK_MODE=local is
   # accepted only on preview or a local tier; production must use transit).
@@ -316,7 +323,7 @@ env:
   # listens on the default :8080, so it is already treated as exposed and
   # nothing changes.
   ENV: preview
-  PA_ENABLED: "false"
+  PA_ENABLED: "true"
   PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
   PA_KEK_MODE: local
   # Each capability flag is explicit, so turning PA_ENABLED on later turns
