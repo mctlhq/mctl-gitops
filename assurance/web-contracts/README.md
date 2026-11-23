@@ -13,8 +13,13 @@ syncs nothing, and changes no consumer repository, CSP, Cloudflare or package pi
 | --- | --- |
 | `pins.json` | present: every pin, validated before anything runs |
 | `report/build_report.py` | present: `--check-pins` and report generation (stdlib only) |
+| `report/gen_cases.py` | present: generates and checks `cases.json` (stdlib only) |
+| `cases.json` | present: the case catalogue (test id to AC/HDR or G id); the specs generate one test per case |
+| `fixtures/` | present: fixture origin config, test-only manifest, `header/`, `assets/`, `broken/` (eight negative controls) |
+| `tests/*.spec.ts`, `tests/guard.ts`, `playwright.config.ts`, `package.json`, `package-lock.json` | present: `@playwright/test` 1.64.1, `playwright-core` 1.64.1 and `@axe-core/playwright` 4.14.0, exact |
+| `run.sh` | present: isolated run, report, guard counters, cleanup by name |
 | `../../tests/test_web_contract_report.py` | present: fail-closed mapping tests (no browser) |
-| `cases.json`, `fixtures/`, `tests/*.spec.ts`, `run.sh`, workflow | NOT present yet (PR 2). Commands below marked "after PR 2" do not work until that lands. |
+| workflow, spike document, consumer promotion | NOT present yet (later PRs) |
 
 ## Reproduce
 
@@ -43,17 +48,44 @@ Recorded when this was written (2026-11-23): the pinned commit contains
 `apps/storybook/public/0.21.0/` and `0.20.2/`, and the sha256 and sha384 of all
 eight sheets equal the values in `pins.json` (`--check-pins --design-repo` exits 0).
 
-Available after PR 2 lands (not runnable today):
+Full run (needs Docker, Node and a local mctl-design checkout holding the pinned commit, or network access to fetch it):
 
 ```sh
-# full run: pin check, fixture origin on a --internal network, Playwright, report
-assurance/web-contracts/run.sh
+# pin check, git archive of mctl-design at the pin, npm ci from the lockfile and image
+# availability happen BEFORE isolation; then docker network create --internal, the fixture
+# origin, Playwright in the pinned image, the report, and removal of everything this run created
+WCA_DESIGN_REPO=/path/to/mctl-design assurance/web-contracts/run.sh
+
+# print the docker commands without running anything (also prints the mode:image consumer
+# commands for a pins file in which a site has mode image)
+assurance/web-contracts/run.sh --consumer-plan-only
+WCA_PINS=/path/to/pins-with-an-image-site.json assurance/web-contracts/run.sh --consumer-plan-only
 
 # report only, from a finished run
 python3 assurance/web-contracts/report/build_report.py \
   --junit assurance-out/junit.xml --cases assurance/web-contracts/cases.json \
   --pins assurance/web-contracts/pins.json --out-dir assurance-out --artifact assurance-out.tgz
 ```
+
+`run.sh` environment: `WCA_PREFIX` (name prefix of every container and the network, default
+`wca-run`; an existing network of that name is never touched), `WCA_OUT`, `WCA_WORK`,
+`WCA_DESIGN_REPO`, `WCA_PINS`, `WCA_PW_ARGS` (extra Playwright arguments; a filtered run proves
+nothing). Extra exit codes: 4 = the guard saw an unexpected request or its log is unreadable,
+5 = setup failed. After a change to the catalogue run `python3 assurance/web-contracts/report/gen_cases.py`.
+
+## Isolation as built
+
+- The Playwright dependencies are installed on the host from the lockfile before isolation, into a
+  directory outside the repository, and mounted read-only.
+- Every container runs as the runner UID with `--read-only`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, `--pull=never`, a `--pids-limit`, tmpfs for `/tmp`, no published
+  ports and no Docker socket. The repository is mounted read-only; `/out` is the only writable mount.
+- `tests/guard.ts` aborts a request to a host outside the allowlist (the `pins.json` fixture hosts plus
+  the consumer aliases `run.sh` creates) and any path matching oauth, connect, manage, consent,
+  callback or auth, and records `guard-blocked`. A test that did not declare a deliberate probe fails
+  when anything was blocked; `run.sh` sums the counters and exits 4 on any unexpected request.
+- The "CDN unreachable" G3 case aborts the requests to the stand-in sheet host in the browser (the page
+  and the sheets share one origin container), instead of stopping the container.
 
 ## Pins
 
