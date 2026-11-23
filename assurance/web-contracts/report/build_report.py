@@ -39,10 +39,16 @@ DISCLAIMER = "preview assurance only; not production conformance"
 SITES = ("mctl-web", "mctl-docs", "mctl-telegram", "mctl-academy", "mctl-alice", "seerrsense")
 MODES = ("image", "fixture-only", "not-run")
 SHEETS = ("mctl.css", "global.css", "prose.css", "site.css")
-DIGEST_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
-HEX40 = re.compile(r"^[0-9a-f]{40}$")
-EXACT_SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-URL_RE = re.compile(r"https?://[^\s'\"<>)\]]+", re.IGNORECASE)
+FIXTURE_SITES = ("fixture-reference",)  # non-consumer sites that cases/controls may name
+FIXTURE_HOSTS = ("ui.fixture.test", "site.fixture.test")  # allowlist lives here, not in the checked file
+# fullmatch everywhere: "$" would accept a trailing newline, and \d accepts non-ASCII digits
+DIGEST_REF = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
+HEX40 = re.compile(r"[0-9a-f]{40}")
+HEX64 = re.compile(r"[0-9a-f]{64}")
+SHA384_REF = re.compile(r"sha384-[A-Za-z0-9+/]{64}")
+EXACT_SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+# any scheme, or a scheme-relative "//host"; runs to whitespace so no tail can leak
+URL_RE = re.compile(r"(?<![A-Za-z0-9_/.:-])(?:[A-Za-z][A-Za-z0-9+.-]*:)?//\S+")
 STATUSES = ("PASS", "FAIL", "NOT-RUN", "EXCEPTION-PENDING")
 
 
@@ -53,6 +59,8 @@ class InputError(Exception):
 # --------------------------------------------------------------------------- URLs
 
 def sanitize_url(url):
+    if "\\" in url:
+        return "[unparseable-url]"
     try:
         parts = urlsplit(url)
         host = parts.hostname
@@ -94,6 +102,8 @@ def sha256_file(path):
 def _walk_strings(node, path=""):
     if isinstance(node, dict):
         for k, v in node.items():
+            if isinstance(k, str):
+                yield f"{path}.<key>", k
             yield from _walk_strings(v, f"{path}.{k}")
     elif isinstance(node, list):
         for i, v in enumerate(node):
@@ -111,20 +121,20 @@ def check_pins(pins):
     def digest_image(label, value, nullable=False):
         if value is None and nullable:
             return
-        if not isinstance(value, str) or not DIGEST_REF.match(value):
+        if not isinstance(value, str) or not DIGEST_REF.fullmatch(value):
             bad.append(f"{label}: image must be pinned by @sha256:<64 hex>, got {value!r}")
 
     digest_image("playwright_image", pins.get("playwright_image"))
     digest_image("nginx_image", pins.get("nginx_image"))
     ver = pins.get("playwright_test_version")
-    if not isinstance(ver, str) or not EXACT_SEMVER.match(ver):
+    if not isinstance(ver, str) or not EXACT_SEMVER.fullmatch(ver):
         bad.append(f"playwright_test_version: must be an exact X.Y.Z, got {ver!r}")
 
     design = pins.get("mctl_design")
     if not isinstance(design, dict):
         bad.append("mctl_design: missing")
         design = {}
-    if not isinstance(design.get("commit"), str) or not HEX40.match(design["commit"]):
+    if not isinstance(design.get("commit"), str) or not HEX40.fullmatch(design["commit"]):
         bad.append(f"mctl_design.commit: must be 40 lowercase hex, got {design.get('commit')!r}")
     contracts = design.get("contracts")
     if not isinstance(contracts, list) or not contracts:
@@ -145,8 +155,8 @@ def check_pins(pins):
             continue
         for f in SHEETS:
             h = entry.get(f)
-            if not isinstance(h, dict) or not re.match(r"^[0-9a-f]{64}$", str(h.get("sha256", ""))) \
-                    or not re.match(r"^sha384-[A-Za-z0-9+/]{64}$", str(h.get("sha384", ""))):
+            if not isinstance(h, dict) or not HEX64.fullmatch(str(h.get("sha256", ""))) \
+                    or not SHA384_REF.fullmatch(str(h.get("sha384", ""))):
                 bad.append(f"mctl_design.sheets[{v}][{f}]: needs a 64-hex sha256 and a sha384-<base64> value")
 
     sites = pins.get("sites")
@@ -172,7 +182,7 @@ def check_pins(pins):
         if s.get("observed_image_digest") is not None:
             digest_image(f"sites[{n}].observed_image_digest", s["observed_image_digest"])
         sc = s.get("source_commit")
-        if sc is not None and (not isinstance(sc, str) or not HEX40.match(sc)):
+        if sc is not None and (not isinstance(sc, str) or not HEX40.fullmatch(sc)):
             bad.append(f"sites[{n}].source_commit: must be 40-hex or null, got {sc!r}")
         bp = s.get("breakpoint")
         if bp is not None and (isinstance(bp, bool) or not isinstance(bp, int) or bp <= 0):
@@ -180,17 +190,19 @@ def check_pins(pins):
         if mode == "not-run" and not (isinstance(s.get("not_run_reason"), str) and s["not_run_reason"].strip()):
             bad.append(f"sites[{n}]: mode not-run needs a not_run_reason")
 
-    fixture_hosts = pins.get("fixture_hosts")
-    if not isinstance(fixture_hosts, list) or not all(isinstance(h, str) for h in fixture_hosts):
+    declared = pins.get("fixture_hosts")
+    if not isinstance(declared, list) or not all(isinstance(h, str) for h in declared):
         bad.append("fixture_hosts: must be a list of strings")
-        fixture_hosts = []
+    elif not set(declared) <= set(FIXTURE_HOSTS):
+        bad.append(f"fixture_hosts: {sorted(set(declared) - set(FIXTURE_HOSTS))} not in the script allowlist")
     for where, text in _walk_strings(pins):
         for m in URL_RE.finditer(text):
+            url = m.group(0)
             try:
-                host = urlsplit(m.group(0)).hostname
+                host = None if "\\" in url else urlsplit(url).hostname
             except ValueError:
                 host = None
-            if host not in fixture_hosts:
+            if host not in FIXTURE_HOSTS:
                 bad.append(f"{where}: URL to a non-fixture host: {sanitize_url(m.group(0))}")
     return bad
 
@@ -270,11 +282,20 @@ def load_cases(path):
         if c["id"] in seen:
             raise InputError(f"cases: duplicate id {c['id']}")
         seen.add(c["id"])
-        if not isinstance(c.get("site"), str):
-            raise InputError(f"cases: {c['id']} has no site")
+        if c.get("site") not in SITES + FIXTURE_SITES:
+            raise InputError(f"cases: {c['id']} names unknown site {c.get('site')!r}")
+        for key in ("contract_id", "gate", "route_class", "viewport", "provenance", "exception"):
+            if c.get(key) is not None and not isinstance(c[key], str):
+                raise InputError(f"cases: {c['id']}.{key} must be a string")
         if c.get("kind", "case") not in ("case", "negative-control"):
             raise InputError(f"cases: {c['id']} has an unknown kind {c.get('kind')!r}")
     return cases, digest
+
+
+# surefire-style rerun elements are a failed attempt: never read as a clean pass
+JUNIT_CHILDREN = (("failure", "fail"), ("flakyFailure", "fail"), ("rerunFailure", "fail"),
+                  ("error", "error"), ("flakyError", "error"), ("rerunError", "error"),
+                  ("skipped", "skipped"))
 
 
 def load_junit(path):
@@ -292,7 +313,13 @@ def load_junit(path):
         if not name:
             raise InputError("junit: testcase without a name")
         outcome, message = "pass", ""
-        for tag, label in (("failure", "fail"), ("error", "error"), ("skipped", "skipped")):
+        # a status attribute other than run/passed is not a pass (fail closed)
+        st = (tc.get("status") or "").lower()
+        if st in ("skipped", "disabled", "notrun", "not-run"):
+            outcome, message = "skipped", f"status={st}"
+        elif st not in ("", "run", "passed", "pass"):
+            outcome, message = "error", f"unrecognised status={st}"
+        for tag, label in JUNIT_CHILDREN:
             el = tc.find(tag)
             if el is not None:
                 outcome = label
@@ -336,6 +363,11 @@ def derive(case, runs, site_pins):
 
 
 def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for stale in ("results.json", "matrix.md"):  # a hard error must not leave a prior verdict behind
+        (out / stale).unlink(missing_ok=True)
+
     pins, pins_sha = load_json(pins_path, "pins")
     problems = check_pins(pins)
     if problems:
@@ -347,6 +379,9 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
     site_pins = {s["name"]: s for s in pins["sites"]}
 
     results, control_problem, fail = [], False, False
+    if not any(c.get("kind", "case") == "negative-control" for c in cases):
+        # no controls catalogued = the "every control must FAIL" guarantee is silently off
+        control_problem = True
     for c in cases:
         status, reason = derive(c, runs.get(c["id"]), site_pins)
         control = c.get("kind", "case") == "negative-control"
@@ -388,11 +423,11 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
            "sites": per_site, "gates": gates, "results": results,
            "summary": {"compliance_claim": not any_fail and any(s["compliant"] for s in per_site.values()),
                        "failed_cases": [r["id"] for r in results if r["kind"] == "case" and r["status"] == "FAIL"],
-                       "broken_controls": [r["id"] for r in results if r.get("control") == "BROKEN"],
+                       "broken_controls": [r["id"] for r in results if r.get("control") == "BROKEN"]
+                                       + ([] if any(r["kind"] == "negative-control" for r in results)
+                                          else ["<no negative control catalogued>"]),
                        "statement": "no compliance claim" if any_fail else
                                     "per-site compliance only where every catalogued case is PASS"}}
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
     (out / "matrix.md").write_text(render_matrix(doc))
     if control_problem:
@@ -438,9 +473,15 @@ def render_matrix(doc):
 
 # --------------------------------------------------------------------------- main
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):  # argparse exits 2 by default, which here means "control did not FAIL"
+        print(f"ERROR: {message}", file=sys.stderr)
+        raise SystemExit(3)
+
+
 def main(argv=None):
     here = Path(__file__).resolve().parent
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = _Parser(description=__doc__.split("\n")[0])
     ap.add_argument("--check-pins", action="store_true")
     ap.add_argument("--design-repo")
     ap.add_argument("--pins", default=str(here.parent / "pins.json"))
@@ -462,6 +503,9 @@ def main(argv=None):
         return build(args.junit, args.cases, args.pins, args.out_dir, args.artifact, attempt)
     except InputError as exc:
         print(f"ERROR: {sanitize_text(str(exc))}", file=sys.stderr)
+        return 3
+    except Exception as exc:  # an uncaught traceback exits 1, which means "a case FAILed"
+        print(f"ERROR: unexpected {type(exc).__name__}: {sanitize_text(str(exc))}", file=sys.stderr)
         return 3
 
 

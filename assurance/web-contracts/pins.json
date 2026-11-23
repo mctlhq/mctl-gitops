@@ -117,10 +117,9 @@
       ],
       "mode": "not-run",
       "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
-      "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:1df8c48c13d1bbc03709cef31edc8001f46b31c11fdb30c95235956e08f21e5f",
-      "observed_image_digest_resolved_for_tag": "0.142.0",
-      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit",
-      "observed_image_digest_note": "digest was resolved for tag 0.142.0; gitops_tag on main moved to 0.143.0 afterwards, so the digest does not describe gitops_tag and must be re-resolved before this site is promoted to mode image"
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
+      "observed_image_digest_resolved_for_tag": "0.143.0",
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
     },
     {
       "name": "mctl-academy",
