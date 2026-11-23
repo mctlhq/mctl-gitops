@@ -241,10 +241,15 @@ const behaviours: Record<string, (wca: Wca, c: CaseDef) => Promise<void>> = {
     // pure decision table: encodings, params and sibling auth routes must not slip past the guard
     const hosts = new Set(['site.fixture.test']);
     for (const p of ['/authorize', '/oauth2callback', '/login', '/signin', '/logout', '/connected', '/%6Fauth/x',
-                     '/%256Fauth/x', '/oauth;a=1/x', '/a/b/OAuth/x', '/api/auth', '/oauth/authorize']) {
+                     '/%256Fauth/x', '/oauth;a=1/x', '/a/b/OAuth/x', '/api/auth', '/oauth/authorize',
+                     // a static-file exemption applies to the final segment only
+                     '/oauth/x.css', '/auth/app.js', '/a/token/b.svg', '/token', '/tokens', '/tokens/', '/token.json', '/token.css/',
+                     '/tokens.html', '/login.php', '/assets/tokens.css/x', '/%6Fauth/x.css', '/tokens.css%2F']) {
       expect(decide(`http://site.fixture.test${p}`, hosts), `sensitive path ${p}`).toMatchObject({ allow: false, reason: 'sensitive-path' });
     }
-    for (const p of ['/', '/header/reference.html', '/0.21.0/site.css', '/broken/no-acao.html', '/healthz']) {
+    for (const p of ['/', '/header/reference.html', '/0.21.0/site.css', '/broken/no-acao.html', '/healthz',
+                     // a site's own stylesheet whose name merely starts like a sensitive word
+                     '/assets/tokens.css', '/assets/session.js', '/assets/login.svg', '/static/oauth-icon.png', '/assets/token.woff2']) {
       expect(decide(`http://site.fixture.test${p}`, hosts), `fixture path ${p}`).toEqual({ allow: true });
     }
     wca.probe = true;

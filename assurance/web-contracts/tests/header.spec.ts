@@ -144,7 +144,9 @@ type Ctx = { wca: Wca; t: Target; width: number; narrow: boolean; c: CaseDef };
 const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   1: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
-    const navs = p.locator(`${t.sel.header} nav`);
+    // the declared panel navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
+    // as a language switcher, is not "the navigation landmark" the contract asks to be named
+    const navs = p.locator(t.sel.header).locator(t.sel.nav);
     await expect(navs).toHaveCount(1);
     const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
       || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
@@ -156,7 +158,7 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     }
     // the header region's landmark (AC-1: "inspect the header navigation landmark"); a named landmark elsewhere on the
     // page, in content or the footer, is not the header's
-    await expect(p.locator(t.sel.header).getByRole('navigation', { name: /\S/ })).toHaveCount(1);
+    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(t.sel.nav))).toHaveCount(1);
     expect(await axe(), 'axe on the header region').toEqual([]);
   },
 
@@ -339,8 +341,9 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   13: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
     if (narrow) {
-      await p.locator('body').press('Tab'); // brand
-      await p.keyboard.press('Tab'); // toggle
+      // Tab from the top of the page until the toggle holds focus: other controls (a theme switch) may sit before it
+      await p.locator('body').press('Tab');
+      await tabUntil(p, toggle(p, t));
       await expect(toggle(p, t)).toBeFocused();
       const ring = t.kind === 'checkbox' ? p.locator(t.sel.clickToggle) : toggle(p, t);
       expect(hasRing(await outline(ring)), 'focus indicator on the toggle').toBe(true);
@@ -379,7 +382,12 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     // Precondition: with no reduced-motion preference something on the panel or toggle does run, so an empty
     // list below is a measured absence and not a page that never animated.
     const base = await load(wca, t, width, { reducedMotion: 'no-preference' });
-    expect((await running(base, t)).length, 'detector precondition: a transition runs on the panel or the toggle icon without the preference').toBeGreaterThan(0);
+    // No transition without the preference: the detector measured an absence it could not tell from a wrong element,
+    // so the case proves nothing either way (owner decision 2026-11-23). A broken page never lands here: the
+    // negative control that ignores the preference does animate, and still FAILs below.
+    if ((await running(base, t)).length === 0) {
+      test.skip(true, 'no transition exists to suppress: nothing runs on the panel or the toggle icon without the preference, so the detector proves nothing');
+    }
     const p = await load(wca, t, width, { reducedMotion: 'reduce' });
     expect(await running(p, t), 'closed: no transition or animation runs on the panel or the toggle').toEqual([]);
     await openPanel(p, t, width);
@@ -443,8 +451,11 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expect
   if (!st.healthy || !st.url) return { skip: `image did not start: ${sanitize(st.reason || 'no reason recorded')}` };
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
   const s = site.selectors as Record<string, string>;
-  return { t: { url: st.url, bp: site.breakpoint as number, kind: 'button',
-    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp,
+  // a CSS checkbox header declares kind 'checkbox' and the element a user clicks (the label) as click_toggle;
+  // the default stays a native button, where the toggle is also what is clicked
+  const kind = s.kind === 'checkbox' ? 'checkbox' : 'button';
+  return { t: { url: st.url, bp: site.breakpoint as number, kind,
+    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside } }, vp,
     expected: site.expected_blocked ?? [] };
 }
 
