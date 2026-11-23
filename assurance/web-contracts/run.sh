@@ -25,7 +25,9 @@
 #                    then lists every unselected case as NOT-RUN; such a run proves nothing)
 #
 # Exit codes: the report's (0 ok, 1 a case FAILed, 2 a negative control did not FAIL, 3 unreadable
-# input or rejected pin), plus 4 = the guard saw an unexpected request, 5 = setup failed.
+# input or rejected pin), plus 4 = the guard saw an unexpected request or its log does not account
+# for every executed test, 5 = setup failed, the Playwright runner crashed, or a fixture case that
+# should have run is NOT-RUN.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -42,6 +44,7 @@ DRY=0
 NET=$PREFIX-net
 ORIGIN=$PREFIX-origin
 RUNNER=$PREFIX-runner
+RUN_ID=$$-$(date +%s)   # every container carries label wca.run=$RUN_ID; cleanup removes only those
 CREATED_CONTAINERS=()
 CREATED_NET=0
 OWN_WORK=0
@@ -62,9 +65,14 @@ cleanup() {
   [ "$DRY" = 1 ] && return "$rc"
   # Only what this run created, only by exact name: no pattern kill, no prune, no image removal.
   for c in "${CREATED_CONTAINERS[@]:-}"; do
-    [ -n "$c" ] && docker rm -f "$c" >/dev/null 2>&1
+    [ -n "$c" ] || continue
+    # remove only a container this run labelled; a same-named foreign container is left alone
+    [ "$(docker inspect -f '{{index .Config.Labels "wca.run"}}' "$c" 2>/dev/null)" = "$RUN_ID" ] \
+      && docker rm -f "$c" >/dev/null 2>&1
   done
-  [ "$CREATED_NET" = 1 ] && docker network rm "$NET" >/dev/null 2>&1
+  if [ "$CREATED_NET" = 1 ]; then
+    docker network rm "$NET" >/dev/null 2>&1 || log "WARNING: could not remove network $NET (an endpoint may still be attached): remove it by name"
+  fi
   if [ "$OWN_WORK" = 1 ] && [ -n "${WORK:-}" ]; then rm -rf "$WORK"; fi
   return "$rc"
 }
@@ -128,14 +136,24 @@ else
 fi
 
 # ------------------------------------------------------------------ 3. isolated network
-HARDEN=(--pull=never --user "$RUN_UID:$RUN_GID" --read-only --cap-drop ALL --security-opt no-new-privileges
+HARDEN=(--pull=never --label "wca.run=$RUN_ID" --user "$RUN_UID:$RUN_GID" --read-only --cap-drop ALL --security-opt no-new-privileges
         --pids-limit 512 --tmpfs "/tmp:rw,nosuid,size=512m")
 
 log "3/5 isolated network and fixture origin"
 if [ "$DRY" = 0 ] && docker network inspect "$NET" >/dev/null 2>&1; then
   die "network $NET already exists; refusing to touch it (set WCA_PREFIX to a free prefix)"
 fi
-[ "$DRY" = 0 ] && CREATED_NET=1
+if [ "$DRY" = 0 ]; then
+  # a pre-existing container with one of our names is never touched: refuse before creating anything
+  names=("$ORIGIN" "$RUNNER" "$PREFIX-probe")
+  while read -r name image; do [ -n "${name:-}" ] && names+=("$PREFIX-$name"); done <<<"$CONSUMER_LINES"
+  for n in "${names[@]}"; do
+    if docker container inspect "$n" >/dev/null 2>&1; then
+      die "container $n already exists; refusing to touch it (set WCA_PREFIX to a free prefix)"
+    fi
+  done
+  CREATED_NET=1
+fi
 dk network create --internal "$NET" >/dev/null
 if [ "$DRY" = 0 ]; then
   internal=$(docker network inspect -f '{{.Internal}}' "$NET")
@@ -169,7 +187,7 @@ while read -r name image; do
   [ -n "${name:-}" ] || continue
   c=$PREFIX-$name
   alias=consumer-$name
-  CREATED_CONTAINERS+=("$c")
+  CREATED_CONTAINERS+=("$c" "$PREFIX-probe")
   dk run -d --name "$c" --network "$NET" --network-alias "$alias" "${HARDEN[@]}" --memory 384m \
     -e NODE_ENV=production -e PORT=8080 -e OAUTH_CLIENT_ID=dummy -e OAUTH_CLIENT_SECRET=dummy \
     -e TELEGRAM_BOT_TOKEN=dummy -e SESSION_SECRET=dummy "$image" >/dev/null || true
@@ -208,7 +226,9 @@ docker run --name "$RUNNER" --network "$NET" "${HARDEN[@]}" --memory 1536m --shm
   -e NODE_PATH=/deps/node_modules -w /repo/assurance/web-contracts "$PW_IMAGE" \
   node /deps/node_modules/@playwright/test/cli.js test --config /repo/assurance/web-contracts/playwright.config.ts ${WCA_PW_ARGS:-} \
   && PW_RC=0 || PW_RC=$?
-log "playwright exit code $PW_RC (non-zero is expected while negative controls fail; the report decides)"
+log "playwright exit code $PW_RC (1 is expected while negative controls fail; the report decides)"
+# 0 = all passed, 1 = some tests failed; anything else is a runner crash, not a verdict
+case "$PW_RC" in 0|1) ;; *) die "Playwright runner crashed (exit $PW_RC): the results are not a verdict" 5 ;; esac
 
 # ------------------------------------------------------------------ 5. report and guard counters
 log "5/5 report"
@@ -224,17 +244,22 @@ set -e
 
 # guard counters: could not observe is never "zero"; a missing or unreadable log is an error
 GUARD_RC=0
-python3 - "$OUT/guard.jsonl" "$PINS" "$ALLOW_HOSTS" <<'PY' || GUARD_RC=$?
+python3 - "$OUT/guard.jsonl" "$OUT/junit.xml" <<'PY' || GUARD_RC=$?
 import json, sys
-path, pins, extra = sys.argv[1:4]
-allowed = set(json.load(open(pins))["fixture_hosts"]) | {h for h in extra.split(",") if h}
+import xml.etree.ElementTree as ET
+path, junit = sys.argv[1:3]
 try:
     rows = [json.loads(l) for l in open(path) if l.strip()]
-except (OSError, ValueError) as exc:
-    print(f"guard: log unreadable ({type(exc).__name__}): cannot claim zero unexpected requests", file=sys.stderr)
+    executed = len(ET.parse(junit).getroot().findall(".//testcase"))
+except (OSError, ValueError, ET.ParseError) as exc:
+    print(f"guard: log or junit unreadable ({type(exc).__name__}): cannot claim zero unexpected requests", file=sys.stderr)
     sys.exit(4)
 if not rows:
     print("guard: no records: cannot claim zero unexpected requests", file=sys.stderr)
+    sys.exit(4)
+if len(rows) != executed:
+    # a test that bypassed the wca fixture (bare page or request) leaves no row: unknown, not zero
+    print(f"guard: {len(rows)} records for {executed} executed tests: some test is not accounted for", file=sys.stderr)
     sys.exit(4)
 unexpected = sum(r["unexpected_blocked"] for r in rows)
 probes = sum(len(r["blocked"]) - r["unexpected_blocked"] for r in rows)
@@ -242,12 +267,33 @@ hosts = {}
 for r in rows:
     for h, n in r["hosts"].items():
         hosts[h] = hosts.get(h, 0) + n
-outside = sorted(h for h in hosts if h not in allowed)
-print(f"guard: {len(rows)} tests, requests per host {hosts}, expected probe aborts {probes}, "
-      f"unexpected blocked {unexpected}, hosts outside the allowlist {outside}", file=sys.stderr)
-sys.exit(4 if unexpected or outside else 0)
+# Only requests the browser contexts issued through the route guard are counted here; the
+# network itself (docker --internal) is the enforcement, this is an in-band tripwire.
+print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, expected probe aborts {probes}, "
+      f"unexpected blocked {unexpected}", file=sys.stderr)
+sys.exit(4 if unexpected else 0)
+PY
+
+# a fixture case that should have run but is NOT-RUN is an incomplete run, not a quiet gap
+COMPLETE_RC=0
+python3 - "$OUT/results.json" "$HERE/cases.json" <<'PY' || COMPLETE_RC=$?
+import json, sys
+try:
+    res = json.load(open(sys.argv[1]))["results"]
+    cases = {c["id"]: c for c in json.load(open(sys.argv[2]))["cases"]}
+except (OSError, ValueError, KeyError) as exc:
+    print(f"completeness: unreadable ({type(exc).__name__}): cannot claim the fixture cases ran", file=sys.stderr)
+    sys.exit(5)
+# documented NOT-RUN in fixture sites: the G4 placeholder and the catalogued known gaps
+bad = [r["id"] for r in res
+       if r["site"].startswith("fixture-") and r["kind"] == "case" and r["status"] == "NOT-RUN"
+       and cases[r["id"]].get("gate") != "G4" and not cases[r["id"]].get("known_gap")]
+if bad:
+    print(f"completeness: {len(bad)} fixture case(s) NOT-RUN outside the documented allowlist: {bad[:5]}", file=sys.stderr)
+    sys.exit(5)
 PY
 
 if [ "$REPORT_RC" != 0 ]; then exit "$REPORT_RC"; fi
 if [ "$GUARD_RC" != 0 ]; then exit 4; fi
+if [ "$COMPLETE_RC" != 0 ]; then exit 5; fi
 exit 0

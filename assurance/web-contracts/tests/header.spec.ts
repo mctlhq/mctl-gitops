@@ -12,14 +12,22 @@
 //  * a site with breakpoint null yields a skip ("breakpoint unknown") for its B-1/B cases;
 //  * a sensitive route class never targets a consumer, only fixtures;
 //  * a consumer whose pins mode is not "image" is skipped with its recorded reason;
-//  * `known_gap` (cases.json) turns an observed failure of a fixture-pattern limitation that the
-//    contract registers no exception for into a skip carrying the observed reason; without it a
-//    failed assertion is a FAIL.
+//  * `known_gap` (cases.json) turns the failure of ONE named assertion (the Enter step of HDR-4, the
+//    checked/hidden-state checks after growing past B in HDR-11) of a fixture-pattern limitation that
+//    the contract registers no exception for into a skip carrying the observed reason; every other
+//    failure, including earlier steps of the same case, stays a FAIL.
 import AxeBuilder from '@axe-core/playwright';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Page } from '@playwright/test';
 import { expect, loadCases, loadPins, OUT, sanitize, test, type CaseDef, type Wca } from './guard';
+
+/** Thrown only at the one assertion a catalogued known_gap describes; anything else stays a FAIL. */
+class KnownGap extends Error {}
+async function atGap(c: CaseDef, fn: () => Promise<void>): Promise<void> {
+  if (!c.known_gap) return fn();
+  try { await fn(); } catch (e) { throw new KnownGap(String((e as Error).message).split('\n')[0]); }
+}
 
 const BASE = 'http://site.fixture.test:8080';
 const HEIGHT = 800;
@@ -96,17 +104,22 @@ async function outline(loc: ReturnType<Page['locator']>) {
 const hasRing = (o: { style: string; width: number }) => o.style !== 'none' && o.width > 0;
 
 async function durations(p: Page, t: Target): Promise<number[]> {
-  return p.evaluate(([navSel, togSel]) => {
+  return p.evaluate(([headSel, navSel, linkSel, togSel]) => {
     const out: number[] = [];
     const add = (el: Element | null, pseudo?: string) => {
       if (!el) return;
-      for (const part of getComputedStyle(el, pseudo).transitionDuration.split(',')) out.push(parseFloat(part));
+      const cs = getComputedStyle(el, pseudo);
+      for (const part of cs.transitionDuration.split(',')) out.push(parseFloat(part));
+      for (const part of cs.animationDuration.split(',')) out.push(parseFloat(part));
     };
+    const head = document.querySelector(headSel);
+    add(head); add(head, '::before'); add(head, '::after');
     add(document.querySelector(navSel));
+    document.querySelectorAll(linkSel).forEach((a) => add(a));
     const tog = document.querySelector(togSel);
     add(tog); add(tog, '::before'); add(tog, '::after');
     return out;
-  }, [t.sel.nav, t.sel.toggle]);
+  }, [t.sel.header, t.sel.nav, t.sel.links, t.sel.toggle]);
 }
 
 // ------------------------------------------------------------------ behaviours
@@ -144,15 +157,18 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     await expectClosed(p, t);
   },
 
-  4: async ({ wca, t, width }) => {
+  4: async ({ wca, t, width, c }) => {
     const p = await load(wca, t, width);
     await toggle(p, t).focus();
-    for (const key of ['Enter', 'Space']) {
+    const cycle = async (key: string) => {
       await p.keyboard.press(key);
       await expectOpen(p, t, width);
       await p.keyboard.press(key);
       await expectClosed(p, t);
-    }
+    };
+    // Space first and outside the gap wrapper: a broken toggle is never mistaken for the Enter gap.
+    await cycle('Space');
+    await atGap(c, () => cycle('Enter'));
   },
 
   5: async ({ wca, t, width }) => {
@@ -251,11 +267,12 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     await expect(nav(p, t)).toBeVisible();
     expect(await nav(p, t).evaluate((e) => getComputedStyle(e).position), 'inline nav, not the fixed drawer').not.toBe('fixed');
     await expect(p.locator(t.sel.clickToggle)).toBeHidden();
-    if (t.kind === 'checkbox') await expect(toggle(p, t)).not.toBeChecked();
+    // the checkbox's :checked state cannot be cleared by CSS alone: that, and the panel reopening on
+    // return to narrow, are the two observations the HDR-11 known_gap describes
+    if (t.kind === 'checkbox') await atGap(c, async () => { await expect(toggle(p, t)).not.toBeChecked(); });
     else await expect(toggle(p, t)).toHaveAttribute('aria-expanded', 'false');
     await p.setViewportSize({ width, height: HEIGHT });
-    await expectClosed(p, t); // no hidden open state returns
-    void c;
+    await atGap(c, () => expectClosed(p, t)); // no hidden open state returns
   },
 
   12: async ({ wca, t, width }) => {
@@ -278,6 +295,20 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     await expectClosed(p, t);
     expect(await p.evaluate((sel) => document.activeElement === document.querySelector(sel), t.sel.toggle),
       'focus is on the toggle, not lost to body').toBe(true);
+    // Close initiated from inside the panel (a link click): focus must be the toggle or the
+    // navigation target, never body.
+    await openPanel(p, t, width);
+    const before = p.url();
+    await p.locator(t.sel.links).nth(1).click();
+    await expect.poll(() => p.url()).not.toBe(before);
+    await expectClosed(p, t);
+    const where = await p.evaluate((sel) => {
+      const a = document.activeElement;
+      if (!a || a === document.body || a === document.documentElement) return 'body';
+      if (a === document.querySelector(sel)) return 'toggle';
+      return a.id && a.id === location.hash.slice(1) ? 'target' : 'other:' + a.tagName;
+    }, t.sel.toggle);
+    expect(['toggle', 'target'], `after a link-initiated close focus is ${where}, not on the toggle or the target`).toContain(where);
   },
 
   13: async ({ wca, t, width, narrow }) => {
@@ -301,9 +332,16 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     expect(axe, 'axe on the header region').toEqual([]);
   },
 
-  14: async ({ wca, t, width }) => {
+  14: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
     await expect(p.locator(`${t.sel.links}[aria-current="page"]`)).toHaveCount(1);
+    if (t.kind === 'checkbox') return; // server-rendered: every route is a full page load, there is no client transition
+    // client route change: the current marker must follow, still exactly one
+    if (narrow) await openPanel(p, t, width);
+    const target = p.locator(t.sel.links).nth(1);
+    await target.click();
+    await expect(p.locator(`${t.sel.links}[aria-current="page"]`)).toHaveCount(1);
+    await expect(target).toHaveAttribute('aria-current', 'page');
   },
 
   15: async ({ wca, t, width }) => {
@@ -392,7 +430,8 @@ for (const c of cases) {
     try {
       await fn({ wca, t, width, narrow, c });
     } catch (e) {
-      if (c.known_gap) test.skip(true, `observed gap, no exception registered: ${c.known_gap}`);
+      // only the one assertion the known_gap names is a skip; any other failure stays a FAIL
+      if (e instanceof KnownGap) test.skip(true, `observed gap, no exception registered: ${c.known_gap} (${e.message})`);
       throw e;
     }
   });

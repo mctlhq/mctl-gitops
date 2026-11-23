@@ -8,7 +8,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Page } from '@playwright/test';
-import { expect, loadCases, loadPins, ROOT, test, type CaseDef, type Wca } from './guard';
+import { decide, expect, loadCases, loadPins, ROOT, test, type CaseDef, type Wca } from './guard';
 
 const UI = 'http://ui.fixture.test:8080';
 const SITE = 'http://site.fixture.test:8080';
@@ -135,6 +135,15 @@ const behaviours: Record<string, (wca: Wca, c: CaseDef) => Promise<void>> = {
     expect(Object.keys(wca.seen), 'no request reached any host').toEqual([]);
   },
   async 'guard-oauth-path'(wca) {
+    // pure decision table: encodings, params and sibling auth routes must not slip past the guard
+    const hosts = new Set(['site.fixture.test']);
+    for (const p of ['/authorize', '/oauth2callback', '/login', '/signin', '/logout', '/connected', '/%6Fauth/x',
+                     '/%256Fauth/x', '/oauth;a=1/x', '/a/b/OAuth/x', '/api/auth', '/oauth/authorize']) {
+      expect(decide(`http://site.fixture.test${p}`, hosts), `sensitive path ${p}`).toMatchObject({ allow: false, reason: 'sensitive-path' });
+    }
+    for (const p of ['/', '/header/reference.html', '/0.21.0/site.css', '/broken/no-acao.html', '/healthz']) {
+      expect(decide(`http://site.fixture.test${p}`, hosts), `fixture path ${p}`).toEqual({ allow: true });
+    }
     wca.probe = true;
     const { page } = await wca.open();
     await page.goto(`${SITE}/oauth/authorize?code=probe`).catch(() => undefined);

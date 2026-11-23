@@ -70,8 +70,10 @@ python3 assurance/web-contracts/report/build_report.py \
 `run.sh` environment: `WCA_PREFIX` (name prefix of every container and the network, default
 `wca-run`; an existing network of that name is never touched), `WCA_OUT`, `WCA_WORK`,
 `WCA_DESIGN_REPO`, `WCA_PINS`, `WCA_PW_ARGS` (extra Playwright arguments; a filtered run proves
-nothing). Extra exit codes: 4 = the guard saw an unexpected request or its log is unreadable,
-5 = setup failed. After a change to the catalogue run `python3 assurance/web-contracts/report/gen_cases.py`.
+nothing; it also exits 5, because the fixture cases are NOT-RUN). Extra exit codes: 4 = the guard saw
+an unexpected request, its log is unreadable, or it holds fewer records than executed tests; 5 = setup
+failed, the Playwright runner crashed (exit code other than 0 or 1), or a fixture case outside the
+documented allowlist (G4, the catalogued known gaps) is NOT-RUN. After a change to the catalogue run `python3 assurance/web-contracts/report/gen_cases.py`.
 
 ## Isolation as built
 
@@ -81,11 +83,28 @@ nothing). Extra exit codes: 4 = the guard saw an unexpected request or its log i
   `--security-opt no-new-privileges`, `--pull=never`, a `--pids-limit`, tmpfs for `/tmp`, no published
   ports and no Docker socket. The repository is mounted read-only; `/out` is the only writable mount.
 - `tests/guard.ts` aborts a request to a host outside the allowlist (the `pins.json` fixture hosts plus
-  the consumer aliases `run.sh` creates) and any path matching oauth, connect, manage, consent,
-  callback or auth, and records `guard-blocked`. A test that did not declare a deliberate probe fails
-  when anything was blocked; `run.sh` sums the counters and exits 4 on any unexpected request.
+  the consumer aliases `run.sh` creates) and any path with a segment starting with oauth, oidc, auth,
+  authorize, connect, manage, consent, callback, login, logout, signin, signup, sso, token or session
+  (the path is percent-decoded until stable, lowercased and stripped of `;params` first), and records
+  `guard-blocked`. A test that did not declare a deliberate probe fails when anything was blocked;
+  `run.sh` sums the counters and exits 4 on any unexpected request or when the records do not account
+  for every executed test (a spec using Playwright's bare `page` or `request` fixture leaves no record).
+  The counter is an in-band tripwire: it sees only requests the browser contexts route through the
+  guard (not WebSockets). The enforcement is the `--internal` network and the container hardening
+  below, which are the sole isolation layers once consumer pages are exercised; Chromium runs
+  with its sandbox disabled inside the cap-dropped container.
+- `run.sh` refuses to start when a container or the network named `<prefix>-...` already exists, labels
+  every container it creates with `wca.run=<id>` and removes only containers that carry its own label.
+- `assurance-out/` (the default `WCA_OUT`) is gitignored.
 - The "CDN unreachable" G3 case aborts the requests to the stand-in sheet host in the browser (the page
   and the sheets share one origin container), instead of stopping the container.
+
+## Case catalogue note
+
+Consumer rows for HDR-1, 13, 14 and 16 also run at 1280, a superset of the viewport set in the
+contract's AC matrix (no AC id is missing or extra); HDR-11 runs at `B-1` and returns to `B`.
+A `known_gap` skips only the single named assertion (the Enter step of HDR-4, the checked/hidden-state
+checks of HDR-11); any other failure in those cases is a FAIL.
 
 ## Pins
 

@@ -3,7 +3,7 @@
 //
 // The guard registers a context-level route on '**/*' and aborts every request whose host is
 // outside the allowlist, or whose path looks like a sensitive route (oauth, connect, manage,
-// consent, callback, auth). Each abort is recorded as `guard-blocked`. A test that did not
+// consent, callback, auth, login, ...; percent-encoding and ;params do not hide a segment). Each abort is recorded as `guard-blocked`. A test that did not
 // declare a deliberate probe fails when anything was blocked, so a green run proves the
 // "no request to an unexpected host" counter was zero.
 import { test as base, expect, request, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
@@ -15,7 +15,27 @@ export { expect };
 export const ROOT = path.resolve(__dirname, '..');
 export const OUT = process.env.WCA_OUT || path.join(ROOT, 'assurance-out');
 
-export const SENSITIVE_PATH = /\/(oauth\d*|connect|manage|consent|callback|auth)([\/?#._-]|$)/i;
+// Prefix semantics on a path segment: /authorize, /oauth2callback, /login and /connected all match.
+// Over-blocking is the safe direction here; the fixtures never use such a segment.
+export const SENSITIVE_SEGMENT =
+  /^(oauth|oidc|auth|authorize|connect|manage|consent|callback|login|logout|signin|signup|sso|token|session)/;
+
+/** Percent-decode until stable (a server decodes %6Fauth), lowercase, drop ;params, split into segments. */
+export function pathSegments(pathname: string): string[] | null {
+  let p = pathname;
+  for (let i = 0; i < 8; i++) {
+    let d: string;
+    try { d = decodeURIComponent(p); } catch { return null; } // undecodable: caller blocks
+    if (d === p) break;
+    p = d;
+  }
+  return p.toLowerCase().replace(/\\/g, '/').split('/').map((s) => s.split(';')[0]).filter((s) => s !== '');
+}
+
+export function isSensitivePath(pathname: string): boolean {
+  const segs = pathSegments(pathname);
+  return segs === null || segs.some((s) => SENSITIVE_SEGMENT.test(s));
+}
 const NON_NETWORK = new Set(['data:', 'blob:', 'about:']);
 
 export interface Pins {
@@ -52,7 +72,7 @@ export function decide(rawUrl: string, hosts: Set<string> = allowedHosts()): Dec
   try { u = new URL(rawUrl); } catch { return { allow: false, reason: 'unparseable-url' }; }
   if (NON_NETWORK.has(u.protocol)) return { allow: true };
   if (!hosts.has(u.hostname)) return { allow: false, reason: 'host-not-allowlisted' };
-  if (SENSITIVE_PATH.test(u.pathname)) return { allow: false, reason: 'sensitive-path' };
+  if (isSensitivePath(u.pathname)) return { allow: false, reason: 'sensitive-path' };
   return { allow: true };
 }
 
