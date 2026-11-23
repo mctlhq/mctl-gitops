@@ -145,7 +145,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 0. **Header and evidence limitations.**
    - The two pinned SHAs and both image tags.
    - Vendor access dates.
-   - The label legend: `VERIFIED`, `VENDOR-DOCUMENTED`, `UNTESTED`, `NOT-IMPLEMENTED`, `UNKNOWN`, plus `NOT-EXECUTED` and `BLOCKED` for tests.
+   - The label legend: `VERIFIED_CODE`, `VERIFIED_GITOPS_DESIRED`, `LIVE_ARGO_OBSERVED`, `OWNER_OBSERVED_WORKS`, `OBSERVED_AUDIT`, `VENDOR_DOCUMENTED`, `PROJECT_DOCUMENTED`, `DESIGNED_ONLY`, `NOT_IMPLEMENTED`, `UNKNOWN`; separate test execution fields `NOT_EXECUTED`, `BLOCKED`, `EXECUTED`.
    - A statement that "deployed" means gitops desired state unless a dated live observation is cited.
 1. **MCTL baseline.**
    - 1a: PA items (consent, private-chat ingress, 24h TTL, `/new`, `/forget`, `/consent`, linking, connector executor, audit, egress, taint, budgets, pin and allowlist, switches). Each is classified merged, deployed, flagged, tested or planned, with a path.
@@ -161,8 +161,8 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
    - Rows: Grok Bot x `tg`, Townie x `tg`, Grok Bot x `alice`, Townie x `alice`, plus optional Grok Chat x `tg` and Cursor IDE x `tg` as distinct categories.
    - Columns: the work package 3 columns.
    - Grok (grok.com) x tg: OWNER_OBSERVED_WORKS (2026-11-22, #1393/#1381), with untested negative paths. Grok Bot specifically x tg: client/build ATTRIBUTION_UNKNOWN; do not downgrade the existing Grok observation or upgrade the Bot without new proof.
-   - Alice rows: secondary evidence only.
-4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT-EXECUTED`).
+   - Alice rows: pinned source scope map VERIFIED_CODE at `mctlhq/mctl-alice@cb276d65` (`src/tools/handlers.ts:4–26`); OAuth E2E and device behavior UNKNOWN.
+4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT_EXECUTED`).
    - Positive steps:
      - RFC 9728 and RFC 8414 discovery;
      - DCR with a loopback redirect (accepted regardless of the list);
@@ -183,7 +183,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
      - code reuse;
      - disconnect, after which tools fail at the Telegram layer while OAuth persists.
    - Each step names its expected audit or metric entry. The plan states that it proves server behaviour only, never vendor E2E.
-5. **Vendor interoperability test plan** (all `NOT-EXECUTED`, BLOCKED until a separate owner GO).
+5. **Vendor interoperability test plan** (all `NOT_EXECUTED`, BLOCKED until a separate owner GO).
    - One row per category. Each row records the registration strategy, the exact callback host and URI (vendor-documented or `UNKNOWN`), `resource`, PKCE, the requested and granted scopes, `initialize`, `tools/list`, the identity read, one synthetic read, negative cases and audit.
    - Preconditions:
      - a stable `client_id`;
@@ -196,7 +196,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
    - Controls that do not carry over to a direct MCP client: the PA consent `pa-data-flow/v1`, taint, kill switches `PA_*`, PA budgets, PA pin and audit-before-dispatch.
    - Controls that do: server-side scopes and ceiling, profiles, PKCE and `resource`, redirect allowlists, the `send_reply` confirmation binding, the `tg` audit chain, and token TTL.
    - Grok Bot boundaries as quoted: connections shared across all Bots, the shared computer, "Auto Review is on by default". Everything else is `UNKNOWN`.
-   - Alice: `iot:view` only, no real devices, no control.
+   - Alice: source-verified `iot:view` read scope, `iot:control` mutations and `quasar` commands at `mctl-alice@cb276d65`; no real device or control calls.
 7. **Telegram consent and licensing gate.** It cites core-profiles and the official terms, re-read with a date. It separates policy and legal questions (other participants' consent, own-messages-only mode) from engineering questions. It applies the gate to the digest, memory and external-distribution hypotheses. The demo uses synthetic data only.
 8. **Meetup pack.**
    - Timeline: Nov 26 pack, Nov 27 rehearsal, Nov 28 event. Date confirmation and registration are owner actions.
@@ -223,7 +223,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 | P2-01 SHAs, admission separation | Both SHAs re-pinned. `grok.com` and Cursor implicit hosts recorded, and production vs preview contrasted. Seven separate admission columns. No inference from Grok Chat or Cursor. | requirements "Provenance", "MCTL baseline"; design "Deployed state checked", report 1b, 3 |
 | P2-02 profile vs ceiling | Ceiling is keyed by `client_id` only and a profile by `client_id` or `redirect_uri`. DCR gives a random `tgmcp_` id. Live-test preconditions set, and dynamic ids BLOCKED. | requirements "Test plans"; design "MCP provider surface", report 1c, 5 |
 | P2-03 revocation | Semantics from `handleRevoke` and `SECURITY.md`: access token valid until TTL (1h), family revoke, replay, 720h absolute, deletion, disconnect. No immediate-401 expectation. | requirements "MCTL baseline"; report 1d, 4; T5 |
-| P2-04 conformance vs vendor | Two plans. Vendor plan per client category, all `NOT-EXECUTED` or BLOCKED. | report 4, 5; tasks 4, 5 |
+| P2-04 conformance vs vendor | Two plans. Vendor plan per client category, all `NOT_EXECUTED` or BLOCKED. | report 4, 5; tasks 4, 5 |
 | P2-05 external threat model | Control-by-control carry-over table, Grok Bot quotes, Alice `iot:view`. | report 6; task 6 |
 | P2-06 Telegram consent | core-profiles section and terms cited. Policy split from engineering. Gate applied to hypotheses. | report 7, 9; task 7 |
 | P2-07 meetup | Nov 26, 27, 28 timeline. Tracks A, B and C with gates and a fallback. | report 8; task 8 |
