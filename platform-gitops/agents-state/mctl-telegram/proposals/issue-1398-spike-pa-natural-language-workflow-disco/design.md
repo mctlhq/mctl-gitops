@@ -33,7 +33,7 @@ Pinned at mctl-telegram `9877b1d68ef7d2d969992023bd5fb49fe7835db6` (main, merge 
 - **Connections, linking and gate.** `internal/pa/connection` (`state.go`, `scope.go`, `kek.go`) holds the state machine, the `authority_revision` and `token_generation` counters, and scope-ceiling verification. `internal/pa/linking` holds the Mini App `initData` flow, and `internal/pa/gate/decide.go` the tier decision. VERIFIED_CODE.
 - **Memory.** `internal/pa/memory.go` has a `MemoryStore` interface and only `NoopMemoryStore`. DESIGNED_ONLY for real memory.
 - **Gates.**
-  - `docs/agent-runtime/pa-s1-manifest.yaml` still lists open `gaps` (the S1 gate "is NOT closed while any gap is listed").
+  - Current `docs/agent-runtime/pa-s1-manifest.yaml` has no gap rows in its manifest body; #1317 is still open and a gate-closing CI pass and #1319 R1-R6 exit have not been attested. No readiness inferred from a zero-gap grep.
   - `docs/agent-runtime/pa-s2-manifest.yaml` has 27 `pending` and 5 `green` rows, and states `PA_WRITES_ENABLED` stays off everywhere until it is clean.
 - **Switches.** `PA_ENABLED`, `PA_EXTERNAL_TOOLS_ENABLED`, `PA_WRITES_ENABLED`, `PA_SERVER_<NAME>_ENABLED`, `PA_ALLOWED_PRINCIPALS` and `PA_BUDGET_USD_{JOB,DAY,MONTH}` are read in `cmd/server` (`pa_state.go`, `main.go`). Everything is inert unless `PA_ENABLED` is true.
 
@@ -55,7 +55,7 @@ Pinned at mctl-telegram `9877b1d68ef7d2d969992023bd5fb49fe7835db6` (main, merge 
 - `mctl_get_service_status(labs, mctl-telegram)`: ArgoCD Healthy and Synced, image `0.142.0`, host `tg.mctl.ai`, has a database.
 - `mctl_get_service_status(labs, mctl-telegram-preview)`: Healthy and Synced, image `main-9877b1d` (the pinned SHA), host `tg-preview.mctl.ai`.
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: no `PA_*` variable appears. Since every switch fails closed, the PA is not enabled in production (VERIFIED_DEPLOYMENT of config; runtime env was not observed directly). The file sets `AGENT_ENABLED: "true"`, `AGENT_KILL_SWITCH: "false"` and `ASSISTANT_REGISTRY_ENABLED: "true"`, plus digest settings.
-- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram-preview/values.yaml`: no `PA_*` variable. `AGENT_ENABLED: "true"`, `ASSISTANT_REGISTRY_ENABLED: "true"`.
+- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram-preview/values.yaml`: PA variables ARE present in the current GitOps main, but `PA_ENABLED=false`, `PA_EXTERNAL_TOOLS_ENABLED=false`, `PA_SERVER_TG_ENABLED=false`, `PA_WRITES_ENABLED=false`; the separate PA worker (`services/labs/agent-worker-pa-preview/values.yaml`) is scaled to zero. This is desired state, not live operation.
 - `$MCTL_GITOPS_ROOT/tenants/labs`: no PA reference found by grep.
 - Not observed:
   - live pod env;
@@ -149,7 +149,7 @@ Each stage has a go/no-go gate.
 |---|---|---|
 | 1 | Daily Brief (reads plus self-delivery) | Lowest risk |
 | 2 | "Check and remind me" | Needs event triggers |
-| 3 | Alice home summary | Read only; Alice T1 residual acceptance pending |
+| 3 | Alice home summary | Read only; T1 residual accepted for preview/closed pilot in #1363 but PA_SERVER_ALICE_ENABLED remains off until separate environment GO |
 | 4 | Glovo basket prep | Needs #1325 and C2 GO; no checkout |
 
 **Metrics, defined without thresholds:**
@@ -212,3 +212,34 @@ Each stage has a go/no-go gate.
   - The "unanswered" heuristic is unreliable. Mitigation: frame the brief as "messages since your last message", and measure H2 on synthetic data.
   - A scope collision with #318, #1325 or #1048. Mitigation: map interfaces to those issues only, and include no design of their internals.
   - Natural-language consent mistaken for authorization. Mitigation: callback-only activation bound to the digest.
+
+## Revision 2: source-pinned competitive product model and security reuse (2026-11-23)
+
+### Competitive evidence ledger
+
+| Competitor / pattern | Primary source | Evidence class | MCTL implication |
+| --- | --- | --- | --- |
+| Grok Bot: successful one-off job -> saved skill -> scheduled/event routine | https://docs.x.ai/grok-bot/skills-routines-and-automations | VENDOR_DOCUMENTED | Reusable user-visible recipe + independently approved occurrence; no auto-permission |
+| Grok Bot: custom Remote HTTPS MCP and OAuth Client ID UX | https://docs.x.ai/grok-bot/computer-and-apps | VENDOR_DOCUMENTED | Simplify connector onboarding, never derive OAuth authority from UI |
+| Hermes: agent-managed procedural skill knowledge | https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md | PROJECT_DOCUMENTED | Explicit review/version/digest/provenance for user-requested saved skills |
+| dots: proactive and continued agent work | https://openai.com/index/introducing-dots/ | VENDOR_DOCUMENTED | Separate persistent job lifecycle from interactive chat; do not infer backend parity |
+| Gemini scheduled task behavior | https://support.google.com/gemini/answer/17094710 | VENDOR_DOCUMENTED / verify eligibility | Capture user intent into a schedule with explicit limits and edit/revoke |
+| Grok (grok.com) -> MCTL tg MCP | https://github.com/mctlhq/mctl-telegram/pull/1393 , #1381 | OWNER_OBSERVED_WORKS (2026-11-22) | External MCTL distribution works; product attribution to separately named Grok Bot still UNKNOWN |
+
+### Authority model: skill != workflow != memory
+
+1. **SkillDefinition** (proposed non-authoritative content): version, provenance, immutable digest, required inputs/tool references, checkable expected output; no executable code by default, no OAuth tokens, no scheduled triggers, no self-grant. A proposed auto-learned skill remains DRAFT until user review.
+2. **WorkflowInstance** (proposed authority): principal, source peer IDs selected by user, connection IDs + authority_revision, pinned schema/description hashes, consent version, budget, a schedule/occurrence binding, explicit activation receipt. Every modification creates a new version/digest and requires renewed approval.
+3. **MemoryItem** (future #1325): user facts/preferences with explicit source and confidence, TTL/retention, inspect/correct/delete operations; external taint is preserved. No memory entry can authorize a tool or change a scope ceiling.
+
+Both interactive and scheduled runs must reuse the existing PA ExecutionContext, connector executor and audit. Scheduling is only a signal from existing #318 authority; no new cron, shadow memory database or agent runtime. A task may fail incomplete, fenced or outcome_unknown and must not silently retry a write or interpret a tool failure as an empty result.
+
+### Minimum synthetic product journey
+
+User: 'Every workday at 09:00, summarize the selected Telegram chats for me.' -> draft (choose chats, timezone, principal-only private Bot delivery, budget) -> synthetic dry-run -> immutable digest/authority preview -> explicit activation callback -> schedule occurrence id H(workflow_id, version, occurrence_at) -> revalidate flags, consent, allowlist, revision, pin, budget and recipient -> audited read-only execution -> safe answer / actionable incomplete receipt -> pause/edit/revoke. All steps after draft are DESIGNED_ONLY pending approvals; no real chat data or sends.
+
+### Corrected current baseline
+
+Current GitOps: production mctl-telegram image tag 0.143.0 with no PA variables, preview main-3aab3cb with PA feature flags false, PA worker at replicaCount 0. This supersedes the 2026-11-22 historical 'preview has no PA variables' line, which was accurate only at its older pin. R1-R6 #1319 and the S1 gate still require direct evidence. The external Grok Web connection is not a test of the MCTL PA.
+
+**Recommendation:** BOUNDED_HYBRID for research (PA owns instances and authority; optional Catalog template adapter; #318 provides trigger occurrences), DEFER implementation. Do not submit a second assistant, grant, scheduler, or memory subsystem.
