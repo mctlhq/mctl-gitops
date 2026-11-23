@@ -124,6 +124,20 @@ OWNERS = {
 # fetch path change under a check whose whole job is noticing changes.
 PRIVATE_OWNERS = {"projects"}
 
+# Upstreams with no owning repository to fetch an allowlist from. `argocd` is a
+# third-party server (a fork of the Argo CD MCP server kept free of anything
+# specific to this portal), so there is no docs/portal-allowlist.json to
+# vendor. Its statement of the tool set is the literal `updated_tools` list in
+# mapping.json -- the entry the validator already requires for any server with
+# `vendored: false`. Named here rather than inferred from mapping.json, for the
+# same reason PRIVATE_OWNERS is: a server should have to be added to this file
+# to change how it is checked, and a vendored server must never silently fall
+# back to the weaker, in-repo statement.
+MAPPING_OWNED = {"argocd"}
+
+# Every upstream this check expects to find on the portal.
+KNOWN_SERVERS = set(OWNERS) | MAPPING_OWNED
+
 # Read by the fetch below. `ALLOWLIST_TOKEN` is set by cloudflare-drift.yml
 # from a mctl-org-read App token (environment app-org-read) with contents:read;
 # GITHUB_TOKEN would not do, being scoped to this repository.
@@ -136,6 +150,9 @@ PORTAL = "mcp"
 # here with the live catalogue, names and order both: the attribute is a list.
 CATALOGUE_FILE = (pathlib.Path(__file__).resolve().parents[1]
                   / "infrastructure/cloudflare/portal/allowlists/catalogue.json")
+
+# The literal list for MAPPING_OWNED servers, next to catalogue.json.
+MAPPING_FILE = CATALOGUE_FILE.with_name("mapping.json")
 
 
 class Undetermined(Exception):
@@ -263,7 +280,34 @@ def allowlist_source(server: str, repo: str, token: str | None) -> tuple[str, st
     )
 
 
+def mapping_allowlist(server: str, mapping_doc: object) -> dict:
+    """The allowlist of a MAPPING_OWNED server, from mapping.json's literal list.
+
+    Same shape as an owner's file for compare(): {"server", "tools": [{name,
+    enabled}]}. Pure (the document is passed in) so selftest() can drive every
+    refusal without touching the repository. A vendored entry is refused: its
+    statement lives in an owning repo, and reading a literal list that the
+    validator does not allow on it would compare against the wrong thing.
+    """
+    servers = mapping_doc.get("servers") if isinstance(mapping_doc, dict) else None
+    entry = servers.get(server) if isinstance(servers, dict) else None
+    if not isinstance(entry, dict):
+        raise Undetermined(f"{server}: no entry in {MAPPING_FILE.name}; cannot read its tool list")
+    if entry.get("vendored") is not False:
+        raise Undetermined(f"{server}: is in MAPPING_OWNED but {MAPPING_FILE.name} does not say vendored: false")
+    tools = entry.get("updated_tools")
+    if not isinstance(tools, list):
+        raise Undetermined(f"{server}: {MAPPING_FILE.name} updated_tools is not a list")
+    return {"server": server, "tools": tools}
+
+
 def owner_allowlist(server: str) -> dict:
+    if server in MAPPING_OWNED:
+        try:
+            doc = json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 - the exit code is the point
+            raise Undetermined(f"{server}: {MAPPING_FILE.name} could not be read: {e!r}") from e
+        return mapping_allowlist(server, doc)
     repo = OWNERS.get(server)
     if not repo:
         raise Undetermined(f"{server}: no owning repository known; add it to OWNERS")
@@ -633,7 +677,7 @@ def waiver_is_wellformed(key, w) -> bool:
     try:
         _dt.date.fromisoformat(until)
         return (bool(tools) and bool(w.get("why"))
-                and key[0] in OWNERS and key[1] in KINDS)
+                and key[0] in KNOWN_SERVERS and key[1] in KINDS)
     except (KeyError, ValueError, TypeError):
         return False
 
@@ -650,7 +694,7 @@ def expected_missing(servers, applied: set[str] | None = None) -> list[str]:
     --account path -- and then OWNERS is taken at its word, which is the
     behaviour this check had before.
     """
-    expected = set(OWNERS) if applied is None else set(OWNERS) & applied
+    expected = set(KNOWN_SERVERS) if applied is None else set(KNOWN_SERVERS) & applied
     return [
         f"{missing}: expected on portal {PORTAL} and not mapped there at all "
         "-- restore the mapping, or drop it from OWNERS in this script if it "
@@ -1042,10 +1086,12 @@ def selftest() -> int:
     # decision here with no case: an upstream OWNERS expects and the portal
     # does not map at all.
     for name, servers, want in [
-        ("every expected upstream mapped is quiet", set(OWNERS), 0),
-        ("an upstream missing from the portal fires", set(OWNERS) - {"tg"}, 1),
+        ("every expected upstream mapped is quiet", set(KNOWN_SERVERS), 0),
+        ("an upstream missing from the portal fires", set(KNOWN_SERVERS) - {"tg"}, 1),
+        ("a mapping-owned upstream missing from the portal fires",
+         set(KNOWN_SERVERS) - MAPPING_OWNED, 1),
         ("a server the portal maps and OWNERS does not is not missing",
-         set(OWNERS) | {"unknown"}, 0),
+         set(KNOWN_SERVERS) | {"unknown"}, 0),
     ]:
         got = 1 if expected_missing(servers) else 0
         print(f"{'ok  ' if got == want else 'FAIL'} {name}")
@@ -1057,11 +1103,11 @@ def selftest() -> int:
     # is the expected state of the world and not a production outage.
     for name, servers, applied, want in [
         ("an OWNERS entry not applied yet is not missing",
-         set(OWNERS) - {"projects"}, set(OWNERS) - {"projects"}, 0),
+         set(KNOWN_SERVERS) - {"projects"}, set(KNOWN_SERVERS) - {"projects"}, 0),
         ("an applied entry missing from the portal still fires",
-         set(OWNERS) - {"projects"}, set(OWNERS), 1),
+         set(KNOWN_SERVERS) - {"projects"}, set(KNOWN_SERVERS), 1),
         ("state is not consulted when it was not piped in",
-         set(OWNERS) - {"projects"}, None, 1),
+         set(KNOWN_SERVERS) - {"projects"}, None, 1),
     ]:
         got = 1 if expected_missing(servers, applied) else 0
         print(f"{'ok  ' if got == want else 'FAIL'} {name}")
@@ -1128,9 +1174,41 @@ def selftest() -> int:
     print(f"{'ok  ' if ok else 'FAIL'} a server with no readable catalogue is left to compare()")
     if not ok:
         failures.append("lag unreadable")
+    # mapping_allowlist(): the literal list is the statement for a MAPPING_OWNED
+    # server, and every shape that is not that is refused, not guessed at.
+    lit = {"servers": {"s": {"vendored": False, "updated_tools": [{"name": "a", "enabled": True}]}}}
+    ok = mapping_allowlist("s", lit) == {"server": "s", "tools": [{"name": "a", "enabled": True}]}
+    print(f"{'ok  ' if ok else 'FAIL'} a mapping-owned server's literal list is its allowlist")
+    if not ok:
+        failures.append("mapping allowlist literal")
+    for label, doc in (
+        ("a server absent from mapping.json", {"servers": {}}),
+        ("a vendored entry", {"servers": {"s": {"vendored": True, "updated_tools": []}}}),
+        ("an entry without a vendored flag", {"servers": {"s": {"updated_tools": []}}}),
+        ("a non-list updated_tools", {"servers": {"s": {"vendored": False, "updated_tools": None}}}),
+        ("a document that is not an object", []),
+    ):
+        try:
+            mapping_allowlist("s", doc)
+            ok = False
+        except Undetermined:
+            ok = True
+        print(f"{'ok  ' if ok else 'FAIL'} mapping_allowlist refuses {label}")
+        if not ok:
+            failures.append(f"mapping allowlist refuses {label}")
+    for sid in sorted(MAPPING_OWNED):
+        try:
+            got = {t.get("name") for t in owner_allowlist(sid)["tools"]}
+            want_names = set(json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))["servers"][sid])
+            ok = got == want_names
+        except Exception:  # noqa: BLE001 - a FAIL line is the point
+            ok = False
+        print(f"{'ok  ' if ok else 'FAIL'} the committed mapping.json literal list matches catalogue.json for {sid}")
+        if not ok:
+            failures.append(f"mapping literal vs catalogue {sid}")
     real = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8")).get("servers")
-    ok = isinstance(real, dict) and set(real) == set(OWNERS)
-    print(f"{'ok  ' if ok else 'FAIL'} the committed catalogue.json names exactly the OWNERS servers")
+    ok = isinstance(real, dict) and set(real) == KNOWN_SERVERS
+    print(f"{'ok  ' if ok else 'FAIL'} the committed catalogue.json names exactly the OWNERS and MAPPING_OWNED servers")
     if not ok:
         failures.append("catalogue owners")
 
