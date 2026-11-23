@@ -57,6 +57,11 @@ argo-cd:
       # ci-freshness` against the cluster kubeconfig, stored as the
       # ARGOCD_FRESHNESS_TOKEN Actions secret of this repository.
       accounts.ci-freshness: apiKey
+      # Read-only account for the argocd-mcp service (labs/argocd-mcp), the
+      # portal's Argo CD MCP upstream. Token: `argocd --core account
+      # generate-token --account argocd-mcp`, stored in Vault at
+      # secret/data/teams/labs/argocd-mcp (key ARGOCD_API_TOKEN).
+      accounts.argocd-mcp: apiKey
 
       # Health check for ExternalSecrets
       resource.customizations.health.external-secrets.io_ExternalSecret: |
@@ -201,6 +206,14 @@ argo-cd:
         p, mctl-api, projects, get, *, allow
         # argocd-freshness workflow: list applications and their revisions
         p, ci-freshness, applications, get, */*, allow
+        # argocd-mcp (read-only Argo CD MCP behind the Cloudflare portal): read
+        # applications, their logs, projects (sync windows) and clusters. No
+        # write verbs and no exec. projects takes the bare project name as the
+        # object, not <project>/<app> (see the mctl-api lines above).
+        p, argocd-mcp, applications, get, */*, allow
+        p, argocd-mcp, logs, get, */*, allow
+        p, argocd-mcp, projects, get, *, allow
+        p, argocd-mcp, clusters, get, */*, allow
 
         # Tenant roles: no exec. Argo CD exec is a cluster-admin-adjacent
         # shell into application pods; only role:admin retains it. New

@@ -298,8 +298,8 @@ run "release_approval_client_is_a_confidential_pkce_web_client" {
     error_message = "The client must be in the MCTL API project of MCTL: has_project_check there is what limits who can sign in."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_release_approval.redirect_uris == tolist(["https://api.mctl.ai/release/approvals/callback"])
-    error_message = "The only redirect URI must be https://api.mctl.ai/release/approvals/callback."
+    condition     = zitadel_application_oidc.mctl_api_release_approval.redirect_uris == tolist(["https://api.mctl.ai/release/approvals/callback", "https://api.mctl.ai/release/window-approvals/callback"])
+    error_message = "The redirect URIs must be exactly the grant page callback and the release-window page callback, both https://api.mctl.ai."
   }
   assert {
     condition     = zitadel_application_oidc.mctl_api_release_approval.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_release_approval.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"

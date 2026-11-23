@@ -15,8 +15,8 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-1fd33d0"
-  digest: "sha256:4f0702186bf321cf11a52417e321a80ba47a6e106690cd9e4da506ab40ab8201"
+  tag: "main-3aab3cb"
+  digest: "sha256:0354b51075974a78dbdb65d1f618a553be5f6db3fd74ec17dd0fa7474e34d607"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -298,6 +298,74 @@ env:
   MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
+  # Personal Assistant bot (mctlhq/mctl-telegram#1318), preview only. Step G1:
+  # the plain values land with PA_ENABLED "false", so nothing PA runs and the
+  # server reads none of the PA settings below (config.loadPA returns before
+  # reading anything when the flag is off). The bot token, webhook secret,
+  # local KEK and principal allowlist come from Vault through the
+  # labs-mctl-telegram-preview-pa ExternalSecret below.
+  # PA_ENABLED goes "true" after the owner's GO, once that Secret reports
+  # synced: config.Load refuses PA_ENABLED=true without the bot token and
+  # webhook secret, and strategy is Recreate, so the order matters.
+  # Production keeps every PA flag off.
+  #
+  # ENV is the deployment tier the local KEK checks (PA_KEK_MODE=local is
+  # accepted only on preview or a local tier; production must use transit).
+  # "preview" is not a local tier. The test-DC check treats it as it treats
+  # ENV unset; the boot guard counts an unset ENV as local, but this pod
+  # listens on the default :8080, so it is already treated as exposed and
+  # nothing changes.
+  ENV: preview
+  PA_ENABLED: "false"
+  PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
+  PA_KEK_MODE: local
+  # Each capability flag is explicit, so turning PA_ENABLED on later turns
+  # on chat only. Tools and the tg server go on together in a later step;
+  # writes and the alice server stay off on preview.
+  PA_EXTERNAL_TOOLS_ENABLED: "false"
+  PA_WRITES_ENABLED: "false"
+  PA_SERVER_TG_ENABLED: "false"
+  PA_SERVER_ALICE_ENABLED: "false"
+  # The tg server is this instance's own authorization server and MCP
+  # endpoint; the values are its published metadata
+  # (/.well-known/oauth-authorization-server and
+  # /.well-known/oauth-protected-resource/mcp). PA_BOT_USERNAME and
+  # PA_MINI_APP_NAME are added with the tg-server step: they exist only once
+  # the bot is created, and nothing reads them before then.
+  PA_APP_URL: https://tg-preview.mctl.ai/pa/link/app
+  PA_SERVER_TG_CLIENT_ID: pa-preview
+  PA_SERVER_TG_ISSUER: https://tg-preview.mctl.ai
+  PA_SERVER_TG_AUTHORIZATION_ENDPOINT: https://tg-preview.mctl.ai/oauth/authorize
+  PA_SERVER_TG_TOKEN_ENDPOINT: https://tg-preview.mctl.ai/oauth/token
+  PA_SERVER_TG_REVOCATION_ENDPOINT: https://tg-preview.mctl.ai/oauth/revoke
+  PA_SERVER_TG_MCP_URL: https://tg-preview.mctl.ai/mcp
+  PA_SERVER_TG_RESOURCE: https://tg-preview.mctl.ai/mcp
+  PA_SERVER_TG_ALLOWED_HOSTS: tg-preview.mctl.ai
+  # The PA's OAuth client on this authorization server: a public PKCE client
+  # with one exact callback, seeded at startup. Its callback host is on
+  # neither OAUTH_ALLOWED_IMPLICIT_HOSTS nor loopback, and the client is bound
+  # to the core-readonly profile with a scope ceiling equal to the PA's
+  # Phase 1 tg scope set (internal/pa/connection/scope.go). The client is
+  # registered from this change on, but inert until the tg-server step: its
+  # only callback is the PA route, which is not mounted while PA is off.
+  OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"pa-preview","client_name":"Personal Assistant (preview)","redirect_uris":["https://tg-preview.mctl.ai/pa/oauth/callback/tg"]}]'
+  # CIMD on preview, for the hosted Hermes test (mctl-telegram#1401, #1402).
+  # The AgentsPodium entry is path-scoped to ONE pod's client documents, which
+  # needs the parser from mctl-telegram#1404: on an image without it this
+  # value fails at startup ("is not a host name or .suffix"). Merge only after
+  # image.tag above is a main build that contains #1404. The other hosts
+  # mirror production so existing preview clients keep working once CIMD is
+  # advertised. Rollback: drop the three OAUTH_CIMD_* lines and the profile
+  # record; removing the entry also cuts off that client's refreshes.
+  # A profile binds to the EXACT client_id, and an AgentsPodium client_id ends
+  # in the server name chosen in the pod dashboard. The first hosted test used
+  # a name with no profile and was issued the full user scope set with
+  # scope_ceiling_applied=false (mctl-telegram#1401): the path-scoped allowlist
+  # admits the client, only a profile limits it. Add one entry per server name.
+  OAUTH_CIMD_ACCEPT: "true"
+  OAUTH_CIMD_ADVERTISE: "true"
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
 ingress:
   enabled: true
   hosts:
@@ -450,7 +518,40 @@ envFrom:
       name: "labs-mctl-telegram-preview-login"
   - secretRef:
       name: "labs-mctl-telegram-preview-events"
+  # optional: if the ExternalSecret ever fails to sync, the pod still starts
+  # while PA_ENABLED is "false" (nothing reads these keys). With it "true",
+  # a missing bot token or webhook secret refuses startup, a missing
+  # allowlist admits nobody, and a missing KEK refuses startup once a PA
+  # server is enabled: each fails closed.
+  - secretRef:
+      name: "labs-mctl-telegram-preview-pa"
+      optional: true
 extraExternalSecrets:
+  # Personal Assistant bot (mctlhq/mctl-telegram#1318): its own bot token
+  # (a different bot from the login bot), the webhook secret, the
+  # preview-only local KEK (threat model T3; transit before production) and
+  # the principal allowlist (a comma-separated list of Telegram user ids;
+  # unset or empty allows nobody). The ids are personal data and this
+  # repository is public, so they live in Vault only.
+  labs-mctl-telegram-preview-pa:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-preview-pa
+    data:
+      - secretKey: PA_BOT_TOKEN
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: bot-token
+      - secretKey: PA_WEBHOOK_SECRET
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: webhook-secret
+      - secretKey: PA_KEK_LOCAL_KEY
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: kek-local-key
+      - secretKey: PA_ALLOWED_PRINCIPALS
+        remoteKey: secret/data/platform/mctl-telegram-preview/pa
+        property: allowed-principals
   # EVENTS_VALKEY_PASSWORD for the telegram-producer Valkey ACL user
   # (XADD to mctl:events:telegram and mctl:events:audit only).
   labs-mctl-telegram-preview-events:

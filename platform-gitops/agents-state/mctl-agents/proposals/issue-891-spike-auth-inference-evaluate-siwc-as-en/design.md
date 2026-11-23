@@ -2,6 +2,13 @@
 
 ## Current state
 
+### Already-operational Codex/MCTL Bridge (new comparison baseline)
+
+- [`mctl-claude-remote/docs/chatgpt-orchestrator-bridge.md`](https://github.com/mctlhq/mctl-claude-remote/blob/main/docs/chatgpt-orchestrator-bridge.md) documents Gate 1 passed on 2026-11-03: Codex daemon app-server control socket, `thread/resume`, `turn/start`, `turn/completed` and cross-client history. Validate *current* revision/release when running the spike; a historic proof is not a present runtime measurement.
+- [`plugin/mctl-bridge/README.md`](https://github.com/mctlhq/mctl-claude-remote/blob/main/plugin/mctl-bridge/README.md) describes a working Valkey bridge, `src/appserver.ts`, `src/waker.ts` and `mctl-codex say`, with claims, correlation, fencing, audit and recovery. Reuse this baseline rather than prototyping a second orchestrator.
+- Existing Codex app-server with its normal authenticated thread (baseline A) is **not** the same as launching a scratch Codex server with an externally acquired SIWC token (original experiment E). Keep these separate in the report.
+- A successful fresh SIWC Responses call cannot target/wake this particular existing standard ChatGPT web conversation. Verify any claimed exception using supported, dated product documentation; do not test scraping or session-cookie approaches.
+
 ### `cli/mctl` (mctlhq/mctl-gitops), read from the checkout at `/workdir/mctl-gitops/cli/mctl`
 
 - Module `github.com/mctlhq/mctl-gitops/cli/mctl` (Go 1.26.9, cobra, `golang.org/x/oauth2`, `coreos/go-oidc/v3`). Commands are registered in `cmd/root.go`: `deploy`, `delete`, `config`, `auth`, `repo`, `status`, `logs`, `version`.
@@ -27,18 +34,68 @@
 - `$MCTL_GITOPS_ROOT/services/` lists tenants `admins`, `karabu`, `labs` and `namax66`. No service references OpenAI or ChatGPT credentials. This was checked by grep over the mctl-support and mctl-agents-worker values only, not every service.
 - `/workdir/mctl-gitops/.github/workflows/`: no workflow references `cli/mctl`.
 - The mctl MCP tools were not called. The gitops files above were enough for this proposal, and no runtime state of the CLI exists on the platform.
-- The SIWC source page (https://developers.openai.com/siwc/token-sharing-open-source, read 2026-10-29) says:
+- The SIWC source page (https://developers.openai.com/siwc/token-sharing-open-source, originally read 2026-10-29; rechecked 2026-11-22 with dedicated subpages) says:
   - It covers "open-source and locally hosted apps".
   - Each `client_id` is bound to one user and workspace.
   - Several hosts (a laptop, a self-hosted VM) may share a `client_id`, each with its own opaque `ext_agent_host_id` (JWK thumbprint URI recommended).
   - Re-sign-in does not create a new host.
   - Paid or remotely hosted offerings need the interest form.
   - Responses calls use bearer, `store: false`, `stream: true`.
-  - It does not state scope names, the model-discovery endpoint, revocation, or the rules on another user's activity, proxying, pooling or background automation. Those are open questions.
+  - The dedicated [sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) page **does state** the scopes including `chatgpt.tokens.use.direct`; the [Codex app-server page](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) states child-env `ACCESS_TOKEN` and token-refresh process restart. Other restrictions remain scope- and source-specific; unsupported shared/hosted patterns are not allowed by default.
+
+## Decision-first comparison (new mandatory gate 0)
+
+Before writing the proposed Go experiment, collect a bounded baseline matrix:
+
+| Path | Status and purpose | Auth/context | Key question |
+|---|---|---|---|
+| A. Existing Codex app-server + MCTL Bridge | Operational baseline, local operator-controlled orchestration | Existing authorized Codex thread and harness | Which requested MCTL jobs does it *not* satisfy? |
+| B. SIWC + direct Responses in the existing `mctl` CLI | Candidate, not yet approved | User-local SIWC grant; client-managed context and tools | Does simple structured RPC or genuine per-user BYOS offset an extra OAuth/token/Responses surface? |
+| C. API-key Responses | Pricing/terms baseline; live billable call optional, not required | Standard API key and usage billing | Is a normal API key simpler/safer for shared or hosted MCTL? |
+| D. Fresh Codex process with SIWC token from local MCTL CLI | **Preferred controlled local architecture to evaluate**, not adopted product | Distinct from A; documented ephemeral child `ACCESS_TOKEN`, no `~/.codex/auth.json` | Can MCTL provably constrain its shell/MCP/child-agent execution and handle revocation/refresh? |
+
+Use the same bounded read-only reviewer fixture (seeded findings), structured output, a proposed disallowed tool (must be refused), and two-turn history where paths permit. Record the exact model/effort **actually available**, account/host eligibility, success, latency, token/usage signals, RSS, observed failures and process/maintenance delta; noncomparable paths are explicitly marked. Pin fixture and source revisions; provide reproducible commands with redacted output. No independent quota or access to existing ChatGPT web-chat history may be inferred from SIWC.
+
+**Gate 0 decision order:** (1) date-stamped OpenAI policy/eligibility and quota terms; (2) prove a concrete gap in path A *or* distinct value to normal end-users for BYOS; (3) choose the minimal feasible proof. If policy blocks an option, or no end-user/bridge advantage survives scrutiny, skip unnecessary runtime experiments and record `UNMEASURED` rather than fabricate results. If a candidate survives, run the original fake-auth fixtures and narrowly scoped local/manual opt-in proof. No new daemon, subscription review worker or shared hosted deployment in this spike.
+
+Final report includes both the pre-existing issue-level verdict (exactly one of its five tokens) and a **subsidiary** `bridge_incremental_value: YES | NO | UNPROVEN` with evidence. A bridge `NO` does not automatically reject CLI BYOS. A `YES` still requires source-backed policy and owner acceptance. Explicitly record `EXISTING_CHAT_WAKE_UNSUPPORTED` absent a supported mechanism for external wake of an arbitrary standard ChatGPT Chat High web conversation.
+
+## Owner-selected local SIWC → Codex architecture (2026-11-22, #1110 policy recheck)
+
+This is **a selected evaluation architecture, not a final #891 ADOPT verdict, merged spec, implementer approval or deployed feature**. The original A/B/C baselines and value calculation remain required. Prefer a local MCTL-owned SIWC identity and child Codex execution to a hosted shared provider seam. Scope initially to **one user, one controlled local host, offline mock OAuth/Responses fixtures**. Live browser authorization, cost/spend and self-hosted VM rollout require separate explicit consent/eligibility gates.
+
+```text
+normal MCTL CLI user (not admin)
+  │
+  ├─ mctl API identity (existing token; controls approved tools/work-item rights)
+  └─ OpenAI SIWC identity (separate 0600 credential + refresh lock)
+          │ exact issued client_id + stable opaque host_id + plan-usage consent
+          ▼
+  mctl local runtime [stores OAuth tokens locally; refreshes/revokes]
+          │ short-lived ACCESS_TOKEN only in scrubbed child env
+          ▼
+  codex app-server --listen stdio:// (isolated CODEX_HOME)
+          │ JSON-RPC initialize; thread/start; turn/start; thread/resume after token refresh
+          ▼
+  MCTL policy/approval/capability gate [run token + tenant/work-item binding]
+          │ only explicit permitted tools reach API/connector
+          ├─ ALLOWED: one bounded read-only fixture
+          └─ DENIED: shell/deploy/unapproved MCP/cross-tenant/child-agent egress
+```
+
+**Source-pinned implementation correction.** The previously proposed "pass OAuth token only through JSON-RPC" is **incorrect**. OpenAI's [Codex app-server SIWC instructions](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) explicitly use `ACCESS_TOKEN` in the **child process environment** and an explicit Responses provider configuration with `env_key="ACCESS_TOKEN"`, `wire_api="responses"`, `requires_openai_auth=false`, `supports_websockets=false`; see document as of 2026-11-22. Codex consumes stdin/stdout JSON-RPC, but no documented OAuth token injection over that RPC. Refresh is **parent-owned**, then the child restarts with the new token and re-opens thread via `thread/resume`. `model/list` may return a bundled catalog; model entitlement only verified by eligible actual call. Never copy `~/.codex/auth.json` or a consumer session cookie.
+
+**Provider limits as implementable contracts.** [OpenAI SIWC preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations): HTTP `store:false`, `stream:true`; no `previous_response_id` HTTP history, `background`, hosted MCP/connectors, Code Interpreter, native computer tool, or Responses tool_search. Codex local shell/MCP/child-agents are **not hosted Responses tools**: they are high-risk local actions, which must be off or mediated by the MCTL capability/approval boundary; use a deliberately denying offline fixture. The local process shall have a sanitized environment (no mctl control-plane secret, GitHub tokens or host private keys), sandboxed working directory, explicit allowlists, no ambient network/write rights unless evidenced and approved. **If the Codex execution loop cannot be constrained, choose direct Responses or DEFER; never call it governed merely because it uses MCTL's name.**
+
+**Auth/quota/tenancy.** [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-source) documents open-source/local use and redirects paid/remote apps to an interest form. [SIWC sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) requires issued `client_id`, verified ID-token, PKCE/nonce/state and explicit `chatgpt.tokens.use.direct`. [Sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions) explains shared plan app quota and settings. The local user holds all tokens; account/workspace mismatch, revocation, 401, 429 or exhausted entitlement is fail-closed (never silently paid or tenant-pooled). [Self-hosted VM](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms) docs explicitly lack per-host usage attribution and revocation for transferred sessions. Phase 1 does **not** ship remote self-hosted VM behavior.
+
+**Gate 0 acceptance for the selected direction.** Evidence supports a **policy-permitted conditional local hypothesis**, not the outcome that SIWC improves on the existing MCTL Bridge; measure incremental end-user BYOS value, credential complexity and quota contention. Existing authenticated Codex bridge stays a benchmark, not copied. Prefer the smallest offline fake-Codex harness and a fallback direct Responses test; only then record the formal `ADOPT_SIWC_CLI_PLUS_CODEX` / other allowed outcome. No extra standalone `mctl-runtime` daemon.
+
+**Evidence**: [#1110 source report pinned to 0d22925](https://github.com/mctlhq/mctl-agents/blob/0d22925fdfdbcbad9afbc29673666b9e4d8dce78/docs/spikes/1110-subscription-backed-inference-research.md); SIWC provider docs linked above. New external product features require source re-verification prior to any live pilot.
 
 ## Proposed solution
 
-The deliverable is a spike: evidence, an isolated experiment, a fake-auth CI fixture and one recommendation. Nothing ships to `cli/mctl` or to the workers in this change.
+The deliverable is a decision-first spike: baseline/policy evidence and one recommendation are mandatory; the isolated Go experiment and fake-auth CI fixture are **conditional on passing Gate 0**. If Gate 0 yields a defensible NO-GO/DEFER, document which prototype tasks were intentionally skipped and why. Nothing ships to `cli/mctl` or to the workers in this change.
 
 ### 1. Experiment: `experiments/siwc-cli-891/` (Go module, mirrors `cli/mctl`)
 
@@ -61,7 +118,7 @@ It is written in Go so the measured delta transfers one-to-one to `cli/mctl`. Pa
   - `siwc-spike auth status`: two sections, "MCTL identity" (the fake `whoami`) and "Inference identity (OpenAI/ChatGPT)" (account, workspace, host ID suffix, expiry, entitlement). It never shows a token.
   - `siwc-spike models --provider openai`
   - `siwc-spike run --fixture <path> [--engine responses|codex]`
-- `internal/codexbridge/`, for option E. It launches `codex app-server` as a child with stdio JSON-RPC, gives it a scratch `CODEX_HOME`, and hands over the access token only over the JSON-RPC channel (never argv, env file or `auth.json`). It records whether app-server accepts external tokens at all, then refresh behaviour, thread/resume, and whether shell, MCP and child-agent capabilities can be narrowed to the fixture allowlist. If the handoff needs Codex's own login or a persisted `auth.json`, the result is `CODEX_OWNS_CREDENTIAL` and option 2 fails invariants 4 and 5. Live only. In CI it is a skipped test with a reason.
+- `internal/codexbridge/`, for option E. It launches `codex app-server` as a child with stdio JSON-RPC, gives it a scratch `CODEX_HOME`, and passes the access token through the **ephemeral child `ACCESS_TOKEN` environment variable** per official SIWC Codex app-server docs (never argv, persisted env file, `auth.json` or JSON-RPC token injection). It verifies token scrubbing, app-server restart on refresh, `thread/resume`, sandbox/capability narrowing and MCTL deny oracle, latency and RSS against direct Responses. Build synthetic offline fake-provider tests in CI; optional actual OAuth inference remains a separate manual, owner-approved live measurement.
 - `testdata/fake/`: in-process fakes started by `httptest`.
   - Fake SIWC authorization server: discovery, registration, authorize, token with rotating refresh tokens and reuse detection (a reused refresh token revokes the family), revocation, plus an ID token signed with a test key.
   - Fake model catalog with switchable variants: eligible, empty, model removed.
@@ -83,6 +140,7 @@ It triggers on `pull_request` for paths `experiments/siwc-cli-891/**` and on `wo
 ### 5. Report: `docs/spikes/891-siwc-byos.md`
 
 Sections:
+0. Gate 0: operational Codex bridge baseline, policy/quota matrix, comparable fixtures, and `bridge_incremental_value` (plus explicit existing-web-chat wake status).
 1. Current-state map (above, refreshed at the implementation SHA).
 2. End-user journey with a step count. The expected count is 4 steps from a logged-in CLI: run `auth openai login`, press "Continue with ChatGPT", run `models`, run the operation. The spike measures it.
 3. Policy matrix (10 shapes).

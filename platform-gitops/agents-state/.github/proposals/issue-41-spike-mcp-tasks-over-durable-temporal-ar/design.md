@@ -1,384 +1,617 @@
 # Design: issue-41-spike-mcp-tasks-over-durable-temporal-ar
 
+Revision 2. It supersedes revision 1 of this proposal (committed
+2026-11-22T01:52Z), which received REQUEST_CHANGES (2 P1, 4 P2) from an
+independent review.
+
 ## Current state
 
-Evidence pins (read 2026-11-22):
+### Evidence pins (read 2026-11-22)
 
-| Repository | Pin | Read |
+| Source | Pin | What was read |
 | --- | --- | --- |
-| mctlhq/.github | `7a0659c` (HEAD of clone) | manifests, spike conventions |
-| mctlhq/mctl-api | `5062295fbd4b1d2c5949d4bd21985b16b8fb5f6c` | `go.mod`, `internal/mcp/server.go`, `internal/temporalclient/client.go`, `internal/api/handlers_approval_grant.go`, `internal/workitems/execution_requests.go` `[CODE]` |
-| mctlhq/mctl-agents | `05c1dc83b6c025aa5128e6d9234023eb513f95a0` | `orchestrator/temporal/workflows/action_approval.py`, `docs/adr/013-human-input-contract.md`, tree listing `[CODE]` |
-| mark3labs/mcp-go | tags `v1.0.0`, `v1.6.0` | `mcp/tasks.go`, `mcp/types.go`, `server/server.go` `[CODE]` |
-| Spec | https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks | method set, fields, errors, security `[DOC]` |
+| mctlhq/.github | `60e9db5` (clone HEAD) | `roadmap/spikes/mcp-tasks-durable-execution.yaml`, `roadmap/schemas/spike-definition.schema.json`, `roadmap/scripts/validate.py`, `roadmap/tests/test_validate_spike.py`, `roadmap/requirements.txt`, `docs/spikes/automation-control-plane/` layout, AGENTS.md `[CODE]` |
+| mctlhq/mctl-api | `80f7a011c975422a6bb632022f5538d59772928f` (main) | `go.mod`, `internal/mcp/server.go`, `internal/temporalclient/client.go`, `internal/workitems/execution_requests.go` (blob `913924a334a8e92daada1bf8370a409d2a47f0b0`, the blob the reviewer cited), `internal/workitems/store.go`, `internal/workitems/orphans.go` `[CODE]` |
+| mctlhq/mctl-agents | `eec4fdd865491d89d221a2bd2b8ed40fab65ef23` (main) | `docs/adr/013-human-input-contract.md` `[CODE]`; revision 1 read `orchestrator/temporal/workflows/action_approval.py` at `05c1dc8` |
+| Spec | https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks (retrieved 2026-11-22) | input_required, resultType, ttlMs, tasks/update, Mcp-Name, errors, notifications `[DOC]` |
 
-In this repository (`.github`):
+### In this repository
 
-- `roadmap/spikes/mcp-tasks-durable-execution.yaml`: `lifecycle: proposed`,
-  owner `mctlhq/mctl-agents`, outcomes
-  `GO_ADAPTER_IN_MCTL_API | GO_UPSTREAM_ONLY | NO_GO`, decision due
-  `2026-12-15`. Its header comment says the trigger fired (Claude Code ships
-  the extension in public beta from v2.1.304 `[DOC]`), the Portal half is
-  dropped (the mcp-gateway plan passes Tasks through and checks that at
-  G2), and the executable pilot is mctl-api#284.
-- `roadmap/epics/enterprise-mcp.yaml`: work item `mcp-tasks` (phase
-  `extensions`, required) is mctl-api#284. It depends on
-  `correlation-contract` and `compatibility-spike`. Success criterion: "MCP
-  Tasks and Apps are accepted only after end-to-end Portal compatibility is
-  measured."
-- `docs/plans/mcp-gateway.md` (lines 122, 267): Tasks, Apps and elicitation
-  pass through the Portal untouched once measured.
-- `docs/spikes/automation-control-plane.md` (D1 table and Boundaries): "A
-  Task is one execution; an automation is a standing intent". The MCP Tasks
-  row reads "one execution = one task". The chain is `au_ -> wi_ -> xr_ ->
-  we_`. Its fixture layout (`model/`, `fixtures/`, `schemas/`,
-  `temporal-integration/` with a real Temporal dev server through the
-  official SDK, `[MODEL]` vs `[TEMPORAL_DEV]` tags) is the pattern reused
-  here.
-- `docs/spikes/journey-intent-correlation.md`: proposed `REUSE_WORK_ITEM_ID`.
-  `wi_` is the journey key, and a modern DevLoop attaches `(temporal,
-  workflow_id#run_id)` as its `we_` through `ensure_issue_execution`.
-- `docs/spikes/agent-client-compatibility.md`: host compatibility is a draft
-  with "pending live run" and `unknown` cells. No host has been run against
-  `api.mctl.ai/mcp`.
+- `roadmap/spikes/mcp-tasks-durable-execution.yaml` has the following
+  values:
+  - `lifecycle: proposed` and `outcomes: GO_ADAPTER_IN_MCTL_API |
+    GO_UPSTREAM_ONLY | NO_GO`;
+  - `timebox.decisionBy: 2026-12-15` and owner `mctlhq/mctl-agents`;
+  - no `evidence.report` and no `decision`.
 
-In mctl-api (`[CODE]` at the pin):
+  The header comment says the Portal half is dropped: the gateway passes
+  Tasks through, and its G2 checks that. It also says the executable pilot
+  is mctl-api#284.
+- `roadmap/schemas/spike-definition.schema.json` defines the shapes:
+  - `outcome` matches `^[A-Z][A-Z0-9_]*$`;
+  - `evidence.report` is a relative path;
+  - `decision` is allowed only when the spike is decided.
+- `roadmap/scripts/validate.py` (around lines 388-395) refuses a
+  `decision.verdict` that is not in `spec.outcomes`. That makes the manifest
+  outcome list the only machine-checked vocabulary (P2-TS-06).
+- `roadmap/requirements.txt` pins `jsonschema==4.25.1` and `PyYAML==6.0.2`.
+  That gives an independent schema validator outside the Go model
+  (P2-TS-05).
+- `docs/spikes/automation-control-plane/` is the precedent layout:
+  - `model/`, `fixtures/`, `schemas/`;
+  - `harness_test.go`, `negative_test.go`, `regression_test.go`;
+  - an opt-in `temporal-integration/` module with its own `go.mod`.
 
-- `go.mod`: `github.com/mark3labs/mcp-go v1.0.0`, `go.temporal.io/sdk v1.50.0`.
-- `internal/mcp/server.go`: `server.WithStateLess(true)` (no `Mcp-Session-Id`),
-  tool and prompt capabilities on, and `WithResourceCapabilities(false,
-  false)` with the comment that a stateless transport has no session to
-  deliver notifications to. No `WithTaskCapabilities` and no task tools are
-  registered. The server advertises no Tasks support today.
-- `internal/temporalclient/client.go`: `StartDevLoopWorkflow`,
-  `DescribeDevLoopExecution`/`DescribeDevLoopRun`, `SignalApprove`,
-  `SignalAbandon`, `SignalBridgeResult`, `QueryShepherdInLoop`,
-  `QueryHumanInputState` (`RUNNING | WAITING_FOR_INPUT | INPUT_TIMED_OUT`,
-  with `request_id`/`request_hash`, "the ONLY source of truth ... mctl-api
-  keeps no copy"), and the human-input response signal. There is **no
-  generic workflow-cancel method**.
-- `internal/api/handlers_approval_grant.go`: `prepareApprovalGrant`,
-  `bindApprovalGrant` and `spendApprovalGrant` form one atomic
-  compare-and-set: approved, same intent, not expired, not consumed. The
-  approval is bound to `artifact_hash`. Since the owner decision of
-  2026-11-18, decisions are made only on the decide page.
-- `internal/workitems/execution_requests.go`: `xr_` requests with
-  `expected_state_version`, `idempotency_key`, `surface`, `requested_by`,
-  `acting_principal`, and `OpenRequestError` (one open request per item).
-- `internal/mcp/testdata/support/task_*.json`: A2A task-state fixtures for
-  `mctl_get_support_task`. This is a precedent for mapping another
-  protocol's task states onto a canonical store without copying it.
+### In mctl-api `[CODE]`
 
-In mctl-agents (`[CODE]`):
+- `go.mod` pins `github.com/mark3labs/mcp-go v1.0.0` and
+  `go.temporal.io/sdk v1.50.0`.
+- `internal/mcp/server.go`:
+  - `server.WithStateLess(true)` (line 246), so there is no session;
+  - `server.WithResourceCapabilities(false, false)` (line 285);
+  - no `WithTaskCapabilities`, so the server advertises no Tasks today.
+- mcp-go v1.x implements the legacy SEP-1686 shape: `tasks/list`,
+  `tasks/result`, an in-memory `tasks` map and a goroutine executor (read in
+  revision 1). The adapter must never enable it.
+- `internal/temporalclient/client.go` has these methods:
+  - `StartDevLoopWorkflow`, `DescribeDevLoopExecution` and
+    `DescribeDevLoopRun`;
+  - `SignalApprove` and `SignalAbandon`;
+  - `QueryHumanInputState` (line 456) and `SignalHumanInputResponse`
+    (line 479).
 
-- `orchestrator/temporal/workflows/action_approval.py`: `ApprovalWaitWorkflow`.
-  It waits on a wake-up signal `{"approval_id": "aar_..."}` bounded by a
-  durable timer, polls every 15 minutes (ADR-014 section 7), and ends with
-  outcomes `ran | denied | expired | consumed | mismatch`.
-- `docs/adr/013-human-input-contract.md`: a sealed, content-addressed request
-  (`request_hash`, `request_id = "hir-" + ...`, `question_hash`), bounded TTL
-  (`MAX_REQUEST_TTL_SECONDS`) and bounded rounds. The workflow validates the
-  response (id, hash, expiry, respondent, typed value).
-- `orchestrator/temporal/dispatcher.py` claims `xr_` and starts the run via
-  Update-with-Start (as recorded in automation-control-plane D1).
+  There is no generic `RequestCancel`.
+- `internal/workitems/execution_requests.go` (the P1-TS-02 evidence):
+  - `Store.CreateExecutionRequest` (line 367) runs its own
+    `s.withTx(ctx, "workitem:"+in.WorkItemID, ...)` (line 373). Inside it:
+    `getItem`, then `replayed(...opExecutionRequest, in.Mutation)` (replay
+    keyed on `(work_item_id, idempotency_key)`), then the
+    `expected_state_version` check, then `openExecutionRequest`
+    (`OpenRequestError`), then `checkRunnable`, then the INSERT with state
+    `pending`, then `appendEvent`, then `remember`.
+  - The id is `ExecutionRequestIDPrefix + uuid.NewString()` with dashes
+    removed. That is a UUIDv4, with 122 random bits.
+  - The unique index `work_item_execution_requests_one_open` allows at most
+    one pending or claimed request per item.
+  - `ClaimExecutionRequest` (line 495) scans open requests with
+    `claimCandidateSQL` outside any lock, then locks each item. A pending
+    `xr_` can therefore be claimed by the dispatcher as soon as its
+    transaction commits.
+- `internal/workitems/store.go`:
+  - `withTx` (line 269) begins a transaction, takes
+    `pg_advisory_xact_lock(hashtext(lockKey))`, runs `fn`, and commits;
+  - `rememberCreate` writes `work_item_create_requests`
+    `(tenant, idempotency_key, request_hash, ...)`;
+  - `replayed` and `remember` use `work_item_requests`.
 
-In mcp-go (`[CODE]`):
+  These helpers are package-private. No public API composes two mutators in
+  one transaction.
+- `internal/workitems/orphans.go` has `OpenExecutionsWithQueuedRequests` and
+  orphan close (`execution_orphan_closed`). This is a precedent for a
+  recovery sweep paged by `(started_at, id)`.
 
-- v1.0.0 and v1.6.0 implement the **legacy SEP-1686** shape:
-  `MethodTasksList` ("tasks/list ... for the current session"),
-  `MethodTasksResult`, `notifications/tasks/status`, and no `tasks/update`.
-  The server task store is `tasks map[string]*taskEntry` in process memory.
-  `executeTaskTool` runs the handler in a goroutine with a cancel func, and
-  `scheduleTaskCleanup` is a timer. Enabling it would create a second,
-  non-durable executor that loses tasks on restart. This contradicts the
-  issue and the modern spec.
+### In mctl-agents `[CODE]`
 
-Modern spec (`[DOC]`, 2026-07-28):
+- `docs/adr/013-human-input-contract.md`:
+  - The request is sealed and content-addressed (`request_hash`,
+    `request_id = "hir-" + request_hash[7:23]`, `question_hash`).
+  - `expires_at` is hash-covered and clamped by `MAX_REQUEST_TTL_SECONDS`.
+    Rounds are bounded by `MAX_CLARIFICATION_ROUNDS`.
+  - `validate_response` checks respondent membership in
+    `requested_from.actor_refs`, request id and hash, and expiry.
+  - "Clarification is not approval": `WAITING_FOR_INPUT` and
+    `WAITING_FOR_APPROVAL` are distinct gates.
+  - "A human respondent": the only respondent is the issue author, and a bot
+    author is discarded.
+  - Continuation records `respondent` and `surface` per answer.
+  - There is no field that says which surfaces or assurance levels may
+    answer (P2-TS-03 gap).
+- `ApprovalWaitWorkflow` (revision 1 read, `action_approval.py`) waits on
+  the `{"approval_id": "aar_..."}` signal with a durable timer. Its outcomes
+  are `ran | denied | expired | consumed | mismatch`.
 
-- Negotiation is per request, through
-  `params._meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`.
-  The server advertises it in `server/discover`.
-- The result is `CreateTaskResult` with `resultType: "task"` (`taskId`,
-  `status`, `statusMessage`, `createdAt`, `lastUpdatedAt`, `ttlMs`,
-  `pollIntervalMs`), returned only after durable creation.
-- Statuses: `working | input_required | completed | cancelled | failed`.
-- `tasks/get` returns `result` inline when `completed`, `error` when `failed`,
-  and `inputRequests` when `input_required`.
-- `tasks/update {taskId, inputResponses}` and `tasks/cancel {taskId}` both
-  return an empty, eventually consistent acknowledgement. Cancel is
-  cooperative.
-- A tool result with `isError: true` is still `completed`.
-- There is no `tasks/list` or `tasks/result`. Notifications go through
-  `subscriptions/listen` with `notifications/tasks`.
-- Errors: `-32602` for an unknown `taskId`, `-32603` internal, `-32021`
-  missing client capability.
-- `taskId` must have high entropy and every request must be authorized.
-- `Mcp-Name: <taskId>` is required on Streamable HTTP `tasks/*` requests.
+### Spec facts `[DOC]` that drive this revision
 
-Deployed state checked:
+- `input_required`: "The `inputRequests` field MUST contain all outstanding
+  requests from the server to the client". The entries are elicitation or
+  sampling payloads. An approval on an out-of-band page is neither
+  (P1-TS-01).
+- `resultType` MUST be `"complete"` on the `tasks/get`, `UpdateTaskResult`
+  and `CancelTaskResult` results. A create returns `"task"` (P2-TS-05).
+- `ttlMs`: "Time-to-live duration from creation ... null for unlimited". It
+  "MAY change over the lifetime of a task". After it elapses, a server MAY
+  mark the task failed and delete it (P2-TS-04).
+- `tasks/update`: "Each key MUST correspond to a currently-outstanding
+  inputRequest key". Servers SHOULD ignore keys that are not outstanding,
+  and MAY accept partial sets.
+- The client MUST set `Mcp-Name` to `params.taskId` on `tasks/*`.
+- Error codes: `-32602` for an unknown task, `-32603` for an internal error,
+  `-32021` for a missing client capability.
+- `notifications/tasks` via `subscriptions/listen` carries the full
+  `tasks/get`-equivalent state.
 
-- `mctl_list_services(team=admins)` `[LIVE]`: `mctl-agents-worker`,
-  `-worker-exec` and `-worker-implement` at `1.117.0`, all Synced. mctl-api
-  is **not** in the `admins` catalogue, so its deployed image, flags and
-  whether a Tasks capability is live are `unknown (not observed)`.
-- `services/admins/mctl-agents-worker/values.yaml` `[CONFIG]`: `replicaCount:
-  1`, `image.tag "1.117.0"`, `TEMPORAL_NAMESPACE: mctl-agents`,
-  `TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233`,
-  `EXECUTION_REQUEST_DISPATCHER: "true"`.
-- `services/admins/mctl-agents-worker-exec/values.yaml` `[CONFIG]`: same
-  namespace and tag, `replicaCount: 1`.
-- `gh issue view` `[LIVE]`: mctl-api#284 OPEN; .github#375 (authority
-  lifecycle, revocation and fencing), #376 (MCP Apps) and #377 (SEP-3415
-  events) are OPEN.
-- Not observed: live `api.mctl.ai/mcp` behaviour for `server/discover` and
-  `tasks/*`, Portal pass-through, and every AI host. All are `unknown`.
+### Deployed state checked
+
+- `mctl_get_service_status(team=admins, service=mctl-agents-worker)`
+  `[LIVE]`: Argo CD `Healthy` and `Synced`, `imageTag 1.117.0`, updated
+  2026-11-22T18:06:58Z.
+- `services/admins/mctl-agents-worker/values.yaml` `[CONFIG]`:
+  `replicaCount: 1`, `image.tag "1.117.0"`, `TEMPORAL_NAMESPACE:
+  mctl-agents`, `EXECUTION_REQUEST_DISPATCHER: "true"`. The dispatcher that
+  claims `xr_` is live, so an orphan pending `xr_` would really be
+  dispatched.
+- `services/admins/mctl-agents-worker-exec/values.yaml` `[CONFIG]`:
+  `replicaCount: 1`, tag `1.117.0`, namespace `mctl-agents`.
+- `services/` listing `[CONFIG]`: no `mctl-api` directory under any tenant
+  (`admins`, `karabu`, `labs`, `namax66`, `redloop`). mctl-api's deployed
+  image, flags and live Tasks behaviour are `unknown (not observed)`, not
+  absent.
+- Not observed: `api.mctl.ai/mcp` `server/discover`, Portal pass-through,
+  and every AI host. All are `unknown`.
 
 ## Proposed solution
 
-The spike's output is documentation plus a reference fixture in this
-repository. No production change. The design below is the contract that the
-fixture proves and that mctl-api#284 later implements.
+### Finding-to-change matrix
 
-### ADR-41: thin Tasks adapter in mctl-api over canonical execution
+| Finding | Revision 1 | Revision 2 change | Proof (Phase 0) | Proof (later gate) |
+| --- | --- | --- | --- | --- |
+| P1-TS-01 | approval wait -> `input_required`, no `inputRequests` | Approval wait and human-only input map to `working` + advisory `statusMessage`. `input_required` only with a non-empty elicitation `inputRequests`, and only for client-relayable input. Section 3. | N3, N4, S1-S3 (schema negatives) `[MODEL]` | G2 host run |
+| P1-TS-02 | "one transaction" over public mutators | Design A: new `Store.CreateTaskExecution` in one `withTx`, with a lock order, commit order, collision rules and a recovery sweep. Design B documented as the fallback. Section 5. | Commit-order model with injected crash points `[MODEL]`, explicitly not an atomicity proof | G1 Postgres fault injection in mctl-api |
+| P2-TS-03 | owner may answer any key | Typed form elicitation only, plus respondent policy, `actor_ref` match, freshness, hash, scope, credential class and `client_id`. Never an approval path. Section 7. | N5-N10 `[MODEL]` | G1 + mctl-agents ADR 013 extension |
+| P2-TS-04 | `ttlMs` 24 h default, 7 d max | `ttlMs: null` while non-terminal, terminal-only expiry, idempotency scope outlives the row, WorkItem fallback. Section 10. | T21-T23 (8-day approval with a fake clock) `[MODEL]` + `[TEMPORAL_DEV]` time-skipping | G1 |
+| P2-TS-05 | only create shape tested | Pinned official schema, independent Python `jsonschema` check of every fixture, `Mcp-Name` exactness, negotiation negatives. Section 12. | S1-S12 | G2 |
+| P2-TS-06 | two vocabularies, silent `GO_ADAPTER_IN_MCTL_API` | Manifest vocabulary is canonical. One map in the report. A consistency check. Recommendation, not decision. Section 13. | C1-C3 | owner decision |
 
-**Decision (proposed):** `GO_ADAPTER_IN_MCTL_API`, scoped as a bounded pilot
-(`BOUNDED_PILOT` in the issue's vocabulary). Do not wait for upstream
-(`GO_UPSTREAM_ONLY`), because no upstream SDK piece is required: the
-adapter writes its own method handlers. `NO_GO` only if a decision gate
-below fails.
+### 1. Layering and ownership (unchanged from revision 1)
 
-1. **Layering and ownership.**
+```text
+MCP host --(tools/call, tasks/*)--> mctl-api internal/mcp    [protocol adapter, mctl-api]
+                                      | mcp_tasks: protocol binding only
+                                      v
+                 workitems.Store: wi_ / xr_ / we_ / cs_        [canonical identity, mctl-api]
+                                      v
+           dispatcher claims xr_ -> Temporal workflow          [execution owner, mctl-agents]
+                                      v
+                        Argo / CI / deploy / agent worker
+```
 
-   ```text
-   MCP host --(tools/call, tasks/*)--> mctl-api internal/mcp  [protocol adapter, mctl-api]
-                                          | tk_ row: protocol state only
-                                          v
-                         WorkItem store: wi_ / xr_ / we_ / cs_  [canonical identity, mctl-api]
-                                          v
-                   dispatcher.py claims xr_ -> Temporal workflow  [execution owner, mctl-agents]
-                                          v
-                              Argo / CI / deploy / agent worker
-   ```
+mctl-agents owns execution semantics: states, gates and cancellation
+boundaries. mctl-api owns the adapter and the protocol table. The adapter
+never starts Temporal itself, because the dispatcher is the only start
+path.
 
-   mctl-agents owns execution semantics: states, gates and cancellation
-   boundaries. mctl-api owns the protocol adapter and the thin protocol
-   table. Service-specific MCP servers (for example mctl-telegram) may
-   reuse the same contract later. They never get a store of their own.
+### 2. Protocol state vs execution state
 
-2. **Protocol state vs execution state.** A new mctl-api table `mcp_tasks`
-   holds **only** protocol state:
-   - `task_id`, `tenant`, `owner_principal`, `client_id`;
-   - `tool`, `args_digest`, `idempotency_key`;
-   - `work_item_id`, `execution_request_id`, and `execution_id` (filled
-     lazily from `xr_.execution_id`);
-   - `ttl_ms`, `poll_interval_ms`, `created_at`, `expires_at`;
-   - `cancel_requested_at`, `answered_input_keys`.
+`mcp_tasks` holds only the protocol binding:
 
-   It has **no status column**. Every `tasks/get` derives status (see 3).
-   `lastUpdatedAt` is the maximum of the canonical timestamps read.
+- identity and owner: `task_id`, `tenant`, `owner_principal_id`,
+  `client_id`;
+- the call: `tool`, `args_digest`, `idempotency_key`;
+- the canonical links: `work_item_id`, `execution_request_id`;
+- protocol timing: `created_at`, `terminal_observed_at`, `expires_at`
+  (null while non-terminal), `cancel_requested_at`;
+- `schema_version`.
 
-3. **Deterministic lifecycle mapping** (first matching row wins):
+It has no status column. Status is derived on every read (section 3).
 
-   | Canonical state | MCP |
-   | --- | --- |
-   | `xr_` rejected | `failed` (`error.data.reason = execution_request_rejected`) |
-   | `xr_` pending or claimed, no `we_` yet | `working` |
-   | Temporal `Completed`, result is a tool success | `completed` + `result` |
-   | Temporal `Completed`, result carries a business refusal or failure | `completed` + `result.isError: true` |
-   | Temporal `Canceled` | `cancelled` |
-   | Temporal `Failed`, `TimedOut` or `Terminated` | `failed` + classified `error` |
-   | Running, `human_input_state = WAITING_FOR_INPUT` | `input_required` + `inputRequests[request_id]` |
-   | Running, `human_input_state = INPUT_TIMED_OUT` | `working` until the workflow ends (the workflow decides) |
-   | Running, waiting on `ApprovalWaitWorkflow` with an `aar_` pending | `input_required` + `statusMessage` naming the decide page; **no** answerable `inputRequests` |
-   | Running, otherwise | `working` (+ `statusMessage` "cancellation requested" if `cancel_requested_at`) |
-   | Any read of Temporal or the store fails | JSON-RPC `-32603`, retryable; never a status |
+### 3. Lifecycle mapping (revised, P1-TS-01)
 
-   `input_required` maps to **both** layers: the persisted, sealed object
-   (the ADR 013 `hir-` request, or an `aar_` grant) is the content binding,
-   and the Temporal signal is only the transport.
+The first matching row wins.
 
-4. **Task identity.** `taskId = "tk_" + base32(128-bit CSPRNG)`. It is not
-   the Temporal workflow ID, which is guessable, for example
-   `dev-loop-mctlhq-<repo>-<issue>` from `WorkflowIDForIssueURL`.
-   Possession is never authorization: every `tasks/*` call re-runs the same
-   principal and tenant authorization as the tool (`PrincipalAuthz`, as in
-   mcp-gateway-g0), then compares `owner_principal` and `tenant`. A
-   mismatch, unknown, malformed or expired ID all return the same `-32602`.
-   The handler requires `Mcp-Name` to equal `params.taskId`. There is no
-   enumeration method.
-
-5. **Durable create before return.** Inside one Postgres transaction, the
-   `tools/call` handler:
-   1. creates or joins the `wi_`;
-   2. creates the `xr_` (surface `mcp`, `acting_principal`, the idempotency
-      key);
-   3. inserts the `mcp_tasks` row;
-   4. commits;
-   5. returns `CreateTaskResult{status: working}`.
-
-   The dispatcher starts Temporal asynchronously, as it does today. So the
-   adapter never calls Temporal start itself and creates no second start
-   path.
-
-6. **Idempotency.** MCP has no stable request key: JSON-RPC `id` is
-   per-connection, and there is no session under the stateless transport.
-   Every task-capable tool therefore takes an explicit `idempotency_key`
-   argument. It is a tool argument and not only `_meta`, because hosts let
-   the model fill arguments, and it is mctl's existing convention (see
-   `mctl_create_work_item`). The scope is `(tenant, owner_principal, tool,
-   idempotency_key)`, with a unique index:
-   - same `args_digest`: the same `taskId` is returned (replayed);
-   - different digest: `idempotency_key_reused`;
-   - key missing on a consequential tool: refused;
-   - after TTL expiry, the key is retained for at least the `xr_`
-     idempotency window, so a late retry cannot start a duplicate.
-
-7. **Input handoff.** `tasks/update` checks the owner, then for each
-   `inputResponses` key:
-   - if the key equals the open `request_id`: send the existing human-input
-     response signal with `request_id`, `request_hash`, the respondent
-     principal and the typed value. The workflow validates it, as it does
-     today;
-   - otherwise: ignore it, record the key in the audit trail, and record
-     the key in `answered_input_keys`.
-
-   It acknowledges with an empty result. Truth arrives through the next
-   `tasks/get`.
-
-8. **Approval handoff.** `tasks/update` cannot answer an approval. The task
-   shows `input_required` and a statusMessage with the `decide_url` that
-   `mctl_get_dev_loop_approval`/`mctl_request_deploy_approval` already
-   return. The owner decides on the fresh-sign-in page. mctl-api signals
-   `ApprovalWaitWorkflow` as today, and the task returns to `working`. MCP
-   Apps (#376) may *display* the same status, but they are never a decision
-   surface.
-
-9. **Cancellation.** `tasks/cancel` checks the owner, records
-   `cancel_requested_at` and the audit entry, then calls a new
-   `temporalclient.RequestCancel(workflowID, runID)`. If no `we_` exists
-   yet, it marks the `xr_` cancelled. It acknowledges with an empty result.
-   Each workflow class declares its boundary:
-   - waiting for input or approval: cancels at once (wait_condition
-     cancelled);
-   - Temporal activity: heartbeat cancellation, then cleanup;
-   - submitted Argo work: the cancel handler stops or terminates the Argo
-     workflow and waits for its terminal phase before the workflow returns
-     `Canceled`;
-   - external CI or deploy past the point of no return: the cancel is
-     honoured after the current non-rollbackable step. The result records
-     which side effects happened, and if the step finished first the task
-     ends `completed`.
-
-   Races: Temporal's first terminal state wins. A cancel after a terminal
-   state is a no-op acknowledgement. A cancel is never reported as
-   `cancelled` early.
-
-10. **TTL and retention.** The default `ttlMs` is 24 hours, capped at 7 days,
-    and never longer than the workflow's own bound. After expiry, `tasks/*`
-    returns `-32602` and a sweeper deletes the protocol row. `wi_`, `we_`,
-    the audit trail and Temporal history keep their own retention, so a
-    result stays reachable through the existing WorkItem tools.
-
-11. **Revocation and fencing (#375).** Authority is re-checked on every
-    `tasks/*` call. The workflow's action-time checkpoint denies side
-    effects for a revoked principal. Lifecycle-ownership fencing epochs stay
-    authoritative over who drives the execution. The task adapter never
-    acquires ownership.
-
-12. **Notifications vs #377.** The pilot is polling only. `pollIntervalMs` is
-    5 s while working and 30 s while `input_required`. The server advertises
-    no `subscriptions/listen` for tasks. If #377 chooses a business-event
-    stream, `notifications/tasks` becomes a projection of the same
-    canonical transition. That projection is keyed on `(taskId,
-    lastUpdatedAt)` so a client that both polls and subscribes is not sent
-    the same change twice.
-
-13. **Fallback for non-negotiating hosts.** The same tool returns a normal
-    `CallToolResult` with `work_item_id` and `execution_request_id`. The
-    host then polls through existing `mctl_get_work_item` and
-    `mctl_list_work_item_executions`. Nothing long-running holds the HTTP
-    request.
-
-14. **Audit.** Each event records principal, tenant, client, `taskId`,
-    `wi_`, `xr_`, `we_`, method and outcome. Content is never logged.
-
-### Pilot choice
-
-| Candidate | Durable today | Side effects | Verdict |
-| --- | --- | --- | --- |
-| DevLoop investigation | yes | gitops commits, model spend | rejected as first pilot (spend and writes) |
-| Deploy + wait-for-Argo-health | yes | production deploy | rejected (production side effects) |
-| Telegram research | unknown worker boundary | messages | rejected (boundary not ready) |
-| **Synthetic `TaskProbeWorkflow`** | built in the fixture with the SDK | none | **chosen** |
-
-`TaskProbeWorkflow` has three phases: a cancellable sleep, a
-`WAITING_FOR_INPUT` gate that reuses the ADR 013 request shape, and an
-approval-wait gate that reuses the `ApprovalWaitWorkflow` signal shape
-against a fake grant store. It then returns a deterministic result, or a
-business error on input `fail`. It first lives only in
-`docs/spikes/mcp-tasks-durable-execution/temporal-integration/`. Moving it
-into mctl-agents and exposing it through mctl-api#284 are later,
-owner-gated steps.
-
-### Host and SDK compatibility matrix (initial)
-
-| Client | Extension declared | Evidence |
+| Canonical state | MCP `status` | Payload |
 | --- | --- | --- |
-| Claude Code | public beta from v2.1.304 | `[DOC]` (manifest comment), unmeasured |
-| Claude (web/desktop), ChatGPT, Codex, Antigravity, agy, Grok Bot | unknown | not observed |
-| mcp-go server v1.0.0/v1.6.0 | legacy SEP-1686 only | `[CODE]`; the adapter must not use `WithTaskCapabilities` or `AddTaskTool` |
+| any read of the store or Temporal fails | JSON-RPC `-32603` | none; never a status |
+| `xr_` rejected with reason `cancelled_by_task` (cancel before `we_`) | `cancelled` | |
+| `xr_` rejected, any other reason | `failed` | `error` (`execution_request_rejected`), `statusMessage` |
+| `xr_` pending/claimed, no `we_` | `working` | |
+| Temporal `Completed`, tool success | `completed` | `result` |
+| Temporal `Completed`, business refusal | `completed` | `result` with `isError: true` |
+| Temporal `Canceled` | `cancelled` | |
+| Temporal `Failed`, `TimedOut`, `Terminated` | `failed` | classified `error`, diagnostic `statusMessage` |
+| Running, `WAITING_FOR_INPUT`, request `respondent_policy` allows `mcp/client_relayed`, and the caller is an allowed respondent | `input_required` | `inputRequests: {<request_id>: elicitation form request built from the sealed ResponseSpec}` |
+| Running, `WAITING_FOR_INPUT`, policy does not allow MCP or the caller is not a respondent | `working` | `statusMessage`: "waiting for human input on another surface" |
+| Running, `INPUT_TIMED_OUT` | `working` | the workflow decides the outcome |
+| Running, `WAITING_FOR_APPROVAL` / `ApprovalWaitWorkflow` with `aar_` pending | `working` | advisory `statusMessage`: "waiting for owner approval". It includes the `decide_url` only if the caller is authorized to decide that grant (same check as `mctl_get_dev_loop_approval`). Otherwise no link and no grant content. |
+| Running, otherwise | `working` | "cancellation requested" if `cancel_requested_at` is set |
 
-### Decision gates
+Rules:
 
-- G0: the fixture passes the full test matrix `[MODEL]` and `[TEMPORAL_DEV]`.
-- G1: mctl-api can register modern `tasks/*` handlers and `server/discover`
-  extension advertisement without the legacy store (code spike in #284).
-- G2: direct `api.mctl.ai/mcp` measurement from one real host (Claude Code).
-- G3: Portal pass-through of `tasks/*` and `Mcp-Name` (mcp-gateway G2).
+- An `input_required` result always has a non-empty `inputRequests` map.
+- An approval never produces `input_required` or an `inputRequests` entry.
+- The `statusMessage` "MAY be exposed to the end-user or model" `[DOC]`.
+  A decide link therefore never confers anything: the decide page itself
+  requires a fresh sign-in with a second factor and checks the grant's
+  `artifact_hash` and `context_digest`.
 
-Each gate is a separate owner approval. A failed G1 means `NO_GO` for now,
-or `GO_UPSTREAM_ONLY` if the gap is an SDK hook. A failed G3 keeps Tasks
-upstream-only, as #284 already states.
+Alternative evaluated and rejected for the pilot: a URL-mode elicitation
+pointing at the decide page. It would be a well-formed `inputRequest`, but:
+
+- the client's accept or decline answer would travel on `tasks/update`,
+  the same path as client input, which P2-TS-03 forbids;
+- hosts may render "accept" as consent;
+- URL-mode support in the 2026-07-28 Tasks flow and in hosts is
+  `unknown (not observed)`.
+
+### 4. Task identity
+
+- `taskId = "tk_" + base32(16 bytes from crypto/rand)`. It is never a
+  Temporal workflow id (DevLoop ids derive from issue URLs) and never the
+  `xr_` id (122 bits, already shown to callers of WorkItem tools).
+- Every `tasks/*` call re-authorizes the caller and then compares `tenant`
+  and `owner_principal_id`.
+- A mismatch, unknown, malformed or expired id all return the same
+  `-32602`.
+- `Mcp-Name` must equal `params.taskId` byte for byte. Otherwise the call
+  gets `-32602`, before any lookup, so the check reveals nothing.
+
+### 5. Durable create-before-return (revised, P1-TS-02)
+
+Revision 1's "one transaction" was false. A controller cannot wrap
+`CreateWorkItem` and `CreateExecutionRequest` in one transaction, because
+each commits inside its own `withTx`. The failure mode is concrete: a crash
+after the `xr_` commits but before the `mcp_tasks` insert leaves a pending
+`xr_`. The live dispatcher (`EXECUTION_REQUEST_DISPATCHER: "true"`) then
+claims and runs it, while no handle exists. A retry would then see
+`OpenRequestError`, not the original task.
+
+**Design A (recommended): one transactional `Store` method in package
+`workitems`.**
+
+```go
+// CreateTaskExecution creates or joins the work item, creates the start
+// request and inserts the task binding in ONE transaction.
+func (s *Store) CreateTaskExecution(ctx context.Context, in TaskExecutionInput) (*TaskBinding, bool /*replayed*/, error)
+```
+
+Steps inside a single `pgx.Tx`:
+
+1. **Lock 1:** `pg_advisory_xact_lock(hashtext("mcp-task:"+tenant+"|"+owner_principal_id+"|"+tool+"|"+idempotency_key))`.
+2. **Scope lookup.** `SELECT` from `mcp_task_scopes` for the scope:
+   - found with an equal `args_digest`: return the stored `task_id` (replayed);
+   - found with a different digest: `idempotency_key_reused`.
+3. **Create or join `wi_`.** Use the package-private create path with
+   `rememberCreate`, keyed by `(tenant, derived key "mcp-task:"+task_id)`.
+4. **Lock 2:** `pg_advisory_xact_lock(hashtext("workitem:"+wi_id))`. This is
+   the same key existing mutators use, so they stay serialized.
+5. **Create `xr_`.** Run the body of `CreateExecutionRequest`, refactored
+   into `createExecutionRequestTx(ctx, tx, in)`, with
+   `Mutation.IdempotencyKey = "mcp-task:"+task_id`.
+6. **Insert the binding.** INSERT `mcp_tasks` and `mcp_task_scopes`. The
+   unique index on the scope is the backstop.
+7. **COMMIT.** Only then does the server write `CreateTaskResult` to the
+   wire.
+
+Properties:
+
+- **Lock order.** It is always scope lock, then item lock. No existing
+  mutator takes a scope lock, so no cycle exists.
+- **Commit order.** One commit holds the `wi_`, the `xr_` and the binding.
+  The dispatcher's claim scan can see the `xr_` only after the binding is
+  visible.
+- **Collision handling.** Two racing creates on the same scope serialize on
+  lock 1. The loser replays or fails at step 2. A unique violation at step 6
+  maps to replay after a re-read. It is never a 500 and never a second
+  `xr_`.
+- **Crash.** A crash at any step rolls everything back. A retry is a fresh
+  create, and the client has never seen a `taskId`.
+- **Refactor cost.** `CreateExecutionRequest` becomes a thin wrapper around
+  `createExecutionRequestTx`, so its behaviour stays identical. This is
+  checked by the existing `execution_requests_test.go`.
+- **Migration.** Two additive tables, `mcp_tasks` and `mcp_task_scopes`,
+  created with the existing `CREATE TABLE IF NOT EXISTS` schema style.
+
+**Design B (fallback if A is refused): durable protocol intent first.**
+
+1. Commit a `mcp_task_scopes` row in state `reserving`, with `task_id`,
+   the derived keys and `args_digest`.
+2. Call the public `CreateWorkItem`, using the derived idempotency key.
+3. Call the public `CreateExecutionRequest`, using the derived mutation key.
+   Both are replayable through `work_item_create_requests` and
+   `work_item_requests`.
+4. Mark the row `bound`. Only then return.
+
+Retry and recovery under B:
+
+- A retry that finds `reserving` re-runs steps 2-4 idempotently and
+  returns the same `taskId`.
+- A recovery sweep, paged like `OpenExecutionsWithQueuedRequests`, finishes
+  `reserving` rows older than a bound.
+- An `xr_` can exist without a bound row only while a `reserving` row names
+  it. The execution then runs before the handle is bound, which is
+  acceptable because the retry or the sweep binds it.
+
+B is weaker: it has a window in which the execution runs before the handle
+exists, and it depends on the retention of the inner idempotency rows (an
+open question).
+
+**Phase 0 proof boundary.** The Go model implements A and B against a fake
+store, with injected crash points before and after each step. It shows the
+commit-order and replay invariants `[MODEL]`. It does NOT prove Postgres
+atomicity, lock behaviour or index backstops. Those are gate G1: Postgres
+fault-injection tests in mctl-api, run with a real Postgres and a killed
+connection at each step. G1 needs owner approval.
+
+### 6. Idempotency
+
+- Every task-capable tool takes an explicit `idempotency_key` argument,
+  matching the existing `mctl_create_work_item` convention.
+- MCP has no stable request key under `WithStateLess(true)`. The JSON-RPC
+  `id` is per connection.
+- The scope is `(tenant, owner_principal_id, tool, idempotency_key)`, with
+  `args_digest` over canonical JSON arguments without `_meta`.
+- A missing key on a consequential tool is refused.
+
+### 7. `tasks/update` trust boundary (revised, P2-TS-03)
+
+Allowed response types:
+
+- form-mode elicitation responses (`action: accept` with `content`, or
+  `decline`/`cancel`) to ADR 013 requests;
+- no sampling and no URL-mode elicitation.
+
+The server processes each `inputResponses` entry in order. It ignores and
+audits any entry that fails a check:
+
+1. **Credential class.** Service, agent and relayed-surface credentials are
+   refused for the whole call, and for `tasks/cancel` too. mctl-api already
+   refuses such credentials for approvals.
+2. **Task ownership.** Same as `tasks/get`.
+3. **Key.** It must equal the currently open `request_id` from
+   `QueryHumanInputState`. Any other key is ignored with reason `not_open`.
+   That covers already-answered keys, keys from a prior round, `aar_` ids
+   and arbitrary strings.
+4. **Respondent policy.** The sealed request's `respondent_policy` must list
+   `{surface: mcp, assurance: client_relayed}`. This is a new ADR 013 field,
+   owned by mctl-agents. A request without it is never emitted as an
+   `inputRequest` and is never answerable here (`policy_denied`).
+5. **Respondent identity.** The caller's canonical principal must resolve
+   to a member of `requested_from.actor_refs` (`respondent_mismatch`).
+6. **Freshness.** `now < effective_deadline` and the round count is below
+   `MAX_CLARIFICATION_ROUNDS` (`expired`, `rounds_exhausted`).
+7. **Typed validation.** `content` must validate against the sealed
+   `ResponseSpec`, within the ADR 013 limits (2000 code points, 8000 chars
+   compact JSON) (`invalid_value`).
+8. **Binding.** The server forwards with
+   `SignalHumanInputResponse(workflowID, runID, {request_id, request_hash,
+   value, respondent, surface: "mcp", assurance: "client_relayed",
+   client_id, received_at})`. The workflow's own `validate_response`
+   re-checks id, hash, expiry and respondent. The adapter's checks never
+   replace it.
+
+Rules for the whole call:
+
+- `UpdateTaskResult{resultType: "complete"}` is returned whatever happened
+  to the entries. The truth comes from the next `tasks/get`.
+- No code path from `tasks/update` reaches `SignalApprove`, an approval
+  grant mutation or the `ApprovalWaitWorkflow` signal. A test asserts this
+  with a call-graph spy in the model.
+- **OAuth-client boundary:**
+  - `tasks/get` and `tasks/cancel` are allowed from any OAuth client of the
+    owning principal, which is the reconnect-across-hosts goal;
+  - `tasks/update` records `client_id` on the answer;
+  - for a task whose policy says `same_client`, `tasks/update` also requires
+    the creating `client_id`. Pilot default: `any_client_of_owner`.
+
+### 8. Approval handoff
+
+- The task stays `working` (section 3).
+- The owner decides on the existing decide page. mctl-api signals
+  `ApprovalWaitWorkflow` exactly as today, bound to `aar_` `artifact_hash`
+  and `context_digest`.
+- MCP Apps (#376) may display the same canonical status. They never decide.
+
+### 9. Cancellation
+
+This section is unchanged from revision 1, with one addition: the
+acknowledgement is `CancelTaskResult{resultType: "complete"}`.
+
+- A new `temporalclient.RequestCancel(workflowID, runID)` is needed later.
+- With no `we_` yet, cancel rejects the `xr_` under the item lock.
+- Each workflow declares its boundary:
+  - input or approval wait: cancels at once;
+  - activity: heartbeat cancel, then cleanup;
+  - Argo: stop, then wait for its terminal phase;
+  - external CI or deploy past the point of no return: completes the step
+    and records its side effects, and may end `completed`.
+- The first terminal state recorded by Temporal wins.
+- A cancel after a terminal state is a no-op acknowledgement.
+
+### 10. TTL and retention (revised, P2-TS-04)
+
+- **Non-terminal (`working` or `input_required`):** `ttlMs: null`. The
+  extension defines null as unlimited, and the value MAY change. The task is
+  never expired, failed or deleted while the execution lives. That holds for
+  a week-long approval and for any wait bounded by the workflow's own
+  durable timer.
+- **Terminal:** on the first read that observes a terminal state, set
+  `terminal_observed_at`. From then on report
+  `ttlMs = (terminal_observed_at - created_at) + terminal_retention`, with a
+  default of 24 h and a maximum of 7 d.
+- **After expiry:** answer `-32602`, and a sweeper deletes the `mcp_tasks`
+  row. The `mcp_task_scopes` row stays for `terminal_retention` + the `xr_`
+  replay window (open question: that window's retention). A retry inside
+  that window replays the same `taskId`, which then returns `-32602`; the
+  caller falls back to the WorkItem tools. A retry after that window creates
+  a new work item, which is a documented, bounded behaviour.
+- **Reclamation:** a task whose execution was closed by
+  `execution_orphan_closed` reads as `failed` with
+  `error.data.reason = execution_orphaned`. It is then reclaimed like any
+  terminal task.
+- **Fallback:** `wi_`, `we_`, audit and Temporal history keep their own
+  retention. `mctl_get_work_item` and `mctl_list_work_item_executions` still
+  return the result.
+
+### 11. Revocation, fencing, audit, notifications, fallback
+
+These points are unchanged from revision 1:
+
+- Authority is re-checked on every call, and the action-time checkpoint
+  denies a revoked principal's side effects (#375).
+- Lifecycle-ownership fencing stays authoritative, and the adapter never
+  acquires ownership.
+- Audit records `taskId`, `wi_`, `xr_`, `we_`, method, per-entry reason code,
+  principal, `client_id` and tenant, and never content.
+- Polling only: `pollIntervalMs` is 5 s while `working` and 30 s while
+  `input_required`.
+- A future `notifications/tasks` stream from #377 would be a projection of
+  the same canonical transition, deduplicated on `(taskId, lastUpdatedAt)`.
+- Non-negotiating clients get a `CallToolResult` with `wi_`/`xr_`
+  references.
+
+### 12. Conformance (revised, P2-TS-05)
+
+- `schemas/vendor/` holds the official Tasks extension JSON Schema, copied
+  at a pinned upstream commit, with its sha256 recorded in the report. If
+  the official schema cannot be obtained as a file, the report says so, and
+  hand-written schemas are marked `[DOC]-derived`, not official.
+- `fixtures/responses/` holds one golden JSON per variant:
+  - create;
+  - get in each of the five statuses;
+  - update acknowledgement;
+  - cancel acknowledgement;
+  - each error code.
+- `fixtures/negative/` holds the negatives. Each must FAIL validation or be
+  refused:
+  - `input_required` without `inputRequests`, and with an empty map;
+  - `completed` without `result`;
+  - `failed` without `error`;
+  - `resultType: "task"` on get;
+  - `resultType` missing on update or cancel;
+  - `inputRequests` on `working`;
+  - a sampling entry from the pilot;
+  - approval content inside `inputRequests`.
+- `checks/validate_fixtures.py` runs `python -I` with `jsonschema==4.25.1`
+  over both directories. It has no import from the Go model, so it is an
+  independent check.
+- Transport tests in the Go model:
+  - `Mcp-Name` missing, different case, trailing space or another task's id
+    -> `-32602`;
+  - an undeclared extension on the request -> `CallToolResult` and
+    `-32021` on `tasks/*`;
+  - the extension declared only in an earlier request -> still `-32021`,
+    because negotiation is per request;
+  - `tasks/list` and `tasks/result` -> method not found.
+
+### 13. Verdict vocabulary (revised, P2-TS-06)
+
+The manifest `spec.outcomes` is canonical, because `validate.py` enforces
+it. The report carries the one map:
+
+| Issue outcome | Manifest outcome |
+| --- | --- |
+| `ADOPT_THIN_TASKS_ADAPTER` | `GO_ADAPTER_IN_MCTL_API` |
+| `BOUNDED_PILOT` | `GO_ADAPTER_IN_MCTL_API` with `decision.followUps` limited to mctl-api#284 (one synthetic tool, gates G1-G4) |
+| `DEFER` | `NO_GO`, or `GO_UPSTREAM_ONLY` when the only blocker is an SDK or upstream gap |
+
+- The final decision lives only in the manifest `spec.decision`, written by
+  the owner. The report links to it.
+- Phase 0 adds only `spec.evidence.report:
+  docs/spikes/mcp-tasks-durable-execution.md` and leaves `lifecycle`,
+  `outcomes` and `decision` alone. That edit is optional and owner-reviewed.
+- The report states a recommendation, `BOUNDED_PILOT`, labelled
+  "recommendation, not decision".
+- `checks/verdict_consistency.py` checks three things:
+  - every issue outcome, from a pinned copy in the report header, has
+    exactly one mapping row;
+  - every target is in the manifest `spec.outcomes`;
+  - the report contains no "Decision:" line unless the manifest has
+    `spec.decision`.
+
+### 14. Pilot and gates
+
+The pilot is a synthetic `TaskProbeWorkflow`, local only. Other candidates
+were rejected as in revision 1: DevLoop (spend and gitops writes), deploy
+(production side effects), Telegram (worker boundary not ready).
+
+The workflow runs these phases:
+
+1. a cancellable sleep;
+2. a `WAITING_FOR_INPUT` gate with a sealed ADR 013-shaped request whose
+   policy allows `mcp/client_relayed`;
+3. a second input gate whose policy is human-only, which must surface as
+   `working`;
+4. an approval-wait gate against a fake grant store;
+5. a deterministic result, or a business error on input `fail`.
+
+Decision gates. Each needs a separate review and a digest-bound owner
+approval:
+
+- **G0:** Phase 0 complete. The model and offline tests pass, the
+  `[TEMPORAL_DEV]` tests pass or are reported as not run, and the
+  schema/consistency checks pass.
+- **G1:** mctl-api code spike behind #284 on a branch:
+  `CreateTaskExecution` (design A) and the two tables, with Postgres
+  fault-injection tests. It has no production endpoint.
+- **G2:** mcp-go v1.0.0 accepts custom `tasks/*` handlers and the
+  `server/discover` extension without the legacy store, measured in one
+  real host (Claude Code) against a non-production endpoint.
+- **G3:** Portal pass-through of `tasks/*` and `Mcp-Name` (mcp-gateway G2).
+- **G4:** an mctl-agents ADR 013 `respondent_policy` extension, before any
+  real (non-probe) input is exposed.
+
+What a failed gate means:
+
+- a failed G1 with design B also failing: `NO_GO`;
+- a failed G2 caused by the SDK: `GO_UPSTREAM_ONLY`;
+- a failed G3: Tasks stay direct-only.
+
+### Host and SDK compatibility (initial)
+
+| Client | Status | Evidence |
+| --- | --- | --- |
+| Claude Code | public beta from v2.1.304 | `[DOC]` manifest note; unmeasured |
+| Claude web/desktop, ChatGPT, Codex, Antigravity, agy, Grok Bot | unknown | not observed |
+| mcp-go v1.0.0 (server) | legacy SEP-1686 only | `[CODE]`; never `WithTaskCapabilities`/`AddTaskTool` |
 
 ## Alternatives
 
-- **Enable mcp-go's built-in task support** (`WithTaskCapabilities`,
-  `AddTaskTool`). Dropped: in-memory, process-local, and runs the handler in
-  a goroutine, which makes it a second executor that loses tasks on
-  restart. It also implements the legacy method set (`tasks/list`,
-  `tasks/result`, no `tasks/update`).
-- **`taskId` = Temporal workflow ID (or `we_`).** Dropped: DevLoop IDs are
-  derivable from issue URLs. `we_` does not exist at return time, because
-  the dispatcher creates it asynchronously, so durable create-before-return
-  would require a synchronous Temporal start in the adapter (a second start
-  path). TTL and idempotency would also have no home.
-- **`taskId` = `xr_` with no extra table.** Viable if `xr_` IDs prove to have
-  at least 128 bits of entropy. The open question decides this. It still
-  needs somewhere for TTL and answered-key state, and it overloads the
-  execution-request contract with protocol fields. Kept as a fallback.
-- **A full task store with its own status machine.** Dropped: it duplicates
-  canonical state and drifts.
+- **Keep revision 1's `input_required` with no `inputRequests` for
+  approvals.** Dropped: it is non-conformant with the spec (P1-TS-01).
+- **A URL-mode elicitation to the decide page.** Dropped for the pilot (see
+  section 3). It shares the client-input response path and has unknown host
+  support.
+- **Controller-level composition of the public `CreateWorkItem` and
+  `CreateExecutionRequest`, then an insert.** Dropped: it is not atomic
+  (P1-TS-02). Design B is the bounded, recoverable form of this idea and is
+  kept as the fallback.
+- **A synchronous Temporal start in the adapter, using `taskId` = workflow
+  id.** Dropped: it creates a second start path next to the dispatcher, and
+  the ids are guessable.
+- **mcp-go's built-in task store.** Dropped: in-memory, a goroutine
+  executor, the legacy method set.
+- **A fixed `ttlMs` with renewal on each poll.** Dropped: an abandoned
+  client would let a live task expire. Terminal-only expiry is simpler and
+  spec-legal (`null`).
+- **Adopting the issue vocabulary in the manifest now.** Dropped: it is a
+  roadmap change outside a proposed spike's evidence. It remains an owner
+  option (see Open questions in requirements.md).
 
 ## Platform impact
 
-- **This proposal:** docs and a reference fixture in `.github` only. No
-  migration, no deployment, no spend. The fixture runs locally against a
-  Temporal dev server (opt-in, as automation-control-plane does).
-- **Later (mctl-api#284, gated):** one additive table `mcp_tasks` with a
-  unique `(tenant, owner_principal, tool, idempotency_key)` index, one new
-  `temporalclient` cancel method, modern `tasks/*` handlers, and one pilot
-  tool. Backward compatibility: clients that do not declare the extension
-  see no change.
+- **Phase 0:** documentation and self-contained fixtures in mctlhq/.github.
+  - no migration, deployment, endpoint, host, real approval or spend;
+  - the Temporal tests run only against a developer-started local dev
+    server and skip otherwise;
+  - the Python checks use already-pinned dependencies.
+- **Later (G1, gated):**
+  - two additive Postgres tables;
+  - one refactor of `CreateExecutionRequest` into
+    `createExecutionRequestTx`, which keeps behaviour and is covered by the
+    existing tests;
+  - one new `Store` method;
+  - one `temporalclient.RequestCancel`.
+
+  Clients that do not declare the extension see no change.
 - **Risks and mitigations:**
-  - mcp-go's legacy store is enabled by accident: a test asserts
-    `tasks/list`/`tasks/result` return method-not-found.
-  - Status drift: no status column, so status is derived per read.
-  - Enumeration: 128-bit IDs, a uniform `-32602`, no list method.
-  - Duplicate executions: a mandatory key, and `xr_`'s one-open-request
-    rule.
-  - Approval bypass: `tasks/update` is never an approval path; tested.
-  - Early cancelled: cancelled is reported only on Temporal `Canceled`.
-  - Polling load: `pollIntervalMs` plus rate limits, and every `tasks/get`
-    costs one Temporal describe/query. Accepted for one pilot tool; measured
-    in G2.
-- **Resource impact:** none now. Later: one describe/query per poll.
+
+  | Risk | Mitigation |
+  | --- | --- |
+  | Orphan `xr_` | Design A single commit; G1 fault injection |
+  | Approval bypass through `tasks/update` | No code path to approval signals; spy test; separate gate states |
+  | A model answering as the human | `respondent_policy` gates which requests are exposed; assurance is recorded as `client_relayed`; human-only requests stay `working` |
+  | A live task hidden by its TTL | `ttlMs: null` until terminal |
+  | Schema drift | A pinned vendor schema with sha256, and an independent validator |
+  | Vocabulary drift | One map plus the consistency check |
+  | Polling load | One describe/query per `tasks/get`, rate limited, measured in G2 |
+
+- **Resource impact:** none in Phase 0.

@@ -1,8 +1,10 @@
 # Sync-window write path: what is built, and the mctl-api step (#2828 S1)
 
-**Status (updated 2026-11-22, after the first version of this file): steps 1
-and 2 are built and merged. The mctl-api step is built in three slices, all
-dark by default: S1 is merged (mctl-api#1153), S2 and S3 are not started.
+**Status (updated 2026-11-22, evening): steps 1 and 2 are built and merged.
+The mctl-api step is built in three slices: S1, S2 and S3 are merged
+(mctl-api#1153, #1154, #1155), released as mctl-api 4.173.0, and switched on
+with `RELEASE_WINDOWS_ENABLED=true` (gitops#2909). The first real run was
+made and watched the same evening (section 2). No window is on `main`.
 Section 5 records which decisions are now made and which are still open. This
 file authorises nothing; merging it is not a GO.**
 
@@ -11,8 +13,8 @@ This is the "new proposal" that section 1 of the #2828 design
 asks for before S1. That design is research-only and authorises nothing, and
 it says any AppProject, window, MCP tool or production change needs a separate
 owner security GO. Steps 1 and 2 below were built on the owner's direction in
-a working session, without a written GO. That GO is still not written down;
-section 5, item 1, stays open.
+a working session. The owner gave the written GO for them as built on
+2026-11-22, in session (section 5, item 1).
 None of them applies a window: every step opens or checks a pull request that
 a person reviews and merges.
 
@@ -65,12 +67,15 @@ mctl-api's own, not the S0 and S1 stages of the #2828 design:
   JSON>`. The server reads main's head itself and treats a failed read as
   unavailable, never as a guess. It computes the same `window_sha256` as the
   workflow, checked against shared golden vectors.
-- **S2, not started.** The MFA decide page for `release.window`, a clone of the
+- **S2, merged 2026-11-22 (mctl-api#1154).** The MFA decide page for
+  `release.window` at `/release/window-approvals/{aar_id}`, a clone of the
   release-grant page: fresh sign-in, MFA, only the owner decides. It decides
-  and does nothing else. Open fork: a second redirect URI on the page's
-  ZITADEL client (new callback path, no change to the live grant page) or a
-  shared callback.
-- **S3, not started.** The MCP tool and a REST execute route, in two calls.
+  and does nothing else. The fork was settled as a new callback path with a
+  second redirect URI on the same ZITADEL client (`mctl-api-release-approval`,
+  gitops#2905); the live grant page is unchanged.
+- **S3, merged 2026-11-22 (mctl-api#1155).** The MCP tool
+  `mctl_propose_release_window` and the REST route
+  `POST /api/v1/release/windows/{approval_id}/execute`, in two calls.
   The first returns the pending approval and its decide URL. The second, with
   the same arguments once the approval is granted, consumes it and dispatches
   `release-window-pr.yml`. A dispatch returns no run id, so the tool answers
@@ -95,6 +100,17 @@ Scope, as agreed so far:
 - Audit: request id, caller, window id, hash, the workflow runs link, PR
   number once it exists.
 
+First real run, 2026-11-22: request `aar_a495ad1bbdbb4c7cb3c1415f2c0482df`
+(window `w-cb40a0fccceb`: project `apps`, `admins-umami`, deny, `0 3 * * 1`,
+1h) decided by the owner with MFA at 18:36Z, executed at 18:37Z
+(`approved -> in_flight -> executed`). Workflow run 45056122362 opened PR
+#2915 from `release-window/w-cb40a0fccceb` as `mctl-gitops-pr[bot]`, one file,
+a diff identical to the approved window. The PR was closed unmerged and its
+branch deleted before its CI finished, so the validator result for that PR was
+not observed (the trial PR #2893 did pass it). Observed: the REST read
+`GET /api/v1/release/windows` lists windows from git, not approval state; the
+approval state is read by repeating the same `POST`, which is idempotent.
+
 Not in this step: removing or shortening a window, the exception path
 (`release.freeze_exception`, broker), a calendar policy file, activation
 checks. Each needs its own proposal.
@@ -109,11 +125,11 @@ written at GO time.
 
 ## 3. Facts about mctl-api, and what is verified
 
-Verified on GitHub on 2026-11-22: mctl-api#1153 (S1) is merged, and its
-description says the slices were agreed with the owner. The S2 and S3 detail
-above comes from the working session's notes and is not in any pull request
-yet. The rest is from a read-only scouting pass the same day against the
-default branches, to be re-checked when the work starts: the read tool lives in
+Verified on GitHub on 2026-11-22: mctl-api#1153, #1154 and #1155 (S1 to S3)
+are merged and shipped in release 4.173.0, and #1153's description says the
+slices were agreed with the owner. The rest is from a read-only scouting pass
+the same day against the default branches, to be re-checked if the code
+moves: the read tool lives in
 `internal/api/handlers_syncwindows_read.go` and `internal/argocd/syncwindows.go`;
 `internal/ghactions/dispatch.go` already dispatches workflows (the portal apply
 tool uses it); `release_approvals.go` defines the dedicated kind
@@ -137,15 +153,15 @@ generic route.
 
 ## 5. Decisions for the owner
 
-1. **Record a GO for steps 1 and 2 as built** (section 1). Still open. They
-   were built on direction in session; the #2828 text asks for a written
-   security GO.
-2. **Dispatch credential.** Still open. (a) the existing broad token now, the
-   way the portal apply tool does, with the narrow `mctl-gitops-dispatch` App
-   as a follow-up; (b) move to the narrow App first, which needs its key held
-   where mctl-api can read it and a rotation path. The S3 plan assumes (a),
-   because it adds no new secret and the workflow's guards bound what a
-   dispatch can do. No explicit owner answer is recorded for it.
+1. **GO for steps 1 and 2 as built** (section 1). Given by the owner in
+   session on 2026-11-22 as an explicit yes to this exact item, and recorded
+   here at the owner's direction. It covers the two steps as built and
+   released, not a window on `main`.
+2. **Dispatch credential.** Decided 2026-11-22: (a), the existing broad token
+   now, the way the portal apply tool does, with the narrow
+   `mctl-gitops-dispatch` App as a follow-up. The residual risk in section 4,
+   item 1 is accepted for now: the workflow's own guards bound what a dispatch
+   can produce, not who can send it. Revisit when the narrow App is built.
 3. **MFA on the request.** Decided 2026-11-22 (the slices are described as
    agreed with the owner in mctl-api#1153): option (b), a dedicated kind
    `release.window` with an MFA decide page. This replaces the recommendation
@@ -154,6 +170,14 @@ generic route.
    review with no self-approval and the merge queue, and the real approval is
    the merge, which is a person on a protected path. The kind adds a second,
    earlier human step on the request.
-4. **GO to implement the tool.** S1 is built and merged. S2 and S3 are not
-   started; each release goes through the release ledger with the owner at the
-   screen, and the first real dispatch is its own watched checkpoint.
+4. **GO to implement the tool.** Given in session on 2026-11-22 for the
+   release of S1 to S3 and for the first real run, both done (4.173.0, flag on
+   through gitops#2909). Any real window on `main` is a separate decision.
+   The S3 review follow-ups (settle detached from the request, expired
+   `in_flight` claim reports expired) are merged in mctl-api#1156 and go live
+   with the next mctl-api release.
+5. **Portal exposure.** Decided 2026-11-22: `mctl_get_sync_windows` and
+   `mctl_propose_release_window` are enabled on the Cloudflare MCP portal,
+   because the owner is its only user (mctl-api#1159). The portal switch
+   decides visibility only; the API's role check, the MFA page and the receipt
+   gate stay the access control.

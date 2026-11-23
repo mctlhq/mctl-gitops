@@ -77,6 +77,18 @@ Eval runs (S2)
   `(user_id, digest)` with the suite's install values and no `ownerNotes`,
   and issue a token with audience `agent-eval` bound to that task and
   attempt.
+- WHEN the claim comes from the managed-runtime pool credential THE SYSTEM
+  SHALL accept it on the eval claim route only (as for `POST /jobs/claim`),
+  and SHALL NOT count the eval task against a managed account's in-flight cap
+  or daily budget.
+- IF an `agent-eval` token is presented to any `/api/agent/v1` real route, any
+  `/api/pa/v1` route, or to any `Provider`-guarded surface, or an `agent`,
+  `agent-job`, `agent-pool` or `pa-job` token to an eval task route, THEN THE
+  SYSTEM SHALL refuse it and change nothing.
+- WHILE `ASSISTANT_FORK_EVAL_ENABLED` and `ASSISTANT_FORK_GUARDED_ENABLED` are
+  off THE SYSTEM SHALL answer every existing token audience on every existing
+  route exactly as before this change (no regression of the Personal
+  Assistant, managed-runtime or worker-revocation behaviour).
 - WHILE serving an eval task THE SYSTEM SHALL route it only to
   `internal/agenteval` handlers, which have no path to the executor or to
   Telegram, and SHALL refuse `agent-eval` tokens on real agent routes and
@@ -170,12 +182,18 @@ Runtime
   route or a flag on the existing claim. Assumption: a separate
   `POST /api/agent/v1/eval/claim` route that the server answers with
   `204` while real jobs are pending, so the real claim path is unchanged.
+  Since the first draft the managed pool credential exists (claim-only,
+  ADR 0008) and a pool-mode worker runs on preview. Assumption: the eval
+  claim route accepts both the account `agent` token (own account's tasks
+  only) and the pool credential (any account's tasks), as the second route a
+  pool credential may call. Needs owner confirmation before S2 starts.
 - Which "client wrote this version" the promote page shows: `assistant_forks`
   has no writer column today. Assumption: add a nullable `written_by_client`
   column in S3, filled from the MCP identity's client id for new writes;
   older versions show "unknown".
 - `assistants/hr-recruiter/eval/` holds suites for 0.1.0 and 0.1.1, pinned
-  by `activeSuiteDigests` in `internal/agenteval/agenteval_test.go`. Whether
+  by `activeSuiteDigests` in `internal/agenteval/agenteval_test.go:28`
+  (unchanged on main `0ef3857a`). Whether
   the registry's published `hr-recruiter` version is one of these needs a
   check before the preview run. A base without a suite stays unpromotable
   (ADR decision 11).
