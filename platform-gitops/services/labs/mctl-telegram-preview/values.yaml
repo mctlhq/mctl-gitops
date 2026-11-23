@@ -349,7 +349,18 @@ env:
   # registered from this change on, but inert until the tg-server step: its
   # only callback is the PA route, which is not mounted while PA is off.
   OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"pa-preview","client_name":"Personal Assistant (preview)","redirect_uris":["https://tg-preview.mctl.ai/pa/oauth/callback/tg"]}]'
-  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
+  # CIMD on preview, for the hosted Hermes test (mctl-telegram#1401, #1402).
+  # The AgentsPodium entry is path-scoped to ONE pod's client documents, which
+  # needs the parser from mctl-telegram#1404: on an image without it this
+  # value fails at startup ("is not a host name or .suffix"). Merge only after
+  # image.tag above is a main build that contains #1404. The other hosts
+  # mirror production so existing preview clients keep working once CIMD is
+  # advertised. Rollback: drop the three OAUTH_CIMD_* lines and the profile
+  # record; removing the entry also cuts off that client's refreshes.
+  OAUTH_CIMD_ACCEPT: "true"
+  OAUTH_CIMD_ADVERTISE: "true"
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
 ingress:
   enabled: true
   hosts:
