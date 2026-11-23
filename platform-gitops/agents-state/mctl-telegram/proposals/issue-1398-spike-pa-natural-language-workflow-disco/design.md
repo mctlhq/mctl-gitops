@@ -100,7 +100,7 @@ The report compares this with a form or builder (the #1280 reference in `docs/sp
 
 - **Stage 0.** A desk check of the spec and test matrix against the code (this spike).
 - **Stage 1.** A CI-only synthetic harness (owner GO required), on the pattern of `internal/pa/worker_e2e_test.go` and `s1_suite_test.go`.
-- **Stage 2.** An owner-only preview after PA Phase 1 exit and a #318 contract.
+- **Stage 2.** A separately approved owner-only scheduled preview AFTER PA Phase 1 exit AND #322 canonical store/Temporal/verified-principal bridge, not merely the existence of #318's research contract.
 
 Each stage has a go/no-go gate.
 
@@ -152,10 +152,10 @@ Each stage has a go/no-go gate.
 
 ## Alternatives
 
-- **PA_EXTENSION (pure).** The PA owns templates as well. This is the simplest option, but it forks a second definition catalog next to `internal/assistant`, which the issue asks not to do silently. It is kept as the fallback if the adapter adds no value.
+- **PA_EXTENSION (pure).** REJECTED as standing authority: would contradict owner-decided `.github#318/#322` and fork `automation/v1` in mctl-api. PA may still implement read-only proposal/draft UI and own PA-specific connection records.
 - **CATALOG_COMPOSER.** Workflows become `Definition`/`Install` documents run by the catalog runtime. Rejected: that runtime acts as the user's MTProto account with the communication-agent tool set, and ADR 0011 rejects merging the two security models.
 - **In-process scheduler in mctl-telegram** (like `internal/digest`). Rejected: it would be an independent scheduler with its own occurrence semantics, which contradicts #318 ownership.
-- **DEFER.** This is the build recommendation until PA Phase 1 exits and #318 has a contract. The research output still lands so that the decision is informed.
+- **DEFER.** This is the build recommendation until evidence closes PA Phase 1 exit, canonical `automation-api-store` and Temporal adapter (#322), a verified cross-surface/PA-principal bridge and action-time consent gates. The `automation/v1` contract itself already exists and is contract-only.
 
 ## Platform impact
 
@@ -163,9 +163,9 @@ Each stage has a go/no-go gate.
 - **Future impact, if built.** A future build would need:
   - an ADR 0011 addendum;
   - a new constructor, `NewScheduled`, producing the same `Policy`;
-  - a trigger and occurrence column on `pa_jobs`, or a sibling `pa_workflow_runs` table;
-  - a `pa_workflows` table and a `PA_ROUTINES_ENABLED` switch;
-  - an inbound occurrence endpoint authenticated like the pool;
+  - a future PA scheduled-job adapter with a fresh per-occurrence bounded context, using canonical `au_`/`occurrence_key`/`wi_` rather than any competing `pa_workflow_runs` ledger;
+  - canonical mctl-api `AutomationDefinition au_`, durable claim/tombstones and Temporal adapter under the separately gated `.github#322` roadmap; a PA routine kill switch may be proposed but never owns standing automation authority;
+  - a signed, verified principal-bound occurrence bridge from mctl-api to PA, independently checking the current PA connection/consent/flags on each dispatch and send;
   - possibly a tg pin change (a reply-to field).
 - **Cost.** Each workflow occurrence is roughly one interactive job: one model run with up to 8 tool calls, capped by `PA_BUDGET_USD_JOB`. The report gives the formula only, since no measured cost exists.
 - **Risks.**
