@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broken focus-lost</title>
+<!-- NEGATIVE CONTROL focus-lost: Escape closes but focus is lost to body (HDR-12). TEST-ONLY fixture for mctl-gitops#2929: a reference target, never a consumer row.
+     Stylesheets come from the pinned mctl-design archive served by the fixture origin. -->
+<link rel="stylesheet" href="http://ui.fixture.test:8080/0.21.0/mctl.css">
+<link rel="stylesheet" href="http://ui.fixture.test:8080/0.21.0/site.css">
+</head>
+<body>
+<header id="site-header" class="mctl-site-header">
+  <div class="mctl-site-header__inner mctl-site-container">
+    <a class="mctl-site-brand" href="#home"><span class="mctl-site-brand__accent">m</span>ctl</a>
+    <nav id="site-nav" class="mctl-site-nav" aria-label="Primary">
+      <a href="#home" aria-current="page">Home</a>
+      <a href="#docs">Docs</a>
+      <a href="#pricing">Pricing</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="mctl-site-container">
+  <h1>Reference header fixture</h1>
+  <p>Route: <span id="route-name">home</span></p>
+  <p><a id="outside-link" href="#outside">Outside content link</a></p>
+  <div id="home" tabindex="-1"></div><div id="docs" tabindex="-1"></div><div id="pricing" tabindex="-1"></div><div id="outside" tabindex="-1"></div>
+  
+</main>
+<script src="/header/header.js" data-breakpoint="768" data-defect="focus-lost"></script>
+</body>
+</html>

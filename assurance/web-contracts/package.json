@@ -1,0 +1,12 @@
+{
+  "name": "web-contract-preview-assurance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Preview assurance only; not production conformance (mctlhq/mctl-gitops#2929). Dependencies are installed on the host before network isolation and mounted read-only into the pinned Playwright image.",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "playwright-core": "1.64.1"
+  }
+}

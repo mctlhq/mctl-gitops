@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "note": "Preview assurance pins for mctlhq/mctl-gitops#2929. Validated by report/build_report.py --check-pins before anything runs. Preview assurance only; not production conformance.",
+  "playwright_image": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+  "playwright_test_version": "1.64.1",
+  "nginx_image": "docker.io/nginx/nginx-unprivileged:1.31.9-alpine@sha256:60214a103e6f38e953ff957f34b1f2e97a9db801ab2df3821da955d0fe6cadd6",
+  "mctl_design": {
+    "commit": "6d82a6b239365213d6859f2794c2449af7dd4e1f",
+    "css_version": "0.21.0",
+    "also_verified_versions": [
+      "0.20.2"
+    ],
+    "contracts": [
+      {
+        "id": "web-header-a11y",
+        "version": "1.0.0",
+        "path": "docs/contracts/web-header-a11y.md"
+      },
+      {
+        "id": "web-asset-integrity",
+        "version": null,
+        "version_note": "the document at the pinned commit states no contract version",
+        "path": "docs/contracts/web-asset-integrity.md"
+      }
+    ],
+    "sheets": {
+      "0.21.0": {
+        "mctl.css": {
+          "sha256": "5970ec6855048f93812a21342db7ac7e3d37dab4ac15a6738d30ba0f74722e10",
+          "sha384": "sha384-7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5"
+        },
+        "global.css": {
+          "sha256": "365a64c7998b12879d218da4f2aa1dedc6fc4e606c2cba0f0b575fbca60070c3",
+          "sha384": "sha384-oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV"
+        },
+        "prose.css": {
+          "sha256": "4e8891f87875514e8f03804619b979802c805065fa030aefbbc64540cf5e4ec1",
+          "sha384": "sha384-EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W"
+        },
+        "site.css": {
+          "sha256": "a111f5bde21034bb8e2f68f5e4085529cac67a873fd76c896d980b6929819ba2",
+          "sha384": "sha384-XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr"
+        }
+      },
+      "0.20.2": {
+        "mctl.css": {
+          "sha256": "063ceae822d3b139c670fd2b687a00ff021cf2d75443995c14c3b19145324958",
+          "sha384": "sha384-3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ"
+        },
+        "global.css": {
+          "sha256": "cd78060bdc83c56508594fe20fd9302951130e8720604c547140c16f1762ff03",
+          "sha384": "sha384-QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm"
+        },
+        "prose.css": {
+          "sha256": "71536bf86e0d1edc1b9efb6d3fb5cc823826c0826c5790f3f26bdf0cd1a1ee0f",
+          "sha384": "sha384-iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4"
+        },
+        "site.css": {
+          "sha256": "d184836c17818edbe85923d356da872113f07cb8d088477796f39d0fc01ad31a",
+          "sha384": "sha384-qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj"
+        }
+      }
+    }
+  },
+  "fixture_hosts": [
+    "ui.fixture.test",
+    "site.fixture.test"
+  ],
+  "sites": [
+    {
+      "name": "mctl-web",
+      "gitops_tag": "7.24.0",
+      "image": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
+      "source_commit": null,
+      "breakpoint": null,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "image",
+      "not_run_reason": null,
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
+      "observed_image_digest_resolved_for_tag": "7.24.0",
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+    },
+    {
+      "name": "mctl-docs",
+      "gitops_tag": "0.1.73",
+      "image": null,
+      "source_commit": null,
+      "breakpoint": null,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "not-run",
+      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-docs@sha256:9ef88b94545988ce5e208e829c603283f77c4d2c1673b5203ef75a7239ec29e4",
+      "observed_image_digest_resolved_for_tag": "0.1.73",
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+    },
+    {
+      "name": "mctl-telegram",
+      "gitops_tag": "0.143.0",
+      "image": null,
+      "source_commit": null,
+      "breakpoint": null,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "not-run",
+      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-telegram@sha256:cc58792c0ab97470378edcf9a53cd34e27cba49b4f337ac3b3f78d80a20501d3",
+      "observed_image_digest_resolved_for_tag": "0.143.0",
+      "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"
+    },
+    {
+      "name": "mctl-academy",
+      "gitops_tag": "0.1.101",
+      "image": null,
+      "source_commit": null,
+      "breakpoint": 981,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "not-run",
+      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-academy@sha256:e6a52625094a30b08a6343f082ee3d229282cac3aa0cf542981cf7442c40dde6",
+      "observed_image_digest_resolved_for_tag": "0.1.101"
+    },
+    {
+      "name": "mctl-alice",
+      "gitops_tag": "2.16.0",
+      "image": null,
+      "source_commit": null,
+      "breakpoint": 981,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "not-run",
+      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "observed_image_digest": "ghcr.io/mctlhq/mctl-alice@sha256:8a69bb953aaefedcc157d50031db94c8f8877259d9c03b46490458a4a8b56f30",
+      "observed_image_digest_resolved_for_tag": "2.16.0"
+    },
+    {
+      "name": "seerrsense",
+      "gitops_tag": "1.14.4",
+      "image": null,
+      "source_commit": null,
+      "breakpoint": 768,
+      "route_classes": [
+        "landing",
+        "content",
+        "app-shell",
+        "sensitive"
+      ],
+      "mode": "not-run",
+      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "observed_image_digest": "ghcr.io/mctlhq/seerrsense@sha256:e65663bf8f1aa5e6bc5999562c725f054717d8189b553398be5d585a5926e485",
+      "observed_image_digest_resolved_for_tag": "1.14.4"
+    }
+  ]
+}

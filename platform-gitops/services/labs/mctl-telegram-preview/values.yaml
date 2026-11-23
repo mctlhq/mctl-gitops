@@ -15,8 +15,8 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-0ef3857"
-  digest: "sha256:ccbc68ae793c48b4e3d6c2773aa44995954b2cc84c31c6228a27d6ac82bbbead"
+  tag: "main-c17f894"
+  digest: "sha256:b3112b7200e7165a53b3fe448da0820a61f70325cad4a840ccb41739988bcf12"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -349,7 +349,23 @@ env:
   # registered from this change on, but inert until the tg-server step: its
   # only callback is the PA route, which is not mounted while PA is off.
   OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"pa-preview","client_name":"Personal Assistant (preview)","redirect_uris":["https://tg-preview.mctl.ai/pa/oauth/callback/tg"]}]'
-  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
+  # CIMD on preview, for the hosted Hermes test (mctl-telegram#1401, #1402).
+  # The AgentsPodium entry is path-scoped to ONE pod's client documents, which
+  # needs the parser from mctl-telegram#1404: on an image without it this
+  # value fails at startup ("is not a host name or .suffix"). Merge only after
+  # image.tag above is a main build that contains #1404. The other hosts
+  # mirror production so existing preview clients keep working once CIMD is
+  # advertised. Rollback: drop the three OAUTH_CIMD_* lines and the profile
+  # record; removing the entry also cuts off that client's refreshes.
+  # A profile binds to the EXACT client_id, and an AgentsPodium client_id ends
+  # in the server name chosen in the pod dashboard. The first hosted test used
+  # a name with no profile and was issued the full user scope set with
+  # scope_ceiling_applied=false (mctl-telegram#1401): the path-scoped allowlist
+  # admits the client, only a profile limits it. Add one entry per server name.
+  OAUTH_CIMD_ACCEPT: "true"
+  OAUTH_CIMD_ADVERTISE: "true"
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]}]'
 ingress:
   enabled: true
   hosts:

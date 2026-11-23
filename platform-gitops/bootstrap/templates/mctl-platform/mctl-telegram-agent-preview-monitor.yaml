@@ -114,7 +114,16 @@ spec:
       # `up`, `scrape_duration_seconds` and the other synthetic series are
       # added by the scraper after metric relabeling and are unaffected, so
       # target health for these two workloads stays observable.
+      #
+      # mctl_pa_.* (mctlhq/mctl-telegram#1318 step G2a) is the Personal
+      # Assistant's own family, evaluated by the preview-scoped groups
+      # mctl-telegram-pa and mctl-telegram-pa-catalog in
+      # vm-rules/mctl-telegram-ops.yaml, which select this server by
+      # namespace and service. Every rule that reads mctl_pa_* carries that
+      # selector, so admitting the family cannot leak preview samples into a
+      # production-sized threshold the way the paragraph above describes.
+      # Without it here those rules would have no data and never fire.
       metricRelabelConfigs:
         - sourceLabels: [__name__]
-          regex: "mctl_agent_.*"
+          regex: "mctl_agent_.*|mctl_pa_.*"
           action: keep

@@ -767,3 +767,13 @@ mctlGlovo:
   # 0 for the service default. Reached by the pod through its environment, so
   # changing it rolls the pod.
   linkAttemptsPerHour: 15
+  # Hosted keepalive (service 0.5.0): every interval the service refreshes
+  # each stored session chain through the same coordinator path as a tool call,
+  # so a chain does not expire while nobody reads. The first round runs a minute
+  # after the pod starts, with jitter. A refused chain is marked needs_relink
+  # and logged with an alert marker; nothing runs while the kill
+  # switch is on. The real refresh-chain lifetime is not measured, so 12h sits
+  # inside the 6-12h range that is safe against a day-long lifetime. Empty
+  # leaves it off; a whole number of hours 1h..24h. Single replica only. Reached
+  # by the pod through its environment, so changing it rolls the pod.
+  keepaliveInterval: "12h"
