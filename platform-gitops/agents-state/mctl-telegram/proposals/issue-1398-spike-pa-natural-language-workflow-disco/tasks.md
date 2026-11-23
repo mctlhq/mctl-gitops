@@ -30,3 +30,12 @@ All tasks are research and documentation only. Each produces a section of `docs/
 ## Rollback
 
 The spike adds only a markdown document, so revert the docs PR to roll back. No flags, data, deployments or runtime behaviour change, so nothing else needs undoing.
+
+## Revision 2 added research tasks (2026-11-23; not executed)
+
+- [ ] 11. Add a source-to-claim comparison Grok Bot / Hermes / dots / Gemini vs PA, routed to #1379 for vendor interop and #1325 for Phase 4; identify available vs planned functions with precise evidence classes.
+- [ ] 12. Define separate non-authoritative skill, workflow instance with user-approved authority and inspectable memory artifact; compare reuse of current Assistant Catalog definitions versus independent PA instances. No shadow scheduler/runtime/DB.
+- [ ] 13. Create two synthetic interaction storyboards: immediate read-only ask, and saved Daily Brief (draft, source selection, dry run, approval, occurrence, receipts, edit, pause, revoke); never imply a functioning trigger today.
+- [ ] 14. Re-pin production and preview PA config, worker replicaCount, S1 and R1-R6 status, and Grok Web 2026-11-22 owner observation. DoD: no stale 'preview no PA variables', no mistaken Grok Bot attribution, no claim that external client E2E is PA E2E.
+- [ ] 15. Define D1, D7, per-eligible-occurrence success, cost, latency, denial, privacy, and revocation measurements with synthetic fixture, negative tests and unknown outcome semantics. Targets require owner decision.
+- [ ] T6. Static acceptance: every external claim dated with a source URL, all unexecuted tasks marked UNTESTED, every authority-changing action gated by the user, #318 trigger reuse and all HOLDs preserved. No change to .status.yaml and no implementer/preview activation.
