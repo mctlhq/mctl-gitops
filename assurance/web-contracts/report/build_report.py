@@ -188,6 +188,9 @@ def check_pins(pins):
         bp = s.get("breakpoint")
         if bp is not None and (isinstance(bp, bool) or not isinstance(bp, int) or bp <= 0):
             bad.append(f"sites[{n}].breakpoint: must be a positive integer or null, got {bp!r}")
+        eb = s.get("expected_blocked", [])
+        if not isinstance(eb, list) or not all(isinstance(e, str) and EXPECTED_BLOCKED_RE.match(e) for e in eb):
+            bad.append(f"sites[{n}].expected_blocked: must be a list of exact host/path strings (no scheme, query or wildcard)")
         if mode == "not-run" and not (isinstance(s.get("not_run_reason"), str) and s["not_run_reason"].strip()):
             bad.append(f"sites[{n}]: mode not-run needs a not_run_reason")
 
@@ -357,6 +360,9 @@ def derive(case, runs, site_pins):
     if outcome == "skipped":
         return "NOT-RUN", "skipped" + (f": {message}" if message else "")
     if outcome == "error":
+        if message.startswith("guard-blocked"):
+            # raised by the fixture teardown, so the assertion may well have run: the case is not a verdict either way
+            return "NOT-RUN", "a request no case declared was blocked, so the case outcome is not a verdict: " + message
         return "NOT-RUN", "errored before its assertion" + (f": {message}" if message else "")
     if outcome == "fail":
         return "FAIL", message or "assertion failed"
@@ -369,38 +375,49 @@ def derive(case, runs, site_pins):
 
 
 FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+# host/path exactly as the guard logs it: lowercase host, then a path; never a scheme, query, port or wildcard
+EXPECTED_BLOCKED_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9._~/-]*$")
+
+
+def _counts_ok(per_test, totals):
+    return (isinstance(per_test, dict) and isinstance(totals, dict)
+            and all(isinstance(v, dict) and all(isinstance(n, int) for n in v.values()) for v in per_test.values())
+            and all(isinstance(n, int) for n in totals.values()))
 
 
 def load_substitutions(path):
-    """Requests the guard answered locally (pinned design sheets, empty font sheets). None = not provided;
-    a file that was given but cannot be read is an input error, never "none were answered"."""
+    """What the guard answered locally (pinned design sheets, empty font sheets) and which declared, expected blocks it
+    saw. None = not provided; a file that was given but cannot be read is an input error, never "none"."""
     if not path:
         return None
     try:
         doc = json.loads(Path(path).read_text())
         per_test, totals = doc["per_test"], doc["totals"]
-        ok = (isinstance(per_test, dict) and isinstance(totals, dict)
-              and all(isinstance(v, dict) and all(isinstance(n, int) for n in v.values()) for v in per_test.values())
-              and all(isinstance(n, int) for n in totals.values()))
+        eb = doc["expected_blocked"]
+        eb_per_test, eb_totals = eb["per_test"], eb["totals"]
+        ok = _counts_ok(per_test, totals) and _counts_ok(eb_per_test, eb_totals)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise InputError(f"substitutions file unreadable ({type(exc).__name__}): cannot say what was answered locally")
     if not ok:
         raise InputError("substitutions file malformed: cannot say what was answered locally")
-    return {"per_test": per_test, "totals": totals}
+    return {"per_test": per_test, "totals": totals, "expected_blocked": {"per_test": eb_per_test, "totals": eb_totals}}
 
 
 def substitution_summary(subst):
     if subst is None:
-        return {"status": "not-provided", "totals": {}, "statement":
-                "not provided: it is unknown whether any request was answered locally"}
-    totals = subst["totals"]
-    if not totals:
-        return {"status": "computed", "totals": {}, "statement": "no request was answered locally"}
-    fonts = any(totals.get(h) for h in FONT_HOSTS)
-    stmt = ("requests answered locally, none reached their host: design sheets from the pinned mctl-design bytes"
-            + ("; web fonts were NOT loaded (font hosts answered with an empty stylesheet), so a layout result "
-               "that depends on font metrics is not evidence" if fonts else ""))
-    return {"status": "computed", "totals": totals, "statement": stmt}
+        return {"status": "not-provided", "totals": {}, "expected_blocked": {}, "statement":
+                "not provided: it is unknown whether any request was answered locally or declared-blocked"}
+    totals, eb = subst["totals"], subst["expected_blocked"]["totals"]
+    parts = []
+    if totals:
+        parts.append("requests answered locally, none reached their host: design sheets from the pinned mctl-design bytes"
+                     + ("; web fonts were NOT loaded (font hosts answered with an empty stylesheet), so a layout result "
+                        "that depends on font metrics is not evidence" if any(totals.get(h) for h in FONT_HOSTS) else ""))
+    if eb:
+        parts.append("requests to declared hosts were aborted, never answered (pins.json expected_blocked): the page ran "
+                     "without those scripts and calls, so a result that depends on them is not evidence")
+    return {"status": "computed", "totals": totals, "expected_blocked": eb,
+            "statement": "; ".join(parts) if parts else "no request was answered locally and no declared block was seen"}
 
 
 def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, substitutions_path=None):
@@ -433,6 +450,8 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
                "kind": c.get("kind", "case"), "status": status, "reason": reason}
         if subst and subst["per_test"].get(c["id"]):
             row["answered_locally"] = subst["per_test"][c["id"]]
+        if subst and subst["expected_blocked"]["per_test"].get(c["id"]):
+            row["expected_blocked"] = subst["expected_blocked"]["per_test"][c["id"]]
         if control:
             # The inversion: a control is healthy only when the detector saw it FAIL.
             if status == "FAIL":
@@ -489,9 +508,15 @@ def _cell(text):
 
 
 def _local(row):
-    """A case that ran while the guard answered requests locally says so on its own row."""
+    """A case that ran while the guard answered or aborted declared requests says so on its own row."""
+    out = ""
     a = row.get("answered_locally")
-    return " [answered locally: " + ", ".join(f"{h} x{n}" for h, n in sorted(a.items())) + "]" if a else ""
+    if a:
+        out += " [answered locally: " + ", ".join(f"{h} x{n}" for h, n in sorted(a.items())) + "]"
+    b = row.get("expected_blocked")
+    if b:
+        out += " [declared blocked: " + ", ".join(f"{h} x{n}" for h, n in sorted(b.items())) + "]"
+    return out
 
 
 def render_matrix(doc):
@@ -502,7 +527,8 @@ def render_matrix(doc):
          f"Playwright image: `{doc['pins']['playwright_image']}`  ",
          f"Summary: {doc['summary']['statement']}  ",
          f"Substituted requests: {_cell(doc['substitutions']['statement'])}"
-         + (f" (totals {_cell(json.dumps(doc['substitutions']['totals'], sort_keys=True))})" if doc['substitutions']['totals'] else ""), "",
+         + (f" (answered locally {_cell(json.dumps(doc['substitutions']['totals'], sort_keys=True))})" if doc['substitutions']['totals'] else "")
+         + (f" (declared blocked {_cell(json.dumps(doc['substitutions']['expected_blocked'], sort_keys=True))})" if doc['substitutions']['expected_blocked'] else ""), "",
          "## Six-site matrix", "",
          "| Site | Mode | GitOps tag | PASS | FAIL | NOT-RUN | EXCEPTION-PENDING | Compliant | Reason |",
          "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]

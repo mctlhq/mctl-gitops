@@ -5113,6 +5113,18 @@
    "id": "WCA-A-ISO-guard-design-host",
    "gate": "ISO",
    "behaviour": "guard-design-host"
+  },
+  {
+   "site": "fixture-reference",
+   "kind": "case",
+   "contract_id": null,
+   "route_class": null,
+   "viewport": null,
+   "provenance": "[PREVIEW]",
+   "exception": null,
+   "id": "WCA-A-ISO-guard-expected-blocked",
+   "gate": "ISO",
+   "behaviour": "guard-expected-blocked"
   }
  ]
 }

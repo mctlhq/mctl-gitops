@@ -204,3 +204,22 @@ version is served with its pinned sha-256, that an unpinned version is blocked, 
   `fixture-reset` case proves that, and the `motion-ignored` control proves a real transition still FAILs. The
   detector precondition (something runs without the preference) turns a detector that measures nothing red.
 
+## Declared, expected blocks (`expected_blocked`)
+
+A consumer page may call hosts the isolated run does not allow (mctl-web: an analytics script, a bot-check
+script, a signup-status call). Without a declaration the guard fails every test that page loads in, which
+hides the outcome of the assertions. A site can list exact `host/path` strings under `sites[].expected_blocked`
+in `pins.json` (no scheme, query, port or wildcard; the format is checked). A request matching an entry is
+still aborted and never answered, so nothing leaves the network and no response is invented; it is counted per
+host and path as `expected_blocked`, shown on the case row and in the matrix, and the matrix states that the
+page ran without those scripts and calls, so a result that depends on them is not evidence.
+
+Only a host the allowlist refuses can be declared: a declared entry for an allowlisted host with a sensitive path
+(`/oauth/...`), an unparseable URL, another path on the same host or the same path on another host is still an
+unexpected block that fails the test. A case where an undeclared block was seen is NOT-RUN, worded as "the case
+outcome is not a verdict", because the guard error is raised after the assertions ran. `WCA-A-ISO-guard-expected-blocked`
+proves each of those, and was mutation-verified (honouring a declared sensitive path turns it red).
+
+HDR-2 counts the control selected as the toggle that has the role and an accessible name, not every named button on
+the page (the same page-wide scope mistake as HDR-1).
+
