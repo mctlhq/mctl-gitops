@@ -103,7 +103,7 @@ def asset_cases():
         if name == "bad-sha":
             c.update({"version": "0.21.0", "sheet": "site.css", "target": "fixtures/broken/manifest-bad-sha.test-only.json"})
         cases.append(c)
-    for name in ("prod-host", "oauth-path", "design-host"):
+    for name in ("prod-host", "oauth-path", "design-host", "expected-blocked"):
         cases.append({**base, "id": f"WCA-A-ISO-guard-{name}", "gate": "ISO", "contract_id": None,
                       "behaviour": f"guard-{name}"})
     return cases

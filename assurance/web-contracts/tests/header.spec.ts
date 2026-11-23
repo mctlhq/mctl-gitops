@@ -163,7 +163,8 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   2: async ({ wca, t, width }) => {
     const p = await load(wca, t, width);
     const role = t.kind === 'checkbox' ? 'checkbox' : 'button';
-    await expect(p.getByRole(role, { name: /\S/ })).toHaveCount(1);
+    // the toggle itself: the control selected as the toggle has the role and a name (not every named button on the page)
+    await expect(p.getByRole(role, { name: /\S/ }).and(p.locator(t.sel.toggle))).toHaveCount(1);
     await toggle(p, t).focus();
     await expect(toggle(p, t)).toBeFocused();
   },
@@ -416,7 +417,7 @@ function consumers(): Record<string, { healthy?: boolean; url?: string; reason?:
 }
 
 /** Returns a skip reason, or a target to run against. */
-function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string } {
+function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expected?: string[] } {
   const vp = c.viewport || '375';
   if (c.kind === 'negative-control') {
     return { t: { url: `${BASE}/broken/${c.defect}.html`, bp: 768, kind: 'button', sel: BUTTON_SEL }, vp };
@@ -439,14 +440,16 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string } {
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
   const s = site.selectors as Record<string, string>;
   return { t: { url: st.url, bp: site.breakpoint as number, kind: 'button',
-    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp };
+    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.toggle, outside: s.outside } }, vp,
+    expected: site.expected_blocked ?? [] };
 }
 
 for (const c of cases) {
   test(c.id, async ({ wca }) => {
     const r = resolve(c);
     if ('skip' in r) test.skip(true, r.skip);
-    const { t, vp } = r as { t: Target; vp: string };
+    const { t, vp, expected } = r as { t: Target; vp: string; expected?: string[] };
+    wca.expectBlocked(expected ?? []);
     const width = viewportWidth(vp, t.bp);
     const narrow = width < t.bp;
     const fn = behaviours[c.hdr as number];

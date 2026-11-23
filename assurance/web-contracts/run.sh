@@ -255,14 +255,20 @@ python3 - "$OUT/guard.jsonl" "$OUT/substitutions.json" <<'PY' || true
 import json, sys
 try:
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-    per_test = {r["test"]: r["substituted"] for r in rows if r["substituted"]}
-    totals = {}
-    for v in per_test.values():
-        for h, n in v.items():
-            totals[h] = totals.get(h, 0) + n
+    def agg(field):
+        per_test = {r["test"]: r[field] for r in rows if r[field]}
+        totals = {}
+        for v in per_test.values():
+            for h, n in v.items():
+                totals[h] = totals.get(h, 0) + n
+        return per_test, totals
+    per_test, totals = agg("substituted")
+    eb_per_test, eb_totals = agg("expected_blocked")
 except (OSError, ValueError, KeyError):
     sys.exit(0)
-json.dump({"per_test": per_test, "totals": totals}, open(sys.argv[2], "w"), indent=2, sort_keys=True)
+json.dump({"per_test": per_test, "totals": totals,
+           "expected_blocked": {"per_test": eb_per_test, "totals": eb_totals}},
+          open(sys.argv[2], "w"), indent=2, sort_keys=True)
 PY
 SUBST_ARGS=()
 [ -f "$OUT/substitutions.json" ] && SUBST_ARGS=(--substitutions "$OUT/substitutions.json")
@@ -297,14 +303,17 @@ unexpected = sum(r["unexpected_blocked"] for r in rows)
 probes = sum(len(r["blocked"]) - r["unexpected_blocked"] for r in rows)
 hosts = {}
 subst = {}
+eblock = {}
 for r in rows:
     for h, n in r["hosts"].items():
         hosts[h] = hosts.get(h, 0) + n
     for h, n in r["substituted"].items():
         subst[h] = subst.get(h, 0) + n
+    for h, n in r["expected_blocked"].items():
+        eblock[h] = eblock.get(h, 0) + n
 # Only requests the browser contexts issued through the route guard are counted here; the
 # network itself (docker --internal) is the enforcement, this is an in-band tripwire.
-print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, answered locally {subst}, expected probe aborts {probes}, "
+print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, answered locally {subst}, declared blocked {eblock}, expected probe aborts {probes}, "
       f"unexpected blocked {unexpected}", file=sys.stderr)
 sys.exit(4 if unexpected else 0)
 PY
