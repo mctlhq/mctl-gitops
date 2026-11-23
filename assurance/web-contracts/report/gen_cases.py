@@ -47,6 +47,7 @@ KNOWN_GAPS = {
     ("seerrsense", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
     # observed in the consumer markup and in the mctl-design reference stories alike: the burger follows the nav
     ("mctl-web", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
+    ("mctl-academy", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
 }
 
 

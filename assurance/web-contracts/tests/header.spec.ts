@@ -35,9 +35,10 @@ const HEIGHT = 800;
 // `routes` selects the links that are in-app ROUTES (a client navigation moves the current marker). It is declared,
 // never guessed from an href: a section anchor or an external link is not a route, and HDR-14's route-change step
 // is only meaningful for a site that has route links.
-interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string }
+interface Sel { header: string; nav: string; links: string; toggle: string; clickToggle: string; outside: string; routes?: string; landmark?: string }
 class NoRouteLinks extends Error {}
-interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel }
+// after: the selectors of the viewport a narrow case grows into (HDR-11), when they differ per viewport
+interface Target { url: string; bp: number; kind: 'button' | 'checkbox'; sel: Sel; after?: Sel }
 
 const BUTTON_SEL: Sel = {
   header: '#site-header', nav: '#site-nav', links: '#site-nav a', routes: '#site-nav a', toggle: '.mctl-site-burger',
@@ -144,21 +145,24 @@ type Ctx = { wca: Wca; t: Target; width: number; narrow: boolean; c: CaseDef };
 const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   1: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
-    // the declared panel navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
-    // as a language switcher, is not "the navigation landmark" the contract asks to be named
-    const navs = p.locator(t.sel.header).locator(t.sel.nav);
-    await expect(navs).toHaveCount(1);
-    const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
-      || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
-    expect(label.trim(), 'navigation landmark has an accessible name').not.toBe('');
     const axe = async () => (await new AxeBuilder({ page: p }).include(t.sel.header).analyze()).violations.map((v) => `${v.id}:${v.nodes.length}`);
+    // narrow-closed first: a panel some frameworks render only while open is not in the DOM yet
     if (narrow) {
       expect(await axe(), 'axe, narrow-closed').toEqual([]);
       await openPanel(p, t, width);
     }
+    // the declared navigation inside the header (owner decision 2026-11-23): a second named nav in the header, such
+    // as a language switcher, is not "the navigation landmark" the contract asks to be named. A header whose panel
+    // container is not itself the nav declares selectors.landmark.
+    const lm = t.sel.landmark ?? t.sel.nav;
+    const navs = p.locator(t.sel.header).locator(lm);
+    await expect(navs).toHaveCount(1);
+    const label = await navs.first().evaluate((n) => n.getAttribute('aria-label')
+      || (n.getAttribute('aria-labelledby') ? document.getElementById(n.getAttribute('aria-labelledby')!)?.textContent : '') || '');
+    expect(label.trim(), 'navigation landmark has an accessible name').not.toBe('');
     // the header region's landmark (AC-1: "inspect the header navigation landmark"); a named landmark elsewhere on the
     // page, in content or the footer, is not the header's
-    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(t.sel.nav))).toHaveCount(1);
+    await expect(p.getByRole('navigation', { name: /\S/ }).and(p.locator(t.sel.header).locator(lm))).toHaveCount(1);
     expect(await axe(), 'axe on the header region').toEqual([]);
   },
 
@@ -290,8 +294,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     const p = await load(wca, t, width);
     await openPanel(p, t, width);
     await p.setViewportSize({ width: t.bp, height: HEIGHT });
-    await expect(nav(p, t)).toBeVisible();
-    expect(await nav(p, t).evaluate((e) => getComputedStyle(e).position), 'inline nav, not the fixed drawer').not.toBe('fixed');
+    // past B the inline navigation may be a different element from the narrow panel (selectors.wide)
+    const wideNav = p.locator((t.after ?? t.sel).nav);
+    await expect(wideNav).toBeVisible();
+    expect(await wideNav.evaluate((e) => getComputedStyle(e).position), 'inline nav, not the fixed drawer').not.toBe('fixed');
     await expect(p.locator(t.sel.clickToggle)).toBeHidden();
     // the checkbox's :checked state cannot be cleared by CSS alone: that, and the panel reopening on
     // return to narrow, are the two observations the HDR-11 known_gap describes
@@ -397,7 +403,9 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   16: async ({ wca, t, width }) => {
     const p = await load(wca, t, width, { javaScript: false });
     const count = await p.locator(t.sel.links).count();
-    expect(count).toBeGreaterThan(0);
+    // a panel that script renders on open has no links in the DOM at all without JavaScript: the contract's
+    // "links stay reachable" is then not met, and the message says why instead of a bare count
+    expect(count, 'no panel link exists in the page without JavaScript').toBeGreaterThan(0);
     const ctl = p.locator(t.sel.clickToggle);
     const reach = async () => {
       const bad: string[] = [];
@@ -450,12 +458,21 @@ function resolve(c: CaseDef): { skip: string } | { t: Target; vp: string; expect
   if (!st) return { skip: 'consumer status unknown (not observed): run.sh recorded nothing for this site' };
   if (!st.healthy || !st.url) return { skip: `image did not start: ${sanitize(st.reason || 'no reason recorded')}` };
   if (!site.selectors) return { skip: 'consumer header selectors unknown (not observed): add sites[].selectors to pins.json before promoting this site' };
-  const s = site.selectors as Record<string, string>;
+  // top-level selectors are strings; narrow and wide, when declared, are objects of strings
+  const s = site.selectors as Record<string, any>;
   // a CSS checkbox header declares kind 'checkbox' and the element a user clicks (the label) as click_toggle;
   // the default stays a native button, where the toggle is also what is clicked
   const kind = s.kind === 'checkbox' ? 'checkbox' : 'button';
-  return { t: { url: st.url, bp: site.breakpoint as number, kind,
-    sel: { header: s.header, nav: s.nav, links: s.links, routes: s.routes, toggle: s.toggle, clickToggle: s.click_toggle ?? s.toggle, outside: s.outside } }, vp,
+  // A header whose markup differs by viewport (a framework with an inline menu on wide and a separate panel on
+  // narrow) declares selectors.narrow and selectors.wide; nav, links and landmark are read from the one matching
+  // the case's viewport, falling back to the top-level selectors.
+  const isNarrow = vp === 'B-1' || vp === '375';
+  const build = (per: Record<string, string> | undefined): Sel => ({
+    header: s.header, nav: per?.nav ?? s.nav, links: per?.links ?? s.links, routes: s.routes, toggle: s.toggle,
+    clickToggle: s.click_toggle ?? s.toggle, outside: s.outside, landmark: per?.landmark ?? s.landmark });
+  const sel = build(isNarrow ? s.narrow : s.wide);
+  const after = isNarrow && s.wide ? build(s.wide) : undefined;
+  return { t: { url: st.url, bp: site.breakpoint as number, kind, sel, after }, vp,
     expected: site.expected_blocked ?? [] };
 }
 

@@ -291,3 +291,14 @@ no connection string is read from `pins.json`: only role names matching `[a-z_][
 its own migrations at boot. If the sidecar does not become ready, or a role cannot be created, the site is NOT-RUN with
 that reason and the consumer is not started. The sidecar container is named `<prefix>-<site>-db`, carries the run label,
 and is removed with the others at the end of the run.
+
+## Selectors that differ by viewport (`selectors.narrow`, `selectors.wide`)
+
+A header whose markup changes with the viewport (a framework with an inline menu on wide and a separate panel on narrow,
+possibly rendered only while open) declares `selectors.narrow` and `selectors.wide`, each with `nav` and `links`, and
+optionally `landmark`: the element that must be the named navigation when the panel container (`nav`, also the target of
+`aria-controls`) is not itself a `<nav>`. The case's viewport picks the set (`B-1` and `375` narrow, `B` and `1280` wide);
+anything missing falls back to the top-level selectors. HDR-1 opens the panel first on narrow because a panel rendered on
+open is not in the DOM before that, and HDR-11 looks for the inline navigation with the wide set after growing past B.
+A result of FAIL on a framework-native hamburger that does not close on Escape or on an outside click is the observation
+that makes the contract's conditional exception EX-3 apply; it stays FAIL until the owner signs the exception off.
