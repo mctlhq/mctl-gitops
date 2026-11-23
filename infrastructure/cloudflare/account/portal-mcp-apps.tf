@@ -220,18 +220,14 @@ resource "cloudflare_zero_trust_access_application" "portal_member_argocd" {
 
   session_duration = "8760h"
 
-  # Same two doors as every other member: the pilot addresses (break-glass) and the
-  # ZITADEL access role.
+  # ZITADEL access role only. Unlike the other members this one has no pilot
+  # (break-glass) door: the upstream (argocd-mcp.tf) is an admin surface that
+  # admits ZITADEL only, so a pilot address would pass here and then be denied
+  # by the upstream Access application.
   policies = [
     {
-      name       = "Phase 0 pilot users"
-      decision   = "allow"
-      precedence = 1
-      include    = [for e in var.portal_pilot_emails : { email = { email = e } }]
-    },
-    {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
-      precedence = 2
+      precedence = 1
     },
   ]
 }
