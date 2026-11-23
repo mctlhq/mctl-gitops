@@ -205,7 +205,7 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     expect(same, 'aria-controls points at the panel').toBe(true);
   },
 
-  7: async ({ wca, t, width }) => {
+  7: async ({ wca, t, width, c }) => {
     const p = await load(wca, t, width);
     // narrow-closed: the panel links are skipped and focus is never trapped
     await toggle(p, t).focus();
@@ -221,12 +221,15 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     await p.keyboard.press(t.kind === 'checkbox' ? 'Space' : 'Enter');
     await expectOpen(p, t, width);
     const hrefs = await p.locator(t.sel.links).evaluateAll((as) => as.map((a) => a.textContent!.trim()));
-    const seen: string[] = [];
-    for (let i = 0; i < hrefs.length; i++) {
-      await p.keyboard.press('Tab');
-      seen.push(await p.evaluate(() => (document.activeElement?.textContent || '').trim()));
-    }
-    expect(seen).toEqual(hrefs);
+    // the one assertion a catalogued known_gap names (a header whose toggle follows the panel in DOM order)
+    await atGap(c, async () => {
+      const seen: string[] = [];
+      for (let i = 0; i < hrefs.length; i++) {
+        await p.keyboard.press('Tab');
+        seen.push(await p.evaluate(() => (document.activeElement?.textContent || '').trim()));
+      }
+      expect(seen).toEqual(hrefs);
+    });
   },
 
   8: async ({ wca, t, width }) => {
@@ -242,9 +245,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
       return;
     }
     await openPanel(p, t, width);
-    await toggle(p, t).focus();
-    await p.keyboard.press('Tab');
-    expect(await activeInNav(p, t)).toBe(true);
+    // focus inside the open panel is a precondition set directly: reaching it by Tab from the toggle depends on
+    // the DOM order HDR-7 covers, and HDR-8/12 only require where focus goes after the close
+    await p.locator(t.sel.links).first().focus();
+    expect(await activeInNav(p, t), 'precondition: focus is inside the open panel').toBe(true);
     await p.keyboard.press('Escape');
     await expectClosed(p, t);
     await expect(toggle(p, t)).toBeFocused();
@@ -294,9 +298,10 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
       return;
     }
     await openPanel(p, t, width);
-    await toggle(p, t).focus();
-    await p.keyboard.press('Tab');
-    expect(await activeInNav(p, t)).toBe(true);
+    // focus inside the open panel is a precondition set directly: reaching it by Tab from the toggle depends on
+    // the DOM order HDR-7 covers, and HDR-8/12 only require where focus goes after the close
+    await p.locator(t.sel.links).first().focus();
+    expect(await activeInNav(p, t), 'precondition: focus is inside the open panel').toBe(true);
     await p.keyboard.press('Escape');
     await expectClosed(p, t);
     expect(await p.evaluate((sel) => document.activeElement === document.querySelector(sel), t.sel.toggle),

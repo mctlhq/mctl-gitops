@@ -186,4 +186,14 @@ version is served with its pinned sha-256, that an unpinned version is blocked, 
   a site that declares `selectors.routes` in `pins.json`; a section anchor or an external link is not a
   route, and the harness never guesses one from an href. Without `selectors.routes` the case is NOT-RUN
   with the reason "route-change step not run", never PASS. The fixtures declare their links as routes.
+- **HDR-7** on `mctl-web` is a catalogued `known_gap` (NOT-RUN, "observed gap, no exception registered"): the
+  toggle follows the panel in DOM order, exactly as in the mctl-design `SiteHeader` reference stories, so
+  Tab from the toggle cannot reach the panel links, while the contract row requires the toggle then the
+  panel links in DOM order. Only the open-state Tab walk is covered by the gap; the closed-state checks still
+  run. The gap converts a failure into NOT-RUN and nothing else: a site whose toggle precedes its panel
+  passes. Mutation-verified on the fixture (toggle moved after the nav turns HDR-7 red).
+- **HDR-8 / HDR-12** put focus inside the open panel directly (`focus()` on the first panel link) instead of by
+  Tab from the toggle, because that route depends on the DOM order HDR-7 covers. What is asserted after the
+  Escape or the link click (the panel closes, focus is on the toggle or the navigation target) is unchanged,
+  and the `no-escape` and `focus-lost` negative controls still FAIL.
 

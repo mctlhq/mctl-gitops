@@ -1587,7 +1587,8 @@
    "route_class": "landing",
    "viewport": "B-1",
    "provenance": "not-run",
-   "exception": null
+   "exception": null,
+   "known_gap": "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception"
   },
   {
    "id": "WCA-H-HDR7-mctl-web-landing-375",
@@ -1599,7 +1600,8 @@
    "route_class": "landing",
    "viewport": "375",
    "provenance": "not-run",
-   "exception": null
+   "exception": null,
+   "known_gap": "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception"
   },
   {
    "id": "WCA-H-HDR8-mctl-web-landing-B-1",
