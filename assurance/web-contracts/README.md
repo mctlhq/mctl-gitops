@@ -176,3 +176,14 @@ report: `results.json` carries `substitutions`, every case that ran with answere
 built without the file says the substitution state is unknown; an unreadable file is a hard error.
 Case `WCA-A-ISO-guard-design-host` proves the decision table, that every pinned sheet of every pinned
 version is served with its pinned sha-256, that an unpinned version is blocked, and the serve-time checks.
+
+## Contract scope decisions (owner, 2026-11-23)
+
+- **HDR-1** counts named navigation landmarks inside the header region only (AC-1: "inspect the header
+  navigation landmark"). A named landmark in page content or a footer is not the header's.
+- **HDR-14** counts every link of the header region carrying `aria-current="page"`, the brand link
+  included: exactly one. The route-change step (click a route link, the marker must follow) runs only for
+  a site that declares `selectors.routes` in `pins.json`; a section anchor or an external link is not a
+  route, and the harness never guesses one from an href. Without `selectors.routes` the case is NOT-RUN
+  with the reason "route-change step not run", never PASS. The fixtures declare their links as routes.
+
