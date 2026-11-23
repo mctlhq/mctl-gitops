@@ -20,6 +20,10 @@ on:
 
 permissions:
   contents: read
+  # Consumer images are private ghcr packages. This lets the job's token pull
+  # the ones linked to this repository; a package linked elsewhere still
+  # fails to pull and the consumer is reported NOT-RUN, never PASS.
+  packages: read
 
 concurrency:
   group: web-contract-assurance-${{ github.ref }}
@@ -38,6 +42,16 @@ jobs:
       - name: Unit tests of the fail-closed report
         run: python3 tests/test_web_contract_report.py
 
+      # Same-repository runs only: a fork PR already needs a maintainer's
+      # approval (all_external_contributors), and this keeps the registry
+      # credential out of its reach even then. The login happens before
+      # run.sh isolates the network; the containers run.sh starts never see it.
+      - name: Log in to ghcr.io
+        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
       # run.sh does its own pin check, catalogue check, host-side npm ci and
       # image pulls BEFORE it isolates the network, then runs the browser with
       # no egress. Its exit code is the verdict (0 ok, 1 FAIL, 2 control did not
@@ -45,6 +59,10 @@ jobs:
       # fails on any non-zero code and the artifact is uploaded regardless.
       - name: Isolated run and report
         run: assurance/web-contracts/run.sh
+
+      - name: Log out of ghcr.io
+        if: always()
+        run: docker logout ghcr.io || true
 
       - name: Step summary
         if: always()

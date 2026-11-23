@@ -110,7 +110,14 @@ check("pass on a registered exception is EXCEPTION-PENDING, not PASS",
 rc, res, _, _ = report([case("T-EXF", exception="EX-1")], [("T-EXF", "fail", "x")])
 check("failure on a registered exception is still FAIL", rc == 1 and status_of(res, "T-EXF") == "FAIL", res)
 
-rc, res, _, _ = report([case("T-CONS", site="mctl-web")], [("T-CONS", "pass", "")])
+def to_not_run(p):
+    # pinned here, not read from the live pins.json: promoting a consumer there must not change this test
+    s = next(s for s in p["sites"] if s["name"] == "mctl-web")
+    s["mode"], s["image"] = "not-run", None
+    s["not_run_reason"] = "test: forced not-run"
+
+
+rc, res, _, _ = report([case("T-CONS", site="mctl-web")], [("T-CONS", "pass", "")], pins=pins_with(to_not_run))
 check("consumer pass while pins mode is not-run is NOT-RUN (contradiction)",
       status_of(res, "T-CONS") == "NOT-RUN", res)
 

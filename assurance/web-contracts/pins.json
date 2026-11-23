@@ -70,7 +70,7 @@
     {
       "name": "mctl-web",
       "gitops_tag": "7.24.0",
-      "image": null,
+      "image": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
       "source_commit": null,
       "breakpoint": null,
       "route_classes": [
@@ -79,8 +79,8 @@
         "app-shell",
         "sensitive"
       ],
-      "mode": "not-run",
-      "not_run_reason": "consumer image not yet exercised: standalone startup is unknown (not observed); promoted to mode image only after a healthy start on the internal network (task 8)",
+      "mode": "image",
+      "not_run_reason": null,
       "observed_image_digest": "ghcr.io/mctlhq/mctl-web@sha256:bc1bab0a01feea756bb22a9075dcf5fac33dfa8e5d5ffcb6572f6cf349635a3b",
       "observed_image_digest_resolved_for_tag": "7.24.0",
       "breakpoint_note": "unknown (not observed): not stated in the contract at the pinned commit"

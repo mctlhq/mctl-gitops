@@ -20,7 +20,8 @@ syncs nothing, and changes no consumer repository, CSP, Cloudflare or package pi
 | `run.sh` | present: isolated run, report, guard counters, cleanup by name |
 | `../../tests/test_web_contract_report.py` | present: fail-closed mapping tests (no browser) |
 | `../../.github/workflows/web-contract-assurance.yml` | present: runs `run.sh` on PRs touching these paths and on demand; read-only token, no secrets, 7-day artifact, not a required check |
-| spike document, consumer promotion | NOT present yet (later PRs) |
+| consumer promotion | `mctl-web` is `mode: image`; the other five stay `not-run` until each is exercised in CI |
+| spike document | NOT present yet (task 9) |
 
 ## Reproduce
 
