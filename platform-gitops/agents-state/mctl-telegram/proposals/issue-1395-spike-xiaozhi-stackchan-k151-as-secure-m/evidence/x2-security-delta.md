@@ -1,6 +1,6 @@
 # X2 security delta — candidate only
 
-No accepted ADR change. Reference: mctl-telegram `docs/adr/0011-personal-assistant.md` and `docs/agent-runtime/personal-assistant-threat-model.md`.
+No accepted ADR change. B3 ADR/design tracker: https://github.com/mctlhq/mctl-telegram/issues/1412. Reference: mctl-telegram `docs/adr/0011-personal-assistant.md` and `docs/agent-runtime/personal-assistant-threat-model.md`.
 
 | Boundary | Synthetic simulator | Real device future (blocked) |
 |---|---|---|
