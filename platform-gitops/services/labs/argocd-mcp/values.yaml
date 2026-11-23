@@ -63,9 +63,10 @@ env:
   MCP_AUTH_TOKEN_HEADER: cf-access-jwt-assertion
   # The AUD tag of the Access application argocd_mcp (terraform output
   # argocd_mcp_aud). It has no default on purpose: an assertion minted for a
-  # different application would otherwise verify here. Until it is replaced this
-  # placeholder matches no token, so the server answers 401 to everything.
-  MCP_AUTH_AUDIENCE: REPLACE-WITH-argocd_mcp_aud-AFTER-APPLY
+  # different application would otherwise verify here. Quoted so YAML keeps it a
+  # string. If the Access application is ever recreated the AUD changes and the
+  # server answers 401 to everything until this is updated.
+  MCP_AUTH_AUDIENCE: "2bbae5e31329a202957bfd59fa7c47138bffbcc51a43a3811ce014ad50e44765"
   # In-cluster: this is the pod calling Argo CD, not the portal. server.insecure is
   # true in platform-gitops/argocd/values.yaml, so the Service speaks plain HTTP.
   # Reaching it must not go through Cloudflare Access.
