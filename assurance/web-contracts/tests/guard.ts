@@ -191,8 +191,10 @@ export class Wca {
 
   constructor(private browser: Browser, private info: TestInfo) {}
 
-  /** Exact host+path entries only. Honoured solely for a host the allowlist refuses; a sensitive path, an
-   *  unparseable URL or any entry that is not an exact match stays an unexpected block. */
+  /** Exact host+path entries only. Honoured for a host the allowlist refuses and for a sensitive path on the
+   *  site's own host (a client-rendered app asks its own session endpoint on load); it is still aborted and never
+   *  answered, so nothing sensitive reaches the container. An unparseable URL or any entry that is not an exact
+   *  match stays an unexpected block. */
   expectBlocked(entries: string[]): void { this.expected = new Set(entries); }
 
   private note(url: string, d: Decision): void {
@@ -241,7 +243,7 @@ export class Wca {
         return;
       }
       const d = decide(url, this.hosts);
-      if (!d.allow && d.reason === 'host-not-allowlisted' && this.expected.has(sanitize(url))) {
+      if (!d.allow && (d.reason === 'host-not-allowlisted' || d.reason === 'sensitive-path') && this.expected.has(sanitize(url))) {
         const key = sanitize(url);
         this.expectedBlocked[key] = (this.expectedBlocked[key] || 0) + 1;
         await route.abort('blockedbyclient');

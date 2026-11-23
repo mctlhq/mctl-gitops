@@ -223,18 +223,21 @@ const behaviours: Record<string, (wca: Wca, c: CaseDef) => Promise<void>> = {
     wca.expectBlocked(['stats.example.test/insights.js', 'site.fixture.test/oauth/authorize']);
     const probe = (u: string) => page.evaluate((x) => fetch(x, { mode: 'no-cors' }).then(() => 'answered', () => 'failed'), u);
     expect(await probe('https://stats.example.test/insights.js?cb=1'), 'a declared request is aborted, not answered').toBe('failed');
-    expect(wca.expectedBlocked).toEqual({ 'stats.example.test/insights.js': 1 });
+    expect(await probe(`${SITE}/oauth/authorize`), 'a declared sensitive path on the own host is aborted, not answered').toBe('failed');
+    expect(wca.expectedBlocked).toEqual({ 'stats.example.test/insights.js': 1, 'site.fixture.test/oauth/authorize': 1 });
     expect(wca.blocked, 'a declared block is not an unexpected one').toEqual([]);
     wca.probe = true; // everything below must be recorded as a block no case declared
     expect(await probe('https://stats.example.test/other.js')).toBe('failed');                 // same host, other path
     expect(await probe('https://other.example.test/insights.js')).toBe('failed');              // same path, other host
-    expect(await probe(`${SITE}/oauth/authorize`)).toBe('failed');                              // declared, but an allowlisted host: sensitive-path wins
+    expect(await probe(`${SITE}/oauth/token`)).toBe('failed');                                  // sensitive sibling, not declared
+    expect(await probe(`${SITE}/oauth/authorize/x`)).toBe('failed');                            // declared path with a suffix: not an exact entry
     expect(wca.blocked.map((b) => `${b.reason} ${b.url}`).sort()).toEqual([
       'host-not-allowlisted other.example.test/insights.js',
       'host-not-allowlisted stats.example.test/other.js',
-      'sensitive-path site.fixture.test/oauth/authorize',
+      'sensitive-path site.fixture.test/oauth/authorize/x',
+      'sensitive-path site.fixture.test/oauth/token',
     ]);
-    expect(wca.expectedBlocked, 'the declared count did not grow').toEqual({ 'stats.example.test/insights.js': 1 });
+    expect(wca.expectedBlocked, 'the declared counts did not grow').toEqual({ 'stats.example.test/insights.js': 1, 'site.fixture.test/oauth/authorize': 1 });
     expect(Object.keys(wca.seen).filter((h) => h.includes('example.test')), 'nothing reached those hosts').toEqual([]);
   },
   async 'guard-oauth-path'(wca) {

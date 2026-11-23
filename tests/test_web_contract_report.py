@@ -612,6 +612,35 @@ for label, t in (("a relative path", ["tmp/x"]), ("a dot-dot segment", ["/tmp/..
                  ("five paths", ["/a", "/b", "/c", "/d", "/e"]), ("a trailing newline", ["/tmp/x\n"]), ("a string", "/tmp/x")):
     check_pins_with(f"tmpfs with {label} is rejected", "tmpfs", t, False)
 
+# ---- database sidecar (pins.json sites[].sidecar, postgres_image)
+def check_pins_top(label, mutate, ok, needle):
+    pins_x = pins_with(mutate)
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "pins.json"
+        f.write_text(json.dumps(pins_x))
+        rc, out, err = run("--check-pins", "--pins", f)
+        check(label, (rc == 0) if ok else (rc == 3 and needle in (out + err)), (rc, out, err))
+
+
+def with_sidecar(value):
+    def m(p):
+        next(x for x in p["sites"] if x["name"] == "mctl-academy")["sidecar"] = value
+    return m
+
+
+check_pins_top("a postgres sidecar with plain role names is accepted", with_sidecar({"postgres": {"roles": ["academy_readonly", "_x1"]}}), True, "")
+check_pins_top("a postgres sidecar without roles is accepted", with_sidecar({"postgres": {}}), True, "")
+for label, v in (("a non-postgres sidecar", {"mysql": {"roles": []}}), ("an extra key next to postgres", {"postgres": {"roles": []}, "redis": {}}),
+                 ("an extra key under postgres (such as SQL)", {"postgres": {"roles": [], "sql": "DROP DATABASE wca"}}),
+                 ("a role with a quote", {"postgres": {"roles": ["a\"b"]}}), ("a role with a semicolon", {"postgres": {"roles": ["a;drop"]}}),
+                 ("an upper-case role", {"postgres": {"roles": ["Academy"]}}), ("a role starting with a digit", {"postgres": {"roles": ["1a"]}}),
+                 ("an empty role", {"postgres": {"roles": [""]}}), ("a trailing newline in a role", {"postgres": {"roles": ["ab\n"]}}),
+                 ("five roles", {"postgres": {"roles": ["a", "b", "c", "d", "e"]}}), ("a duplicate role", {"postgres": {"roles": ["a", "a"]}}),
+                 ("roles as a string", {"postgres": {"roles": "a"}}), ("a list instead of a mapping", ["postgres"])):
+    check_pins_top(f"a sidecar with {label} is rejected", with_sidecar(v), False, "sidecar")
+check_pins_top("postgres_image without a digest is rejected", lambda p: p.__setitem__("postgres_image", "docker.io/library/postgres:16"), False, "postgres_image")
+check_pins_top("a missing postgres_image is rejected", lambda p: p.pop("postgres_image"), False, "postgres_image")
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

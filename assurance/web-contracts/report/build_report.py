@@ -127,6 +127,7 @@ def check_pins(pins):
 
     digest_image("playwright_image", pins.get("playwright_image"))
     digest_image("nginx_image", pins.get("nginx_image"))
+    digest_image("postgres_image", pins.get("postgres_image"))
     ver = pins.get("playwright_test_version")
     if not isinstance(ver, str) or not EXACT_SEMVER.fullmatch(ver):
         bad.append(f"playwright_test_version: must be an exact X.Y.Z, got {ver!r}")
@@ -191,6 +192,8 @@ def check_pins(pins):
         eb = s.get("expected_blocked", [])
         if not isinstance(eb, list) or not all(isinstance(e, str) and valid_expected_blocked(e) for e in eb):
             bad.append(f"sites[{n}].expected_blocked: must be a list of exact host/path strings (no scheme, query or wildcard)")
+        if "sidecar" in s and not valid_sidecar(s["sidecar"]):
+            bad.append(f"sites[{n}].sidecar: must be {{\"postgres\": {{\"roles\": [up to 4 plain role names]}}}} and nothing else")
         if not valid_env(s.get("env", {})):
             bad.append(f"sites[{n}].env: must map upper-case names (not {ENV_RESERVED}) to short plain values without '@'")
         if not valid_tmpfs(s.get("tmpfs", [])):
@@ -408,6 +411,22 @@ def valid_tmpfs(paths):
                     and not any(seg in (".", "..") for seg in p.split("/"))
                     and p.split("/")[1] not in ("proc", "sys", "dev")
                     for p in paths) and len(set(paths)) == len(paths))
+
+
+# A database sidecar a consumer image may need. Only Postgres, and only roles to create by name: the harness builds the
+# statements itself, so no SQL text is ever read from this public file.
+ROLE_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+
+
+def valid_sidecar(sc):
+    if not isinstance(sc, dict) or set(sc) != {"postgres"}:
+        return False
+    pg = sc["postgres"]
+    if not isinstance(pg, dict) or not set(pg) <= {"roles"}:
+        return False
+    roles = pg.get("roles", [])
+    return (isinstance(roles, list) and len(roles) <= 4 and len(set(roles)) == len(roles)
+            and all(isinstance(r, str) and ROLE_RE.fullmatch(r) for r in roles))
 
 
 def valid_expected_blocked(entry):
