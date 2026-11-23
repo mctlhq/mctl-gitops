@@ -12,18 +12,18 @@
 # mctl-telegram, never in this pod (mctl-telegram#1400). It never polls the agent
 # job queue, so it does not compete with agent-worker-managed-preview.
 #
-# Staged rollout. This lands inert: replicaCount 0 and no pool token. The
-# aud=agent-pool token (AGENT_API_TOKEN, Vault path
-# secret/data/platform/labs/agent-worker-pa-preview/api) does not exist yet,
-# and base-service renders every extraExternalSecrets entry unconditionally,
-# so an ExternalSecret on that path would leave the Application Degraded. It
-# is added together with the pool token, before the worker gets a replica;
-# run() refuses to start without AGENT_API_TOKEN, so a replica before then
-# would crash-loop rather than run unattributed.
+# Staged rollout. G2b landed this inert (replicaCount 0, no pool token). G5
+# (owner GO) adds the aud=agent-pool token and the first replica together:
+# the owner minted the token (POST /api/agent/pool-token, pool_name
+# agent-worker-pa-preview) and wrote it to Vault
+# secret/data/platform/labs/agent-worker-pa-preview/api before this landed,
+# because base-service renders every extraExternalSecrets entry
+# unconditionally and an ExternalSecret on a missing path would leave the
+# Application Degraded. run() refuses to start without AGENT_API_TOKEN.
 #
 # Rollback: replicaCount 0, revoke the pool token jti, PA_ENABLED "false" in
 # mctl-telegram-preview.
-replicaCount: 0
+replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "main-0ef3857"
@@ -111,16 +111,29 @@ env:
   # AGENT_OPENAI_MIN_INTERVAL or AGENT_SYSTEM_PROMPT (all read only after the
   # PA branch returns), and AGENT_MAX_BUDGET_USD is parsed but never passed to
   # the PA worker; the per-job limit comes from the server's claim.
-# One ExternalSecret per credential, both on Vault paths that already exist
-# for agent-worker-managed-preview. The pool-token ExternalSecret
-# (labs-agent-worker-pa-preview-api) is added with the pool token, before the
-# first replica; see the header.
+# One ExternalSecret per credential. openai and gateway reuse the Vault paths
+# of agent-worker-managed-preview; the pool token is this worker's own.
 envFrom:
+  - secretRef:
+      name: labs-agent-worker-pa-preview-api
   - secretRef:
       name: labs-agent-worker-pa-preview-openai
   - secretRef:
       name: labs-agent-worker-pa-preview-gateway
 extraExternalSecrets:
+  # The claim-only aud=agent-pool token (pool_name agent-worker-pa-preview),
+  # its own jti so revoking it stops only the PA worker, never the managed
+  # pool. It can call POST /api/pa/v1/jobs/claim only; every later call uses
+  # the per-job pa-job token the claim returns.
+  labs-agent-worker-pa-preview-api:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-pa-preview-api
+    data:
+      - secretKey: AGENT_API_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-pa-preview/api
+        property: token
   # Nebius Token Factory key, sent through the gateway (byok). Shared with
   # agent-worker-managed-preview for the preview window.
   labs-agent-worker-pa-preview-openai:
