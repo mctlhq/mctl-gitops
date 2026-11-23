@@ -55,6 +55,10 @@ Revision 4 (2026-11-23). Remaining tasks are docs-only/research-only and need in
 
 The change is docs-only. Revert the report commit, or close its PR unmerged. No runtime, flag, OAuth, gitops, account or vendor state is touched, so nothing else needs to be undone.
 
+## Claude P2/P3 remediation tasks (research-only)
+- [ ] SECURITY-1433. Verify mctl-telegram#1433 is OPEN, accountable @mashkovd; current elevated Grok grant and refresh-family state **UNKNOWN** until authorized audit. Do not use admin grant for testing; do not revoke/modify credential without owner GO; only after independent security signoff may restricted non-admin exact-client-ceiling tests proceed.
+- [ ] SOURCE-LEDGER. For Grok Bot, Town, Hermes, dots, Gemini and Telegram, cross-check **claim-supporting** primary-source quotation and checked date; avoid titles and incomplete fragments. Source class is exactly one per claim, future test execution status is a separate field.
+
 ## Revision 4 evidence completion tasks (all research-only; not executed)
 
 - [ ] 10. Reconcile Grok (grok.com) and Town `OWNER_OBSERVED_WORKS` with #1393 and historical #1381 audit; retain Grok Bot exact client/build UNKNOWN and Town CIMD-versus-DCR UNKNOWN.
