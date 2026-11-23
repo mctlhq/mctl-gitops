@@ -451,7 +451,8 @@ def report_with_subst(subst_text):
         cases = [case("S-A"), case("S-CTL", kind="negative-control")]
         (d / "junit.xml").write_text(junit([("S-A", "pass", ""), ("S-CTL", "fail", "detected")]))
         (d / "cases.json").write_text(json.dumps({"cases": cases}))
-        (d / "pins.json").write_text(json.dumps(PINS))
+        # these cases are about the substitution record, not about the live pins' declarations
+        (d / "pins.json").write_text(json.dumps(pins_with(lambda p: [x.__setitem__("expected_blocked", []) for x in p["sites"]])))
         extra = []
         if subst_text is not None:
             (d / "subst.json").write_text(subst_text)
@@ -519,6 +520,54 @@ with tempfile.TemporaryDirectory() as d:
 rc, res, mx, _ = report([case("G-1")], [("G-1", "error", "guard-blocked unexpected request(s): x.test/a.js")])
 check("a guard error raised after the case ran is NOT-RUN with wording that does not claim the assertion never ran",
       status_of(res, "G-1") == "NOT-RUN" and "outcome is not a verdict" in next(r for r in res["results"] if r["id"] == "G-1")["reason"], res)
+
+# ---- review follow-ups: blind PASS is never a compliance claim; stale declarations are listed; entry format
+def with_mctl_web_blocks(entries):
+    def m(p):
+        site = next(x for x in p["sites"] if x["name"] == "mctl-web")
+        site["mode"], site["image"], site["not_run_reason"] = "image", site["observed_image_digest"], None
+        site["expected_blocked"] = entries
+    return pins_with(m)
+
+
+def report_blind(pins, per_test, totals):
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        cases = [case("B-1", site="mctl-web"), case("B-CTL", kind="negative-control")]
+        (d / "junit.xml").write_text(junit([("B-1", "pass", ""), ("B-CTL", "fail", "detected")]))
+        (d / "cases.json").write_text(json.dumps({"cases": cases}))
+        (d / "pins.json").write_text(json.dumps(pins))
+        (d / "subst.json").write_text(json.dumps({"per_test": {}, "totals": {}, "expected_blocked": {"per_test": per_test, "totals": totals}}))
+        rc, _, err = run("--junit", d / "junit.xml", "--cases", d / "cases.json", "--pins", d / "pins.json",
+                         "--out-dir", d / "out", "--attempt-id", "t-1", "--substitutions", d / "subst.json")
+        res = d / "out/results.json"
+        return rc, (json.loads(res.read_text()) if res.exists() else None), (d / "out/matrix.md").read_text() if (d / "out/matrix.md").exists() else None, err
+
+
+E = "stats.example.test/insights.js"
+rc, res, mx, err = report_blind(with_mctl_web_blocks([E]), {"B-1": {E: 1}}, {E: 1})
+site = res["sites"]["mctl-web"]
+check("a PASS that ran with declared blocks stays PASS but the site is not compliant, and the matrix says so",
+      status_of(res, "B-1") == "PASS" and site["pass_with_declared_blocks"] == 1 and site["compliant"] is False
+      and "1 PASS ran with declared blocks: never a compliance claim" in mx, (site, err))
+rc, res, mx, err = report_blind(with_mctl_web_blocks([E]), {}, {})
+site = res["sites"]["mctl-web"]
+check("without declared blocks the same PASS is compliant (the rule bites only when a block was seen)",
+      site["pass_with_declared_blocks"] == 0 and site["compliant"] is True, site)
+check("a declared entry that no run saw is listed as never observed, in results and in the matrix",
+      res["substitutions"]["declared_never_observed"] == {"mctl-web": [E]} and "declared but never observed" in mx, res["substitutions"])
+rc, res, mx, err = report_blind(with_mctl_web_blocks([E]), {"B-1": {E: 1}}, {E: 1})
+check("a declared entry that was seen is not listed as never observed", res["substitutions"]["declared_never_observed"] == {}, res["substitutions"])
+for entry in ("a.test/x\n", "a.test/../x", "a.test//x", "a..test/x", "a.test/x/.."):
+    pins_bad = pins_with(lambda p, e=entry: next(s for s in p["sites"] if s["name"] == "mctl-web").__setitem__("expected_blocked", [e]))
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "pins.json"
+        f.write_text(json.dumps(pins_bad))
+        rc, out, err = run("--check-pins", "--pins", f)
+        check(f"expected_blocked entry {entry!r} (dead or malformed) is rejected", rc == 3 and "expected_blocked" in (out + err), (rc, out, err))
+rc, res, mx, _ = report([case("G-2")], [("G-2", "error", "guard-blocked (host-not-allowlisted): x.test/a.js")])
+check("a guard error thrown mid-test by Wca.get keeps the older wording (it ran before any assertion)",
+      "errored before its assertion" in next(r for r in res["results"] if r["id"] == "G-2")["reason"], res)
 
 if failures:
     print("\n".join(failures))

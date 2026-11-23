@@ -189,7 +189,7 @@ def check_pins(pins):
         if bp is not None and (isinstance(bp, bool) or not isinstance(bp, int) or bp <= 0):
             bad.append(f"sites[{n}].breakpoint: must be a positive integer or null, got {bp!r}")
         eb = s.get("expected_blocked", [])
-        if not isinstance(eb, list) or not all(isinstance(e, str) and EXPECTED_BLOCKED_RE.match(e) for e in eb):
+        if not isinstance(eb, list) or not all(isinstance(e, str) and valid_expected_blocked(e) for e in eb):
             bad.append(f"sites[{n}].expected_blocked: must be a list of exact host/path strings (no scheme, query or wildcard)")
         if mode == "not-run" and not (isinstance(s.get("not_run_reason"), str) and s["not_run_reason"].strip()):
             bad.append(f"sites[{n}]: mode not-run needs a not_run_reason")
@@ -360,8 +360,10 @@ def derive(case, runs, site_pins):
     if outcome == "skipped":
         return "NOT-RUN", "skipped" + (f": {message}" if message else "")
     if outcome == "error":
-        if message.startswith("guard-blocked"):
-            # raised by the fixture teardown, so the assertion may well have run: the case is not a verdict either way
+        if message.startswith("guard-blocked unexpected request(s)"):
+            # Raised by the fixture teardown (Playwright reports it as <error message="guard-blocked unexpected ...">,
+            # seen in the CI junit of run 45166785569), so the assertions may well have run: not a verdict either way.
+            # Wca.get() throws "guard-blocked (reason)" mid-test, before an assertion, and keeps the older wording.
             return "NOT-RUN", "a request no case declared was blocked, so the case outcome is not a verdict: " + message
         return "NOT-RUN", "errored before its assertion" + (f": {message}" if message else "")
     if outcome == "fail":
@@ -376,7 +378,15 @@ def derive(case, runs, site_pins):
 
 FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 # host/path exactly as the guard logs it: lowercase host, then a path; never a scheme, query, port or wildcard
-EXPECTED_BLOCKED_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9._~/-]*$")
+EXPECTED_BLOCKED_RE = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9._~/-]*")
+
+
+def valid_expected_blocked(entry):
+    """Exact host/path as the guard logs it. fullmatch (a trailing newline never passes), and no dot segment, empty
+    segment or empty host label, none of which can equal a normalised URL: they would be silent dead entries."""
+    host, _, path = entry.partition("/")
+    return (bool(EXPECTED_BLOCKED_RE.fullmatch(entry)) and ".." not in host and "//" not in "/" + path
+            and "/../" not in "/" + path + "/" and not path.endswith("/.."))
 
 
 def _counts_ok(per_test, totals):
@@ -469,20 +479,39 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, subs
     for name in SITES:
         rows = [r for r in results if r["site"] == name and r["kind"] == "case"]
         counts = {s: sum(1 for r in rows if r["status"] == s) for s in STATUSES}
+        # a PASS that ran while declared requests were aborted ran without scripts or calls the page expects:
+        # it stays PASS (the assertion held) but it is never a compliance claim
+        blind = sum(1 for r in rows if r["status"] == "PASS" and r.get("expected_blocked"))
         per_site[name] = {"mode": site_pins[name]["mode"], "gitops_tag": site_pins[name]["gitops_tag"],
                           "not_run_reason": site_pins[name].get("not_run_reason"),
                           "counts": counts, "cases": len(rows),
-                          "compliant": bool(rows) and counts["PASS"] == len(rows)}
+                          "pass_with_declared_blocks": blind,
+                          "compliant": bool(rows) and counts["PASS"] == len(rows) and blind == 0}
     gates = {}
     for r in results:
         if r["gate"] and r["kind"] == "case":
             g = gates.setdefault(r["gate"], {s: 0 for s in STATUSES})
             g[r["status"]] += 1
     any_fail = fail or control_problem
+    summary_subst = substitution_summary(subst)
+    # an entry declared for a site that ran but never seen in the run is stale or mistyped; for a site that did not
+    # run, or when no record was given, it is unknown, never "fine"
+    never = {}
+    if subst is not None:
+        seen = set(subst["expected_blocked"]["totals"])
+        for name in SITES:
+            if site_pins[name]["mode"] == "image":
+                gone = sorted(set(site_pins[name].get("expected_blocked", [])) - seen)
+                if gone:
+                    never[name] = gone
+    summary_subst["declared_never_observed"] = never
+    if never:
+        summary_subst["statement"] += "; declared but never observed (stale or mistyped?): " + ", ".join(
+            f"{n}: {', '.join(v)}" for n, v in sorted(never.items()))
     doc = {"attempt_id": attempt_id, "disclaimer": DISCLAIMER, "pins": pins,
            "inputs": {"junit_sha256": junit_sha, "cases_sha256": cases_sha, "pins_sha256": pins_sha},
            "artifact_sha256": artifact_sha,
-           "substitutions": substitution_summary(subst),
+           "substitutions": summary_subst,
            "artifact_sha256_status": "computed" if artifact else "not-provided",
            "sites": per_site, "gates": gates, "results": results,
            "summary": {"compliance_claim": not any_fail and any(s["compliant"] for s in per_site.values()),
@@ -535,7 +564,9 @@ def render_matrix(doc):
     for name, s in doc["sites"].items():
         c = s["counts"]
         L.append(f"| {name} | {s['mode']} | {s['gitops_tag']} | {c['PASS']} | {c['FAIL']} | {c['NOT-RUN']} | "
-                 f"{c['EXCEPTION-PENDING']} | {'yes' if s['compliant'] else 'no'} | {_cell(s['not_run_reason'])} |")
+                 f"{c['EXCEPTION-PENDING']} | {'yes' if s['compliant'] else 'no'} | {_cell(s['not_run_reason'])}"
+                 + (f" {s['pass_with_declared_blocks']} PASS ran with declared blocks: never a compliance claim." if s["pass_with_declared_blocks"] else "")
+                 + " |")
     L += ["", "## Gates", "", "| Gate | PASS | FAIL | NOT-RUN | EXCEPTION-PENDING |", "| --- | --- | --- | --- | --- |"]
     for g in sorted(doc["gates"]):
         c = doc["gates"][g]

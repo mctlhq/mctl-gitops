@@ -209,15 +209,20 @@ version is served with its pinned sha-256, that an unpinned version is blocked, 
 A consumer page may call hosts the isolated run does not allow (mctl-web: an analytics script, a bot-check
 script, a signup-status call). Without a declaration the guard fails every test that page loads in, which
 hides the outcome of the assertions. A site can list exact `host/path` strings under `sites[].expected_blocked`
-in `pins.json` (no scheme, query, port or wildcard; the format is checked). A request matching an entry is
+in `pins.json` (host and path as the guard logs them, no scheme, query, port or wildcard; the format is checked, and an
+entry with a dot segment, an empty segment or a trailing newline is rejected). A request matching an entry is
 still aborted and never answered, so nothing leaves the network and no response is invented; it is counted per
 host and path as `expected_blocked`, shown on the case row and in the matrix, and the matrix states that the
 page ran without those scripts and calls, so a result that depends on them is not evidence.
 
-Only a host the allowlist refuses can be declared: a declared entry for an allowlisted host with a sensitive path
+Matching is on the lower-cased host plus path only: the scheme, port, userinfo, query and HTTP method of the request are
+not part of the entry, so `http://` and `https://`, any port and any method to that host and path are all matched (and all
+still aborted). Only a host the allowlist refuses can be declared: a declared entry for an allowlisted host with a sensitive path
 (`/oauth/...`), an unparseable URL, another path on the same host or the same path on another host is still an
 unexpected block that fails the test. A case where an undeclared block was seen is NOT-RUN, worded as "the case
-outcome is not a verdict", because the guard error is raised after the assertions ran. `WCA-A-ISO-guard-expected-blocked`
+outcome is not a verdict", because the guard error is raised by the fixture teardown, after the assertions ran. A PASS
+that ran with declared blocks stays PASS, but the site is never `Compliant` while one exists, and the matrix counts them.
+A declared entry that a run never saw is listed as "declared but never observed" (stale or mistyped). `WCA-A-ISO-guard-expected-blocked`
 proves each of those, and was mutation-verified (honouring a declared sensitive path turns it red).
 
 HDR-2 counts the control selected as the toggle that has the role and an accessible name, not every named button on
