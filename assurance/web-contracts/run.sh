@@ -95,7 +95,7 @@ PW_IMAGE=$(pin "d['playwright_image']")
 NGINX_IMAGE=$(pin "d['nginx_image']")
 POSTGRES_IMAGE=$(pin "d['postgres_image']")
 # Sites that need a database: 'name role role ...' per line (pins.json sites[].sidecar.postgres.roles, format-checked).
-PG_LINES=$(pin "'\n'.join(s['name']+' '+' '.join(s['sidecar']['postgres'].get('roles',[])) for s in d['sites'] if s['mode']=='image' and s.get('sidecar',{}).get('postgres'))")
+PG_LINES=$(pin "'\n'.join(s['name']+' '+' '.join(s['sidecar']['postgres'].get('roles',[])) for s in d['sites'] if s['mode']=='image' and 'postgres' in s.get('sidecar',{}))")
 pg_roles_for() { while read -r n roles; do [ "$n" = "$1" ] && { printf '%s\n' "$roles"; return 0; }; done <<<"$PG_LINES"; return 1; }
 COMMIT=$(pin "d['mctl_design']['commit']")
 CONSUMER_LINES=$(pin "'\n'.join(s['name']+' '+s['image'] for s in d['sites'] if s['mode']=='image')")
