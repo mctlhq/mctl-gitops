@@ -43,8 +43,8 @@ blackbox modules, Traefik, Cloudflare Terraform, service values, rollout strateg
 - [ ] 6. Fill in the decision record in the spike doc. Use the provisional
   `RELEASE_SCOPED_PROBE` (conditional upgrade to `HYBRID_EDGE_AND_PROBE`), cost and
   false-positive notes, staged rollback, `owner: pending (issue author)`, the draft
-  follow-up issue text and the preview acceptance criteria. Cite the harness result
-  for the +/-1-2 s claim. (depends on 4) — DoD: the doc states that production
+  follow-up issue text and the preview acceptance criteria. State +/-1–2s only as a conditional sampling-resolution goal,
+  not a guaranteed real-client outage bound. (depends on 4) — DoD: the doc states that production
   instrumentation and any live test require explicit owner GO, and the follow-up is
   drafted, not filed.
 - [ ] 7. Open the PR from a feature branch and request an independent review of the
