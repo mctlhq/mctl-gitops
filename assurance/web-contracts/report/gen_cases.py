@@ -39,6 +39,8 @@ FIXTURES = ["fixture-reference", "fixture-reference-wide", "fixture-checkbox"]
 KNOWN_GAPS = {
     ("fixture-checkbox", 4): "a native checkbox does not toggle on Enter (only Space); HDR-4 requires both keys and the contract registers no exception for it",
     ("fixture-checkbox", 11): "CSS alone cannot clear :checked when the viewport grows past B, so the panel reopens on return to narrow; the contract registers no exception for HDR-11",
+    # observed in the consumer markup and in the mctl-design reference stories alike: the burger follows the nav
+    ("mctl-web", 7): "the toggle follows the panel in DOM order (as in the mctl-design SiteHeader reference stories), so Tab from the toggle cannot reach the panel links; HDR-7 requires the toggle then the panel links in DOM order and the contract registers no exception",
 }
 
 
@@ -61,10 +63,13 @@ def header_cases():
                 if rc == "sensitive" and hdr not in SENSITIVE_HDRS:
                     continue
                 for vp in vps:
-                    cases.append({"id": f"WCA-H-HDR{hdr}-{site}-{rc}-{vp}", "site": site, "kind": "case",
-                                  "contract_id": f"AC-{hdr}-{code}-{letter}", "gate": None, "hdr": hdr,
-                                  "route_class": rc, "viewport": vp, "provenance": "not-run",
-                                  "exception": EXCEPTIONS.get(site, {}).get(hdr)})
+                    c = {"id": f"WCA-H-HDR{hdr}-{site}-{rc}-{vp}", "site": site, "kind": "case",
+                         "contract_id": f"AC-{hdr}-{code}-{letter}", "gate": None, "hdr": hdr,
+                         "route_class": rc, "viewport": vp, "provenance": "not-run",
+                         "exception": EXCEPTIONS.get(site, {}).get(hdr)}
+                    if (site, hdr) in KNOWN_GAPS:
+                        c["known_gap"] = KNOWN_GAPS[(site, hdr)]
+                    cases.append(c)
     for hdr, defect in ((8, "no-escape"), (12, "focus-lost"), (5, "no-aria-expanded"), (15, "motion-ignored")):
         cases.append({"id": f"WCA-H-HDR{hdr}-fixture-broken-{defect}-375", "site": "fixture-broken",
                       "kind": "negative-control", "contract_id": f"HDR-{hdr}", "gate": None, "hdr": hdr,
