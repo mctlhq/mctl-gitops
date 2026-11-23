@@ -104,3 +104,35 @@ spec:
           port: 8083
         - protocol: TCP
           port: 8084
+---
+# labs/argocd-mcp (the portal's read-only Argo CD MCP upstream) calls
+# argocd-server in-cluster at http://argocd-server.argocd.svc (Service port 80
+# -> pod port 8080), so its API traffic never leaves the cluster or crosses
+# Cloudflare. Without this rule default-deny-ingress drops it: allow-argocd-
+# server-clients admits only traefik. Egress from labs is already open
+# (tenants/labs allowClusterEgress). One instance, one port, API only.
+# AND of namespaceSelector + podSelector in ONE element, as in
+# mctl-telegram-bot-start-netpol.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-mcp-to-server
+  namespace: argocd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: labs
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: labs-argocd-mcp
+              app.kubernetes.io/name: base-service
+      ports:
+        - protocol: TCP
+          port: 8080
