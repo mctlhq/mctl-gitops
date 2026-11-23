@@ -1,0 +1,51 @@
+{
+  "label": "test-only frozen manifest; not a published artifact; not a release manifest",
+  "source": "mctl-design commit 6d82a6b239365213d6859f2794c2449af7dd4e1f apps/storybook/public/<version>/ (git archive)",
+  "recomputed": "sha256 hex and sha384 SRI recomputed from the pinned archive; never copied from a document",
+  "versions": {
+    "0.21.0": {
+      "mctl.css": {
+        "sha256": "5970ec6855048f93812a21342db7ac7e3d37dab4ac15a6738d30ba0f74722e10",
+        "sha384": "sha384-7QN+UiT9kdtTe/T4Zquu+siEq/JK9TnDTN28/unP6AtqxUa2/8teBl6GRWPFD2+5",
+        "bytes": 36645
+      },
+      "global.css": {
+        "sha256": "365a64c7998b12879d218da4f2aa1dedc6fc4e606c2cba0f0b575fbca60070c3",
+        "sha384": "sha384-oW83nWNOlS87idvqWpalTClKkeOhvRWt1bgcEhyZHkzTOWZqV5HExZl7Js3ZnbWV",
+        "bytes": 740
+      },
+      "prose.css": {
+        "sha256": "4e8891f87875514e8f03804619b979802c805065fa030aefbbc64540cf5e4ec1",
+        "sha384": "sha384-EJqQTH9+ub6+PY4q1V4m1PsaIHwcXS847FYZp4WDLwgwA+UrlRH3IkKLVk58Z80W",
+        "bytes": 2898
+      },
+      "site.css": {
+        "sha256": "a111f5bde21034bb8e2f68f5e4085529cac67a873fd76c896d980b6929819ba2",
+        "sha384": "sha384-XVVtpDSIweOCXHmDMHHoqm16pWfajmatdsgRfz+Se3UtRBmt8gXgTmRBd7We8Lhr",
+        "bytes": 22816
+      }
+    },
+    "0.20.2": {
+      "mctl.css": {
+        "sha256": "063ceae822d3b139c670fd2b687a00ff021cf2d75443995c14c3b19145324958",
+        "sha384": "sha384-3c3+7j/sxG7OAo0w/yu2pbf6w6gfo4Wmog6O/9Hh/6uS1/ysGw7jx9JMmJhCbSdJ",
+        "bytes": 36645
+      },
+      "global.css": {
+        "sha256": "cd78060bdc83c56508594fe20fd9302951130e8720604c547140c16f1762ff03",
+        "sha384": "sha384-QI5S3hNyBuvXCFO1r4dGHnHjwPBFfInNOAtwUndgzzREPzLWFy3rVFOjLk7Z8Fqm",
+        "bytes": 740
+      },
+      "prose.css": {
+        "sha256": "71536bf86e0d1edc1b9efb6d3fb5cc823826c0826c5790f3f26bdf0cd1a1ee0f",
+        "sha384": "sha384-iBepqPx8VGFFM+TEA8To9z2KXjf3l+WOSIZ0eqckqW1SspX5n17F06nGq+cAh5g4",
+        "bytes": 2898
+      },
+      "site.css": {
+        "sha256": "d184836c17818edbe85923d356da872113f07cb8d088477796f39d0fc01ad31a",
+        "sha384": "sha384-qlcodqkR2eUiRvfnSbsSiyqozeCRlSN2XcBFBh89Icj/J+fOzr9VXUH46sKSvHBj",
+        "bytes": 20854
+      }
+    }
+  }
+}
