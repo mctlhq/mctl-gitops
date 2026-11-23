@@ -1,6 +1,6 @@
 # Design: issue-1379-spike-ai-product-discovery-grok-bot-benc
 
-Revision 2. It supersedes revision 1 (reviewed at gitops `bb69c72`) and remains `proposed`.
+Revision 3 (2026-11-23), including revision 2 and its finding-to-change matrix. Status remains `proposed`; dated historic baselines below are superseded only where explicitly corrected in the new evidence section.
 
 ## Current state
 
@@ -29,9 +29,9 @@ Revision 1 cited mctl-telegram `568da01`. Every statement below was re-read at `
   - `connection/`, `connector/`, `linking/`, `egress/`, `output/`, `gate/`, `jobs/`, `catalog/`;
   - `phase2_inert_test.go`.
 - Gates:
-  - `docs/agent-runtime/pa-s1-manifest.yaml` still lists `gaps:` entries tracked by #1320 and #1318. Its header says the S1 gate "is NOT closed while any gap is listed", and the preview gate (#1318) cannot pass until then.
+  - In the current manifest body, no gap entries were found; #1317 is OPEN and the actual S1 gate-closing run and R1-R6 exit evals are not attested. Do not infer gate closure from grep alone.
   - `pa-s2-manifest.yaml` has 27 `status: pending` and 5 `status: green` entries.
-- Flags: `PA_ENABLED` defaults to false (`internal/config/config.go`). No `PA_*` key is present in any `services/labs/*/values.yaml`. The PA is merged and tested, flagged off, and deployed nowhere.
+- Flags: `PA_ENABLED` defaults to false. Production has no PA variables. Preview config explicitly includes PA variables but PA_ENABLED=false, PA_EXTERNAL_TOOLS_ENABLED=false, PA_SERVER_TG_ENABLED=false and PA_WRITES_ENABLED=false. Dedicated PA preview worker has replicaCount 0. GitOps desired state != real runtime evidence.
 
 ### MCP provider surface used by external clients
 
@@ -62,9 +62,9 @@ Revision 1 cited mctl-telegram `568da01`. Every statement below was re-read at `
   - account deletion revokes the families;
   - "Disconnect does not revoke ... it ends the Telegram session but keeps the client's OAuth grant."
 - `docs/platforms/compatibility.md` (#784 D1, rows dated 2026-11-21 against gitops `8d082583b`):
-  - Grok: "DCR from `grok.com`", "none yet; admission in progress (mctl-gitops#2870)", not tested, verification in #1381;
+  - Grok (grok.com): host admitted in #2870; now OWNER_OBSERVED_WORKS against tg.mctl.ai on 2026-11-22 (sign-in, token grant and tool calls, mctl-telegram PR #1393; issue #1381 closed). Grok Bot-specific client attribution remains UNKNOWN.
   - Cursor: allowlisted, not tested, #1385;
-  - Town: CIMD document or DCR, "Which one Town uses is not confirmed", not tested.
+  - Town: OWNER_OBSERVED_WORKS on 2026-11-22 via #1393; CIMD-versus-DCR remains unknown.
   - The matrix legend says "An allowlist entry alone means `not tested`."
 - `docs/runbooks/admitting-an-agent-platform.md` defines the intake, settings, verification and rollback order for admission. This spike reuses it and does not duplicate it.
 - `docs/design/core-profiles.md`, section "Telegram terms: what a profile does and does not solve", quotes Telegram Content Licensing (read 2026-10-21): an exception requires that "all relevant users individually provide explicit, informed, affirmative and continued consent". It also cites API Terms §1.4 and §1.5. It states that profiles do not "obtain consent from the *other* people in a chat", and that this needs a legal opinion and a product decision.
@@ -160,7 +160,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 3. **Interop compatibility matrix.**
    - Rows: Grok Bot x `tg`, Townie x `tg`, Grok Bot x `alice`, Townie x `alice`, plus optional Grok Chat x `tg` and Cursor IDE x `tg` as distinct categories.
    - Columns: the work package 3 columns.
-   - Grok Bot x `tg`: registration is `UNKNOWN`, because the vendor documents a Client ID or Secret and no callback. `grok.com` admission is not evidence for Grok Bot.
+   - Grok (grok.com) x tg: OWNER_OBSERVED_WORKS (2026-11-22, #1393/#1381), with untested negative paths. Grok Bot specifically x tg: client/build ATTRIBUTION_UNKNOWN; do not downgrade the existing Grok observation or upgrade the Bot without new proof.
    - Alice rows: secondary evidence only.
 4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT-EXECUTED`).
    - Positive steps:
@@ -247,3 +247,20 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
   - **A misread revocation expectation.** The access-token TTL is stated explicitly.
   - **A stale baseline.** Both SHAs are pinned and everything is dated. The PR re-checks gitops.
   - **The report read as authorization.** It says so explicitly and uses `Refs`, not `Closes`. Independent review is required before approval.
+
+## Revision 3 evidence reconciliation (2026-11-23)
+
+| Question | Source | Classification | Limitation |
+| --- | --- | --- | --- |
+| Grok (grok.com) -> tg.mctl.ai/mcp | mctl-telegram#1381 and merged PR #1393 (2026-11-22) | OWNER_OBSERVED_WORKS | Sign-in, token issuance and tool calls recorded as owner's statement; no replayable run ID or transcript |
+| Grok DCR before success | #1381 comment 7069894566, 2026-11-21 | OBSERVED_AUDIT | Redirect admitted and token issued, but admin principal inherited extra admin scopes; initial read-call/refresh/revoke rows were unfilled |
+| Grok Bot distinct executable | No client name/build evidence in #1393 | ATTRIBUTION_UNKNOWN | Grok web success is not by itself Grok Bot's OAuth E2E |
+| Grok Bot skill -> routine | docs.x.ai/grok-bot/skills-routines-and-automations | VENDOR_DOCUMENTED | Not implemented in MCTL PA |
+| Grok Bot custom Remote HTTPS MCP | docs.x.ai/grok-bot/computer-and-apps | VENDOR_DOCUMENTED | UI supports Server URL and OAuth Client ID; exact MCTL callback identity not known |
+| Hermes skill management | NousResearch/hermes-agent website/docs/user-guide/features/skills.md | PROJECT_DOCUMENTED | Different authority model; no MCTL parity inferred |
+
+**Security finding:** #1381 shows implicit platform-admin scopes in the historical Grok OAuth grant. A profile is not a per-client scope ceiling; a random DCR client_id cannot be safely confined through a redirect-host-only ceiling. Future isolated read-only tests need fixed auditable client identity, minimum scopes, both AS and MCP enforcement and owner GO. PA's consent/taint/budget gates do not automatically apply to third-party clients.
+
+**Updated deployment baseline:** current GitOps production tag 0.143.0; preview main-3aab3cb with explicit disabled PA flags; separate agent-worker-pa-preview has replicaCount 0. These are desired-state observations on 2026-11-23. The old 2026-11-21 no-PA-variables-in-preview text in the historic deployment section must not be used as current evidence.
+
+**Research decision:** keep dual-track hypothesis: working Grok web MCP distribution is independently valuable; distinct Grok Bot identity and least-privilege guarantees need evidence. Run no new live test, change no OAuth settings, do not approve or implement Phase 2-4.
