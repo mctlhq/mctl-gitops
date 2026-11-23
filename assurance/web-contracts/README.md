@@ -21,7 +21,7 @@ syncs nothing, and changes no consumer repository, CSP, Cloudflare or package pi
 | `../../tests/test_web_contract_report.py` | present: fail-closed mapping tests (no browser) |
 | `../../.github/workflows/web-contract-assurance.yml` | present: runs `run.sh` on PRs touching these paths and on demand; read-only token, no secrets, 7-day artifact, not a required check |
 | consumer promotion | `mctl-web` is `mode: image`; the other five stay `not-run` until each is exercised in CI |
-| spike document | NOT present yet (task 9) |
+| spike document | present: `docs/spikes/2929-web-contract-preview-assurance.md` (evidence report and decision memo) |
 
 ## Reproduce
 
