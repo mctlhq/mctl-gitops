@@ -247,9 +247,9 @@
         "nav": "#site-nav",
         "links": "#site-nav a",
         "toggle": "#nav-burger",
-        "outside": "#copy-url"
+        "outside": "main a.btn-secondary"
       },
-      "selectors_note": "observed in the landing page served by the pinned image (probe run 45194844005): burger #nav-burger follows the nav in DOM order; outside is the first focusable element after the header, the copy button."
+      "selectors_note": "observed in the page served by the pinned image: burger #nav-burger follows the nav in DOM order. outside is the first focusable element after the header on a real keyboard walk, the secondary hero link (the copy button in the served HTML is not focusable until script runs, so it is not used; first run 45204932387 showed the wrong choice)."
     }
   ]
 }

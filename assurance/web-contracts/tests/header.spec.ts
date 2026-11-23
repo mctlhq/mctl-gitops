@@ -339,8 +339,9 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
   13: async ({ wca, t, width, narrow }) => {
     const p = await load(wca, t, width);
     if (narrow) {
-      await p.locator('body').press('Tab'); // brand
-      await p.keyboard.press('Tab'); // toggle
+      // Tab from the top of the page until the toggle holds focus: other controls (a theme switch) may sit before it
+      await p.locator('body').press('Tab');
+      await tabUntil(p, toggle(p, t));
       await expect(toggle(p, t)).toBeFocused();
       const ring = t.kind === 'checkbox' ? p.locator(t.sel.clickToggle) : toggle(p, t);
       expect(hasRing(await outline(ring)), 'focus indicator on the toggle').toBe(true);
