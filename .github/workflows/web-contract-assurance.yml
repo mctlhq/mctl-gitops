@@ -67,6 +67,22 @@ jobs:
           WCA_CAPTURE_HTML: ${{ inputs.capture_html && '1' || '0' }}
         run: assurance/web-contracts/run.sh
 
+      # A consumer FAIL keeps the job green (it is a finding, not a broken harness) but must not be silent.
+      - name: Annotate consumer findings
+        if: always()
+        run: |
+          python3 - <<'PYX'
+          import json
+          try:
+              s = json.load(open("assurance-out/results.json"))["summary"]
+          except (OSError, ValueError, KeyError):
+              raise SystemExit(0)  # no report: the run step already failed loudly
+          for cid in s.get("consumer_findings", []):
+              print(f"::warning title=consumer finding::{cid} FAILed (see the matrix in the job summary)")
+          if s.get("harness_failures"):
+              print(f"::error title=harness failure::{len(s['harness_failures'])} harness case(s) FAILed")
+          PYX
+
       - name: Log out of ghcr.io
         if: always()
         run: docker logout ghcr.io || true

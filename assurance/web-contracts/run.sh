@@ -26,7 +26,7 @@
 #   WCA_PW_ARGS      extra Playwright CLI arguments, e.g. a --grep filter for debugging (the report
 #                    then lists every unselected case as NOT-RUN; such a run proves nothing)
 #
-# Exit codes: the report's (0 ok, 1 a case FAILed, 2 a negative control did not FAIL, 3 unreadable
+# Exit codes: the report's (0 ok, 1 a fixture or harness case FAILed (a consumer FAIL is a finding, exit 0), 2 a negative control did not FAIL, 3 unreadable
 # input or rejected pin), plus 4 = the guard saw an unexpected request or its log does not account
 # for every executed test, 5 = setup failed, the Playwright runner crashed, or a fixture case that
 # should have run is NOT-RUN.

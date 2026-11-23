@@ -350,7 +350,11 @@ const behaviours: Record<number, (x: Ctx) => Promise<void>> = {
     const count = await p.locator(t.sel.links).count();
     for (let i = 0; i < count; i++) {
       const link = p.locator(t.sel.links).nth(i);
-      await tabUntil(p, link);
+      // Narrow: the indicator is what HDR-13 checks, not the Tab order (HDR-7 owns that and is a known gap when the toggle
+      // follows the panel in DOM order), so each panel link gets focus directly (owner decision, 2026-11-23, as HDR-8/12).
+      if (narrow) await link.focus();
+      else await tabUntil(p, link);
+      await expect(link, `nav link ${i + 1} holds focus`).toBeFocused();
       expect(hasRing(await outline(link)), `focus indicator on nav link ${i + 1}`).toBe(true);
     }
     const axe = (await new AxeBuilder({ page: p }).include(t.sel.header).analyze()).violations.map((v) => `${v.id}:${v.nodes.length}`);
