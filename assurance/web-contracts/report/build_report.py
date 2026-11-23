@@ -368,7 +368,42 @@ def derive(case, runs, site_pins):
     return "PASS", ""
 
 
-def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
+FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+
+
+def load_substitutions(path):
+    """Requests the guard answered locally (pinned design sheets, empty font sheets). None = not provided;
+    a file that was given but cannot be read is an input error, never "none were answered"."""
+    if not path:
+        return None
+    try:
+        doc = json.loads(Path(path).read_text())
+        per_test, totals = doc["per_test"], doc["totals"]
+        ok = (isinstance(per_test, dict) and isinstance(totals, dict)
+              and all(isinstance(v, dict) and all(isinstance(n, int) for n in v.values()) for v in per_test.values())
+              and all(isinstance(n, int) for n in totals.values()))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise InputError(f"substitutions file unreadable ({type(exc).__name__}): cannot say what was answered locally")
+    if not ok:
+        raise InputError("substitutions file malformed: cannot say what was answered locally")
+    return {"per_test": per_test, "totals": totals}
+
+
+def substitution_summary(subst):
+    if subst is None:
+        return {"status": "not-provided", "totals": {}, "statement":
+                "not provided: it is unknown whether any request was answered locally"}
+    totals = subst["totals"]
+    if not totals:
+        return {"status": "computed", "totals": {}, "statement": "no request was answered locally"}
+    fonts = any(totals.get(h) for h in FONT_HOSTS)
+    stmt = ("requests answered locally, none reached their host: design sheets from the pinned mctl-design bytes"
+            + ("; web fonts were NOT loaded (font hosts answered with an empty stylesheet), so a layout result "
+               "that depends on font metrics is not evidence" if fonts else ""))
+    return {"status": "computed", "totals": totals, "statement": stmt}
+
+
+def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id, substitutions_path=None):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for stale in ("results.json", "matrix.md"):  # a hard error must not leave a prior verdict behind
@@ -380,6 +415,7 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
         raise InputError("pins rejected: " + "; ".join(sanitize_text(p) for p in problems[:5]))
     cases, cases_sha = load_cases(cases_path)
     runs = load_junit(junit_path)
+    subst = load_substitutions(substitutions_path)
     junit_sha = sha256_file(junit_path)
     artifact_sha = sha256_file(artifact) if artifact else None
     site_pins = {s["name"]: s for s in pins["sites"]}
@@ -395,6 +431,8 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
                "site": c["site"], "route_class": c.get("route_class"),
                "viewport": c.get("viewport"), "provenance": c.get("provenance", "not-run"),
                "kind": c.get("kind", "case"), "status": status, "reason": reason}
+        if subst and subst["per_test"].get(c["id"]):
+            row["answered_locally"] = subst["per_test"][c["id"]]
         if control:
             # The inversion: a control is healthy only when the detector saw it FAIL.
             if status == "FAIL":
@@ -425,6 +463,7 @@ def build(junit_path, cases_path, pins_path, out_dir, artifact, attempt_id):
     doc = {"attempt_id": attempt_id, "disclaimer": DISCLAIMER, "pins": pins,
            "inputs": {"junit_sha256": junit_sha, "cases_sha256": cases_sha, "pins_sha256": pins_sha},
            "artifact_sha256": artifact_sha,
+           "substitutions": substitution_summary(subst),
            "artifact_sha256_status": "computed" if artifact else "not-provided",
            "sites": per_site, "gates": gates, "results": results,
            "summary": {"compliance_claim": not any_fail and any(s["compliant"] for s in per_site.values()),
@@ -449,13 +488,21 @@ def _cell(text):
     return sanitize_text(str(text if text is not None else "")).replace("|", "\\|").replace("\n", " ")
 
 
+def _local(row):
+    """A case that ran while the guard answered requests locally says so on its own row."""
+    a = row.get("answered_locally")
+    return " [answered locally: " + ", ".join(f"{h} x{n}" for h, n in sorted(a.items())) + "]" if a else ""
+
+
 def render_matrix(doc):
     L = [f"# Web contract preview assurance matrix", "",
          f"_{DISCLAIMER}_", "", f"Attempt: `{doc['attempt_id']}`  ",
          f"Artifact sha-256: `{doc['artifact_sha256'] or 'not provided'}`  ",
          f"mctl-design: `{doc['pins']['mctl_design']['commit']}` (css {doc['pins']['mctl_design']['css_version']})  ",
          f"Playwright image: `{doc['pins']['playwright_image']}`  ",
-         f"Summary: {doc['summary']['statement']}", "",
+         f"Summary: {doc['summary']['statement']}  ",
+         f"Substituted requests: {_cell(doc['substitutions']['statement'])}"
+         + (f" (totals {_cell(json.dumps(doc['substitutions']['totals'], sort_keys=True))})" if doc['substitutions']['totals'] else ""), "",
          "## Six-site matrix", "",
          "| Site | Mode | GitOps tag | PASS | FAIL | NOT-RUN | EXCEPTION-PENDING | Compliant | Reason |",
          "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -473,7 +520,7 @@ def render_matrix(doc):
     for r in doc["results"]:
         status = r["status"] + (f" (control {r['control']})" if "control" in r else "")
         L.append(f"| {_cell(r['id'])} | {_cell(r['contract_id'])} | {_cell(r['gate'])} | {_cell(r['site'])} | "
-                 f"{status} | {_cell(r['provenance'])} | {_cell(r['reason'])} |")
+                 f"{status} | {_cell(r['provenance'])} | {_cell(r['reason'])}{_local(r)} |")
     return "\n".join(L) + "\n"
 
 
@@ -496,6 +543,7 @@ def main(argv=None):
     ap.add_argument("--out-dir")
     ap.add_argument("--artifact")
     ap.add_argument("--attempt-id")
+    ap.add_argument("--substitutions")
     args = ap.parse_args(argv)
     try:
         if args.check_pins:
@@ -506,7 +554,7 @@ def main(argv=None):
         if not attempt:
             run, att = os.environ.get("GITHUB_RUN_ID"), os.environ.get("GITHUB_RUN_ATTEMPT")
             attempt = f"{run}-{att}" if run and att else str(uuid.uuid4())
-        return build(args.junit, args.cases, args.pins, args.out_dir, args.artifact, attempt)
+        return build(args.junit, args.cases, args.pins, args.out_dir, args.artifact, attempt, args.substitutions)
     except InputError as exc:
         print(f"ERROR: {sanitize_text(str(exc))}", file=sys.stderr)
         return 3

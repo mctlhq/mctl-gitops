@@ -104,7 +104,7 @@ else
   if [ -n "${WCA_WORK:-}" ]; then WORK=$WCA_WORK; mkdir -p "$WORK"; else WORK=$(mktemp -d); OWN_WORK=1; fi
   mkdir -p "$OUT"
   rm -rf "$OUT/junit.xml" "$OUT/guard.jsonl" "$OUT/consumers.json" "$OUT/results.json" "$OUT/matrix.md" \
-         "$OUT/network.txt" "$OUT/test-results" "$OUT/consumer-html"
+         "$OUT/network.txt" "$OUT/test-results" "$OUT/consumer-html" "$OUT/substitutions.json"
 
   # pinned mctl-design bytes: a read-only git archive of the pinned commit
   ARCH=$WORK/arch
@@ -248,11 +248,29 @@ case "$PW_RC" in 0|1) ;; *) die "Playwright runner crashed (exit $PW_RC): the re
 log "5/5 report"
 ATTEMPT=${GITHUB_RUN_ID:+$GITHUB_RUN_ID-${GITHUB_RUN_ATTEMPT:-1}}
 ATTEMPT=${ATTEMPT:-local-$(date +%s)}
+# what the guard answered locally, per test and in total, written BEFORE the bundle so it is part of the
+# hashed artifact and of the report; an unreadable log leaves the file absent, which the report states as
+# "not provided" (and the guard block below fails the run)
+python3 - "$OUT/guard.jsonl" "$OUT/substitutions.json" <<'PY' || true
+import json, sys
+try:
+    rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+    per_test = {r["test"]: r["substituted"] for r in rows if r["substituted"]}
+    totals = {}
+    for v in per_test.values():
+        for h, n in v.items():
+            totals[h] = totals.get(h, 0) + n
+except (OSError, ValueError, KeyError):
+    sys.exit(0)
+json.dump({"per_test": per_test, "totals": totals}, open(sys.argv[2], "w"), indent=2, sort_keys=True)
+PY
+SUBST_ARGS=()
+[ -f "$OUT/substitutions.json" ] && SUBST_ARGS=(--substitutions "$OUT/substitutions.json")
 BUNDLE=$WORK/assurance-out.tgz
 tar -czf "$BUNDLE" -C "$OUT" --exclude=results.json --exclude=matrix.md . 2>/dev/null || true
 set +e
 python3 "$REPORT" --junit "$OUT/junit.xml" --cases "$HERE/cases.json" --pins "$PINS" \
-  --out-dir "$OUT" --artifact "$BUNDLE" --attempt-id "$ATTEMPT"
+  --out-dir "$OUT" --artifact "$BUNDLE" --attempt-id "$ATTEMPT" ${SUBST_ARGS[@]+"${SUBST_ARGS[@]}"}
 REPORT_RC=$?
 set -e
 
@@ -278,12 +296,15 @@ if len(rows) != executed:
 unexpected = sum(r["unexpected_blocked"] for r in rows)
 probes = sum(len(r["blocked"]) - r["unexpected_blocked"] for r in rows)
 hosts = {}
+subst = {}
 for r in rows:
     for h, n in r["hosts"].items():
         hosts[h] = hosts.get(h, 0) + n
+    for h, n in r["substituted"].items():
+        subst[h] = subst.get(h, 0) + n
 # Only requests the browser contexts issued through the route guard are counted here; the
 # network itself (docker --internal) is the enforcement, this is an in-band tripwire.
-print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, expected probe aborts {probes}, "
+print(f"guard: {len(rows)}/{executed} tests accounted for, requests per host {hosts}, answered locally {subst}, expected probe aborts {probes}, "
       f"unexpected blocked {unexpected}", file=sys.stderr)
 sys.exit(4 if unexpected else 0)
 PY

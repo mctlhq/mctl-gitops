@@ -8,7 +8,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Page } from '@playwright/test';
-import { decide, expect, loadCases, loadPins, ROOT, test, type CaseDef, type Wca } from './guard';
+import * as os from 'os';
+import { DESIGN_DIR, decide, expect, loadCases, loadPinnedSheet, loadPins, pinnedDesignVersions, ROOT, substitution, test, type CaseDef, type Wca } from './guard';
 
 const UI = 'http://ui.fixture.test:8080';
 const SITE = 'http://site.fixture.test:8080';
@@ -133,6 +134,87 @@ const behaviours: Record<string, (wca: Wca, c: CaseDef) => Promise<void>> = {
     await page.goto('https://mctl.ai/').catch(() => undefined); // aborted by the guard, never sent
     expect(wca.blocked.map((b) => `${b.reason} ${b.url}`)).toContain('host-not-allowlisted mctl.ai/');
     expect(Object.keys(wca.seen), 'no request reached any host').toEqual([]);
+  },
+  async 'guard-design-host'(wca) {
+    const V = pinnedDesignVersions();
+    expect(V, 'pinned versions come from pins.json').toEqual([loadPins().mctl_design!.css_version, ...(loadPins().mctl_design!.also_verified_versions ?? [])]);
+    expect(V.length).toBeGreaterThan(0);
+    // pure decision table
+    const acc = (u: string, m = 'GET') => substitution(u, m, V);
+    expect(acc('https://ui.mctl.ai/0.20.2/site.css')).toEqual({ kind: 'design', version: '0.20.2', sheet: 'site.css' });
+    expect(acc('https://ui.mctl.ai/0.21.0/mctl.css?cb=1')).toEqual({ kind: 'design', version: '0.21.0', sheet: 'mctl.css' });
+    for (const u of ['http://ui.mctl.ai/0.20.2/site.css', 'https://ui.mctl.ai:8443/0.20.2/site.css',
+                     'https://a:b@ui.mctl.ai/0.20.2/site.css', 'https://ui.mctl.ai/0.0.1/site.css',
+                     'https://ui.mctl.ai/0.20.2/evil.css', 'https://ui.mctl.ai/0.20.2/SITE.CSS',
+                     'https://ui.mctl.ai/0.20.2/site.css/', 'https://ui.mctl.ai/0.20.2/site.css.map',
+                     'https://ui.mctl.ai/0.20.2/oauth/x.css', 'https://ui.mctl.ai/0.20.2/%2fsite.css',
+                     'https://ui.mctl.ai//0.20.2/site.css', 'https://ui.mctl.ai/', 'https://ui.mctl.ai/site.css']) {
+      expect(acc(u), `denied: ${u}`).toMatchObject({ kind: 'deny', reason: 'design-path-not-pinned' });
+    }
+    expect(acc('https://ui.mctl.ai/0.20.2/site.css', 'POST'), 'only GET').toMatchObject({ kind: 'deny', reason: 'substituted-host-refused' });
+    for (const u of ['https://ui.mctl.ai.evil.test/0.20.2/site.css', 'https://ui.mctl.ai./0.20.2/site.css',
+                     'https://sub.ui.mctl.ai/0.20.2/site.css', 'https://xui.mctl.ai/0.20.2/site.css', 'https://mctl.ai/']) {
+      expect(acc(u), `ordinary allowlist decides: ${u}`).toBeNull();
+    }
+    // and the ordinary allowlist then refuses every one of them
+    const fixtureHosts = new Set(loadPins().fixture_hosts);
+    for (const u of ['https://ui.mctl.ai.evil.test/0.20.2/site.css', 'https://ui.mctl.ai./0.20.2/site.css',
+                     'https://sub.ui.mctl.ai/0.20.2/site.css', 'https://xui.mctl.ai/0.20.2/site.css', 'https://mctl.ai/']) {
+      expect(decide(u, fixtureHosts), `blocked end to end: ${u}`).toMatchObject({ allow: false, reason: 'host-not-allowlisted' });
+    }
+    // serve-time loader: missing, corrupted, symlinked and unpinned sheets are refused, the pinned one is served
+    const pinned = loadPins().mctl_design!.sheets!;
+    const v0 = V[0];
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wca-design-'));
+    try {
+      fs.mkdirSync(path.join(tmp, v0));
+      expect(loadPinnedSheet(tmp, v0, 'site.css', pinned), 'absent file').toEqual({ ok: false, reason: 'design-file-missing' });
+      const real = fs.readFileSync(path.join(DESIGN_DIR, v0, 'site.css'));
+      fs.writeFileSync(path.join(tmp, v0, 'site.css'), Buffer.concat([real, Buffer.from(' ')]));
+      expect(loadPinnedSheet(tmp, v0, 'site.css', pinned), 'corrupted file').toEqual({ ok: false, reason: 'design-file-mismatch' });
+      fs.rmSync(path.join(tmp, v0, 'site.css'));
+      fs.symlinkSync(path.join(DESIGN_DIR, v0, 'site.css'), path.join(tmp, v0, 'site.css'));
+      expect(loadPinnedSheet(tmp, v0, 'site.css', pinned), 'symlink is never followed').toEqual({ ok: false, reason: 'design-file-missing' });
+      fs.rmSync(path.join(tmp, v0, 'site.css'));
+      fs.writeFileSync(path.join(tmp, v0, 'site.css'), real);
+      expect(loadPinnedSheet(tmp, v0, 'site.css', pinned)).toMatchObject({ ok: true });
+      expect(loadPinnedSheet(tmp, v0, 'site.css', undefined), 'no pin, no serve').toEqual({ ok: false, reason: 'design-file-unpinned' });
+      expect(loadPinnedSheet(tmp, v0, 'extra.css', pinned), 'sheet without a pin').toEqual({ ok: false, reason: 'design-file-unpinned' });
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+    expect(acc('https://fonts.googleapis.com/css2?family=Onest')).toEqual({ kind: 'font', host: 'fonts.googleapis.com' });
+    expect(acc('http://fonts.googleapis.com/css2')).toMatchObject({ kind: 'deny' });
+    expect(acc('https://fonts.gstatic.com/s/x.woff2', 'POST')).toMatchObject({ kind: 'deny' });
+    expect(acc('https://fonts.googleapis.com.evil.test/css2')).toBeNull();
+    // live: the browser gets the pinned bytes, and nothing reaches the host
+    const { page } = await wca.open();
+    await page.goto(`${SITE}/header/reference.html`);
+    const sheets = loadPins().mctl_design!.sheets!;
+    for (const v of V) {
+      expect(Object.keys(sheets[v]).sort(), `all four sheets are pinned for ${v}`).toEqual(['global.css', 'mctl.css', 'prose.css', 'site.css']);
+      for (const sheet of Object.keys(sheets[v])) {
+        const got = await page.evaluate(async (u) => {
+          const r = await fetch(u); return { status: r.status, body: Array.from(new Uint8Array(await r.arrayBuffer())) };
+        }, `https://ui.mctl.ai/${v}/${sheet}`);
+        expect(got.status).toBe(200);
+        expect(sha256(Buffer.from(got.body)), `${v}/${sheet} is the pinned sheet`).toBe(sheets[v][sheet].sha256);
+      }
+    }
+    const fontLoaded = await page.evaluate(() => new Promise<boolean>((res) => {
+      const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=Onest';
+      l.onload = () => res(true); l.onerror = () => res(false); document.head.appendChild(l);
+    }));
+    expect(fontLoaded, 'the font stylesheet request is answered with an empty sheet').toBe(true);
+    expect(wca.substituted['ui.mctl.ai']).toBe(V.reduce((n, v) => n + Object.keys(sheets[v]).length, 0));
+    expect(wca.substituted['fonts.googleapis.com']).toBe(1);
+    expect(wca.blocked, 'nothing was blocked so far').toEqual([]);
+    expect(Object.keys(wca.seen).filter((h) => h.includes('mctl.ai') || h.includes('google')), 'no request reached those hosts').toEqual([]);
+    // live: a path outside the pin is blocked, not answered
+    wca.probe = true;
+    const unpinnedV = '0.0.1';
+    expect(V).not.toContain(unpinnedV);
+    const unpinned = await page.evaluate((u) => fetch(u).then(() => 'answered', () => 'failed'), `https://ui.mctl.ai/${unpinnedV}/site.css`);
+    expect(unpinned).toBe('failed');
+    expect(wca.blocked.map((b) => `${b.reason} ${b.url}`)).toContain(`design-path-not-pinned ui.mctl.ai/${unpinnedV}/site.css`);
   },
   async 'guard-oauth-path'(wca) {
     // pure decision table: encodings, params and sibling auth routes must not slip past the guard
