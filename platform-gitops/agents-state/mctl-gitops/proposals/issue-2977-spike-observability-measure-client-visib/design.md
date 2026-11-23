@@ -80,10 +80,12 @@
   returned only newer records starting ~09:30Z: `query_truncated_or_unverified`,
   not `retention_expired`. Check an earlier bounded UTC/pod query if permitted;
   otherwise keep it `not observed`.
-- kube-state-metrics is enabled (`monitoring.yaml`, `kube-state-metrics` /
-  `kubeStateMetrics`), so `kube_pod_status_ready` samples exist at scrape
-  resolution. No Kubernetes event exporter was found, so events live only for the
-  cluster's event TTL.
+- kube-state-metrics is **configured enabled** (`monitoring.yaml`,
+  `kube-state-metrics` / `kubeStateMetrics`); the actual
+  `kube_pod_status_ready` series and sampling history were **not observed**
+  at runtime. No event exporter was found in the searched GitOps paths,
+  but live event-retention behavior remains unverified. Pod Ready does not
+  prove EndpointSlice or Traefik backend propagation.
 
 ### Deployed state checked:
 
