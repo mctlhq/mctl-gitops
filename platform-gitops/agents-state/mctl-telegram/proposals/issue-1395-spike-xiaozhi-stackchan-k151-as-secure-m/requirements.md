@@ -1,12 +1,18 @@
 # Spike: XiaoZhi / StackChan K151 as a secure MCTL Desk Agent voice client (research only)
 
+## Revision 2 review gate (2026-11-23)
+
+Independent review: https://github.com/mctlhq/mctl-telegram/issues/1395#issuecomment-7087951153. The first implementation of a **separately owner-authorized B1 software-only harness** lives in https://github.com/mctlhq/mctl-telegram/issues/1409 and draft https://github.com/mctlhq/mctl-telegram/pull/1410. The old #1395 Temporal approval path must **not** be used: it activates the broad Tier 2 implementer. Research acceptance, a test-only harness branch, hardware bring-up, PA integration and production are **five distinct decisions**. This proposal remains `proposed` and authorizes no extra activity.
+
+The P1 real-device blockers G-ID (device identity), G-DISC (spoken disclosure) and G-ADR (PA principal and consent model) remain hard **DEFER**. Upstream binary downlink parsing additionally requires firmware bounds review before any physical device is permitted. Green internal simulation is **not** third-party interoperability, hardware safety or PA approval.
+
 ## Context
 
 Issue #1395 asks for a research-only spike. The question is whether XiaoZhi-compatible ESP32 devices could become a self-hosted, secure "MCTL Desk Agent" voice surface for the MCTL Personal Assistant (PA) ecosystem. The first reference device is the M5Stack StackChan K151. The deliverable is an evidence-backed decision package: a protocol and licensing evidence pack, an architecture comparison, an identity and threat-model delta, a no-hardware protocol harness design and product validation criteria. It ends with a recommendation of `GO_FOR_HARNESS_ONLY`, `DEFER` or `NO_GO`. The spike implements nothing, deploys nothing, enrolls no device and buys no hardware.
 
 This matters because the PA (epic #1312, `docs/adr/0011-personal-assistant.md`, `docs/agent-runtime/personal-assistant-threat-model.md`) was designed with a single identity source. Invariant I2 says the principal is the Telegram user id from a filtered Bot API update, a verified `callback_query` or verified Mini App `initData`. In code, `pa.NewInteractive` in `internal/pa/context.go` accepts a principal only from a `VerifiedUpdate` (`internal/pa/ingress.go`). A voice device has none of these, and the evidence gathered for this proposal shows the XiaoZhi firmware's own identity signals are not identity. `Device-Id` is the MAC address. `Client-Id` is a UUID that is reset on reflash. The WebSocket bearer token is an opaque string the OTA endpoint writes into NVS. A device path therefore needs its own ADR and threat-model addendum before it may touch any PA runtime. In XiaoZhi, "MCP" also runs in the opposite direction from MCTL's catalog: the device is the MCP server and the backend is the client (`docs/mcp-protocol.md` at the pinned revision). So the device cannot "call MCTL tools" directly.
 
-**Recommendation carried by this proposal: `GO_FOR_HARNESS_ONLY` for Option A, the self-hosted minimal gateway, and `DEFER` for any hardware, PA integration or deployment.** Three P1 gates block anything beyond the harness: G-ID, G-DISC and G-ADR (see design.md, "Decision package").
+**Research recommendation: Option A is a candidate; conditional `GO_FOR_HARNESS_ONLY` applies solely to the standalone B1 scope in #1409, with no broad implementer signal.** Three P1 gates block anything beyond the harness: G-ID, G-DISC and G-ADR (see design.md, "Decision package").
 
 ## User stories
 
@@ -41,7 +47,7 @@ Product validation (X4)
 - THE SYSTEM SHALL define explicit go/no-go criteria for (a) building the harness, (b) buying one K151 and (c) productizing.
 
 Governance
-- THE SYSTEM SHALL leave the proposal at status `proposed`, and SHALL authorize no implementer run, deployment, preview exposure, device enrollment, firmware flash, credential issue or procurement.
+- THE SYSTEM SHALL leave this research proposal at status `proposed`. The separately approved #1409 test-only branch does not authorize the #1395 Temporal implementer, deployment, preview exposure, device enrollment, firmware flash, credential issue or procurement.
 
 ## Out of scope
 
