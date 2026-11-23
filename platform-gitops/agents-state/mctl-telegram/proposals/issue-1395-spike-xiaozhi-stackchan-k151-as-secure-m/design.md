@@ -54,7 +54,7 @@ Documentation-only (from `docs/websocket.md` and `docs/mcp-protocol.md` at main;
 | G-DISC: voice output is a broadcast channel; wake word and proximity do not establish the listener | P1 | any private data on device; any PA tool beyond the synthetic stub | threat model T6, ADR 0011 `disclosure` class |
 | G-ADR: I2 and T13 must be amended (device principal kind, new data recipients for ASR/TTS) | P1 | any shared PA runtime use | `internal/pa/context.go` `NewInteractive`; T13 |
 | G-VENDOR: default OTA is vendor cloud; factory firmware reconfiguration is unverified | P2 | hardware bring-up | `Kconfig.projbuild` `OTA_URL` |
-| G-LIC: `m5stack/StackChan` has no root license; the `app/` and `remote/` parts are unchecked | P2 | forking StackChan code (Option C) | GitHub license API |
+| G-LIC: `m5stack/StackChan` has no root license; the `remote/code/LICENSE` is MIT, while `app/README.md` displays an MIT badge without a separately verified app-root LICENSE | P2 | forking StackChan code (Option C) | GitHub license API |
 | G-TLS: `ws://` acceptance and cert pinning are unverified | P2 | any non-loopback gateway | X1 |
 | G-MEASURE: latency and cost targets are proposed, not measured | P3 | productization | X4 |
 
