@@ -96,7 +96,7 @@ A keyset cursor `(decided_at,id)` bounded by `devLoopRedeliverBatch` may limit e
 
 Counter `mctl_devloop_approval_redeliveries_total{outcome}` uses a bounded static outcome enum; no grant ids or workflow ids as Prometheus labels. Structured audit includes `approval_ref, execution_id, workflow_id, run_id, attempt_no, age, result_code` and authenticated/service actor; redact secrets and challenge data.
 
-The alert `mctl_devloop_approval_undelivered > 0 for 10m` belongs to GitOps observability maintainers in platform-gitops/infra-components/observability/vm-rules/mctl-api-alerts.yaml, with its companion tests/mctl-api-alerts_test.yaml. Use an MctlApi-prefixed rule and verify routing in bootstrap/templates/observability/monitoring.yaml before enablement; API metrics alone do not count as a deployed alert. Document distinct `decision recorded`, `signal accepted`, `grant consumed`, and `proposal accepted` statuses.
+The alert `mctl_devloop_approval_undelivered > 0 for 10m` belongs to GitOps observability maintainers in platform-gitops/infra-components/observability/vm-rules/mctl-api-alerts.yaml, with its companion tests/mctl-api-alerts_test.yaml. Use an MctlApi-prefixed rule and verify routing in platform-gitops/bootstrap/templates/observability/monitoring.yaml before enablement; API metrics alone do not count as a deployed alert. Document distinct `decision recorded`, `signal accepted`, `grant consumed`, and `proposal accepted` statuses.
 
 ### 6. MFA recovery page and delivery-only retry
 
