@@ -217,13 +217,15 @@ page ran without those scripts and calls, so a result that depends on them is no
 
 Matching is on the lower-cased host plus path only: the scheme, port, userinfo, query and HTTP method of the request are
 not part of the entry, so `http://` and `https://`, any port and any method to that host and path are all matched (and all
-still aborted). Only a host the allowlist refuses can be declared: a declared entry for an allowlisted host with a sensitive path
-(`/oauth/...`), an unparseable URL, another path on the same host or the same path on another host is still an
+still aborted). Two things can be declared: a host the allowlist refuses, and an exact sensitive path on the site's own
+host (a client-rendered app asks its own session endpoint on every load; the request is aborted and never reaches the
+container, so the page runs as a visitor whose session request got no answer). An unparseable URL, another path on the same
+host, a declared path with a suffix, an undeclared sensitive sibling or the same path on another host is still an
 unexpected block that fails the test. A case where an undeclared block was seen is NOT-RUN, worded as "the case
 outcome is not a verdict", because the guard error is raised by the fixture teardown, after the assertions ran. A PASS
 that ran with declared blocks stays PASS, but the site is never `Compliant` while one exists, and the matrix counts them.
 A declared entry that a run never saw is listed as "declared but never observed" (stale or mistyped). `WCA-A-ISO-guard-expected-blocked`
-proves each of those, and was mutation-verified (honouring a declared sensitive path turns it red).
+proves each of those, and was mutation-verified (honouring an undeclared sensitive sibling, or refusing the declared one, turns it red).
 
 HDR-2 counts the control selected as the toggle that has the role and an accessible name, not every named button on
 the page (the same page-wide scope mistake as HDR-1).

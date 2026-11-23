@@ -181,9 +181,10 @@
       "observed_image_digest_resolved_for_tag": "0.1.101",
       "breakpoint_note": "observed in the consumer source (client/src/components/AppNav.vue: the header carries mctl-site-header--drawer-wide and the component reads matchMedia('(min-width: 981px)')); the contract itself does not state it",
       "expected_blocked": [
-        "stats.mctl.ai/insights.js"
+        "stats.mctl.ai/insights.js",
+        "consumer-mctl-academy/api/auth/get-session"
       ],
-      "expected_blocked_note": "analytics script named in the HTML served by the pinned image (read locally from the running image); aborted, never answered. Further entries are added only after a run shows them.",
+      "expected_blocked_note": "stats.mctl.ai/insights.js: analytics script named in the served HTML. consumer-mctl-academy/api/auth/get-session: the client-rendered app asks its own session endpoint on every load; the guard treats /api/auth as sensitive and aborts it, so the app runs as a signed-out visitor whose session request got no answer. Both are aborted, never answered.",
       "env": {
         "BETTER_AUTH_SECRET": "dummydummydummydummydummydummydummydummy"
       },
