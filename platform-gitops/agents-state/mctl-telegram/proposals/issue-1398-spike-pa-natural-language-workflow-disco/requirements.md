@@ -29,7 +29,7 @@ It matters because ADR 0011 already reserves the `scheduled` and `event` trigger
 Baseline and evidence:
 
 - WHEN the report is produced THE SYSTEM SHALL cite the current 2026-11-23 pinned evidence from design.md, explicitly preserving historical 2026-11-22 pins and separating GitOps desired, live Argo and R1–R6 user results.
-- WHEN the report states a capability THE SYSTEM SHALL label it VERIFIED_CODE, VERIFIED_DEPLOYMENT, DESIGNED_ONLY or UNKNOWN, and cite the file, test, gitops path or tool call behind the label.
+- WHEN the report states a capability THE SYSTEM SHALL label it VERIFIED_CODE, VERIFIED_GITOPS_DESIRED, LIVE_ARGO_OBSERVED, VENDOR_DOCUMENTED, DESIGNED_ONLY or UNKNOWN, and cite a precise SHA/path, live tool observation or checked vendor source. Argo Healthy/Synced is not proof of R1–R6 user success.
 - IF a source could not be read THEN THE SYSTEM SHALL label the claim UNKNOWN, never absent or disabled.
 - THE SYSTEM SHALL include a relationship diagram covering four surfaces: the PA (`internal/pa`), the Assistant Catalog / `AssistantInstall` (`internal/assistant`, `internal/assistantinstall`), the automation control plane (mctlhq/.github#318) and `mctl-agents`.
 
