@@ -443,6 +443,48 @@ with tempfile.TemporaryDirectory() as d:
     check("without --design-repo the sheet check is reported NOT-RUN, never a silent pass",
           rc == 0 and "design-sheets: NOT-RUN" in out, out)
 
+# ---- guard substitutions: what the harness answered locally must be visible, and unreadable is an error
+def report_with_subst(subst_text):
+    """Like report(), with a --substitutions file (None = flag not given). Returns (exit, results, matrix, stderr)."""
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        cases = [case("S-A"), case("S-CTL", kind="negative-control")]
+        (d / "junit.xml").write_text(junit([("S-A", "pass", ""), ("S-CTL", "fail", "detected")]))
+        (d / "cases.json").write_text(json.dumps({"cases": cases}))
+        (d / "pins.json").write_text(json.dumps(PINS))
+        extra = []
+        if subst_text is not None:
+            (d / "subst.json").write_text(subst_text)
+            extra = ["--substitutions", d / "subst.json"]
+        rc, _, err = run("--junit", d / "junit.xml", "--cases", d / "cases.json", "--pins", d / "pins.json",
+                         "--out-dir", d / "out", "--attempt-id", "t-1", *extra)
+        res = d / "out/results.json"
+        mx = d / "out/matrix.md"
+        return rc, (json.loads(res.read_text()) if res.exists() else None), (mx.read_text() if mx.exists() else None), err
+
+
+rc, res, mx, _ = report_with_subst(None)
+check("without a substitutions file the report says it is unknown, not none",
+      rc == 0 and res["substitutions"]["status"] == "not-provided" and "unknown" in res["substitutions"]["statement"]
+      and "not provided" in mx, res and res["substitutions"])
+rc, res, mx, _ = report_with_subst(json.dumps({"per_test": {}, "totals": {}}))
+check("an empty record says nothing was answered locally",
+      rc == 0 and res["substitutions"]["statement"] == "no request was answered locally", res and res["substitutions"])
+good = {"per_test": {"S-A": {"ui.mctl.ai": 3, "fonts.googleapis.com": 1}},
+        "totals": {"ui.mctl.ai": 3, "fonts.googleapis.com": 1}}
+rc, res, mx, _ = report_with_subst(json.dumps(good))
+row = next(r for r in res["results"] if r["id"] == "S-A")
+check("a case that ran with answered requests carries them on its row and in the matrix",
+      rc == 0 and row["status"] == "PASS" and row.get("answered_locally") == good["per_test"]["S-A"]
+      and "[answered locally: fonts.googleapis.com x1, ui.mctl.ai x3]" in mx, row)
+check("font substitution is called out as not evidence for font-metric results",
+      "NOT loaded" in res["substitutions"]["statement"] and "not evidence" in mx, res["substitutions"])
+for label, text in (("not json", "{"), ("missing keys", "{}"), ("wrong types", json.dumps({"per_test": [], "totals": {}})),
+                    ("negative-or-text count", json.dumps({"per_test": {"S-A": {"h": "x"}}, "totals": {}}))):
+    rc, res, mx, err = report_with_subst(text)
+    check(f"an unreadable or malformed substitutions file ({label}) is an input error, never 'none'",
+          rc == 3 and res is None and "cannot say what was answered locally" in err, (rc, err))
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

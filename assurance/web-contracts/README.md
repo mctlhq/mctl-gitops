@@ -157,13 +157,22 @@ A consumer page references the design sheets on the production CDN host (`ui.mct
 without the sheets a consumer renders unstyled, so every layout case would fail for a harness reason.
 The guard therefore answers exactly two kinds of request locally instead of sending them anywhere:
 
-- `https://ui.mctl.ai/<pinned version>/<sheet>.css` (GET, no port, no userinfo, versions from
-  `pins.json` `mctl_design`, sheets `mctl|global|prose|site`) is served from the pinned mctl-design bytes,
-  the same bytes whose sha-256 `pins.json` records. Any other path on that host is blocked.
-- GET requests to the two font hosts get an empty `text/css` response, so no web font is ever loaded.
-  Font metrics can therefore differ from production; a layout case that depends on them is not evidence.
+- `https://ui.mctl.ai/<pinned version>/<sheet>.css` (GET, no port, no userinfo; versions from `pins.json`
+  `mctl_design`; sheets `mctl|global|prose|site`). The bytes come from the read-only pinned mctl-design
+  archive and are checked at serve time: a regular file (a symlink is never followed) whose sha-256 equals
+  the one `pins.json` records for exactly that version and sheet. A missing, corrupted or unpinned file
+  is blocked, not served. Any other path on that host is blocked. The response carries
+  `access-control-allow-origin: *`, which the harness supplies: what production `ui.mctl.ai` sends is not
+  verified here.
+- GET requests over https to the two font hosts get an empty `text/css` response, whatever the path, so
+  no web font is ever loaded. Font metrics can therefore differ from production, and a layout result that
+  depends on them is not evidence. Non-GET and non-https requests to these hosts are blocked.
 
-These requests are counted as `substituted` in `guard.jsonl` and summed into `substitutions.json`; they
-are never counted as requests that reached the host. The claim is "nothing left the network", not
-"nothing was requested". Case `WCA-A-ISO-guard-design-host` proves the decision table, the pinned-bytes
-sha-256 and that an unpinned version is blocked.
+Answered requests are counted as `substituted` in `guard.jsonl` and never as requests that reached the
+host: the claim is "nothing left the network", not "nothing was requested". `run.sh` writes
+`substitutions.json` (per test and in total) before it builds the hashed bundle and passes it to the
+report: `results.json` carries `substitutions`, every case that ran with answered requests carries
+`answered_locally` and shows it in the matrix, and the matrix header states the font limitation. A report
+built without the file says the substitution state is unknown; an unreadable file is a hard error.
+Case `WCA-A-ISO-guard-design-host` proves the decision table, that every pinned sheet of every pinned
+version is served with its pinned sha-256, that an unpinned version is blocked, and the serve-time checks.

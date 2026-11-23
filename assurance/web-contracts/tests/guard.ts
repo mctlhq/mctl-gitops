@@ -7,6 +7,7 @@
 // declare a deliberate probe fails when anything was blocked, so a green run proves the
 // "no request to an unexpected host" counter was zero.
 import { test as base, expect, request, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -42,7 +43,8 @@ const NON_NETWORK = new Set(['data:', 'blob:', 'about:']);
 
 export interface Pins {
   fixture_hosts: string[];
-  mctl_design?: { css_version: string; also_verified_versions?: string[] };
+  mctl_design?: { css_version: string; also_verified_versions?: string[];
+                  sheets?: Record<string, Record<string, { sha256: string }>> };
   sites: Array<{ name: string; mode: string; breakpoint: number | null; not_run_reason?: string; image: string | null;
                  selectors?: Record<string, string> }>;
 }
@@ -122,6 +124,24 @@ export function pinnedDesignVersions(): string[] {
   return d ? [d.css_version, ...(d.also_verified_versions ?? [])] : [];
 }
 
+export type SheetLoad = { ok: true; body: Buffer } | { ok: false; reason: 'design-file-missing' | 'design-file-mismatch' | 'design-file-unpinned' };
+
+/** Serve-time check: the bytes about to be handed to a page must be a regular file (never a symlink) whose
+ *  sha-256 equals the one pins.json records for exactly this version and sheet. A sheet without a pin cannot
+ *  be verified and is refused. */
+export function loadPinnedSheet(dir: string, version: string, sheet: string,
+                                sheets: Record<string, Record<string, { sha256: string }>> | undefined): SheetLoad {
+  const want = sheets?.[version]?.[sheet]?.sha256;
+  if (typeof want !== 'string') return { ok: false, reason: 'design-file-unpinned' };
+  const file = path.join(dir, version, sheet);
+  let body: Buffer;
+  try {
+    if (!fs.lstatSync(file).isFile()) return { ok: false, reason: 'design-file-missing' };
+    body = fs.readFileSync(file);
+  } catch { return { ok: false, reason: 'design-file-missing' }; }
+  return crypto.createHash('sha256').update(body).digest('hex') === want ? { ok: true, body } : { ok: false, reason: 'design-file-mismatch' };
+}
+
 /** Host and path only: a query string, fragment or userinfo never reaches a log or a result. */
 export function sanitize(rawUrl: string): string {
   try { const u = new URL(rawUrl); return u.hostname + u.pathname; } catch { return '[unparseable-url]'; }
@@ -180,13 +200,15 @@ export class Wca {
           await route.fulfill({ status: 200, contentType: 'text/css', body: '' });
           return;
         }
-        // design sheet: both path parts matched a closed pattern and a closed set, so the join cannot leave the directory
-        let body: Buffer;
-        try { body = fs.readFileSync(path.join(DESIGN_DIR, sub.version, sub.sheet)); } catch {
-          this.blocked.push({ url: sanitize(url), reason: 'design-file-missing', expected: this.probe });
+        // design sheet: both path parts matched a closed pattern and a closed set, and the bytes are checked
+        // against the pinned sha-256 before a page ever sees them
+        const loaded = loadPinnedSheet(DESIGN_DIR, sub.version, sub.sheet, loadPins().mctl_design?.sheets);
+        if (!loaded.ok) {
+          this.blocked.push({ url: sanitize(url), reason: loaded.reason, expected: this.probe });
           await route.abort('blockedbyclient');
           return;
         }
+        const body = loaded.body;
         this.substituted[host] = (this.substituted[host] || 0) + 1;
         await route.fulfill({ status: 200, contentType: 'text/css', body, headers: { 'access-control-allow-origin': '*' } });
         return;
