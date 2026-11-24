@@ -262,6 +262,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            - {name: GLOVO_EGRESS_PROXY, value: "http://127.0.0.1:3128"}',
         '            - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}',
         '            - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}',
+        '            - {name: GLOVO_C2_REQUIRE_ACCESS, value: "true"}',
         '            - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}',
         '            - {name: GLOVO_C2_CONTROL_JWKS_URL, value: "https://auth.mctl.ai/oauth/v2/keys"}',
     }),
