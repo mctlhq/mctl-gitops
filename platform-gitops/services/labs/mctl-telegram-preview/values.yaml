@@ -333,12 +333,13 @@ env:
   # off on preview. Rollback: PA_EXTERNAL_TOOLS_ENABLED "false" stops every
   # tool call at the next dispatch (re-read per call), PA_SERVER_TG_ENABLED
   # "false" also closes linking.
-  PA_EXTERNAL_TOOLS_ENABLED: "true"
+  # G7 kill-switch drill, step 2 (owner GO 2026-11-24,
+  # mctlhq/mctl-telegram#1318): off for the drill, to see every tool call
+  # refused at dispatch while the tg server and linking stay on. The next
+  # drill PR turns it back on.
+  PA_EXTERNAL_TOOLS_ENABLED: "false"
   PA_WRITES_ENABLED: "false"
-  # G7 kill-switch drill (owner GO 2026-11-24, mctlhq/mctl-telegram#1318):
-  # off for the drill, to see a tool call refused and linking closed on the
-  # deployed service. The next drill PR turns it back on.
-  PA_SERVER_TG_ENABLED: "false"
+  PA_SERVER_TG_ENABLED: "true"
   PA_SERVER_ALICE_ENABLED: "false"
   # The tg server is this instance's own authorization server and MCP
   # endpoint; the values are its published metadata
