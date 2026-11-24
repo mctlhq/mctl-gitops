@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-11-24T00:37:08Z'
+status: review-stuck
+updated_at: '2026-11-24T00:52:16Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-dd82cb5075fbc7a4
@@ -50,11 +50,12 @@ completion:
 ci_blockers_head: a7db8b8ddb028b5dee635524acf38272bdf054d7
 ci_blockers:
 - Validate Manifests / validate
-refusals: 2
+refusals: 3
 refusals_head: a7db8b8ddb028b5dee635524acf38272bdf054d7
-notes: 'implementer declined to act: The validate check failed only because every
-  shard (validate-1..4, zitadel-iac) reported result "cancelled" in the NEEDS dump;
-  the aggregate job then exited 1 on its all-success assertion. No shard ran a manifest
-  check and no validation error appears in the excerpt, so there is no code defect
-  to fix. This looks like runner saturation or cancellation, which is the subject
-  of issue 2993. A re-run is needed, not a commit.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: The validate gate failed only because every
+  shard reported result "cancelled" (validate-1..4 and zitadel-iac: cancelled; the
+  gate step checks all five are success). No shard ran a validation that failed, so
+  nothing in the repo is wrong. This matches the issue topic of hosted-runner saturation
+  cancelling jobs. Re-running the workflow is the fix, not a code change.'
