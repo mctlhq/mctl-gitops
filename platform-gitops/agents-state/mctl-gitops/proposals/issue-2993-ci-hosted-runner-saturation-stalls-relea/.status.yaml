@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-23T23:34:27Z'
+updated_at: '2026-11-24T00:22:11Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-dd82cb5075fbc7a4
@@ -47,3 +47,14 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+ci_blockers_head: a7db8b8ddb028b5dee635524acf38272bdf054d7
+ci_blockers:
+- Validate Manifests / validate
+refusals: 1
+refusals_head: a7db8b8ddb028b5dee635524acf38272bdf054d7
+notes: 'implementer declined to act: The validate check only failed because every
+  shard (validate-1..4, zitadel-iac) reported result "cancelled" (log: "validate-1:
+  cancelled ... zitadel-iac: cancelled"). No shard ran a validation that failed, so
+  there is no manifest defect to fix. This is a cancelled or runner-saturation CI
+  run (the subject of issue 2993), not a code problem; re-running the check is the
+  remedy.'
