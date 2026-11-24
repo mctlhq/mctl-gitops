@@ -516,6 +516,20 @@ spec:
             # Quoted: the release gate parses this block as YAML, and an
             # unquoted inline directive is not a scalar there.
             GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
+            # Owner card for a new access request (mctl-api >= 4.177.0): one
+            # Telegram card through the mctl-web Worker bridge, carrying a
+            # one-time link to the MFA decision page. The Worker side is on
+            # since mctl-web#267; the emails have their own switch and stay
+            # off. Missing inputs leave the card off with one boot-log error.
+            # Rollback: delete this line.
+            GLOVO_ACCESS_NOTIFY_ENABLED: "true"
+            # "Google only" guard on the C2 MCP and link resources, shadow
+            # mode (mctl-api >= 4.177.0): one log line and one counter per
+            # sign-in on those resources, nothing is refused. Accepted values
+            # are off and shadow; any other value, enforce included, refuses
+            # the boot because the refusal is not implemented yet.
+            # Rollback: delete this line.
+            GLOVO_GOOGLE_ONLY_MODE: shadow
             {{- end }}
             {{- if .Values.mctlGlovo.linkLogin }}
             # The account-link RFC 8707 resource (mctl-api >= 4.170.0, its
