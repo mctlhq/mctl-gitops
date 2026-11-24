@@ -15,7 +15,7 @@ spec:
       values: |
         image:
           repository: ghcr.io/mctlhq/mctl-agent
-          tag: "2.9.5"
+          tag: "2.9.6"
         imagePullSecrets:
           - name: ghcr-credentials
         service:
@@ -73,10 +73,19 @@ spec:
           # Base URL for the Telegram bot webhook (setWebhook); not related to
           # the removed outbound subscription API (mctl-agent#161).
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
-          # LLM fallback skill disabled — Anthropic Console API key removed.
-          # Deterministic skills cover all known alert types; TypeGeneric
-          # alerts will remain open until MAX_ANALYZING_AGE expires.
-          DISABLE_LLM_DIAGNOSIS: "true"
+          # LLM fallback skill on (owner decision, 2026-11-24). It was off from
+          # 2026-05-16, when the Console key was revoked, on the assumption
+          # that the deterministic skills cover every alert type. They do not:
+          # on 2026-11-23 five of six tickets (two replica mismatches, a
+          # critical crash loop, tool latency and tool error rate) ended in
+          # "No skill matched". The skill has the lowest priority, so it only
+          # runs when nothing else matches, and a failed API call falls
+          # through to that same message. It sends the ticket and its
+          # evidence (up to 100 log lines) to api.anthropic.com, and a
+          # diagnosis it marks fixable with high confidence opens a PR here,
+          # which AUTO_MERGE_ENABLED=false above keeps from merging itself.
+          # Set this back to "true" to turn it off; the key can stay in Vault.
+          DISABLE_LLM_DIAGNOSIS: "false"
           # Absolute TTL for analyzing tickets (CreatedAt-based, not reset by
           # flapping alert heartbeats). Prevents eternal stale incidents when
           # a flapping alert keeps UpdatedAt fresh but no skill can resolve it.
@@ -168,6 +177,9 @@ spec:
             - secretKey: MCTL_API_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: mctl-api-token
+            - secretKey: ANTHROPIC_API_KEY
+              remoteKey: platform/mctl-agent/tokens
+              property: anthropic-api-key
             - secretKey: GITHUB_TOKEN
               remoteKey: platform/mctl-agent/tokens
               property: github-token

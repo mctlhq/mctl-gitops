@@ -221,22 +221,29 @@ spec:
         # counts when the wait starts, and the slow call counts when it ends
         # 30s later. It cannot last the 15m "for", so the rule would not have
         # fired.
+        #
+        # `namespace` is kept in every aggregation. mctl-agent reads the
+        # tenant and the service from the alert's namespace and pod labels;
+        # with neither, it filed the 2026-11-23 firing as
+        # "platform/HighToolLatency" and looked for logs in the wrong
+        # tenant. The job name already differs per deployment, so this does
+        # not split any series that was one before.
         - alert: HighToolLatency
           expr: |
             (
               (
-                sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
-                - sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_bucket{le="5"}[1h]) and on (job, pod) (up offset 1h))
+                sum by (job, namespace, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+                - sum by (job, namespace, tool) (increase(mctl_tool_invocation_duration_seconds_bucket{le="5"}[1h]) and on (job, pod) (up offset 1h))
                 - (
-                    sum by (job, tool) (increase(mctl_telegram_flood_wait_events_total[1h]) and on (job, pod) (up offset 1h))
+                    sum by (job, namespace, tool) (increase(mctl_telegram_flood_wait_events_total[1h]) and on (job, pod) (up offset 1h))
                     or
-                    0 * sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+                    0 * sum by (job, namespace, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
                   )
               )
-              / sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+              / sum by (job, namespace, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
             ) > 0.05
-            and on (job, tool)
-            sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h)) >= 20
+            and on (job, namespace, tool)
+            sum by (job, namespace, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h)) >= 20
           for: 15m
           labels:
             severity: warning

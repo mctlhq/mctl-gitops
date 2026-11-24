@@ -10,9 +10,12 @@ lifecycle numbers from Loki (old pod `shutdown signal received` to new pod
 `listening`: 16.77 s, 18.74 s and 12.85 s in production; 10.83-18.81 s in preview).
 These are not client-visible outage measurements: a request can still fail after the
 app is listening (readiness, endpoint propagation, Traefik, Cloudflare), and it can
-fail before shutdown starts. The only outside-in observer, the
-`mctl-telegram-healthz` VMProbe, samples every 60 s, so a 10-20 s gap can fall
-entirely between two samples.
+fail before shutdown starts. The existing `mctl-telegram-healthz` VMProbe samples every 60 s, so a 10-20 s
+gap can fall entirely between two samples. Traefik 400-599 JSON access logs
+are **configured enabled** as of 2026-10-29; the older podscrape comment
+asserting access logs were off is stale. Actual running flags and Loki
+ingestion must still be verified. Ingress logs need traffic; neither they nor
+pod lifecycle spans alone prove a continuous client-visible outage.
 
 The issue asks for a bounded research spike, not a monitoring change. It wants a
 source-pinned inventory of existing evidence, a comparison of four minimal designs
@@ -39,64 +42,91 @@ instrumentation.
   staged rollback SO THAT I can give or withhold an explicit GO for production
   instrumentation.
 
-## Acceptance criteria (EARS)
+## Acceptance criteria (EARS) — revision 2
 
-- WHEN the spike document `docs/spikes/2977-rollout-client-downtime.md` is merged THE
-  SYSTEM SHALL contain an evidence inventory in which every source has a repo path
-  or a read-only tool call as its source, plus its sampling interval and retention.
-  Every source not observed in this run (Cloudflare analytics/Logpush, UptimeRobot or
-  other external monitors, live Kubernetes event retention) SHALL be listed as
-  "not observed", never as "absent".
-- THE SYSTEM SHALL include a table with the rows *pod lifecycle gap*, *Kubernetes
-  unready / endpoint removed*, *ingress (Traefik) 5xx*, *edge (Cloudflare) 5xx/52x*
-  and *external client availability*. For each row it SHALL give the source, what
-  the row proves, what it cannot prove, and its time resolution and uncertainty.
-- THE SYSTEM SHALL include a design matrix for options A, B, C and D. It SHALL cover
-  cost, operational risk, bias, failure domain and resulting precision.
-- WHEN the offline estimator is given an ordered set of probe-attempt records for one
-  rollout window THE SYSTEM SHALL output `old_last_success`, `first_error`,
-  `last_error`, `new_first_success`, the observed failing span (lower bound), the
-  bracketing span (upper bound), the per-class error counts and a status of
-  `measured`, `no_outage_observed` or `unknown`.
-- IF two consecutive subject attempts between `old_last_success` and
-  `new_first_success` are further apart than the configured maximum sample gap (or
-  anywhere in the window when no failure was observed), OR no success exists before
-  or after the span, OR
-  the control target also failed during the span, OR the declared clock offset
-  exceeds the tolerance, OR any attempt in the window reported a probe-local failure
-  (DNS resolution of the probe itself, runner abort) THEN THE SYSTEM SHALL return
-  `unknown` with a machine-readable reason and SHALL NOT return a duration.
-- IF an attempt carries `cf-cache-status` `HIT`, `STALE` or `UPDATING` THEN THE SYSTEM
-  SHALL treat the window as `unknown` (`reason: edge_cache_served`). A cached answer
-  does not prove the origin was available.
-- THE SYSTEM SHALL classify each attempt as one of `ok`, `origin_5xx` (Traefik or app
-  502/503/504 without a Cloudflare error page), `edge_52x` (520-527), `timeout`,
-  `connect_error`, `tls_error`, `dns_error`, `probe_local_error` or `other`, and
-  report counts per class.
-- THE SYSTEM SHALL report lifecycle (`shutdown -> listening`) and HTTP outage under
-  separate keys, and SHALL never derive one from the other.
-- WHILE the estimator or its tests run THE SYSTEM SHALL perform no network I/O. A
-  test SHALL fail if the estimator module imports `socket`, `urllib`, `http.client`,
-  `requests`, `httpx` or `subprocess`.
-- WHEN `python3 tests/test_rollout_outage_estimator.py` runs THE SYSTEM SHALL pass
-  every fixture case listed in tasks.md (200->503->200, no traffic, missed probes,
-  timeouts, Cloudflare 521, concurrent edge paths, clock drift, no response, probe
-  self-failure, cache hit).
-- THE SYSTEM SHALL record in the spike document a decision from the issue's
-  enumeration and a named owner (or "owner: pending" with whose decision it is). It
-  SHALL record one bounded follow-up implementation issue as a draft text, plus
-  preview acceptance criteria. The precision target of +/-1-2 s SHALL be stated only
-  as proven by the harness for the stated sampling parameters.
-- WHILE this spike is in scope THE SYSTEM SHALL NOT change any VMProbe, VMRule,
-  blackbox module, Traefik HelmChartConfig, Cloudflare Terraform, service values,
-  workflow that deploys, or rollout strategy.
+- WHEN the spike document `docs/spikes/2977-rollout-client-downtime.md` is
+  reviewed, IT SHALL cite immutable repository blobs and read-only runtime
+  evidence for every telemetry source, its cadence, effective retention,
+  availability and data sensitivity. Distinguish **configured** from **deployed,
+  ingested and actually observed**. If no runtime evidence was collected say
+  `not observed`, never `absent`.
+- THE inventory SHALL correct the stale October 6 Traefik podscrape comment:
+  `infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl`
+  configures `accessLog.enabled: true`, JSON, 400-599 filtering and retries
+  (commits `74265995863411c72642d420f223b244aa39ad42`,
+  `0679c43e4f1eacdaf0148724ca9a70a95fb41545`, Oct 29).
+  Read-only inspection SHALL seek running flags and redacted Loki samples
+  before describing live telemetry. Existing logged `Cf-Connecting-Ip` and
+  `Cf-Ray` values SHALL NOT be exported into public reports, fixtures or GitHub.
+- THE signal matrix SHALL separately enumerate pod lifecycle, pod readiness,
+  EndpointSlice membership and ingress endpoint propagation, Traefik-origin
+  4xx/5xx, Cloudflare edge failures/challenges and synthetic HTTP vantage
+  outcomes. `kube_pod_status_ready` SHALL NOT be asserted to prove
+  EndpointSlice membership or client-path availability. List what each signal
+  proves, cannot prove, and its timestamp resolution/uncertainty.
+- THE decision SHALL compare: A release-scoped fine-grained probe; B currently
+  configured Traefik 400-599 logs and counters plus possible Cloudflare data;
+  C existing blackbox (60s), KSM/Loki and canary; D a hybrid with verified
+  ingress telemetry. The matrix SHALL include data availability, cost,
+  privacy, failure domain, bias and resolution. External Cloudflare analytics,
+  Logpush, UptimeRobot and K8s event retention are `not observed` unless
+  accessed via a permitted live read.
+- WHEN the stdlib offline estimator reads timestamped subject/control attempts,
+  IT SHALL report `old_last_success`, `first_error`, `last_error`,
+  `new_first_success`, per-class counts and **two separate** outputs:
+  `http_observations` (per-vantage sampled outcomes and a DESCRIPTIVE
+  `failure_event_envelope`) and `continuous_blackout` (default `unknown`).
+  The failure-event envelope SHALL NEVER be called an unconditional lower
+  bound on uninterrupted HTTP downtime.
+- Two failed samples SHALL NOT establish continuous unavailability between
+  them. Only with an **explicit, independently justified**
+  `single_contiguous_blackout_assumption` may the estimator compute
+  *conditional* lower/upper durations and a model-resolution flag. Without
+  this assumption `continuous_blackout.status: unknown` and
+  `precision_target_met: null`. Any success between first and last failure
+  SHALL force `continuous_blackout: unknown/intermittent_success` even when
+  the sample envelope is measurable. One fixture SHALL disprove the former
+  false inference using 503@t0, 200@t5, 503@t10.
+- IF coverage is incomplete, bracketing success missing, control fails, local
+  probe fails, clock is untrusted, the response is cached or redirects, THEN
+  IT SHALL fail closed with a machine-readable reason. All-success synthetic
+  attempts with sufficient coverage SHALL be `no_outage_observed`, meaning
+  **no failed sample**, not proven zero outage between probes or on MCP/OAuth.
+- THE outcome taxonomy SHALL distinguish `ok`, `origin_5xx` only where
+  origin evidence exists, `http_5xx_unattributed` for ambiguous 502/503/504,
+  `edge_52x` (520-527), `http_403`, `http_429`, `edge_challenge`
+  only with Cloudflare mitigation evidence, `timeout`, `connect_error`,
+  `tls_error`, `dns_error`, `probe_local_error`, `other`. A WAF
+  challenge does not prove origin unavailability. Distinguish regular
+  external ASNs/regions from the privileged in-cluster ASN24940 vantage:
+  Cloudflare's SBFM skip means the latter cannot prove global client reachability.
+  A healthy control target cannot exclude subject-specific WAF errors.
+- THE estimator SHALL perform no network I/O. AST forbidden-import checks
+  SHALL be a defense in depth, supplemented by a test-scoped fail-fast socket
+  guard and a test asserting no external communications on CLI execution.
+- WHEN `python3 tests/test_rollout_outage_estimator.py` runs, IT SHALL cover
+  T1-T18 from tasks.md: 200/503/200, 10s timeout, all-success probes with
+  zero real-client traffic, gaps, 521/522 vs unattributed 5xx, intermittent
+  colos, t0/t5/t10 false lower bound, clock skew, cache HIT, redirects,
+  probe-local failure, ASN/WAF challenges and a same-day truncated Loki query.
+- THE report SHALL keep `lifecycle` independent of `http_observations`;
+  never infer HTTP 503 duration from SIGTERM-to-listening.
+  A +/-1–2s precision target SHALL be described only as **conditional-model
+  sampling resolution**, not a guaranteed client downtime bound.
+- THE output SHALL contain a provisional, justified decision, owner (or
+  `owner: pending`), a *draft-only* follow-up issue, preview-only
+  acceptance, cost estimate and staged rollback.
+- WHILE this spike remains proposed, IT SHALL NOT change running probes,
+  VMProbe/VMRule, blackbox modules, Traefik config, Cloudflare, service values,
+  rollouts, secrets or PA flags. A reviewed proposal still requires
+  a separate owner decision to run the implementer and any live test.
 
 ## Out of scope
 
 - Running any live probe, including a 1 Hz probe against preview or production,
   during the spike.
-- Enabling Traefik access logs, Cloudflare Logpush, new VMProbes, new alerts or a new
-  dashboard.
+- Changing already-configured Traefik access logs, enabling Cloudflare Logpush,
+  deploying new VMProbes/alerts or a new dashboard.
 - Changing `strategy.type: Recreate`, replica counts or readiness probe settings of
   mctl-telegram or mctl-telegram-preview.
 - MTProto session ownership/fencing (mctl-telegram#1115), DB retry/readiness and
@@ -108,6 +138,14 @@ instrumentation.
 
 ## Open questions
 
+- Traefik deployment: access logs are configured enabled, but running flags,
+  Loki 400-599 records/retention and request coverage have not been independently
+  queried. Do not confuse this with an absent pipeline; the runtime check
+  must redact raw user IP, full Cf-Ray and request metadata.
+- Earlier 0.143.0 Loki reconstruction: the 1000-line service-log query returned
+  only newer records starting at ~09:30Z **on the same day as the release**.
+  The 14-day retention cannot explain that gap. Seek bounded earlier queries
+  if possible, otherwise mark `query_truncated_or_unverified`.
 - Cloudflare analytics: is a GraphQL Analytics token with `Zone Analytics:Read` for
   `mctl.ai` available, and at what granularity and retention does the plan expose
   `httpRequestsAdaptiveGroups` per host and status? No Logpush job exists in

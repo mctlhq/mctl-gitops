@@ -26,15 +26,22 @@ on:
 # Per-commit release-gate reporting does not depend on this: release-gate-watch
 # runs per SHA and is never cancelled.
 #
-# Pull requests and merge groups keep a group per run (no cancellation): a
-# merge-group check must report on exactly the commit the queue tests, and a
-# shared group would cancel the check of position 1 when position 2 starts.
+# Pull requests are grouped by PR number with cancellation (mctlhq/mctl-gitops
+# #2993): a new head supersedes the checks of the previous head, which would
+# otherwise keep 12 jobs queued on the shared runner pool. Required checks are
+# evaluated on the latest head, so merging is unaffected.
+#
+# Merge groups keep a group per run (no cancellation): a merge-group check must
+# report on exactly the commit the queue tests, and a shared group would cancel
+# the check of position 1 when position 2 starts.
 concurrency:
   group: >-
     ${{ github.event_name == 'push'
         && format('validate-manifests-push-{0}', github.ref)
+        || github.event_name == 'pull_request'
+        && format('validate-manifests-pr-{0}', github.event.pull_request.number)
         || format('validate-manifests-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -399,6 +406,12 @@ jobs:
           python3 tests/test_release_bump_pr_route.py
           python3 tests/test_release_bump_supersede.py
           python3 tests/test_release_bump_apply.py
+
+      - name: Workflow concurrency groups (superseded runs, never a release)
+        # mctlhq/mctl-gitops#2993: PR checks and main-sha preview builds are
+        # superseded by a newer run; merge-group checks and releases always
+        # resolve to a per-run group. The test pins every expression.
+        run: python3 tests/test_workflow_concurrency.py
 
       - name: Release window PR-opener (wiring, input binding, insert script)
         # Proposal issue-2828, 8.2: release-window-pr.yml opens a release-window/*
