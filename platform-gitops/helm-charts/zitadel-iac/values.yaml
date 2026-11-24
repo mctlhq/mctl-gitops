@@ -90,6 +90,11 @@ image:
 #   the release approval page, in the MCTL API project): no new action; a
 #   create, plus an in-place update of the data of
 #   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   Self-service access page (mctl-api.tf: the mctl-api-glovo-access web
+#   client, in the MCTL API project; customers.tf: its client id joins
+#   ZITADEL_HOOK_CLAIM_CLIENT_IDS): no new action; a create, plus in-place
+#   updates of the data of mctl-api/mctl-api-oidc-zitadel (two keys added)
+#   and of the identity hook's Secret (one client id added to the list).
 #   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
 #   for coolify-mcp and mctl-academy, one grant of each project per tenant
 #   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel

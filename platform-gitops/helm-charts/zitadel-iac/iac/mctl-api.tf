@@ -257,6 +257,38 @@ resource "zitadel_application_oidc" "mctl_api_glovo_basket" {
   id_token_userinfo_assertion = true
 }
 
+# The self-service access page (api.mctl.ai/glovo/access): a customer signs
+# in here with Google, fresh (prompt=login, max_age=0, PKCE, nonce), to record
+# their consent and to open or withdraw their own access request for the
+# hosted connector. The owner's decision is taken elsewhere, on the access
+# decision page behind mctl-api-release-approval. A client of its own, so a
+# code or ID token issued for this page is never accepted by a decision page
+# and the reverse (the ID token's aud is the client id), the secrets rotate
+# apart, and removing this client touches nothing else. Same shape as the
+# other page clients: client secret plus PKCE, one redirect, opaque (BEARER)
+# access token, because a JWT access token of any app in this project would
+# pass mctl-api's JWT bearer check. Do not switch it to JWT.
+#
+# Unlike the decision pages this client IS in ZITADEL_HOOK_CLAIM_CLIENT_IDS
+# (customers.tf): the page admits a person only on the token hook's proof of
+# a Google sign-in in the customers organization, and resolves the principal
+# from that proof. The customers organization reaches the project through
+# zitadel_project_grant.customers_mctl_api.
+resource "zitadel_application_oidc" "mctl_api_glovo_access" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-glovo-access"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/glovo/access/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 # The deploy approval page (mctl-api#1026, deploy grants): an agent asks for
 # a deploy with mctl_request_deploy_approval, mctl-api shows the tenant owner
 # a link to api.mctl.ai/deploy/approvals/{id}, and the owner signs in here,
@@ -400,6 +432,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # stays unmounted unless GLOVO_BASKET_UI_ENABLED is "true" (it is unset).
     GLOVO_BASKET_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_basket.client_id
     GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret
+    # The self-service access page client. Nothing reads these keys until
+    # the mctl-api values mount them and set GLOVO_ACCESS_SELF_UI_ENABLED to
+    # "true" (it is unset, so the page stays unmounted).
+    GLOVO_ACCESS_SELF_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_access.client_id
+    GLOVO_ACCESS_SELF_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_access.client_secret
     # The deploy approval page client (mctl-api#1026). Nothing reads these
     # keys until the mctl-api values mount them and set
     # DEPLOY_APPROVAL_UI_ENABLED to "true" (it is unset, so the page stays
