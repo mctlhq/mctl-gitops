@@ -10,6 +10,7 @@ Plain script, run by validate-manifests.yml:
 `python3 tests/test_workflow_concurrency.py`.
 """
 import pathlib
+import subprocess
 import sys
 
 import yaml
@@ -97,6 +98,27 @@ def test_preview_prefix_matches_argo_template():
     assert 'build_id        = "{{workflow.name}}"' in (
         ROOT / "platform-gitops/argo-workflows/cluster-templates/wft-preview-deploy.yaml"
     ).read_text()
+
+
+def test_preview_images_take_the_direct_route():
+    """release-deploy may cancel a preview run mid-flight only because its bump
+    is one direct push. On the PR route a cancelled run would leave an open
+    release-bump pull request that nothing supersedes (a `main-<sha>` suffix is
+    not a semver tag). Every `-preview` service must therefore resolve to
+    `direct` through the real route script. If this fails, take the image off
+    the PR route or make the preview group in release-deploy.yaml non-cancelling.
+    """
+    dirs = sorted(d for d in (ROOT / "platform-gitops/services").glob("*/*-preview") if d.is_dir())
+    assert dirs, "no -preview service found: the check would pass on nothing"
+    for d in dirs:
+        image = (yaml.safe_load((d / "values.yaml").read_text()).get("image") or {}).get("repository")
+        assert isinstance(image, str) and image, f"{d.name}: image.repository could not be read"
+        r = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/release-bump-route.py"), "--image", image, "--root", str(ROOT)],
+            capture_output=True, text=True,
+        )
+        assert r.returncode == 0, f"{d.name}: route for {image} could not be decided: {r.stderr.strip()}"
+        assert r.stdout.strip() == "direct", f"{d.name}: {image} is on the {r.stdout.strip()!r} route"
 
 
 def test_ci_runs_this_test():
