@@ -332,14 +332,30 @@ env:
   # Each capability flag is explicit. Step G6 (owner GO) turns tools and the
   # tg server on together: an allowlisted user can link their own Telegram
   # account through the Mini App and the model may call the pinned tg READ
-  # tools, each one executed server-side. Writes and the alice server stay
-  # off on preview. Rollback: PA_EXTERNAL_TOOLS_ENABLED "false" stops every
+  # tools, each one executed server-side. Writes stay off on preview. Rollback: PA_EXTERNAL_TOOLS_ENABLED "false" stops every
   # tool call at the next dispatch (re-read per call), PA_SERVER_TG_ENABLED
   # "false" also closes linking.
   PA_EXTERNAL_TOOLS_ENABLED: "true"
   PA_WRITES_ENABLED: "false"
   PA_SERVER_TG_ENABLED: "true"
-  PA_SERVER_ALICE_ENABLED: "false"
+  # The alice server (owner direction for the preview pilot: preview only,
+  # read scope iot:view; mctlhq/mctl-telegram#1319): an allowlisted user can link a
+  # smart-home account and the model may call the pinned alice READ tools.
+  # An alice account is not a Telegram identity, so the link is bound to
+  # whoever completes the sign-in on the authorization server (threat model
+  # T1, S1-L14); this environment runs with that residual. Startup
+  # fetches the server's published authorization metadata and refuses to
+  # start if it cannot be read or disagrees with the values below.
+  # Rollback: PA_SERVER_ALICE_ENABLED "false".
+  PA_SERVER_ALICE_ENABLED: "true"
+  PA_SERVER_ALICE_CLIENT_ID: chatgpt_7c650a8a870f49d69efb213af193763d
+  PA_SERVER_ALICE_ISSUER: https://alice.mctl.ai
+  PA_SERVER_ALICE_AUTHORIZATION_ENDPOINT: https://alice.mctl.ai/oauth/authorize
+  PA_SERVER_ALICE_TOKEN_ENDPOINT: https://alice.mctl.ai/oauth/token
+  PA_SERVER_ALICE_REVOCATION_ENDPOINT: https://alice.mctl.ai/oauth/revoke
+  PA_SERVER_ALICE_MCP_URL: https://alice.mctl.ai/mcp
+  PA_SERVER_ALICE_RESOURCE: https://alice.mctl.ai/mcp
+  PA_SERVER_ALICE_ALLOWED_HOSTS: alice.mctl.ai
   # The tg server is this instance's own authorization server and MCP
   # endpoint; the values are its published metadata
   # (/.well-known/oauth-authorization-server and
