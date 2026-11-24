@@ -15,7 +15,7 @@ spec:
       values: |
         image:
           repository: ghcr.io/mctlhq/mctl-agent
-          tag: "2.9.6"
+          tag: "2.10.0"
         imagePullSecrets:
           - name: ghcr-credentials
         service:
