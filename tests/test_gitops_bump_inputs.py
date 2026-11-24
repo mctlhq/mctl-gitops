@@ -26,7 +26,14 @@ WORKER = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"
 CWFT = "platform-gitops/argo-workflows/cluster-templates/cwft-x.yaml"
 TEMPLATE = "platform-gitops/bootstrap/templates/mctl-platform/mctl-x.yaml"
 SPLIT = "platform-gitops/services/labs/split/values.yaml"
+APP = "platform-gitops/bootstrap/templates/mctl-platform/mctl-app.yaml"
 OTHER_IMAGE = "ghcr.io/mctlhq/app"
+# An Argo CD Application that parses as YAML and keeps its Helm values inline,
+# the shape of mctl-platform/mctl-agent.yaml.
+APP_TEXT = (
+    "apiVersion: argoproj.io/v1alpha1\nkind: Application\nspec:\n  source:\n    helm:\n      values: |\n"
+    f"        image:\n          repository: {OTHER_IMAGE}\n          tag: \"1.0.0\"\n"
+    "        env:\n          A: b\n")
 VALUES = f'replicaCount: 1\nimage:\n  repository: {OTHER_IMAGE}\n  tag: "1.0.0"\nenv:\n  A: b\n'
 failures = []
 
@@ -57,6 +64,7 @@ def fixture(tmp):
     w(OTHER, VALUES)
     w(SPLIT, "image:\n  registry: ghcr.io\n  repository: mctlhq/app\n  tag: 1.0.0\n")
     w(CWFT, f"      - name: agent_image\n        value: {OTHER_IMAGE}:1.0.0\n      - image: {OTHER_IMAGE}:1.0.0\n")
+    w(APP, APP_TEXT)
     w(TEMPLATE, "{{- if .Values.x }}\n" + f"image: {OTHER_IMAGE}:1.0.0\n" + "{{- end }}\n")
     (tmp / "scripts").mkdir()
     shutil.copy(ROOT / "scripts/release-gate.py", tmp / "scripts/release-gate.py")
@@ -203,6 +211,11 @@ rc, changed, contents, out = bump(path="", glob="platform-gitops/argo-workflows/
 check("a CWFT glob bumps both forms", rc == 0 and contents[CWFT].count(":1.2.3") == 2, out)
 rc, changed, contents, out = bump(path=TEMPLATE)
 check("a Helm template that is not YAML bumps", rc == 0 and f"{OTHER_IMAGE}:1.2.3" in contents[TEMPLATE], out)
+# mctl-agent 2.9.6 was refused here (exit 7) on 2026-11-23: the tag sits inside
+# the inline values string, and the parsed comparison saw one changed string.
+rc, changed, contents, out = bump(path=APP)
+check("an Application with inline Helm values bumps", rc == 0 and changed == [APP], (rc, out))
+check("only the inline tag changed", contents.get(APP) == APP_TEXT.replace('"1.0.0"', '"1.2.3"'))
 for tag in ("1042", "1234567", "1e5", "1.0", "1.10", "2.0.0"):
     rc, changed, contents, out = bump(path=SPLIT, tag=tag)
     parsed = yaml.safe_load(contents.get(SPLIT, "{}")) or {}
@@ -280,6 +293,22 @@ SHORT = BUMP.replace("n = n1 + n2 + n3 + n4\n", "out = out.replace('A: b', 'A: x
 assert SHORT != BUMP
 rc, changed, _, _ = bump(tag="1", script=SHORT)
 check("a value merely containing a short tag is still refused", rc == 7 and not changed, rc)
+
+# The same refusals hold inside inline Helm values.
+rc, changed, _, _ = bump(path=APP, script=SWAP)
+check("a changed unrelated value inside inline values is refused", rc == 7 and not changed, rc)
+rc, changed, _, _ = bump(path=APP, tag="1", script=SHORT)
+check("inside inline values, a value merely containing a short tag is refused", rc == 7 and not changed, rc)
+# Mutant: accept any changed block string without looking inside it.
+INNER_RULE = "return isinstance(inner_a, (dict, list)) and same_but_tags(inner_a, inner_b)"
+assert SHORT.count(INNER_RULE) == 1
+rc, changed, _, _ = bump(path=APP, tag="1", script=SHORT.replace(INNER_RULE, "return True"))
+check("mutant caught: block strings accepted blind, the unrelated value is written", rc == 0 and changed == [APP], rc)
+# Mutant: the fix removed, the ordinary Application bump is refused again.
+NO_INNER = BUMP.replace('if isinstance(a, str) and isinstance(b, str) and "\\n" in a:', "if False:")
+assert NO_INNER != BUMP
+rc, changed, _, _ = bump(path=APP, script=NO_INNER)
+check("mutant caught: without the inline rule the Application bump is refused", rc == 7 and not changed, rc)
 
 print()
 if failures:
