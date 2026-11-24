@@ -5,8 +5,8 @@
       "repo": "mctlhq/mctl-alice",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "efa0f93e6cd23c692031402270d6ccf6a9a809f3",
-      "vendored_at": "2026-11-21T18:34:52Z"
+      "sha": "5f6755b7ae9e8764952dad4e5cb7eaabc78ca48c",
+      "vendored_at": "2026-11-24T08:37:43Z"
     },
     "api": {
       "repo": "mctlhq/mctl-api",
