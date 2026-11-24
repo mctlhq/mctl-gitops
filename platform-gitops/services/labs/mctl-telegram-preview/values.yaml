@@ -323,10 +323,10 @@ env:
   # listens on the default :8080, so it is already treated as exposed and
   # nothing changes.
   ENV: preview
-  # G7 kill-switch drill, step 3 (owner GO 2026-11-24,
-  # mctlhq/mctl-telegram#1318): the master switch is off for the drill, to
-  # see the bot stop on the deployed service. The next drill PR restores it.
-  PA_ENABLED: "false"
+  # G7 kill-switch drill done 2026-11-24 (gitops#2997, #3005, #3006): each
+  # of PA_SERVER_TG_ENABLED, PA_EXTERNAL_TOOLS_ENABLED and PA_ENABLED was
+  # turned off alone on this service, its refusal observed, and restored.
+  PA_ENABLED: "true"
   PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
   PA_KEK_MODE: local
   # Each capability flag is explicit. Step G6 (owner GO) turns tools and the
