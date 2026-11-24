@@ -327,6 +327,13 @@ env:
   # of PA_SERVER_TG_ENABLED, PA_EXTERNAL_TOOLS_ENABLED and PA_ENABLED was
   # turned off alone on this service, its refusal observed, and restored.
   PA_ENABLED: "true"
+  # Streaming (mctlhq/mctl-telegram#1431, owner GO 2026-11-24, preview
+  # only): the partial answer and a fixed tool status are shown as a Telegram
+  # draft while a run is in progress. The final reply is still sent once
+  # through the outbox. Re-read on every claim and draft; an unreadable value
+  # is off. Rollback: "false" here stops drafts at the next claim; the worker
+  # flag AGENT_PA_STREAMING in agent-worker-pa-preview may stay on.
+  PA_STREAMING_ENABLED: "true"
   PA_WEBHOOK_URL: https://tg-preview.mctl.ai/pa/bot/webhook
   PA_KEK_MODE: local
   # Each capability flag is explicit. Step G6 (owner GO) turns tools and the
