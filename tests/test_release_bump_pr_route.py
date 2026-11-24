@@ -128,7 +128,20 @@ def judge(files):
             out.append((f"{label}: await-bump has no environment, no secret, no concurrency group and read-only access",
                         "environment" not in aw and "concurrency" not in aw and "secrets." not in str(aw)
                         and aw.get("permissions") == {"pull-requests": "read"} and aw.get("timeout-minutes") == 55))
-            out.append((f"{label}: the workflow itself is in no concurrency group", "concurrency" not in doc))
+            # No lock shared between releases. release-deploy may carry one
+            # workflow-level block (mctlhq/mctl-gitops#2993), and only in this
+            # shape: `-preview` components built from a `main-<sha>` tag share a
+            # cancelling group, everything else resolves to its own run id.
+            wc = doc.get("concurrency")
+            preview = "endsWith(inputs.component_name, '-preview') && startsWith(inputs.image_tag, 'main-')"
+            out.append((f"{label}: the workflow itself is in no concurrency group shared between releases",
+                        wc is None or (
+                            "release-deploy" in label and isinstance(wc, dict)
+                            and " ".join(str(wc.get("group")).split()) == (
+                                "${{ " + preview
+                                + " && format('release-deploy-preview-{0}-{1}', inputs.team_name, inputs.component_name)"
+                                + " || format('release-deploy-{0}', github.run_id) }}")
+                            and str(wc.get("cancel-in-progress")) == "${{ " + preview + " }}")))
             out.append((f"{label}: await-bump waits for MERGED and fails on closed, unknown state or timeout",
                         wt is not None and "MERGED)" in wtxt and "was closed without merging" in wtxt and "unexpected pull request state" in wtxt
                         and re.search(r'did not merge within 50 minutes"\n\s*exit 1\s*$', wtxt) is not None
@@ -189,6 +202,8 @@ MUT = [
     ("await-bump takes a secret", "release-deploy.yaml", "      - name: Wait for the bump to merge\n        env:\n          GH_TOKEN: ${{ github.token }}\n", "      - name: Wait for the bump to merge\n        env:\n          GH_TOKEN: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
     ("await-bump gets write access", "gitops-bump.yaml", "    permissions:\n      pull-requests: read\n", "    permissions:\n      pull-requests: write\n"),
     ("workflow-wide concurrency back", "gitops-bump.yaml", "# a queued bump of another service would be cancelled behind it.\njobs:\n", "# a queued bump of another service would be cancelled behind it.\nconcurrency:\n  group: gitops-bump\n  cancel-in-progress: false\njobs:\n"),
+    ("release-deploy: every release shares one group", "release-deploy.yaml", "        || format('release-deploy-{0}', github.run_id) }}\n", "        || 'release-deploy' }}\n"),
+    ("release-deploy: semver release of a preview component is cancellable", "release-deploy.yaml", "  cancel-in-progress: ${{ endsWith(inputs.component_name, '-preview') && startsWith(inputs.image_tag, 'main-') }}\n", "  cancel-in-progress: ${{ endsWith(inputs.component_name, '-preview') }}\n"),
     ("newer bump no longer stops this run", "release-deploy.yaml", 'is not newer"\n              exit 1', 'is not newer"\n              true'),
     ("publish-direct applies with a bare git am", "release-deploy.yaml", 'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"\n\n          # Concurrent', 'git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"\n\n          # Concurrent'),
     ("publish-pr applies with a bare git am", "gitops-bump.yaml", 'bash scripts/release-bump-apply.sh "$RUNNER_TEMP/bump-patch/bump.patch"\n          git commit --amend', 'git am --3way "$RUNNER_TEMP/bump-patch/bump.patch"\n          git commit --amend'),

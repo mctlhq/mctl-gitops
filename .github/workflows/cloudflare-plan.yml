@@ -35,6 +35,15 @@ on:
 
 # Nothing here writes to the GitHub API — the plan summary goes to
 # GITHUB_STEP_SUMMARY, not to a PR comment.
+# A new head or a label change supersedes the previous run of the same PR
+# (mctlhq/mctl-gitops#2993). Merge-group and manual runs get a per-run group and
+# are never cancelled: the queue check must report on exactly the queued commit.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('cloudflare-plan-pr-{0}', github.event.pull_request.number)
+        || format('cloudflare-plan-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 
