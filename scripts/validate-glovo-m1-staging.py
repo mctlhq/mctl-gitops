@@ -164,6 +164,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            {{- if .Values.mctlGlovo.apiConsent }}',
         '            GLOVO_CONSENT_ENABLED: "true"',
         '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
+        '            GLOVO_ACCESS_REQUIRED: "true"',
         '            GLOVO_ACCESS_NOTIFY_ENABLED: "true"',
         '            GLOVO_GOOGLE_ONLY_MODE: shadow',
         '            - mctl-api-glovo-consent',

@@ -516,6 +516,14 @@ spec:
             # Quoted: the release gate parses this block as YAML, and an
             # unquoted inline directive is not a scalar there.
             GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"
+            # Access by approval (mctl-api >= 4.176.0): a slot is counted per
+            # approved access request, and the C2 grant needs approved access
+            # on top of consent. On the first start with this on, every
+            # principal with an active consent gets an approved row once
+            # (decided by "backfill"), so nobody already admitted is cut off.
+            # This goes before the service-side requirement, never after it.
+            # Rollback: delete this line (approved rows stay).
+            GLOVO_ACCESS_REQUIRED: "true"
             # Owner card for a new access request (mctl-api >= 4.177.0): one
             # Telegram card through the mctl-web Worker bridge, carrying a
             # one-time link to the MFA decision page. The Worker side is on
