@@ -444,7 +444,18 @@ jobs:
                   return a.keys() == b.keys() and all(same_but_tags(a[k], b[k]) for k in a)
               if isinstance(a, list) and isinstance(b, list):
                   return len(a) == len(b) and all(same_but_tags(x, y) for x, y in zip(a, b))
-              return a == b or (isinstance(b, str) and (b == new_tag or b.endswith(":" + new_tag)))
+              if a == b or (isinstance(b, str) and (b == new_tag or b.endswith(":" + new_tag))):
+                  return True
+              # An Argo CD Application carries its Helm values as one block
+              # string, so a tag bump inside it changes that whole string.
+              # Compare what the string holds, by the same rule.
+              if isinstance(a, str) and isinstance(b, str) and "\n" in a:
+                  try:
+                      inner_a, inner_b = yaml.safe_load(a), yaml.safe_load(b)
+                  except yaml.YAMLError:
+                      return False
+                  return isinstance(inner_a, (dict, list)) and same_but_tags(inner_a, inner_b)
+              return False
 
           def only_tags_changed(before, after):
               """Refuse anything but a tag edit, whatever produced it. Text first, because

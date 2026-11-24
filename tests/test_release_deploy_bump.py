@@ -306,6 +306,43 @@ check("an edit beyond image tags is refused before writing", rc == 7 and not wro
 rc, wrote = edit_case(SCRIPT.replace(EDIT_CHECK_OFF, "if False:"))
 check("mutant caught: edit check off, the injected YAML is written", wrote, rc)
 
+# An Argo CD Application that parses as YAML and keeps its Helm values inline
+# (mctl-platform/mctl-agent.yaml). The 2.9.6 bump was refused with exit 7 on
+# 2026-11-23: the tag sits inside the values string.
+APP = "platform-gitops/bootstrap/templates/mctl-platform/mctl-app.yaml"
+APP_TEXT = (
+    "apiVersion: argoproj.io/v1alpha1\nkind: Application\nspec:\n  source:\n    helm:\n      values: |\n"
+    "        image:\n          repository: ghcr.io/mctlhq/mctl-agents\n          tag: \"1.0.0\"\n"
+    "        env:\n          A: b\n")
+INNER_ON = 'if isinstance(a, str) and isinstance(b, str) and "\\n" in a:'
+INNER_RULE = "return isinstance(inner_a, (dict, list)) and same_but_tags(inner_a, inner_b)"
+TAMPER = "n = n1 + n2 + n3 + n4\n"
+for anchor in (INNER_ON, INNER_RULE, TAMPER):
+    check(f"anchor present once: {anchor[:50]}", SCRIPT.count(anchor) == 1)
+
+
+def app_case(script, tag="1.35.0"):
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        fixture(tmp)
+        (tmp / APP).parent.mkdir(parents=True, exist_ok=True)
+        (tmp / APP).write_text(APP_TEXT)
+        r = run_script(tmp, script, APP, tag)
+        return r.returncode, (tmp / APP).read_text()
+
+
+rc, text = app_case(SCRIPT)
+check("an Application with inline Helm values bumps",
+      rc == 0 and text == APP_TEXT.replace('"1.0.0"', '"1.35.0"'), (rc, text))
+rc, text = app_case(SCRIPT.replace(INNER_ON, "if False:"))
+check("mutant caught: without the inline rule the Application bump is refused", rc == 7 and text == APP_TEXT, rc)
+# An unrelated value inside the inline values that merely contains a short tag.
+SHORT = SCRIPT.replace(TAMPER, "out = out.replace('A: b', 'A: x1y')\n    " + TAMPER, 1)
+rc, text = app_case(SHORT, tag="1")
+check("inside inline values, a value merely containing a short tag is refused", rc == 7 and text == APP_TEXT, rc)
+rc, text = app_case(SHORT.replace(INNER_RULE, "return True"), tag="1")
+check("mutant caught: block strings accepted blind, the unrelated value is written", "A: x1y" in text, rc)
+
 print()
 if failures:
     print(f"{len(failures)} FAILURE(S):")
