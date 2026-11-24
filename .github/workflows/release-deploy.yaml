@@ -42,6 +42,23 @@ on:
         required: false
         type: string
 
+# A newer preview dispatch supersedes the older one for the same component
+# (mctlhq/mctl-gitops#2993): source repos dispatch `<component>-preview` with a
+# `main-<sha>` tag on every push to main, and under runner saturation the older
+# runs sat queued behind real releases. Both conditions are required. A semver
+# tag never starts with `main-`, so a release (of any component, a `-preview`
+# one included) gets a per-run group and is never cancelled; a per-run group
+# serializes nothing, so enqueue-bump and await-bump stay effectively outside
+# any group. Cancelling a preview run mid-flight leaves nothing behind: preview
+# images take the direct bump route, which is one atomic push, not a pull
+# request. tests/test_workflow_concurrency.py pins both expressions.
+concurrency:
+  group: >-
+    ${{ endsWith(inputs.component_name, '-preview') && startsWith(inputs.image_tag, 'main-')
+        && format('release-deploy-preview-{0}-{1}', inputs.team_name, inputs.component_name)
+        || format('release-deploy-{0}', github.run_id) }}
+  cancel-in-progress: ${{ endsWith(inputs.component_name, '-preview') && startsWith(inputs.image_tag, 'main-') }}
+
 jobs:
   # Fail fast, before anything is built or pushed: every dispatch input is
   # shape-checked here with no checkout, no secrets and no permissions. The

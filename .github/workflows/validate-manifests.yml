@@ -407,6 +407,12 @@ jobs:
           python3 tests/test_release_bump_supersede.py
           python3 tests/test_release_bump_apply.py
 
+      - name: Workflow concurrency groups (superseded runs, never a release)
+        # mctlhq/mctl-gitops#2993: PR checks and main-sha preview builds are
+        # superseded by a newer run; merge-group checks and releases always
+        # resolve to a per-run group. The test pins every expression.
+        run: python3 tests/test_workflow_concurrency.py
+
       - name: Release window PR-opener (wiring, input binding, insert script)
         # Proposal issue-2828, 8.2: release-window-pr.yml opens a release-window/*
         # pull request with the App token (open-pr) and queues it for merge

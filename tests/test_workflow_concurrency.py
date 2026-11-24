@@ -2,10 +2,15 @@
 
 Pins: PR runs are superseded per PR number; merge_group and release builds
 resolve to run-scoped, never-cancelled groups; the push group from #2935 stays;
-the review workflows carry no workflow-level group; and the preview build_id
-prefix matches what wft-preview-deploy.yaml actually sends.
+the review workflows carry no workflow-level group; the preview build_id
+prefix matches what wft-preview-deploy.yaml actually sends; and release-deploy
+supersedes only `-preview` components built from a `main-<sha>` tag.
+
+Plain script, run by validate-manifests.yml:
+`python3 tests/test_workflow_concurrency.py`.
 """
 import pathlib
+import sys
 
 import yaml
 
@@ -45,6 +50,12 @@ def test_pr_superseding_workflows():
     assert conc("cloudflare-plan.yml")[0].endswith("|| format('cloudflare-plan-{0}', github.run_id) }}")
     assert conc("cloudflare-plan.yml")[1] == "${{ github.event_name == 'pull_request' }}"
     assert conc("security.yml")[1] == "${{ github.event_name == 'pull_request' }}"
+    assert conc("security.yml")[0].endswith("|| format('security-{0}', github.run_id) }}")
+    # yamllint also supersedes per pushed ref; anything else is per-run
+    group, cancel = conc("yamllint.yml")
+    assert "github.event_name == 'push' && format('yamllint-push-{0}', github.ref)" in group
+    assert group.endswith("|| format('yamllint-{0}', github.run_id) }}")
+    assert cancel == "${{ github.event_name == 'pull_request' || github.event_name == 'push' }}"
 
 
 def test_build_image_cancels_only_preview():
@@ -53,10 +64,24 @@ def test_build_image_cancels_only_preview():
     assert "format('build-image-preview-{0}-{1}-{2}', inputs.team_name, inputs.component_name, inputs.git_ref)" in group
     assert group.endswith("|| format('build-image-{0}', github.run_id) }}")
     assert cancel == "${{ startsWith(inputs.build_id, 'preview-deploy') }}"
-    # release-deploy builds use rd-<run_id>, which must not match the preview prefix
-    rd = (WF / "release-deploy.yaml").read_text()
-    assert "rd-" in rd
-    assert not "rd-".startswith("preview-deploy")
+    # release-deploy builds pass rd-<run_id>, which the preview prefix cannot match
+    rd = load("release-deploy.yaml")["jobs"]["build"]["with"]["build_id"]
+    assert rd == "rd-${{ github.run_id }}", rd
+
+
+PREVIEW = "endsWith(inputs.component_name, '-preview') && startsWith(inputs.image_tag, 'main-')"
+
+
+def test_release_deploy_cancels_only_main_sha_previews():
+    group, cancel = conc("release-deploy.yaml")
+    # both conditions, in the group and in the cancel flag: a semver tag never
+    # starts with `main-`, so a release always falls through to the per-run group
+    assert group == (
+        "${{ " + PREVIEW
+        + " && format('release-deploy-preview-{0}-{1}', inputs.team_name, inputs.component_name)"
+        + " || format('release-deploy-{0}', github.run_id) }}"
+    ), group
+    assert cancel == "${{ " + PREVIEW + " }}", cancel
 
 
 def test_review_workflows_have_no_group():
@@ -72,3 +97,19 @@ def test_preview_prefix_matches_argo_template():
     assert 'build_id        = "{{workflow.name}}"' in (
         ROOT / "platform-gitops/argo-workflows/cluster-templates/wft-preview-deploy.yaml"
     ).read_text()
+
+
+def test_ci_runs_this_test():
+    assert "python3 tests/test_workflow_concurrency.py" in (WF / "validate-manifests.yml").read_text()
+
+
+def main():
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
+    print("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
