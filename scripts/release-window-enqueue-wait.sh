@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Decide whether a release-window/* pull request may enter the merge queue, and
-# wait until it may. Run by the enqueue-window job of release-window-pr.yml from
-# a checkout of main, with a READ-ONLY token in GH_TOKEN; that job enqueues with
+# Decide whether a release-window/* (or, for a removal, release-window-removal/*)
+# pull request may enter the merge queue, and wait until it may. Run by the
+# enqueue-window job of release-window-pr.yml and release-window-removal-pr.yml
+# from a checkout of main, with a READ-ONLY token in GH_TOKEN; that job enqueues with
 # the mctl-gitops-pr App token only after this script has said ready=true.
 #
-#     REPO=o/r PR=N EXPECT_HEAD=<sha> TARGET=<template path> \
+#     REPO=o/r PR=N EXPECT_HEAD=<sha> TARGET=<template path> [WINDOW_KIND=add|remove] \
 #       GITHUB_OUTPUT=... RUNNER_TEMP=... bash scripts/release-window-enqueue-wait.sh
 #
 # The owner's MFA approval on the release-window decide page is the only human
@@ -17,7 +18,11 @@
 #   * head_sha is EXPECT_HEAD, the commit the opening job pushed after it had
 #     re-rendered the approved window and checked the edit changed nothing else;
 #   * the PR is from the App (mctl-gitops-pr[bot]), its head is in this
-#     repository and on a release-window/ branch;
+#     repository and on a release-window/ branch (WINDOW_KIND=add, the default)
+#     or a release-window-removal/ branch (WINDOW_KIND=remove). Nothing else is
+#     a kind: an addition is refused under remove and a removal under add;
+#   * for a removal the diff only deletes: no added line and at least one
+#     deleted one (a removal that adds text is not a removal);
 #   * the full file list is read and is exactly TARGET, one of the two project
 #     templates (apps or platform, never default), with no rename;
 #   * the head has not moved, reviewDecision is APPROVED and an approving review
@@ -35,6 +40,7 @@ set -euo pipefail
 
 : "${REPO:?REPO is required}" "${PR:?PR is required}" "${EXPECT_HEAD:?EXPECT_HEAD is required}" "${TARGET:?TARGET is required}" "${GITHUB_OUTPUT:?}" "${RUNNER_TEMP:?}"
 WAIT_SECONDS=${WAIT_SECONDS:-2700}
+WINDOW_KIND=${WINDOW_KIND:-add}
 APP_LOGIN='mctl-gitops-pr[bot]'
 # The required status checks of ruleset main-protection (id 18465404). Keep in
 # step with the ruleset and with release-bump-enqueue-wait.sh.
@@ -42,6 +48,11 @@ REQUIRED_CHECKS=cloudflare-plan,reserved-hosts,validate
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 die() { echo "::error::$*"; exit 1; }
+case "$WINDOW_KIND" in
+  add) BRANCH_PREFIX='release-window/' ;;
+  remove) BRANCH_PREFIX='release-window-removal/' ;;
+  *) die "WINDOW_KIND must be add or remove (got '${WINDOW_KIND}'); not enqueueing." ;;
+esac
 not_ready() { echo "::notice::$*"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0; }
 
 [[ "$PR" =~ ^[0-9]+$ ]] || die "no pull request number (got '${PR}'); not enqueueing."
@@ -51,11 +62,11 @@ not_ready() { echo "::notice::$*"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 
 
 # --- One read of the PR; every later check is pinned to this head. ---------
 if ! info=$(gh api "repos/${REPO}/pulls/${PR}" \
-      --jq '[.head.sha, .changed_files, .user.login, (.head.repo.full_name // ""), .head.ref, .state, .merged, .node_id] | map(tostring) | join("\u001f")'); then
+      --jq '[.head.sha, .changed_files, .user.login, (.head.repo.full_name // ""), .head.ref, .state, .merged, .node_id, .additions, .deletions] | map(tostring) | join("\u001f")'); then
   die "could not read #${PR}; not enqueueing."
 fi
 # Unit separator, not tab: see release-bump-enqueue-wait.sh.
-IFS=$'\x1f' read -r head_sha expected author head_repo head_ref state merged pr_id <<<"$info"
+IFS=$'\x1f' read -r head_sha expected author head_repo head_ref state merged pr_id additions deletions <<<"$info"
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || die "#${PR} has no readable head sha; not enqueueing."
 [[ -n "$pr_id" ]] || die "#${PR} has no node id; not enqueueing."
 if [ "$merged" = true ]; then not_ready "#${PR} is already merged."; fi
@@ -64,7 +75,10 @@ if [ "$state" = closed ]; then not_ready "#${PR} is closed."; fi
 [ "$head_sha" = "$EXPECT_HEAD" ] || die "the head of #${PR} is ${head_sha}, not the commit this run pushed (${EXPECT_HEAD}); not enqueueing."
 [ "$author" = "$APP_LOGIN" ] || die "#${PR} is authored by ${author}, not ${APP_LOGIN}; it needs a human merge."
 [ "$head_repo" = "$REPO" ] || die "the head of #${PR} is in '${head_repo}', not ${REPO}; it needs a human merge."
-case "$head_ref" in release-window/?*) ;; *) die "#${PR} is on '${head_ref}', not a release-window/ branch." ;; esac
+case "$head_ref" in "${BRANCH_PREFIX}"?*) ;; *) die "#${PR} is on '${head_ref}', not a ${BRANCH_PREFIX} branch." ;; esac
+if [ "$WINDOW_KIND" = remove ]; then
+  [ "$additions" = 0 ] && [ "$deletions" -ge 1 ] || die "#${PR} is not a pure deletion (${additions} added, ${deletions} deleted lines, or the counts are unreadable); not enqueueing."
+fi
 
 # --- The file list, read in full: exactly the one project template. ----------
 if ! files=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" \
