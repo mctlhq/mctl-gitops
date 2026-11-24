@@ -672,6 +672,14 @@ spec:
             {{- if $v.consent }}
             - {name: GLOVO_CONSENT_API_URL, value: "http://mctl-api.mctl-api.svc:8080"}
             - {name: GLOVO_CONSENT_TOKEN_FILE, value: "/var/run/secrets/mctl-api/token"}
+            # Admission needs the owner's approval on top of consent
+            # (service >= 0.7.0): the consent answer must also say access
+            # "approved". An absent or unknown access state is a refusal with
+            # 503, never a pass. mctl-api went first (its access requirement,
+            # mctl-gitops#3013), so every principal with an active consent
+            # was approved before this line existed.
+            # Rollback: delete this line; consent alone decides again.
+            - {name: GLOVO_C2_REQUIRE_ACCESS, value: "true"}
             {{- end }}
             {{- if $v.control }}
             - {name: GLOVO_C2_CONTROL_ISSUER, value: "https://auth.mctl.ai"}
