@@ -21,7 +21,7 @@ Read-only repository inspection used mctl-gitops
 | #2528 proposal content | `sha256:13a4fd9cdf6b1063a9f50ed3b94604e82541d8b19b1f52bda77f6f9128e3443c` | Recomputed with `proposal-content-digest.py --rev HEAD` |
 | Proposal state | `proposed`, `requires_human_approval: true` | No implementation approval inferred |
 | #2589 review | APPROVED on final head `21d5711933a2d68daf7b3613a33bf04f2f6b64a9`, MERGED | Historical review evidence, not approval of future amendments |
-| Ruleset 18465404 | `DeployKey`, null actor id, `always`; strict checks false | Wildcard bypass persists; no mutation performed |
+| Ruleset 18465404 | `DeployKey`, null actor id, `always`; strict checks **true**; contexts `cloudflare-plan`, `reserved-hosts`, `validate` (15368), `agy-formal-review` (5732062) | Wildcard bypass persists; no mutation performed (corrected 2026-11-13: an earlier revision said strict false) |
 
 The issue reports fresh grant `aar_31e2ff84fe6b41b5bf918e79334ca9bd` and
 superseded grant `aar_e6e35315c8f54debaa834845d6f2d550`. Its current ledger
@@ -43,7 +43,7 @@ Sources: [#934](https://github.com/mctlhq/mctl-api/pull/934),
 | Bump routes | `release-bump-routes.yaml` selects the API PR route; both workflows verify trusted policy before publishing | Prove the first real routed bump, final-head review, expiry at merge and effect-time revalidation |
 | Image provenance | `build-image.yaml` stamps resolved `org.opencontainers.image.revision` | Verify label against tag source and digest; SBOM/provenance evidence for the actual build remains pending |
 | Chart | Pinned to `a5b9ef9c`, preserving `/devloop` | Do not follow the stale task to pin 4.154.0's chart; move tag and chart pin together after approval |
-| Trusted review gate | Existing Actions checks; ruleset strict false | Close PR-controlled guard/check spoofing and stale merge verdicts (P2-2/P2-3) |
+| Trusted review gate | Existing Actions checks; ruleset strict true | Close PR-controlled guard/check spoofing and stale merge verdicts (P2-2/P2-3) |
 | Effect boundary | Workflow floor and post-push detection | P2-1 / #2543 residual; admission and runtime injection protection are not established by this audit |
 | Dark configuration | #2591 removes orchestrator identity envFrom entry | Audit all literal env, secret references and producer definitions without reading Secret payloads |
 
@@ -52,13 +52,11 @@ reflect these facts and obtain independent review on the final content digest.
 Amendment changes the digest: obtain the corresponding fresh grant; do not reuse
 a stale grant. Keep the current proposal and ledger untouched during preparation.
 
-The minimal proposed gate interface extends existing `allow` records with
-`digest` and `source_commit`, plus bindings to reviewed release head/tree and
-policy digest. Preserve the existing owner/grant/expiry fields. The implementation
-proposal must define their exact validation and timestamp format before approval.
-Use injectable GitHub/GHCR reads; missing, malformed, partial or unreadable
-responses must refuse the operation. Expiry gates new writes/merges, not restarts
-of an already authorized deployment.
+The gate interface (packet, allow record with `allow_pr` and record-level
+provenance, `policy_digest`, RFC3339 `expires_at`) is defined in the #2528
+proposal, not here. Missing, malformed, partial or unreadable responses are
+UNKNOWN and refuse. Expiry gates new writes/merges, not restarts of an already
+authorized deployment.
 
 ## Execution sequence and owner decision packet
 
@@ -68,9 +66,11 @@ of an already authorized deployment.
    build and decision; movement marks candidate evidence stale and requires a
    refreshed packet and any affected grants. Do not merge Basket PRs into R0.
 2. **Implementation decision.** Present the reviewed amended #2528 digest,
-   grant reference, exact changes and validation evidence. Owner decides through
-   the authenticated human path. No typed approver identity, bot substitute,
-   automatic acceptance or DeployKey bypass. Separate operator approval covers
+   grant reference, exact changes and validation evidence. Owner decides only
+   on the fresh, MFA-backed decide page of mctlhq/mctl-api#1022 (a hard
+   prerequisite). A GitHub login, review, merge or App approval is not a human
+   signal. No typed approver identity, bot substitute, automatic acceptance,
+   "green gate = merge" or DeployKey bypass. Separate operator approval covers
    any App, environment, ruleset or admission changes.
 3. **Implement and verify the approved gate.** Extend the existing gate and
    close the three P2 findings. Prove that merging #934 can build/tag but cannot
@@ -87,22 +87,27 @@ of an already authorized deployment.
 6. **DEPLOY GO.** Owner reviews the built artifact, policy digest, expiry,
    prerequisite evidence, production diff, rollback and risk disposition. Add the
    bound allow record through its reviewed PR only after this decision. Move
-   image tag and chart pin together through the authorized PR route. Validate the
-   current head immediately before merge; observe the first real App PR, review,
-   auto-merge and absence of App direct pushes to main. Failure leaves NO-GO.
+   image tag and chart pin together through the authorized PR route; only the
+   broker merges it, revalidating the current head and consuming the grant
+   immediately before merge. Auto-merge never merges a held PR. Observe the first
+   real App PR and broker merge and the absence of App direct pushes to main.
+   Failure leaves NO-GO.
 7. **Post-deploy.** Operator verifies Argo Synced/Healthy, actual pod imageIDs
    against the authorized digest and all dark flags. Failed reads remain UNKNOWN.
    Keep Basket, migrations and activation on their separate holds.
 
 ### Residual risk decision (#2543)
 
-Both write deploy keys can bypass PR checks and change guarded tag, policy or
-allow records. PR routing and monitoring do not remove this ability. The owner
-must either accept this exact residual in a dated, attributed record with scope,
-expiry and incident/rollback owner, or wait for verified remediation. No
-acceptance has been obtained. #2543 stays open; its research authorization does
-not permit credential, ruleset or production changes. Cluster-admin overrides and
-unverified runtime env injection paths must also have explicit dispositions.
+Both write deploy keys (165489378 `gitops-bump`, 166128843
+`argo-workflows-bot-2026-10`) can bypass PR checks and change guarded tag, policy
+or allow records; routing and monitoring do not remove this. The owner accepted
+the residual risk for 4.155.0 in chat on 2026-11-13 (accept plus compensating
+detection, not remediation first). That chat is not a record: a dated GitHub
+record by the owner, with scope 4.155.0, expiry and incident/rollback owner,
+naming both deploy keys, cluster-admin overrides, P9 env injection and the
+repository-level App keys, is a **GO precondition and does not exist yet**. The
+pinned out-of-repo detector with heartbeat is also a GO precondition. #2543
+stays open; nothing here changes credentials, rulesets or production.
 
 ### Evidence required before GO
 
@@ -178,3 +183,30 @@ Go 1.27.4, synthetic fixtures and no production data or credentials:
 
 These tests use a fake identity provider. They do not satisfy production OAuth,
 real human decision, a production-copy D2 rehearsal, or R0 rollback acceptance.
+
+
+## Five-P2 proposal correction (2026-11-12)
+
+The resumed investigator produced content `sha256:2c3cb1c5...179e99ab` and grant
+`aar_045442c76066428da01870ac379b9d32`. Independent review returned AMEND:
+authority/head binding, trusted workflow, merge-time validation, the positive
+tag+chart path and YAML fallback each had a P2. The amended
+[canonical proposal](../../platform-gitops/agents-state/mctl-gitops/proposals/issue-2528-security-release-enforce-mctl-api-4-155/requirements.md)
+and its design/tasks now specify their replacements and required tests.
+This is a specification correction; implementation, capability proof and
+operator cutover remain undone. The old grant must not approve the new content.
+A fresh final-content review and matching human grant are required. In
+particular, no release readiness is inferred before the trusted merge-authority
+boundary and #2543 migration prerequisites are demonstrated. No ledger state,
+allow record, release, production setting or acceptance status changes here.
+
+## Merged proposal (2026-11-13)
+
+#2604 and the donor rewrite #2606 were merged into one proposal and three
+independent reviews resolved (map in the proposal's tasks.md). Readiness now
+also requires mctl-api#1022, policy provenance, a repo-wide image scan with
+cluster-wide admission, the 4.154.0 digest pin
+(`sha256:42d5a572156f179f0f697bd3279fe7817831294d9ccb4a55a91d28b02f9d4488`,
+registry read; live pod imageID not observed), main-only checker/broker
+environments, exit 7 preserved through the bump jobs, and
+`mctl-api.yaml` in auto-merge `protected_re`. Still NO-GO.
