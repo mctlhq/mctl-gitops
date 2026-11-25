@@ -86,6 +86,7 @@ env:
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
+  MCP_APPS_ENABLED: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
