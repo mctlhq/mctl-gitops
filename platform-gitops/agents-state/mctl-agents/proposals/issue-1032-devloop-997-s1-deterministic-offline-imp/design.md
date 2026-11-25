@@ -51,7 +51,7 @@ Nothing in `mctlhq/mctl-agents` evaluates implementability today.
   `tests/fixtures/sdd/`) are read by table tests. `pyproject.toml` sets
   `testpaths = ["tests"]`.
 
-Deployed state checked:
+GitOps-declared state checked (not verified live runtime):
 
 - `$MCTL_GITOPS_ROOT/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`:
   - env `IMPLEMENTER_BUDGET_USD: "20.00"`. A comment records the raises
@@ -60,8 +60,9 @@ Deployed state checked:
   - `activeDeadlineSeconds` 7200 is noted as the outer net;
   - no `IMPLEMENTER_TIMEOUT_CEILING_SECONDS` override was found.
 
-  So the effective budget is $20 and the timeout is 5400 s, not the manifest
-  defaults. This matches mctl-agents#1025's statement.
+  The **GitOps-declared** budget is $20 and timeout 5400 s, not the
+  manifest defaults. This matches #1025's configuration report, but does
+  not establish the environment of the live implementer pod.
 - `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-implement/values.yaml`
   sets image tag `1.117.0` and `--role implementation`. That worker submits the
   Argo CWFT and waits, so the CWFT env above is what the implementer pod sees.
@@ -86,10 +87,100 @@ existing module.
   `Release blockers*` (case-insensitive, prefix match) are non-task sections.
   Any other heading, or none, is a task section. Unknown headings are recorded
   in `graph.sections`.
-- **Task head.** `^- \[[ xX]\] (?P<id>\d+[a-z]?)\.\s+(?P<body>.*)$` at column 0
-  in a task section. The task block is the head plus every following line that
-  is indented or blank, up to the next head, heading or column-0 non-task
-  line.
+- **Task head.** `^- \[[ xX]\] (?P<id>\d+[a-z]?)\.\s+(?P<body>.*)# Design: issue-1032-devloop-997-s1-deterministic-offline-imp
+
+## Current state
+
+Nothing in `mctlhq/mctl-agents` evaluates implementability today.
+
+- **Digest.** `orchestrator/proposal_state.py` defines
+  `PROPOSAL_DIGEST_FILES = ("requirements.md", "design.md", "tasks.md", "proposed-content.md")`
+  and `content_digest_of(files)`, a length-prefixed sha256 pinned by
+  `tests/test_proposal_digest.py`. The approval grant binds this digest. S1
+  reuses it read-only and changes neither the files nor the function.
+- **Investigator template.** `orchestrator/run_issue_investigator.py` (around
+  line 2273) gives the tasks format `- [ ] 2. <task> (depends on 1) — DoD: ...`.
+  It does not parse the result.
+- **Real `tasks.md` shapes** (read from `$MCTL_GITOPS_ROOT/agents-state`):
+  - `mctl-agents/proposals/issue-997-*/tasks.md`: 8 tasks. Most
+    `(depends on N)` clauses sit alone on a line after nested sub-bullets
+    inside the task block.
+  - `issue-993-*`: 17 tasks under `## Part M`. Ids include `4b`. Clauses
+    include `(depends on 3 and 4b)`, `(depends on 4-11)` and
+    `(depends on 10, 1)`. Task 10 is a spike, and one task "must be merged and
+    live before the switch is turned on".
+  - `issue-996-*`: inline `(depends on 0)` and `(depends on 0-4)`. Ids include
+    `3b`.
+  - `issue-1021-*`: 11 tasks under `## Implementation`, including `5a`, with
+    `T-10`-style test references in DoD text.
+  - `issue-414-*`: 8 dense single-line tasks.
+  - `mctl-gitops/proposals/issue-911-*/tasks.md`: `(depends` wraps to `on 4)`
+    on the next line, and "After merge, confirm ArgoCD ..." is a post-merge
+    gate.
+
+  Non-task sections seen: `## Tests`, `## Rollback`, `## Release blockers (not M1 acceptance)`.
+- **Implementer capabilities.**
+  - `orchestrator/run_implementer.py` clones only `mctlhq/{service}` at the
+    default branch, so it has single-repo write authority and one base.
+  - The prompt (around line 2190) asks for a Conventional Commits subject "like
+    `feat(agents): {ref.slug}` (or fix:/chore: as appropriate)" and allows
+    "multiple small commits".
+  - `agents/mctl-agents/.claude/agents/implementer.md` says "two or three small
+    commits are fine; a dozen is not".
+  - `agents/_manifests/implementer/agent.yaml` declares `budgetUsd: 3.00`,
+    `timeoutSeconds: 900`.
+  - `orchestrator/options.py` reads `IMPLEMENTER_BUDGET_USD` (default `3.00`),
+    `IMPLEMENTER_TIMEOUT_SECONDS` (default `900`) and
+    `IMPLEMENTER_TIMEOUT_CEILING_SECONDS` (default `1800`, used for review
+    work).
+- **Record style precedent.** `orchestrator/implementation_completion.py` is
+  frozen dataclasses with bounded string helpers (`_str`, `redact_text`) and a
+  canonical `_hash_body`. S1 follows it.
+- **Fixture precedent.** `tests/fixtures/<area>/` directories (for example
+  `tests/fixtures/sdd/`) are read by table tests. `pyproject.toml` sets
+  `testpaths = ["tests"]`.
+
+GitOps-declared state checked (not verified live runtime):
+
+- `$MCTL_GITOPS_ROOT/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`:
+  - env `IMPLEMENTER_BUDGET_USD: "20.00"`. A comment records the raises
+    3.00 -> 10.00 -> 20.00;
+  - env `IMPLEMENTER_TIMEOUT_SECONDS: "5400"`;
+  - `activeDeadlineSeconds` 7200 is noted as the outer net;
+  - no `IMPLEMENTER_TIMEOUT_CEILING_SECONDS` override was found.
+
+  The **GitOps-declared** budget is $20 and timeout 5400 s, not the
+  manifest defaults. This matches #1025's configuration report, but does
+  not establish the environment of the live implementer pod.
+- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-implement/values.yaml`
+  sets image tag `1.117.0` and `--role implementation`. That worker submits the
+  Argo CWFT and waits, so the CWFT env above is what the implementer pod sees.
+- `gh issue view 1025`: #1021's implementer run (`mctl-agents-implement-ca0f0420`)
+  quoted a prompt fixing the subject to `feat(agents): <slug>` with a
+  `Co-Authored-By` ending. That differs from the clone HEAD prompt text, and
+  which one image `1.117.0` contains was not verified. The commit contract is
+  therefore treated as unverified (see Open questions in requirements.md).
+- The mctl MCP tools were not called. No live pod env was observed. The values
+  above are declared gitops config, not observed runtime state.
+
+## Proposed solution
+
+S1 adds pure modules, offline tools, fixtures and tests. It modifies no
+existing module.
+
+### 1. `orchestrator/feasibility_tasks.py`: the task parser
+
+`parse_tasks(text: str) -> TaskGraph` is line-based and deterministic.
+
+- **Sections.** A `## ` heading starts a section. `Tests`, `Rollback` and
+  `Release blockers*` (case-insensitive, prefix match) are non-task sections.
+  Any other heading, or none, is a task section. Unknown headings are recorded
+  in `graph.sections`.
+ at column 0
+  in a task section. A block contains the head and its attached continuations.
+  A column-0 line resembling a detached dependency, an unindented
+  `(depends on ...)` or a malformed/wrapped task head is **ambiguous**,
+  never silently discarded. Record a bounded source line reference.
 - **Unknown checklist lines.** A column-0 `- [ ]` line in a task section that
   does not match the head pattern, such as `- [ ] Step two` or `- [ ] 3)`, is
   `unknown-task-syntax`. It drives `tasks-unparseable` when no task parses, and
@@ -106,7 +197,10 @@ existing module.
 
   Any other token in the spec makes the clause ambiguous, for example
   `(depends on 3 and 4b) - names` is fine but `(depends on the M1 PR)` is not.
-  A bare `depends on` outside parentheses is also ambiguous.
+  A bare `depends on` outside parentheses is also ambiguous. Scan task
+  sections for unattached dependency-looking fragments outside parsed
+  blocks, including unindented continuations and wrapped task heads;
+  otherwise the parser can silently lose edges and claim `feasible`.
 - **Annotations.** Optional explicit tags `[repo: X]`, `[base: R]`, `[spike]`
   and `[gate: approval|merge|release|deploy]`. An unknown tag value is an
   advisory. Explicit tags win over heuristics.
@@ -116,31 +210,31 @@ existing module.
 
 ### 2. `orchestrator/feasibility_profile.py`: the runner profile
 
-- `Capability(value, source)` where `source` is `deployed`, `default-only` or
-  `unknown`. `verified` is `source == "deployed"`.
-- `RunnerProfile` (frozen) has these capabilities:
-  - `write_repos` (target only), `base_ref` (`default-branch`) and
-    `attempts` (1). These are `deployed`, because they are structural facts of
-    `run_implementer.py` pinned by S1 constants and tests;
-  - `budget_usd`, `timeout_s`;
-  - `commit_contract`, with fields `subject_types`, `max_commits` and
-    `ordered_typed_commits`.
-
-  `profile_id` is `implementer/single-repo-v1`. `digest()` is the sha256 of the
-  canonical JSON of values and sources.
-- **Derivation (pure, from data).**
-  `derive_profile(manifest: Mapping, option_defaults: Mapping, deployed: Mapping | None)`
-  applies the precedence deployed value, then default-only, then unknown.
-- **Loader (the only I/O, outside `evaluate`).** `load_deployed_snapshot(path)`
-  reads a small JSON snapshot. It holds `IMPLEMENTER_BUDGET_USD`,
-  `IMPLEMENTER_TIMEOUT_SECONDS`, an optional `commit_contract`, and provenance
-  (`source_path`, `gitops_commit`). The offline tool can produce it from a CWFT
-  file with `--from-cwft PATH`, by extracting the named env entries from YAML.
-  An unreadable input is an error, never a defaulted profile.
-- **Committed snapshot.** `tests/fixtures/feasibility/profiles/deployed-2026-11.json`
-  pins 20.00 / 5400 with provenance. `default-only.json` has no deployed
-  snapshot. `commit-verified-single-type.json` sets
-  `ordered_typed_commits: false`.
+- `Capability(value, origin, evidence_ref, revision)` uses origins
+  `source_code`, `gitops_declared`, `runtime_observed`,
+  `synthetic_fixture`, `unknown`. Values, origins, image/config/code
+  revisions and evidence references all participate in the profile digest.
+- `RunnerProfile` records write scope/base/attempts as source-code
+  invariants *pinned to an inspected SHA*, not proof of the running image;
+  budget and timeout as manifest defaults, GitOps declarations or actual
+  observed pod values; and independent `commit_shape_contract`
+  (subjects/count/ordering) and `test_evidence_contract`
+  (red/green/mutation evidence).
+- `derive_profile(...)` is pure. GitOps CWFT values `20.00` / `5400`
+  have origin `gitops_declared`; they are **not** runtime observations.
+  Claims about the live runner require observation tied to its running
+  image/prompt/config. Unknown fields remain unknown.
+- `load_evidence_snapshot(path)` reads a revision-bound offline JSON
+  snapshot. `--from-cwft` imports declarative config only; it never
+  upgrades origin to `runtime_observed`. Invalid/unreadable input fails.
+- Test profiles:
+  `gitops-declared-2026-11.json` (declared 20/5400);
+  `default-only.json` (no live capability verification);
+  `synthetic-verified.json` (fully specified *synthetic* test profile);
+  `commit-verified-single-type.json` (synthetic incompatible shape).
+- A synthetic fixture can yield `feasible` as a **test classification**
+  only; for actual implementer readiness, required unobserved runtime
+  capabilities yield `uncertain`. No result guarantees success.
 
 ### 3. `orchestrator/feasibility.py`: the evaluator and record
 
@@ -190,19 +284,23 @@ existing module.
   - **Replay (6).** It fires when `workflow.patched`, `_PATCH\b` or
     `orchestrator/temporal/workflows/` appears in design or tasks, and no task
     block mentions `replay`, `histories/` or `record_workflow_history`.
-  - **Commit contract (7).** Proposal demands come from a lexicon:
-    `separate .*test:.* commit`, `red before`, `` `test:` commit ``,
-    `\d+ commits`, `commit (subject|message) must`. Each demand is checked
-    against `profile.commit_contract`. A verified contract that does not
-    support the demand gives `incompatible`. An unverified contract gives
-    `unverified`. No demand means the rule is silent.
+  - **Commit shape vs test evidence (7).** Explicit ordered/multiple commits
+    and mandatory commit subject types are compared with the verified
+    `commit_shape_contract`. `red before`, `green after` and mutation-proof
+    language are **test-evidence obligations**, not separate commits.
+    Owner decision #1025 permits one commit with reproducible evidence.
+    The `red before + one commit` negative control must not trigger
+    `commit-contract-incompatible`. Unknown effective shape only triggers
+    `commit-contract-unverified` when a shape demand exists.
   - **Scope (8).** Task count above `MAX_TASKS_ONE_ATTEMPT`, or distinct
     top-level components above `MAX_COMPONENTS`. A component is the first two
     path segments of every backticked path in task blocks.
-  - **Capability (9).** Emitted when any rule that would otherwise let the
-    verdict be `feasible` relies on a capability that is not `verified`.
-    Budget and timeout always qualify, because a `feasible` claim asserts that
-    the work fits one attempt.
+  - **Capability (9).** Actual implementability cannot be marked
+    `feasible` using only source-code/GitOps claims for runtime-sensitive
+    budget, timeout, active image or commit-shape facts. Missing live
+    evidence yields `runner-capability-unknown` and `uncertain`.
+    Fully synthetic test profiles can exercise `feasible`, explicitly
+    labelled as non-production evidence.
 - **Verdict.** The lattice is `blocked_dependency > needs_split > uncertain > feasible`.
 - **Slices.** Topological layers are cut at spike, gate and foreign-repo
   boundaries and at every `MAX_TASKS_ONE_ATTEMPT` tasks. Consecutive tasks
@@ -228,9 +326,12 @@ existing module.
   nothing.
 - `tools/feasibility_corpus_report.py [--runs N]` evaluates every fixture under
   `tests/fixtures/feasibility/` against its declared profile and prints:
-  - the fixture table: verdict, reason codes, `human_label` and FP/FN class
-    (an FP is evaluator `feasible` where the label is not feasible; an FN is
-    evaluator hard-blocked where the label is feasible);
+  - a full **4×4 confusion matrix** of evaluator result vs independently
+    reviewed human label (`feasible | needs_split | blocked_dependency |
+    uncertain`), with reason/severity breakdown and ground-truth provenance.
+    Show **critical false-feasible** count; if a confirmed impossible
+    fixture is classified `feasible`, report **S2 readiness: STOP**.
+    Uncertain human labels cannot be counted as verified truth;
   - limitations;
   - the median and p95 evaluation time over N runs, and the input bytes.
 
@@ -288,6 +389,17 @@ Synthetic mutation fixtures:
   Dropped. That is I/O in evaluation, the result would differ per host, and an
   unset env would silently yield the manifest default. That is exactly the
   `budgetUsd: 3` mistake from #1025.
+
+## Pre-approval execution envelope
+
+The seven heading tasks hide three modules, two CLI tools, a substantial
+fixture corpus and mutation tests. GitOps declares $20 / 5400 seconds, but
+real runner readiness has not been established. Before approval, the owner
+must review a file/test breakdown and assess one-attempt feasibility.
+If the envelope cannot be substantiated, split the canonical work into
+S1a (core parser/profile/evaluator + critical tests) and S1b (expanded
+corpus/report/docs), each requiring a separate proposal, digest and
+approval. Do not weaken acceptance tests to fit a budget.
 
 ## Platform impact
 
