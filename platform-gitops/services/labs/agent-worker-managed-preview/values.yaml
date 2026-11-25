@@ -27,8 +27,8 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "main-a23d899"
-  digest: "sha256:cec18a575b8351c815de7152122f14cb6be30d9ee47d0c49ec01330a0eefbcf0"
+  tag: "main-389cb49"
+  digest: "sha256:d70630bae1800d3d26633bd53581bc777fc66e35a4816a13d845b8151b722a13"
   # tag is auto-bumped by mctl-telegram's preview-deploy.yml on every push to
   # main (mctl-telegram#1094: its dispatch skips until this file exists on
   # main, then bumps it) — do not hand-pin it.
