@@ -82,9 +82,23 @@ Everything ships behind a new switch, `MCTL_EXECUTION_REQUEST_OPERATOR_DRAIN` (d
 `ParseQueueWhileActive`: `""`/`off` mean off, `on` means on, and anything else fails startup. When off, both new
 routes are not mounted and answer 404.
 
+### Owner-v2 approval invariant (hard gate)
+
+The earlier single-admin CAS-only draft is superseded by the owner's explicit v2 decision on
+mctl-api#935. The REST route is `POST /api/v1/operator/execution-requests/{id}/reject`.
+It **requires** a stored, separately approved, single-use `approval_grant_id` with exact
+`execution_request.reject` scope, bound to the request ID, tenant and reason. The approver
+must be distinct from the invoking operator; a successful CAS reject, grant consumption and
+audit event form one transaction. The grant schema/provider and its same-transaction
+integration must be confirmed against actual code; if unavailable this is a **STOP for
+implementation**, not permission to replace it with an unchecked string or single-admin
+bypass. The request's `expected_state` and `expected_row_version` are mandatory. No
+operator mutation or production flag may be enabled until these checks are proven in real
+PostgreSQL concurrent tests. The decision also prohibits any bulk reject.
+
 ### 1. Schema (additive, idempotent, in `executionRequestSchema`)
 ```sql
-ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS row_version BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS rejected_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS rejected_by_principal_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS rejection_kind TEXT NOT NULL DEFAULT ''
@@ -93,29 +107,31 @@ ALTER TABLE work_item_execution_requests ADD COLUMN IF NOT EXISTS rejection_kind
 The existing `work_item_execution_requests_claimable` index on `(created_at, id) WHERE state IN ('pending','claimed')`
 already serves the discovery keyset scan. No new index is needed.
 
-`revision` is a per-row fencing counter. Every state-changing UPDATE gets `revision = revision + 1`: claim,
-fulfil, dispatcher reject and operator reject. Each row's revision is independent of the item's `state_version`.
+`row_version` is a per-row fencing counter. Every state-changing UPDATE gets `row_version = row_version + 1`: claim,
+fulfil, dispatcher reject and operator reject. Each row's row_version is independent of the item's `state_version`.
 
 ### 2. State machine (unchanged states; one new guarded transition)
 ```
 pending --claim(service)--> claimed[live] --lease lapses--> claimed[lapsed] --claim(service)--> claimed[live] (new token, rev+1)
 claimed[live, holder]  --fulfil(holder token)--> fulfilled
 claimed[live, holder]  --reject(holder token)--> rejected (rejection_kind=claimant)
-pending                --operator-reject(human admin, expected_revision)--> rejected (rejection_kind=operator)
-claimed[lapsed]        --operator-reject(human admin, expected_revision)--> rejected (rejection_kind=operator, token cleared)
+pending                --operator-reject(human admin, grant, expected_state, expected_row_version)--> rejected (rejection_kind=operator)
+claimed[lapsed]        --operator-reject(human admin, grant, expected_state, expected_row_version)--> rejected (rejection_kind=operator, token cleared)
 claimed[live]          --operator-reject--> REFUSED 409 execution_request_claim_live
-any, revision moved    --operator-reject--> REFUSED 412 execution_request_revision_moved
-fulfilled|rejected     --operator-reject--> REFUSED 409 execution_request_closed (or 200 replay)
+any, row_version moved    --operator-reject--> REFUSED 412 execution_request_row_version_moved
+fulfilled|rejected     --operator-reject--> REFUSED 409 execution_request_closed (consumed grant -> 403)
 ```
-`lease_state` is computed at read time and never stored: `pending`, `claimed_live` (`claim_expires_at > now`) or
-`claimed_lapsed`.
+`lease_state` is computed using the **database clock** and never stored:
+`pending`, `claimed_live` (`claim_expires_at > now()`), or `claimed_lapsed`.
+The operator-reject lease predicate must use PostgreSQL `now()` in the UPDATE,
+not an API replica's local clock; a skewed replica cannot override a live lease.
 
 ### 3. Store (`internal/workitems/execution_requests.go`, new file `operator_drain.go`)
 
 - `OpenExecutionRequests(ctx, OpenRequestFilter{Tenant, States, Limit, After *OpenRequestCursor})
   ([]OpenExecutionRequestRow, *OpenRequestCursor, error)`. It runs one query:
   ```sql
-  SELECT <executionRequestColumns>, r.revision, w.tenant, w.state, w.state_version, w.visibility, w.owner_principal,
+  SELECT <executionRequestColumns>, r.row_version, w.tenant, w.state, w.state_version, w.visibility, w.owner_principal,
          (SELECT e.id FROM work_item_executions e WHERE e.work_item_id=r.work_item_id AND e.phase IN <openPhasesSQL>
           ORDER BY e.started_at DESC LIMIT 1) AS open_execution_id
   FROM work_item_execution_requests r JOIN work_items w ON w.id = r.work_item_id
@@ -126,35 +142,35 @@ fulfilled|rejected     --operator-reject--> REFUSED 409 execution_request_closed
   The extra row decides whether `next_cursor` is set. Ordering is by immutable `(created_at, id)`, so a full walk
   visits every row that was open when the walk passed its position. Rows created later appear at the end of the
   walk. There is no oldest-N window to starve in. Requests queued behind an open execution are included.
-- `OperatorRejectExecutionRequest(ctx, OperatorRejectInput{Mutation, RequestID, ExpectedRevision, Reason})
+- `OperatorRejectExecutionRequest(ctx, OperatorRejectInput{Mutation, RequestID, ExpectedState, ExpectedRowVersion, Reason, ApprovalGrantID})
   (*ExecutionRequest, *WorkItem, OperatorRejectPrior, bool, error)`. It uses the existing `lockedRequest` (item
   lock, then `SELECT ... FOR UPDATE`), and runs under the same idempotency helpers `replayed`/`remember` with op
   `execution_request_operator_reject`. Order of checks:
-  1. Replay of the same actor, key and body: return the stored row with `created=false`.
+  1. Resolve the persisted operation grant and validate `scope=execution_request.reject`, exact `request_id`, tenant, reason, expiry <= 24h, approved by an authenticated principal other than this operator, and not previously consumed. Missing or used grant returns 403 even on an identical idempotency replay; no mutation.
   2. `fulfilled`/`rejected`: return `ClosedRequestError`.
-  3. `x.Revision != ExpectedRevision`: return `*RevisionMovedError{Current: x}`.
+  3. `x.State != ExpectedState` or `x.RowVersion != ExpectedRowVersion`: return `*RowVersionMovedError{Current: x}`.
   4. `state=claimed && claim_expires_at > now`: return `*ClaimLiveError{Current: x}`.
   5. Otherwise run this UPDATE:
      ```sql
      UPDATE ... SET state='rejected', reason=$2, rejected_by=$3, rejected_by_principal_id=$4,
-            rejection_kind='operator', claim_token='', revision=revision+1, updated_at=$5, closed_at=$5
-     WHERE id=$1 AND revision=$6 AND state IN ('pending','claimed')
-       AND (state='pending' OR claim_expires_at <= $5)
+            rejection_kind='operator', claim_token='', row_version=row_version+1, updated_at=$5, closed_at=$5
+     WHERE id=$1 AND row_version=$6 AND state IN ('pending','claimed')
+       AND (state='pending' OR claim_expires_at <= now())
      ```
      It then appends `execution_request_operator_rejected`, with detail `{execution_request_id, prior_state,
-     prior_claimed_by, prior_claim_expires_at, revision, requested_by}`. The detail has no reason text and no token.
+     prior_claimed_by, prior_claim_expires_at, row_version, requested_by}`. The detail has no reason text and no token.
 
   The reason is validated with the existing `checkText(..., MaxExecutionRequestReason, true)` and `scanSecrets`.
-  The function writes no execution, no approval and no item state.
+  The function writes no execution, no new approval and no item state. **It must atomically consume the verified `approval_grant_id` in the same transaction as the guarded reject and audit event.** A 403/409/412 or DB failure must roll back the grant consumption.
 - Changes to existing paths:
-  - Add `revision=revision+1` to the claim, fulfil and dispatcher-reject UPDATEs. The dispatcher reject also sets
+  - Add `row_version=row_version+1` to the claim, fulfil and dispatcher-reject UPDATEs. The dispatcher reject also sets
     `rejection_kind='claimant'`.
   - In `RejectExecutionRequest`'s `ExecutionRequestRejected` branch, return `ClosedRequestError` when
     `rejection_kind='operator'`. A former holder then learns the request is closed instead of getting
     `not_claimed`.
   - `FulfilExecutionRequest` already returns `ClosedRequestError` for `rejected`, so a lapsed holder can never
     attach an execution, and nothing can record `Succeeded` for it.
-  - `executionRequestColumns` and `scanExecutionRequest` gain `revision`, which is serialized. They also gain
+  - `executionRequestColumns` and `scanExecutionRequest` gain `row_version`, which is serialized. They also gain
     `rejected_by` and `rejection_kind`, serialized as omitempty. `claim_token` stays `json:"-"`.
 
 ### 4. HTTP (`internal/api/handlers_execution_requests.go`, new `handlers_execution_request_drain.go`)
@@ -166,7 +182,7 @@ purpose: the dispatcher must never call this path.
 `GET /api/v1/execution-requests/open?tenant=&state=pending|claimed&limit=50&cursor=`
 ```json
 {"schema_version": "...", "execution_requests": [
-  {"id":"xr_..","work_item_id":"wi_..","kind":"resume","state":"claimed","revision":7,
+  {"id":"xr_..","work_item_id":"wi_..","kind":"resume","state":"claimed","row_version":7,
    "lease_state":"claimed_lapsed","claimed_by":"mctl-agent","claimed_at":"..","claim_expires_at":"..",
    "requested_by":"..","surface":"..","created_at":"..","updated_at":"..",
    "tenant":"admins","work_item_state":"waiting","work_item_state_version":12,
@@ -180,23 +196,23 @@ purpose: the dispatcher must never call this path.
   count.
 - The route sits in the execution-requests rate-limit group.
 
-`POST /api/v1/execution-requests/{request_id}/operator-reject`
+`POST /api/v1/operator/execution-requests/{request_id}/reject`
 ```json
-{"expected_revision": 7, "reason": "drain before worker rollback; mctlhq/mctl-agents#996", "idempotency_key": "drain-2026-11-xx-xr_.."}
+{"expected_state": "claimed", "expected_row_version": 7, "reason": "drain before worker rollback; mctlhq/mctl-agents#996", "approval_grant_id": "aar_...", "idempotency_key": "drain-2026-11-xx-xr_.."}
 ```
-- 200 returns `{"execution_request": {...state:"rejected", rejection_kind:"operator", revision:8},
+- 200 returns `{"execution_request": {...state:"rejected", rejection_kind:"operator", row_version:8},
   "prior": {"state":"claimed","lease_state":"claimed_lapsed","claimed_by":"mctl-agent","claim_expires_at":".."},
   "replayed": false}`.
-- 409 `execution_request_claim_live` returns `{claim_expires_at, claimed_by, revision}`. The operator waits for
+- 409 `execution_request_claim_live` returns `{claim_expires_at, claimed_by, row_version}`. The operator waits for
   the lease to lapse, which happens only once the dispatcher has stopped re-claiming, then re-reads.
-- 412 `execution_request_revision_moved` returns `{revision, state, lease_state}`.
-- 409 `execution_request_closed` reuses `writeExecutionRequestError`.
+- 412 `execution_request_row_version_moved` returns `{row_version, state, lease_state}`.
+- 409 `execution_request_closed` reuses `writeExecutionRequestError`; 403 `execution_request_approval_consumed` refuses a replay with the same grant.
 - 400 is returned for an invalid body or reason. Bodies naming `engine`, `engine_ref`, `execution_id` or
   `claim_token` are refused, extending `refuseExecutionIdentity` with `claim_token` for this route.
 - Each item also passes `requireWorkItemRole(..., item.Tenant, operations.RoleAdmin, "execution-request-operator-reject")`,
   so per-item tenancy is checked explicitly even for platform admins.
 - A success is audited as `work_item.execution_request_operator_rejected` with `RiskHigh`, through
-  `auditExecutionRequest`, with extras covering the prior state, prior claimant and revision. A refusal is
+  `auditExecutionRequest`, with extras covering the prior state, prior claimant and row_version. A refusal is
   audited through `auditExecutionRequestRefusal` with the typed code.
 
 ### 5. Operator procedure (documented in `docs/`, not automated)
@@ -207,7 +223,7 @@ purpose: the dispatcher must never call this path.
    ticket.
 3. For each request, the human records "reject" or "preserve" with a reason in the ticket. Preserved requests
    are not touched.
-4. For each selected request, call operator-reject with the `revision` from the walk. On 412 or 409, re-read
+4. For each selected request, obtain a separately approved short-lived single-use request-bound grant; call operator-reject with the `expected_state`, `row_version` from the walk and `approval_grant_id`. On 412 or 409, re-read
    that one request and decide again. Never retry blindly.
 5. Walk discovery again. Positive evidence for a worker-image rollback below M1 is all of the following: no row
    in the drained set is still open; every rejected id has an `execution_request_operator_rejected` event and
@@ -217,8 +233,7 @@ purpose: the dispatcher must never call this path.
 - The new routes are REST, called by a human directly. They do not pass through the MCP policy checkpoint, and
   they do not replace it. If MCP tools are later added, they must be classified as mutating, so that the
   checkpoint's REQUIRE_APPROVAL applies.
-- An operator reject can only prevent work. It never starts an execution and never touches
-  `action_approvals` or DevLoop approval grants, so no digest-bound owner approval is bypassed or consumed.
+- An operator reject can only prevent work. It never starts an execution. It **does** consume one separately approved, persisted request-bound operation grant atomically, and it never grants itself authority; it does not modify unrelated DevLoop or WorkItem approvals. The proof of grant binding and consumption is a hard implementation prerequisite.
 
 ## Alternatives
 
@@ -230,27 +245,29 @@ purpose: the dispatcher must never call this path.
    not closed, and the lease semantics then govern a human. The single-transaction CAS reject gives the same
    fencing guarantees with less surface. Dropped. The approach could return if an inspect-while-holding step
    turns out to be needed.
-2. **Require a second-admin action approval per reject (mctl-api#366).** The operator would create an
+2. **Selected owner-v2 requirement: second-admin action approval per reject (mctl-api#366 or a verified stored operation grant).** The operator would create an
    `ActionApprovalRequest`, with `action_kind=execution-request-operator-reject`,
-   `target=<xr id>@<revision>` and `artifact_hash=sha256(reason)`. Another human admin decides it, and
+   `target=<xr id>@<row_version>` and `artifact_hash=sha256(reason)`. Another human admin decides it, and
    operator-reject consumes it with `ConsumeActionApproval` plus `MarkActionApprovalExecuted` in the same call.
-   This is the strongest form of explicit authorization, but it makes a drain of N requests need N second-person
-   decisions. Not chosen as the default. Kept as an additive extension behind an option, and recorded as an open
-   question.
+   This is the **selected mandatory owner-v2 control**. A drain of N requests requires N
+   independently approved grants, each individually scope-bound and consumed once. It is
+   not an optional fallback; no implementation may replace it with one-admin CAS-only.
 3. **Batch or filter reject ("reject all claimed_lapsed in tenant X").** Faster, but this is exactly the
-   automated mass rejection the issue forbids, and it loses per-request revision fencing. Dropped.
+   automated mass rejection the issue forbids, and it loses per-request row_version fencing. Dropped.
 4. **Expose `claim_token` to admins on reads so the existing reject works.** This would break the invariant that
    only the claimant ever sees the token, and would let a reader impersonate a live holder. Dropped.
 
 ## Platform impact
 - **Migration:** four additive `ADD COLUMN IF NOT EXISTS` statements with constant defaults. On PostgreSQL 11+
-  this is metadata-only, with no table rewrite. Existing rows get `revision=1`. Older API pods run during a
-  rolling deploy and ignore the new columns. An older pod's claim does not bump `revision`. The operator reject
-  is still safe in that case, because its UPDATE also re-checks state and lease under the lock. The revision CAS
-  is then only weaker for a claim made by an old pod, and the live-claim check still covers it. Document that
-  the drain should be used only after the rollout has completed.
+  this is metadata-only, with no table rewrite. Existing rows get `row_version=0`. Older API pods may run during a
+  rolling deploy and do not increment `row_version`; therefore the operator reject route
+  **MUST STAY OFF until every API replica has upgraded** and all state-changing writers,
+  including lease renewal, have been verified to increment the counter. A mixed-version
+  writer could change ownership without changing the CAS value, so state/lease predicates
+  alone are not a substitute for this activation gate. Old mixed-version writes can silently defeat a stale row-version comparison, so keep
+  the route disabled until all writers are verified and the rollout is complete.
 - **Backward compatibility:** the dispatcher's claim, fulfil and reject contracts are unchanged, apart from new
-  fields (`revision`, `rejection_kind`) in their JSON. The one behaviour change: after an operator reject, a
+  fields (`row_version`, `rejection_kind`) in their JSON. The one behaviour change: after an operator reject, a
   former holder's reject gets 409 `execution_request_closed` instead of 409 `execution_request_not_claimed`.
   Both are already 409, and both mean "stop".
 - **Resources:** the discovery query is bounded at 101 rows and served by an existing partial index. The
@@ -259,7 +276,7 @@ purpose: the dispatcher must never call this path.
 - **Risks and mitigations:**
   - An operator rejects a request that should have run. Mitigated by per-id selection, the reason, the audit
     entry and the ticket. The requester can create a new request, since the one-open slot is freed.
-  - A live dispatcher re-claims mid-drain. Mitigated by the revision CAS (412) and the live-claim refusal (409).
+  - A live dispatcher re-claims mid-drain. Mitigated by the row_version CAS (412) and the live-claim refusal (409).
   - The dispatcher started an engine run before its lease lapsed, and then the operator rejects. The fulfil is
     refused with closed, so no execution is attached. The orphaned engine run is the dispatcher's to stop (out of
     scope). The E2E test asserts that no `Succeeded` is recorded.
