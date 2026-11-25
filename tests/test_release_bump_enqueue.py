@@ -180,27 +180,27 @@ def script_cases(script_text=None):
 
 
 SCRIPT_MUTANTS = {
-    "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),
-    "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||'),
-    "branch check dropped": ("case \"$head_ref\" in release-bump/?*) ;;", "case \"$head_ref\" in *) ;;"),
-    "file count ignored": ('[ "$listed" = "$expected" ] ||', 'true ||'),
-    "protected paths ignored": ('[ -z "$protected" ] ||', 'true ||'),
-    "diff guard skipped": ('python3 "$root/scripts/release-bump-diff-guard.py" < "$RUNNER_TEMP/bump.diff" \\\n  ||', 'true \\\n  ||'),
+    "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||', "a human author is refused"),
+    "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||', "a head in a fork is refused"),
+    "branch check dropped": ("case \"$head_ref\" in release-bump/?*) ;;", "case \"$head_ref\" in *) ;;", "a branch outside release-bump/ is refused"),
+    "file count ignored": ('[ "$listed" = "$expected" ] ||', 'true ||', "a short file list is refused"),
+    "protected paths ignored": ('[ -z "$protected" ] ||', 'true ||', "a protected path is refused"),
+    "diff guard skipped": ('python3 "$root/scripts/release-bump-diff-guard.py" < "$RUNNER_TEMP/bump.diff" \\\n  ||', 'true \\\n  ||', "a diff beyond the tag is refused"),
     "unreadable diff ignored": ('"repos/${REPO}/compare/main...${head_sha}" > "$RUNNER_TEMP/bump.diff" \\\n  ||',
-                                '"repos/${REPO}/compare/main...${head_sha}" > "$RUNNER_TEMP/bump.diff" || true \\\n  ||'),
-    "moved head accepted": ('[ "$cur" = "$head_sha" ] ||', 'true ||'),
-    "approval on another head accepted": ('APPROVED) [[ "$on_head" =~ ^[1-9][0-9]*$ ]] && approved=1 ;;', 'APPROVED) approved=1 ;;'),
-    "review not required": ('REVIEW_REQUIRED|null) ;;', 'REVIEW_REQUIRED|null) approved=1 ;;'),
-    "changes requested waits": ('CHANGES_REQUESTED) die', 'CHANGES_REQUESTED) : die'),
-    "not-ready verdict accepted": ("    case \"$rc\" in\n      0)", "    case \"$rc\" in\n      0|10|11|12)"),
-    "a failed check waits": ('*) die "#${PR} is not mergeable: ${verdict}" ;;', '*) echo waiting ;;'),
-    "own check excludes auto-merge": ('--own-check ""', '--own-check auto-merge'),
-    "deadline ignored": ('if [ "$SECONDS" -ge "$deadline" ]; then', 'if false; then'),
-    "tab separator again": ('join("\\u001f")\'); then', '@tsv\'); then'),
-    "tab IFS again": ("IFS=$'\\x1f' read", "IFS=$'\\t' read"),
-    "deadline names no recovery": ("re-run only this failed enqueue-bump job", "give up"),
+                                '"repos/${REPO}/compare/main...${head_sha}" > "$RUNNER_TEMP/bump.diff" || true \\\n  ||', "an unreadable diff is refused"),
+    "moved head accepted": ('[ "$cur" = "$head_sha" ] ||', 'true ||', "a moved head is refused"),
+    "approval on another head accepted": ('APPROVED) [[ "$on_head" =~ ^[1-9][0-9]*$ ]] && approved=1 ;;', 'APPROVED) approved=1 ;;', "APPROVED with no approval on this head waits"),
+    "review not required": ('REVIEW_REQUIRED|null) ;;', 'REVIEW_REQUIRED|null) approved=1 ;;', "no review yet waits"),
+    "changes requested waits": ('CHANGES_REQUESTED) die', 'CHANGES_REQUESTED) : die', "changes requested is refused"),
+    "not-ready verdict accepted": ("    case \"$rc\" in\n      0)", "    case \"$rc\" in\n      0|10|11|12)", "the deadline refusal names the recovery"),
+    "a failed check waits": ('*) die "#${PR} is not mergeable: ${verdict}" ;;', '*) echo waiting ;;', "a failed check is refused"),
+    "own check excludes auto-merge": ('--own-check ""', '--own-check auto-merge', "a pending auto-merge run is not ignored"),
+    "deadline ignored": ('if [ "$SECONDS" -ge "$deadline" ]; then', 'if false; then', "the deadline refusal names the recovery"),
+    "tab separator again": ('join("\\u001f")\'); then', '@tsv\'); then', "approved, green, App author, tag-only diff -> ready"),
+    "tab IFS again": ("IFS=$'\\x1f' read", "IFS=$'\\t' read", "approved, green, App author, tag-only diff -> ready"),
+    "deadline names no recovery": ("re-run only this failed enqueue-bump job", "give up", "the deadline refusal names the recovery"),
     "closed PR treated as ready": ('if [ "$state" = closed ]; then not_ready "#${PR} is closed."; fi',
-                                   'if [ "$state" = closed ]; then state=open; fi'),
+                                   'if [ "$state" = closed ]; then state=open; fi', "a closed PR is a no-op"),
 }
 
 
@@ -379,13 +379,16 @@ def main():
     cases = script_cases()
     bad = [n for n, f, w in cases if f() != w]
     assert not bad, f"wrong verdicts: {bad}"
+    baseline_names = {n for n, _, _ in cases}
     print(f"ok   {len(cases)} script cases")
     src = SCRIPT.read_text()
-    for name, (old, new) in SCRIPT_MUTANTS.items():
+    for name, (old, new, witness) in SCRIPT_MUTANTS.items():
+        assert witness in baseline_names, f"unknown witness for {name}: {witness!r}"
         assert src.count(old) == 1, f"mutant anchor {name}: {src.count(old)}"
-        red = next((n for n, f, w in script_cases(script_text=src.replace(old, new)) if f() != w), None)
-        assert red, f"script mutant survives: {name}"
-        print(f"mutant killed: {name} (by: {red})")
+        mutated_cases = dict((n, (f, w)) for n, f, w in script_cases(script_text=src.replace(old, new)))
+        wf, ww = mutated_cases[witness]
+        assert wf() != ww, f"script mutant survives: {name} (witness: {witness!r})"
+        print(f"mutant killed: {name} (by: {witness})")
 
     texts = {p.name: p.read_text() for p in sorted(WF_DIR.glob("*.y*ml"))}
     res = wiring_cases(texts)
