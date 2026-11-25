@@ -1,41 +1,111 @@
 # Tasks: issue-597-spike-enterprise-mcp-benchmark-context-e
 
-- [ ] 1. **Write the task-set v1 oracle fixtures.** Add `tools/bench_tasks/tc1-roadmap.yaml`, `tc2-triage.yaml`, `tc3-agent-ops.yaml`, `tc4-cross-upstream.yaml` and `neg-consequential.yaml`, each with the keys `prompt`, `expected_capabilities`, `argument_constraints`, `answer_facts`, `consequential` and `pinned_inputs`. All prompts are read-only. NEG names `mctl_deploy_service` as its excluded capability.
-  - DoD: `load_task` / `validate_task` in `tools/capability_bench.py` load all five. They reject unknown keys and an empty `expected_capabilities`.
-- [ ] 2. **Add the run-record schema** (depends on 1). Add `load_run_record` / `validate_run_record` with the fields `run_id`, `mode`, `task_id`, `task_set_version`, `model`, `profile_version`, `catalog_digest`, `result_messages`, `tool_calls[{name, capability_id, kind, arguments_hash, is_retry}]`, `invocation_traces`, `first_turn_cache_creation_tokens`, `wall_clock_ms`, `final_answer_digest` and `oracle_facts_found`.
-  - DoD: records with `arguments`, `result`, `answer_text` or `message_text` keys are rejected, and so are unknown `kind` values.
-- [ ] 3. **Add pure `cell_metrics(records, task)`** (depends on 2).
-  - Metrics: n; first-turn tokens separate from totals, the totals reusing `_totals_for_transcript`; turns; search, describe, invoke and direct counts; retries; p50/p95 latency, with p95 only when n >= 5 and `below-minimum-n` otherwise; success rate; `permission_preserved`; `audit_complete`.
-  - Audit matching uses `POLICY_DECISION` lines (eager) and `CAPABILITY_INVOCATION` lines (discovery).
-  - DoD: the function is pure, with no I/O.
-- [ ] 4. **Add the `aggregate` subcommand** (depends on 3): `aggregate RUNS_DIR --tasks DIR [--not-measurable MODE=REASON ...] [--schema-bytes FILE]`.
-  - It renders per-task x per-mode tables, using `NOT_RUN` for empty cells and `not measurable: <reason>` for declared modes.
-  - It adds a "Structural vs end-to-end" table against the 61,213 / 23,392 baseline, with a translated / not-translated verdict line.
-  - Optionally add a `record` subcommand that converts a local raw capture into a validated record.
-  - DoD: `compare` output is byte-identical to today's.
-- [ ] 5. **Update `docs/benchmarks/capability-discovery.md` in place** (depends on 4).
-  - Sections: Baseline (n=1) kept; Task set v1; Bounded experiment plan with operator pins and an empty "Approved by / date" line; Capture recipe; Mode availability matrix (7 rows, with `UNKNOWN` for unverified facts); Correlation and enforcement gate (#63 M8 as a hard stop); Results pre-filled `NOT_RUN`, with TC4 under discovery marked `not measurable: provider not in _CAPABILITY_ENDPOINTS`; Adjunct (non-comparable) for #1096; Decision rule plus `PENDING`.
-  - DoD: no new competing benchmark document; `docs/capability-pilot-status.md` links to the updated section.
-- [ ] 6. **Operator step, not the implementer** (depends on 5 and on the experiment plan's approval line being filled). Run 5 interleaved repetitions per measurable (task, mode) cell, plus NEG per mode. Establish with evidence whether the Portal `minimize_tools` and `search_and_execute` arms can run on an isolated test portal; otherwise mark them `not measurable` with the provider limitation. Run `aggregate` and paste the tables.
-  - DoD: every cell holds measured values with n, `not measurable: <reason>`, or `NOT_RUN`.
-- [ ] 7. **Operator step: decision** (depends on 6). Apply the pre-registered rule and record exactly one of `ADOPT_MCTL_NATIVE` / `ADOPT_PORTAL_MODE` / `HYBRID` / `DEFER`, with rollout guardrails and follow-up issues: mctlhq/.github#165, plus provider registration if mctl-native is chosen. Post the decision on #597, link it from mctlhq/.github#35, and add #597 as a sub-issue of #35 to clear the `HierarchyMissingParent` drift.
-  - DoD: the comment URL is recorded in the doc's Decision section.
+**Disposition: CHANGES REQUESTED — RESEARCH INTAKE ONLY.** This is an
+evidence-backed proposal specification and a review amendment only.
+DO NOT send Temporal approval: it accepts the proposal and launches Tier 2.
+No benchmark tools, docs PR, fixtures, runtime changes, live probes,
+Portal modifications, actual model runs or merge are authorized.
 
-## Tests
+## Authorized research-plan corrections
 
-- [ ] T1. The existing `tests/test_capability_bench.py` passes unchanged, so `compare` / `compare_report` stay backward compatible.
-- [ ] T2. `validate_task` rejects unknown keys and an empty `expected_capabilities`, and accepts all five shipped fixtures.
-- [ ] T3. `validate_run_record` rejects each payload key (`arguments`, `result`, `answer_text`, `message_text`) and unknown `kind` values.
-- [ ] T4. `cell_metrics` over 5 fixture records:
-  - computes p50/p95 and the success rate correctly;
-  - keeps first-turn tokens separate from totals;
-  - counts search, describe and invoke calls and retries.
-- [ ] T5. `cell_metrics` over 3 records reports n=3, omits p95 and flags `below-minimum-n`.
-- [ ] T6. A record invoking or seeing a capability outside expected and eligible, or a NEG run where the excluded capability appears, gives `permission_preserved=false`.
-- [ ] T7. An invoke with no matching trace, or with a trace whose policy result is `absent` or that lacks an execution context id, gives `audit_complete=false`.
-- [ ] T8. `aggregate` renders `NOT_RUN` for empty cells and `not measurable: <reason>` for declared modes, never `0`, and prints the structural vs end-to-end table.
-- [ ] T9. The new code imports neither `claude_agent_sdk` nor `mcp` at module scope, so the pure tests run without network, matching the existing T14 convention.
+- [x] R1. Inventory eager/discovery paths and the existing benchmark's
+  `n=1`, 61,213 -> 23,392 initial tokens, and 30 vs 52 turns.
+  Record the `-62%` reduction as *structural*, not end-to-end savings.
+- [x] R2. Define three comparable MCP-using classes: TC1 roadmap,
+  TC2 platform triage, TC3 agent operations; all have independent
+  read-only mctl-api oracles. TC4 Telegram cross-upstream is a distinct
+  applicability case and may be `not measurable` in discovery.
+- [x] R3. Separate expected capability calls (task correctness)
+  from the allowed/excluded capabilities (authorization). The latter
+  comes only from the pinned/sealed execution profile and policy.
+- [x] R4. Define the required identity/audit join:
+  `run_id -> parent_execution_id -> child_call_id ->
+  policy_decision_id -> invocation_outcome -> durable_trace_id`.
+  Every call, including denied and repeated identical-argument calls,
+  needs unique, stable IDs and matching actor/tenant/argument digests.
+  Existing client logs are `UNOBSERVED` until proven sufficient.
+- [x] R5. Remove any automatic eager fallback. Policy/identity/catalog/
+  tenant/approval/unknown failures fail closed. Any future
+  allowlisted non-security recovery must preserve the sealed set
+  and independent audit.
+- [x] R6. Replace the permissive 4/5 adoption criterion with no observed
+  correctness regression plus independent 100% permission/audit gates.
+  Five runs per cell are exploratory and require a separately reviewed
+  confirmatory plan before adoption.
+- [x] R7a. Amend this proposal for the three PR #2803 review findings:
+  (1) sanitized-only recursive usage projection, (2) mode-sensitive NEG
+  exposure vs invocation authorization, (3) conjunctive/alternative oracle
+  groups for TC1–TC3. These are specifications, not executable code.
+- [ ] R7b. Independent reviewer on the **new HEAD** confirms the fixes,
+  including complete nested-field and NEG-mode tests as future criteria,
+  and verifies no implementation was authorized.
 
-## Rollback
+## Candidate future tooling/doc slice — new owner GO required
 
-Everything is additive and offline: fixtures under `tools/bench_tasks/`, pure functions and subcommands in `tools/capability_bench.py`, and a documentation update. Reverting the PR restores the prior state. No runtime, profile, Portal or deployment state is touched. If the operator enabled any Portal arm in task 6, it was on an isolated test portal, and the experiment plan's isolation/rollback step disables it. Production `code_mode: off` is never modified.
+These are **not tasks for the currently parked implementer**.
+
+- [ ] F1. If the owner separately authorizes offline tooling, add
+  `tools/bench_tasks/{tc1-roadmap,tc2-triage,tc3-agent-ops,
+  tc4-cross-upstream,neg-consequential}.yaml` with pinned oracle inputs:
+  `required_all` and `required_any_of` (nested nonempty alternatives),
+  `excluded_capabilities`, `argument_constraints`, `answer_facts`,
+  `consequential`, `pinned_inputs`. Validate TC1 and TC3 either-path
+  correctness, TC2 two-tool conjunction, and NEG with empty positive
+  obligations. No production data and no real consequence-capable action.
+- [ ] F2. If separately authorized, define `usage_summaries[]` as a
+  **numeric allowlisted projection**, never raw `result_messages` or SDK
+  `ResultMessage` objects. Project in RAM, recursively validate the
+  entire record (including nested maps/arrays, tool traces and usage),
+  then persist atomically only if every field is safe. Injected nested
+  `result`, `content`, `text` or `message_text` must refuse the write.
+  Implement pure `aggregate` in `tools/capability_bench.py` without
+  changing legacy `compare` read-side behavior. Preserve cumulative
+  token delta math and separate sanitized first-turn counters.
+  Every child needs stable call/parent/decision IDs, actor/tenant,
+  argument digest and outcome, or explicit `INCOMPLETE`.
+  Never infer a retry from identical hashes.
+- [ ] F3. If separately authorized, update only the existing
+  `docs/benchmarks/capability-discovery.md` with a versioned task set,
+  original baseline, unexecuted results, mode matrix, #63 M8 FAIL,
+  #1096 adjunct and bounded experiment plan. No competing benchmark.
+- [ ] F4. Run pure offline tests for (a) nested raw SDK text/result/payload
+  rejection with zero persisted bytes, even inside arrays or model-usage
+  maps, and stable `compare` output; (b) one-of TC1/TC3 and all-of TC2
+  invocation/answer-fact scoring, malformed any-of groups, NEG with no
+  positive requirement; (c) eager visible-but-DENIED/no execution vs
+  discovery filtered-not-visible/no execution, with separate exposure
+  metrics; (d) missing/multimatched audit IDs, independently eligible
+  sets, and fail-closed recovery. Confirm `NOT_RUN` stays `NOT_RUN`.
+
+## Candidate experiment and decision — a *second* distinct GO
+
+- [ ] E1. Obtain pinned model/identity/profile/catalog/fixtures/owner,
+  explicit isolation/rollback, confirmatory sample-size plan and USD cap.
+  Portal `search_and_execute` stays PARK/M8 blocked, and current
+  production `code_mode: off` must not change.
+- [ ] E2. Only after experiment GO, perform authorized read-only repeated
+  tests; record every unmeasurable and unexecuted cell accurately.
+- [ ] E3. Apply the pre-registered strict governance and no-regression
+  rule. Without enough measured evidence, recommendation is `DEFER`,
+  not ADOPT; owner files any actual rollout follow-ups separately.
+
+## Current review acceptance
+
+- [ ] Every measured result and negative probe is `NOT_RUN`.
+- [ ] Every proposed persisted usage summary has a strict recursive
+  allowlist and no raw SDK result; injections of nested text fail with
+  no record write.
+- [ ] TC1/TC3 alternative-capability success and TC2 conjunctive
+  success have explicit deterministic oracles, independently of policy.
+- [ ] Eager NEG policy-DENY without execution is not confused with
+  the broader advertised schema; discovery checks filtered exposure.
+- [ ] The sealed eligibility set is independent of task oracle expectations.
+- [ ] Eager/discovery audit joins require unique child and decision IDs and
+  deny ambiguous, missing or absent-policy records.
+- [ ] TC1–TC3 are comparable; TC4's unavailable provider is explicit.
+- [ ] No automatic fallback to a wider tool surface; negative tests
+  remain specified but unexecuted.
+- [ ] No code, fixtures, benchmark report PR, Portal, runtime, status flip,
+  implementer, approval, merge or deployment is performed under this GO.
+
+**Rollback:** Revert this GitOps proposal-text amendment if needed.

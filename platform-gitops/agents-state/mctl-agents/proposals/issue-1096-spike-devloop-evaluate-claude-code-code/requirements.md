@@ -1,5 +1,18 @@
 # Spike #1096: evaluate interactive Claude Code Code Mode for read-only operator research, without weakening per-action governance
 
+## Review disposition and authority boundary (2026-11-18)
+
+**CHANGES REQUESTED / RESEARCH INTAKE ONLY; no Tier-2 authorization.** This `requirements.md`, `design.md` and `tasks.md` triplet is itself the revised investigator research intake and evidence-backed *proposed* protocol. No model experiment, fixture generation, structural test, repository documentation change, target-repository PR, automatic implementer, approval or deployment is authorized by this issue. The existing GitOps proposal-revision PR is a governance review amendment, not implementation authorization.
+
+**Temporal approval is prohibited for this research-only phase:** the normal `/dev-loop/{id}/approve` signal accepts the proposal and immediately starts a Tier-2 implementer; there is no "approve research only" semantic. A later docs-only execution, if desired, requires a separate, explicitly scoped owner GO and new/superseding proposal under ordinary gates.
+
+Review-finding resolution checklist:
+- P1 scope/implementer: report and benchmark *specification* are here; target files, test code and PR are **future candidate work**, explicitly not authorized.
+- P2 canary/secret validation: negative secret test is a **scenario definition** only. A future synthetic canary may be assembled in process memory and immediately discarded; do not check in any secret-shaped strings or persist them to logs/evidence. Check absence from output separately.
+- P2 interactive child-governance: SDK hooks do **not** automatically apply to interactive Claude CLI; child-call authority, exact IDs and durable decision chain are `UNPROVEN` and block access to live MCTL tools.
+- P3 recommendation/cost: `FURTHER_RESEARCH` is provisional and unmeasured; 30 runs is a proposed sample design, not an approved budget. Per-run price is `UNKNOWN`.
+
+
 ## Context
 
 Issue mctlhq/mctl-agents#1096 asks for a research-only spike. The question is
@@ -100,6 +113,9 @@ and change no runtime code.
 - THE SYSTEM SHALL NOT change runtime code, hooks, profiles, settings,
   dependencies, gitops, organization/developer settings or Cloudflare
   configuration.
+
+**Additional research-phase restriction:** no target-repository documentation or test PR, no investigator-to-implementer handoff, no `.status.yaml=accepted`, and no research `approve` signal. All candidate target file paths in `design.md` remain illustrative until independently authorized.
+
 
 ## Out of scope
 
