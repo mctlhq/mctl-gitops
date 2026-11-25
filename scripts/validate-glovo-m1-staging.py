@@ -158,7 +158,7 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '            GLOVO_C2_KILLSWITCH_ENABLED: "true"',
         # C2 link step: the product host joins the CIMD allowlist, so the link
         # helper's client document is accepted (no per-owner registration).
-        '            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev,glovo.mctl.ai"',
+        '            OAUTH_CIMD_ALLOWED_HOSTS: "antigravity.google,chatgpt.com,claude.ai,vscode.dev,glovo.mctl.ai"',
         # C2 owner-only cutover wiring (mctlhq/mctl-gitops#2777): mctl-api's
         # consent routes and the shared cohort size, behind apiConsent.
         '            {{- if .Values.mctlGlovo.apiConsent }}',
