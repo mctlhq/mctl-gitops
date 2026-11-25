@@ -416,6 +416,14 @@ env:
   # document from. An image older than 0.148.0 refuses the client_id_prefix
   # key and does not start: roll the record back before the image.
   MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]}]'
+  # MCP Apps prototype surface (mctlhq/mctl-telegram#1479 dashboard + the
+  # triage app from #569; live host validation is #650). Preview only, on
+  # image main-389cb49, which contains that code. Default in the image is
+  # false, and stable tg.mctl.ai leaves this unset. The new tools stay off
+  # the Cloudflare portal allowlist (infrastructure/cloudflare/portal/
+  # allowlists/tg.json is unchanged), so portal clients do not see them.
+  # Direct hosts do. Rollback: remove this key; an absent value is off.
+  MCP_APPS_ENABLED: "true"
 ingress:
   enabled: true
   hosts:
