@@ -40,8 +40,8 @@
       "repo": "mctlhq/mctl-telegram",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "3477f4bc85c6ff089ed347a91815608da4d1bd26",
-      "vendored_at": "2026-11-22T02:42:47Z"
+      "sha": "389cb492a1e4a6e8910016c85ce03a414c1c4127",
+      "vendored_at": "2026-11-25T15:03:55Z"
     }
   }
 }
