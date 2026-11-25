@@ -243,43 +243,16 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates socat
-              mkdir -p ~/.ssh
-              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-              chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
-              chmod 600 ~/.ssh/config
-              # ConnectTimeout / ServerAlive* above bound every SSH
-              # connection in this step. A stalled TCP handshake has no
-              # other timeout and would otherwise eat the workflow's whole
-              # 30-min deadline (observed 2026-07-16, gitops#593 follow-up —
-              # the clone ran 31 min before the deadline killed it).
-              # Host-key verification is the pinned known_hosts below.
-              # GitHub's published SSH host keys, PINNED rather than trusted on
-              # first use. Source: https://api.github.com/meta (.ssh_keys),
-              # fetched 2026-09-02. This replaces an `ssh-keyscan` of
-              # ssh.github.com, which is trust-on-first-use: it accepted
-              # whatever key answered, on a connection carrying a
-              # WRITE-capable deploy key. A MITM or DNS-poison was recorded
-              # as the truth and then honoured.
-              #
-              # Keyed on [ssh.github.com]:443 — ssh looks up the host and
-              # port it actually connects to, which the Host block rewrites.
-              #
-              # If GitHub rotates a host key these lines must be updated; it
-              # last happened in March 2023, when the RSA key was replaced.
-              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-              GITHUB_HOST_KEYS
-              chmod 600 ~/.ssh/known_hosts
+              # Read only, and the repository is public, so no credential and no ssh
+              # setup here. The clone goes over https through the egress proxy
+              # (HTTPS_PROXY above); the step that pushes holds the key. `timeout`
+              # bounds a stalled connection, which has no other limit here.
               # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
               # sessions right after the handshake (proxy tunnels were 200), every
               # clone exited 128 and each failed run fanned out into an incident.
-              # Same key and URL on every try; git prints its own stderr.
+              # Same URL on every try; git prints its own stderr.
               for attempt in 1 2 3; do
-                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                if timeout 120 git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
                   break
                 fi
                 rm -rf /workdir/mctl-gitops
@@ -302,8 +275,6 @@ spec:
           volumeMounts:
             - name: workdir
               mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
       outputs:
         parameters:
           # The reconcile's REAL exit code. The step itself always exits 0 (see
@@ -516,37 +487,16 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates socat
-              mkdir -p ~/.ssh
-              cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
-              chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
-              chmod 600 ~/.ssh/config
-              # GitHub's published SSH host keys, PINNED rather than trusted on
-              # first use. Source: https://api.github.com/meta (.ssh_keys),
-              # fetched 2026-09-02. This replaces an `ssh-keyscan` of
-              # ssh.github.com, which is trust-on-first-use: it accepted
-              # whatever key answered, on a connection carrying a
-              # WRITE-capable deploy key. A MITM or DNS-poison was recorded
-              # as the truth and then honoured.
-              #
-              # Keyed on [ssh.github.com]:443 — ssh looks up the host and
-              # port it actually connects to, which the Host block rewrites.
-              #
-              # If GitHub rotates a host key these lines must be updated; it
-              # last happened in March 2023, when the RSA key was replaced.
-              cat > ~/.ssh/known_hosts <<'GITHUB_HOST_KEYS'
-              [ssh.github.com]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-              [ssh.github.com]:443 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-              [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-              GITHUB_HOST_KEYS
-              chmod 600 ~/.ssh/known_hosts
+              # Read only, and the repository is public, so no credential and no ssh
+              # setup here. The clone goes over https through the egress proxy
+              # (HTTPS_PROXY above); the step that pushes holds the key. `timeout`
+              # bounds a stalled connection, which has no other limit here.
               # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
               # sessions right after the handshake (proxy tunnels were 200), every
               # clone exited 128 and each failed run fanned out into an incident.
-              # Same key and URL on every try; git prints its own stderr.
+              # Same URL on every try; git prints its own stderr.
               for attempt in 1 2 3; do
-                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                if timeout 120 git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
                   break
                 fi
                 rm -rf /workdir/mctl-gitops
@@ -564,8 +514,6 @@ spec:
           volumeMounts:
             - name: workdir
               mountPath: /workdir
-            - name: deploy-key
-              mountPath: /secrets/deploy-key
       script:
         image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
         env:
@@ -645,6 +593,10 @@ spec:
           # passes on its own and stays armed. The comment survived the change
           # and described a chown that no longer happens.
           cd /workdir/mctl-gitops
+          # The init container clone is anonymous https; this step pushes, so it
+          # points origin at the ssh URL that the key and pinned host keys above
+          # serve. Push, fetch and rebase below go over ssh as before.
+          git remote set-url origin git@github.com:mctlhq/mctl-gitops.git
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
