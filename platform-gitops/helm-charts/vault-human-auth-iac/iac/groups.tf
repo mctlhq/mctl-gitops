@@ -7,7 +7,8 @@
 #                read and write on that tenant's own paths, nothing else.
 #
 # Membership is decided at login from the claim, so removing a user's role in
-# ZITADEL removes their access at their next login (tokens live an hour).
+# ZITADEL removes their access at their next login (tokens live an hour, or
+# up to 8h for an admin who signed in with role zitadel-admin, oidc.tf).
 
 locals {
   admin_group = "admins"
