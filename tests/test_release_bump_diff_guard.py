@@ -101,6 +101,14 @@ BAD = {
     "deleted file": diff(SVC, TAGS, extra="deleted file mode 100644\n"),
     "mode change": diff(SVC, TAGS, extra="old mode 100644\nnew mode 100755\n"),
     "rename": "diff --git a/" + SVC + " b/platform-gitops/services/x/y/values.yaml\nsimilarity index 90%\n",
+    "rename with a tag move": (
+        f"diff --git a/{SVC} b/platform-gitops/services/x/y/values.yaml\n"
+        f"similarity index 90%\n"
+        f"rename from {SVC}\n"
+        f"rename to platform-gitops/services/x/y/values.yaml\n"
+        f"--- a/{SVC}\n+++ b/platform-gitops/services/x/y/values.yaml\n"
+        f"@@ -1,3 +1,3 @@\n ctx\n-  tag: \"1.0.0\"\n+  tag: \"1.1.0\"\n"
+    ),
     "binary patch": diff(SVC, TAGS, extra="GIT binary patch\n"),
     "header without a changed line": f"diff --git a/{SVC} b/{SVC}\nindex 1..2 100644\n--- a/{SVC}\n+++ b/{SVC}\n@@ -1 +1 @@\n ctx\n",
     "tag moves backwards": diff(SVC, [("  tag: 1.2.0", "  tag: 1.1.0")]),
@@ -237,7 +245,7 @@ MUT = [
     ("renames accepted (both defences removed)",
      [("m.group(1) != m.group(2)", "False"), ("            if HEADER_REFUSE.match(line):", "            if False:"),
       ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")],
-     "refuses: new file"),
+     "refuses: rename with a tag move"),
     ("file markers skipped anywhere, not only before the first hunk",
      [("                in_header = False\n                continue", "                continue")],
      "accepts: tag line in a values file"),
@@ -265,7 +273,7 @@ MUT = [
      "refuses: tag moves under an unchanged digest"),
     ("digest charset loosened", [("(?P<digest>sha256:[0-9a-f]{64})", "(?P<digest>[^\\n]+)")], "refuses: digest too short"),
     ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")],
-     "same-lines-as refuses an extra changed line of the same identity"),
+     "same-lines-as refuses a patch that changes no line"),
     ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")],
      "same-lines-as with an unreadable patch exits 2"),
     ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')], "refuses: tag with a newline smuggle"),
