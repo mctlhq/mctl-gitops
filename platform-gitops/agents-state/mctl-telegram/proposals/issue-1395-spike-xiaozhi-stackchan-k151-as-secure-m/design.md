@@ -1,6 +1,6 @@
 # Design: issue-1395-spike-xiaozhi-stackchan-k151-as-secure-m
 
-Research spike. This document is the decision package. It changes no code and authorizes nothing.
+Research spike. This is a reviewable decision package, not an approval for the existing #1395 Temporal implementer. Independent review is https://github.com/mctlhq/mctl-telegram/issues/1395#issuecomment-7087951153 ; separately scoped owner-limited B1 test work is #1409 / draft PR #1410. Full review dispositions are in `evidence/review-disposition.md`. Hardware, private voice, PA and production remain blocked.
 
 ## Current state
 
@@ -46,7 +46,7 @@ Documentation-only (from `docs/websocket.md` and `docs/mcp-protocol.md` at main;
 
 ### Decision package
 
-**Recommendation: `GO_FOR_HARNESS_ONLY` (Option A), everything else `DEFER`.**
+**Recommendation: conditional `GO_FOR_HARNESS_ONLY` for the separately authorized B1 harness in #1409 / PR #1410, *not* for a broader gateway or the #1395 implementer. Everything else `DEFER`.**
 
 | Gate | Severity | Blocks | Evidence |
 |---|---|---|---|
@@ -54,7 +54,7 @@ Documentation-only (from `docs/websocket.md` and `docs/mcp-protocol.md` at main;
 | G-DISC: voice output is a broadcast channel; wake word and proximity do not establish the listener | P1 | any private data on device; any PA tool beyond the synthetic stub | threat model T6, ADR 0011 `disclosure` class |
 | G-ADR: I2 and T13 must be amended (device principal kind, new data recipients for ASR/TTS) | P1 | any shared PA runtime use | `internal/pa/context.go` `NewInteractive`; T13 |
 | G-VENDOR: default OTA is vendor cloud; factory firmware reconfiguration is unverified | P2 | hardware bring-up | `Kconfig.projbuild` `OTA_URL` |
-| G-LIC: `m5stack/StackChan` has no root license; the `app/` and `remote/` parts are unchecked | P2 | forking StackChan code (Option C) | GitHub license API |
+| G-LIC: `m5stack/StackChan` has no root license; the `remote/code/LICENSE` is MIT, while `app/README.md` displays an MIT badge without a separately verified app-root LICENSE | P2 | forking StackChan code (Option C) | GitHub license API |
 | G-TLS: `ws://` acceptance and cert pinning are unverified | P2 | any non-loopback gateway | X1 |
 | G-MEASURE: latency and cost targets are proposed, not measured | P3 | productization | X4 |
 
@@ -102,11 +102,11 @@ A harness needs no device, no identity and no network credential, so none of the
 
 ### Harness design (X3, specification only)
 
-- **Location:** the future gateway repo, `test/xiaozhi-sim/`. It runs as Go tests: `go test ./test/xiaozhi-sim/... -run TestSim -count=1`. Loopback only, with no environment credentials, and the tests refuse to start if a variable named `*TOKEN*` or `*API_KEY*` is set to a non-fixture value.
+- **Location:** owner-limited B1 branch in `mctlhq/mctl-telegram/test/xiaozhi-sim/` (draft PR #1410), with a dedicated `.github/workflows/xiaozhi-sim.yml`. It runs on Python 3.13, pinned `websockets==16.0`, via `python test/xiaozhi-sim/run.py`. It binds to numeric loopback only. No production PA file is changed. This is a prototype isolated inside the existing repo, not the originally proposed separate gateway repo; that deployment architecture is still undecided. The unit tests were 17/17 green locally **and** GitHub simulator CI run 45091262216 is successful on 7269b8fc; independent PR review, CodeQL/build and real-device gates remain separate.
 - **Simulated device:** it speaks the XiaoZhi WebSocket protocol, v1 and v3 framing, with the headers above. Fixture values: MAC `02:00:00:00:00:01` (locally administered), `Client-Id` a fixed UUIDv4, persona `Dana` as the paired owner, and a synthetic Telegram id taken from the existing fixtures after a `git grep`.
 - **Audio fixtures:** deterministic. Either pre-encoded Opus frames with SHA-256 recorded in `fixtures/manifest.json`, or a "codec stub" mode with tagged opaque frames, so the assertions do not depend on libopus.
 - **Stub pipeline:** ASR stub maps a fixture hash to a transcript; the intent stub maps it to the single tool `desk_build_status` (synthetic, read-only, returns canned JSON); the TTS stub emits N tagged frames.
-- **Assertions (minimum set):** S-H1 server hello within 10 s, with `transport` echoed and `session_id` set; S-H2 a hello with an unknown version or missing `audio_params` is refused with a safe error; S-A1 a missing, expired or revoked token is refused before hello; S-L1 the `listen start -> stt -> tts start -> sentence_start -> stop` ordering holds; S-I1 `abort{reason:"wake_word_detected"}` during TTS stops downlink within 200 ms of simulated time; S-R1 a reconnect gets a new `session_id` and the old session's late frames are discarded (fenced); S-M1 device `mcp` responses that are malformed, oversized (over 64 KiB) or carry an unknown id are dropped without a crash; S-M2 a device tool absent from the allowlist is never called; S-T1 a transport stall drives the idle timeout to a clean close; S-P1 no transcript, token or audio byte appears in logs or reports; S-X1 no outbound dial except loopback (checked with a dialer guard).
+- **Assertions (minimum set):** S-H1 the server hello matches `transport=websocket` within the upstream device's 10 s timeout (the synthetic test uses an accelerated timeout). Upstream `session_id` and `audio_params` are **optional** in the server hello; the gateway may include `session_id` as local policy but the compatibility validator accepts absence of either field. S-H2 malformed or unknown-version **client** hello is refused; S-H2B missing optional server fields is accepted; S-A1 a missing, expired or revoked token is refused before hello; S-L1 the `listen start -> stt -> tts start -> sentence_start -> stop` ordering holds; S-I1 `abort{reason:"wake_word_detected"}` during TTS stops downlink within 200 ms of simulated time; S-R1 a reconnect gets a new `session_id` and the old session's late frames are discarded (fenced); S-M1 device `mcp` responses that are malformed, oversized (over 64 KiB) or carry an unknown id are dropped without a crash; S-M2 a device tool absent from the allowlist is never called; S-T1 a transport stall drives the idle timeout to a clean close; S-P1 no transcript, token or audio byte appears in logs or reports; S-X1 no outbound dial except loopback (checked with a dialer guard).
 - **Evidence format:** `report.json` modelled on `internal/mcpprobe`. It holds labels, upstream SHAs, protocol versions, assertion ids, pass/fail, durations and counts, and it has no field that can hold a token or text. Verdict values are `protocol_compatible_sim` or `incompatible`. `k151_tested` is not a value the simulator can emit.
 
 ### Product validation (X4, proposed targets, not results)
@@ -114,7 +114,7 @@ A harness needs no device, no identity and no network credential, so none of the
 - Use case U1: "summarize public MCTL build/release status" (synthetic release fixture in the harness; a public source only in a later pilot).
 - Use case U2: "describe synthetic GitHub issue state" (canned fixture).
 - Targets for the later pilot: wake-to-first-audio p50 of 1.5 s or less; end-to-end task p50 of 3 s or less and p95 of 6 s or less; task success of 90% or more over 50 scripted turns; barge-in stop of 300 ms or less; reconnect recovery of 5 s or less; false activations of 1 or fewer per 8 h of ambient audio; cost of $0.50 or less per 100 turns (ASR + LLM + TTS), Russian-first.
-- Go criteria. Harness GO: this package is accepted. One-K151 purchase GO: the harness is green, G-VENDOR and G-TLS are resolved, and the G-ID residual is accepted by the owner. Productization: G-ADR merged, G-DISC threat model accepted, and pilot targets met.
+- Go criteria. Harness-only GO is independently restricted to #1409's test-only scope and is **not** an approval of the #1395 implementer. One-K151 purchase GO: the harness is green, G-VENDOR and G-TLS are resolved, and the G-ID residual is accepted by the owner. Productization: G-ADR merged, G-DISC threat model accepted, and pilot targets met.
 
 ## Alternatives
 
