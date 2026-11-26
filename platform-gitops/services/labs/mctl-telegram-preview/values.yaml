@@ -15,8 +15,8 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-389cb49"
-  digest: "sha256:a2071f57df5c48072e85bec9bb82f01735d5ecd0bd79b7ea402a418bb057446a"
+  tag: "main-0ac47a8"
+  digest: "sha256:218e76b504498547fe4f5565d91536082b855e9aaf3f63521ad0342ae62f62a8"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -404,7 +404,7 @@ env:
   # admits the client, only a profile limits it. Add one entry per server name.
   OAUTH_CIMD_ACCEPT: "true"
   OAUTH_CIMD_ADVERTISE: "true"
-  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,antigravity.google,chatgpt.com,claude.ai,vscode.dev,www.town.com"
   # Scope ceilings for the CIMD clients (mctl-telegram 0.146.0 #1426, 0.148.0
   # #1437). Each lists the five user scopes the client holds today and no
   # admin:*; a client matched by no record keeps the #1414 default (membership
@@ -415,7 +415,7 @@ env:
   # safe because a CIMD client_id is the URL the server itself fetched the
   # document from. An image older than 0.148.0 refuses the client_id_prefix
   # key and does not start: roll the record back before the image.
-  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"pa-preview","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tg-preview.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgpreview2.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://antigravity.google/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]}]'
 ingress:
   enabled: true
   hosts:

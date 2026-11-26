@@ -1,0 +1,10 @@
+status: proposed
+updated_at: '2026-11-25T16:11:00Z'
+updated_by: agy
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 398
+  url: https://github.com/mctlhq/.github/issues/398
+control:
+  requires_human_approval: true

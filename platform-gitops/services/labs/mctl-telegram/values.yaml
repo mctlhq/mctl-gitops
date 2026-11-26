@@ -12,8 +12,8 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.149.0"
-  digest: "sha256:540d200374eaba68329db5b5d87c619c5dcfb1028ead66fba188adebcbc3651a"
+  tag: "0.150.0"
+  digest: "sha256:f2f56ae0e099a14cf53c2128b52da18a6c9790618423ac5724ef5307ce3eb748"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -157,7 +157,7 @@ env:
   # surface (verified on tg-preview), so never admit a path without its profile.
   # Rollback: drop the entry and the profile record; removing the entry also
   # cuts off that client's refreshes.
-  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,chatgpt.com,claude.ai,vscode.dev,www.town.com"
+  OAUTH_CIMD_ALLOWED_HOSTS: "agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/,antigravity.google,chatgpt.com,claude.ai,vscode.dev,www.town.com"
   # Client tool profiles (mctl-telegram 0.87.0, docs/design/core-profiles.md,
   # runbook "Client tool profiles"): a token minted for a listed client sees
   # only that profile's tools, re-resolved at every refresh. Town is bound by
@@ -183,7 +183,7 @@ env:
   # every scope membership can grant, so it removes no scope from anyone; it
   # drops the groups label and turns scope_ceiling_applied on for the portal.
   # Other dynamically registered clients (tgmcp_*) still have no ceiling.
-  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgprod.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"redirect_uri":"https://mcp.mctl.ai/servers-callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage","admin:users","admin:users:read","admin:broadcast"]},{"redirect_uri":"https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage","admin:users","admin:users:read","admin:broadcast"]}]'
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"},{"client_id":"https://agentspodium.com/oauth/mcp/clients/standard-hermes-4f9957/tgprod.json","profile":"core-readonly","scope_ceiling":["telegram:dialogs:read","telegram:messages:read"]},{"client_id":"https://antigravity.google/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"redirect_uri":"https://claude.ai/api/mcp/auth_callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id_prefix":"https://chatgpt.com/oauth/","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"client_id":"https://vscode.dev/oauth/client-metadata.json","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage"]},{"redirect_uri":"https://mcp.mctl.ai/servers-callback","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage","admin:users","admin:users:read","admin:broadcast"]},{"redirect_uri":"https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg","scope_ceiling":["telegram:dialogs:read","telegram:messages:read","telegram:messages:send","telegram:messages:pin","account:manage","admin:users","admin:users:read","admin:broadcast"]}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
