@@ -61,6 +61,8 @@ env:
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
+  MCP_APPS_ENABLED: "true"
+  MCP_APPS_WORKSPACE_ONLY: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg-preview.mctl.ai
   OAUTH_ISSUER_URL: https://tg-preview.mctl.ai
@@ -79,7 +81,7 @@ env:
   # which 403s the browser Origin headers sent by the ChatGPT and Claude connector
   # runtimes. Broadened here to validate connector access on preview before the
   # same change ships to stable tg.mctl.ai. Arbitrary origins still get 403.
-  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com"
+  ALLOWED_ORIGINS: "https://tg-preview.mctl.ai,https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://antigravity.google,https://gemini.google.com,https://grok.com"
   # redirect_uri host allowlist for unregistered client_ids and for every
   # redirect_uri supplied at RFC 7591 dynamic registration (0.50.0+; earlier
   # images ignore this key and use the built-in list). Setting it REPLACES the
@@ -89,7 +91,7 @@ env:
   # redirect on its own hosted domain, and without it every attempt 400s,
   # leaving a hand-pasted static bearer token as the only way in.
   # Loopback hosts are accepted regardless of this list.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,localhost,127.0.0.1"
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: "claude.ai,claude.com,chatgpt.com,grok.com,antigravity.google,oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-sandbox.googleusercontent.com/a/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/r/user_bound_custom-mcp-,oauth-redirect-test.googleusercontent.com/a/user_bound_custom-mcp-,localhost,127.0.0.1"
   # Reuse stable demo video; preview doesn't serve its own.
   DEMO_VIDEO_URL: https://tg.mctl.ai/demo/walkthrough.mp4?v=2
   # Preview bot numeric ID (part before the colon in the bot token).
