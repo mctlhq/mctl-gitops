@@ -89,7 +89,7 @@ env:
   # Controlled Workspace canary on the existing /mcp route (mctlhq/mctl-telegram#650,
   # #1494). Requires 0.150.2+, MCP_APPS_ENABLED="false", AUTH_MODE=local-jwt,
   # AUTH_REQUIRED="true", and CANARY_TELEGRAM_IDS. Exposes read-only Workspace ONLY
-  # to interactive OAuth clients authenticated as CANARY_TELEGRAM_IDS (8745115872);
+  # to interactive OAuth clients authenticated as CANARY_TELEGRAM_IDS;
   # ordinary users and the k8s-sa monitoring canary retain the normal handler.
   # Rollback: remove MCP_APPS_PILOT or set it to "false".
   MCP_APPS_ENABLED: "false"
@@ -319,7 +319,7 @@ env:
   # Keep it equal to MCP_K8S_SA_TELEGRAM_ID below and to CANARY_TG_USER_ID on
   # the canary CronJob; when the canary moves to another account, change all
   # three together (the server refuses to start if the SA id is not listed).
-  CANARY_TELEGRAM_IDS: "8745115872"
+  CANARY_TELEGRAM_IDS: "8745115872,210408407"
   # The canary authenticates to /mcp with its projected ServiceAccount token
   # (mctl-telegram#1286), not a minted worker token: on 2026-11-13 a
   # revoke_worker_token by telegram_id killed that token and the canary could
