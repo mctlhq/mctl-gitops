@@ -1,10 +1,10 @@
 # Design: issue-1379-spike-ai-product-discovery-grok-bot-benc
 
-Revision 2. It supersedes revision 1 (reviewed at gitops `bb69c72`) and remains `proposed`.
+Revision 4 (2026-11-23), including revision 2 and its finding-to-change matrix. Status remains `proposed`; dated historic baselines below are superseded only where explicitly corrected in the new evidence section.
 
 ## Current state
 
-Pinned baseline:
+HISTORICAL 2026-11-21 pinned baseline (revision 4 current pins follow):
 
 - mctl-telegram `b318e97a027bdae661344d4a324ddf47dc1426c6` (2026-11-21 23:15 +0100), a shallow clone;
 - mctl-gitops `a967430042424562a696cac216e428e00631c252` (2026-11-21 22:48 UTC).
@@ -29,9 +29,9 @@ Revision 1 cited mctl-telegram `568da01`. Every statement below was re-read at `
   - `connection/`, `connector/`, `linking/`, `egress/`, `output/`, `gate/`, `jobs/`, `catalog/`;
   - `phase2_inert_test.go`.
 - Gates:
-  - `docs/agent-runtime/pa-s1-manifest.yaml` still lists `gaps:` entries tracked by #1320 and #1318. Its header says the S1 gate "is NOT closed while any gap is listed", and the preview gate (#1318) cannot pass until then.
+  - At source SHA ecbce773, S1 manifest body has no gaps; #1317 and #1319 remain OPEN, and current read-only live service-status evidence does not prove R1–R6.
   - `pa-s2-manifest.yaml` has 27 `status: pending` and 5 `status: green` entries.
-- Flags: `PA_ENABLED` defaults to false (`internal/config/config.go`). No `PA_*` key is present in any `services/labs/*/values.yaml`. The PA is merged and tested, flagged off, and deployed nowhere.
+- [HISTORICAL] `PA_ENABLED` defaults off without config, but current gitops `869582d` explicitly enables PA and TG reads on preview with a one-replica worker; see revision 4. Production retains no PA switches.
 
 ### MCP provider surface used by external clients
 
@@ -62,9 +62,9 @@ Revision 1 cited mctl-telegram `568da01`. Every statement below was re-read at `
   - account deletion revokes the families;
   - "Disconnect does not revoke ... it ends the Telegram session but keeps the client's OAuth grant."
 - `docs/platforms/compatibility.md` (#784 D1, rows dated 2026-11-21 against gitops `8d082583b`):
-  - Grok: "DCR from `grok.com`", "none yet; admission in progress (mctl-gitops#2870)", not tested, verification in #1381;
+  - Grok (grok.com): host admitted in #2870; now OWNER_OBSERVED_WORKS against tg.mctl.ai on 2026-11-22 (sign-in, token grant and tool calls, mctl-telegram PR #1393; issue #1381 closed). Grok Bot-specific client attribution remains UNKNOWN.
   - Cursor: allowlisted, not tested, #1385;
-  - Town: CIMD document or DCR, "Which one Town uses is not confirmed", not tested.
+  - Town: OWNER_OBSERVED_WORKS on 2026-11-22 via #1393; CIMD-versus-DCR remains unknown.
   - The matrix legend says "An allowlist entry alone means `not tested`."
 - `docs/runbooks/admitting-an-agent-platform.md` defines the intake, settings, verification and rollback order for admission. This spike reuses it and does not duplicate it.
 - `docs/design/core-profiles.md`, section "Telegram terms: what a profile does and does not solve", quotes Telegram Content Licensing (read 2026-10-21): an exception requires that "all relevant users individually provide explicit, informed, affirmative and continued consent". It also cites API Terms §1.4 and §1.5. It states that profiles do not "obtain consent from the *other* people in a chat", and that this needs a legal opinion and a product decision.
@@ -105,9 +105,9 @@ These are summaries from one fetch each. Task 2 re-reads every page and records 
   - Telegram is a bot DM (@TownAIBot) linked with a 6-digit code;
   - voice notes are transcribed, and photos are processed;
   - access to the user's personal Telegram chats is not mentioned.
-- Not fetched yet: `town.com/docs`, `town.com/product`, `docs.x.ai/grok-bot/skills-routines-and-automations`, and the Grok Bot security, pricing and FAQ pages. Task 2 fetches them, or records them as `UNKNOWN`.
+- [HISTORICAL 2026-11-21] Those vendor pages were not fetched during that review; revision 4 checked the source/claim ledger on 2026-11-23.
 
-### Deployed state checked
+### Deployed state checked (HISTORICAL 2026-11-21; superseded by Revision 4 evidence)
 
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml` (production `tg`, gitops `a967430`):
   - image `0.141.0`;
@@ -136,7 +136,7 @@ These are summaries from one fetch each. Task 2 re-reads every page and records 
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-alice/values.yaml`: image `2.16.0`, ingress `alice.mctl.ai`. The OAuth configuration is not visible here.
 - The gitops values hold internal identifiers: session-TTL exemption ids and a Cloudflare account path. They were read but are never copied into the report.
 - mctl MCP tools: not called. The gitops checkout answered the configuration questions. Live discovery documents and service status were not fetched, so every "deployed" cell means desired configuration in gitops, not a live observation.
-- The mctl-alice repo was not available. Gap recorded under Open questions in requirements.md.
+- [HISTORICAL 2026-11-21] mctl-alice source unavailable in that earlier checkout; current revision 4 verified pinned `TOOL_SCOPES` code.
 
 ## Proposed solution
 
@@ -145,7 +145,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 0. **Header and evidence limitations.**
    - The two pinned SHAs and both image tags.
    - Vendor access dates.
-   - The label legend: `VERIFIED`, `VENDOR-DOCUMENTED`, `UNTESTED`, `NOT-IMPLEMENTED`, `UNKNOWN`, plus `NOT-EXECUTED` and `BLOCKED` for tests.
+   - The label legend: `VERIFIED_CODE`, `VERIFIED_GITOPS_DESIRED`, `LIVE_ARGO_OBSERVED`, `OWNER_OBSERVED_WORKS`, `OBSERVED_AUDIT`, `VENDOR_DOCUMENTED`, `PROJECT_DOCUMENTED`, `DESIGNED_ONLY`, `NOT_IMPLEMENTED`, `UNKNOWN`; separate test execution fields `NOT_EXECUTED`, `BLOCKED`, `EXECUTED`.
    - A statement that "deployed" means gitops desired state unless a dated live observation is cited.
 1. **MCTL baseline.**
    - 1a: PA items (consent, private-chat ingress, 24h TTL, `/new`, `/forget`, `/consent`, linking, connector executor, audit, egress, taint, budgets, pin and allowlist, switches). Each is classified merged, deployed, flagged, tested or planned, with a path.
@@ -160,9 +160,9 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 3. **Interop compatibility matrix.**
    - Rows: Grok Bot x `tg`, Townie x `tg`, Grok Bot x `alice`, Townie x `alice`, plus optional Grok Chat x `tg` and Cursor IDE x `tg` as distinct categories.
    - Columns: the work package 3 columns.
-   - Grok Bot x `tg`: registration is `UNKNOWN`, because the vendor documents a Client ID or Secret and no callback. `grok.com` admission is not evidence for Grok Bot.
-   - Alice rows: secondary evidence only.
-4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT-EXECUTED`).
+   - Grok (grok.com) x tg: OWNER_OBSERVED_WORKS (2026-11-22, #1393/#1381), with untested negative paths. Grok Bot specifically x tg: client/build UNKNOWN; do not downgrade the existing Grok observation or upgrade the Bot without new proof. Current elevated grant/refresh status UNKNOWN, with security-owner follow-up #1433.
+   - Alice rows: pinned source scope map VERIFIED_CODE at `mctlhq/mctl-alice@cb276d65` (`src/tools/handlers.ts:4–26`); OAuth E2E and device behavior UNKNOWN.
+4. **Conformance test plan** (scripted client, preview, synthetic or isolated approved account, all `NOT_EXECUTED`).
    - Positive steps:
      - RFC 9728 and RFC 8414 discovery;
      - DCR with a loopback redirect (accepted regardless of the list);
@@ -183,7 +183,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
      - code reuse;
      - disconnect, after which tools fail at the Telegram layer while OAuth persists.
    - Each step names its expected audit or metric entry. The plan states that it proves server behaviour only, never vendor E2E.
-5. **Vendor interoperability test plan** (all `NOT-EXECUTED`, BLOCKED until a separate owner GO).
+5. **Vendor interoperability test plan** (all `NOT_EXECUTED`, BLOCKED until a separate owner GO).
    - One row per category. Each row records the registration strategy, the exact callback host and URI (vendor-documented or `UNKNOWN`), `resource`, PKCE, the requested and granted scopes, `initialize`, `tools/list`, the identity read, one synthetic read, negative cases and audit.
    - Preconditions:
      - a stable `client_id`;
@@ -196,7 +196,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
    - Controls that do not carry over to a direct MCP client: the PA consent `pa-data-flow/v1`, taint, kill switches `PA_*`, PA budgets, PA pin and audit-before-dispatch.
    - Controls that do: server-side scopes and ceiling, profiles, PKCE and `resource`, redirect allowlists, the `send_reply` confirmation binding, the `tg` audit chain, and token TTL.
    - Grok Bot boundaries as quoted: connections shared across all Bots, the shared computer, "Auto Review is on by default". Everything else is `UNKNOWN`.
-   - Alice: `iot:view` only, no real devices, no control.
+   - Alice: source-verified `iot:view` read scope, `iot:control` mutations and `quasar` commands at `mctl-alice@cb276d65`; no real device or control calls.
 7. **Telegram consent and licensing gate.** It cites core-profiles and the official terms, re-read with a date. It separates policy and legal questions (other participants' consent, own-messages-only mode) from engineering questions. It applies the gate to the digest, memory and external-distribution hypotheses. The demo uses synthetic data only.
 8. **Meetup pack.**
    - Timeline: Nov 26 pack, Nov 27 rehearsal, Nov 28 event. Date confirmation and registration are owner actions.
@@ -223,7 +223,7 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
 | P2-01 SHAs, admission separation | Both SHAs re-pinned. `grok.com` and Cursor implicit hosts recorded, and production vs preview contrasted. Seven separate admission columns. No inference from Grok Chat or Cursor. | requirements "Provenance", "MCTL baseline"; design "Deployed state checked", report 1b, 3 |
 | P2-02 profile vs ceiling | Ceiling is keyed by `client_id` only and a profile by `client_id` or `redirect_uri`. DCR gives a random `tgmcp_` id. Live-test preconditions set, and dynamic ids BLOCKED. | requirements "Test plans"; design "MCP provider surface", report 1c, 5 |
 | P2-03 revocation | Semantics from `handleRevoke` and `SECURITY.md`: access token valid until TTL (1h), family revoke, replay, 720h absolute, deletion, disconnect. No immediate-401 expectation. | requirements "MCTL baseline"; report 1d, 4; T5 |
-| P2-04 conformance vs vendor | Two plans. Vendor plan per client category, all `NOT-EXECUTED` or BLOCKED. | report 4, 5; tasks 4, 5 |
+| P2-04 conformance vs vendor | Two plans. Vendor plan per client category, all `NOT_EXECUTED` or BLOCKED. | report 4, 5; tasks 4, 5 |
 | P2-05 external threat model | Control-by-control carry-over table, Grok Bot quotes, Alice `iot:view`. | report 6; task 6 |
 | P2-06 Telegram consent | core-profiles section and terms cited. Policy split from engineering. Gate applied to hypotheses. | report 7, 9; task 7 |
 | P2-07 meetup | Nov 26, 27, 28 timeline. Tracks A, B and C with gates and a fallback. | report 8; task 8 |
@@ -247,3 +247,33 @@ Write one docs-only report, `docs/spikes/pa-grok-town-benchmark.md` (status PROP
   - **A misread revocation expectation.** The access-token TTL is stated explicitly.
   - **A stale baseline.** Both SHAs are pinned and everything is dated. The PR re-checks gitops.
   - **The report read as authorization.** It says so explicitly and uses `Refs`, not `Closes`. Independent review is required before approval.
+
+## Revision 4 source-pinned evidence and exit review (2026-11-23)
+
+Current pinned SHA ledger: mctl-telegram ecbce7732fc2915a2a72dc21f1d1d2e9f8713d73; gitops 869582d33b66f5eb36de29ff9b52c487f2631ed4; mctl-alice cb276d6510ce01524b0ca90de46e10832aaee743; mctl-api 3233f6c0a00437f73021570d8a16253d2bcd524b; .github 60e9db522f18299e73dac23fffedfe5b4ce81930.
+
+GitOps desired 2026-11-23: production mctl-telegram 0.145.0, no PA flags; preview main-6623542, PA_ENABLED=true, PA_EXTERNAL_TOOLS_ENABLED=true, PA_SERVER_TG_ENABLED=true, PA_WRITES_ENABLED=false, PA_SERVER_ALICE_ENABLED=false; PA worker replicaCount=1. Read-only live Argo status at 18:01–18:03Z: production, preview and PA worker Healthy/Synced, but this is NOT R1–R6 user evidence. S1 manifest has zero gap rows; #1317/#1319 open.
+
+Historical deployment observations above are not current; `PA_ENABLED=true` for the present preview GitOps state, writes/Alice disabled. Argo status alone does not confirm a user exercised PA; S1 manifest has no gaps but #1317/#1319 remain open.
+
+mctl-alice `src/tools/handlers.ts:4–26` at `cb276d65` verified: four read methods accept `iot:view` or `iot:control`; write control tools require `iot:control`; Quasar tools require `quasar`. Issuer OAuth discovery/refresh remain UNKNOWN; no live calls attempted.
+
+Owner-observed 2026-11-22 Grok (grok.com) and Town connections WORK (merged mctl-telegram#1393), but no replayable transcript. Grok Bot-specific executable and exact callback/client id UNKNOWN; Town CIMD-vs-DCR UNKNOWN. Historical #1381 admin-scope overgrant is not read-only confinement; current grant and refresh-family status UNKNOWN, risk treated potentially active. Open security owner follow-up mctl-telegram#1433, no least-privilege claim or live test without separate GO. Keep direct MCP client policy distinct from PA consent/taint/audit.
+
+### Primary-source source-to-claim ledger (directly checked 2026-11-23)
+
+All quotations below are short exact excerpts supporting ONLY the adjacent narrow claim. They demonstrate **vendor documentation**, not MCTL execution or feature parity. Treat feature availability, product identity and any unverified quote beyond these excerpts as `UNKNOWN`.
+
+| Claim | Claim-supporting primary-source excerpt (checked 2026-11-23) | Evidence class and limitation |
+| --- | --- | --- |
+| Grok Bot skills and recurring routines | [Grok Bot skills/routines](https://docs.x.ai/grok-bot/skills-routines-and-automations): “A routine tells one Bot when to run a workflow: on a schedule, or when something happens” | `VENDOR_DOCUMENTED`; not proof that the observed `grok.com` client was Grok Bot |
+| Grok Bot external MCP registration | [Grok Bot computer/apps](https://docs.x.ai/grok-bot/computer-and-apps): “Remote HTTPS takes a Server URL, with optional HTTP headers and an OAuth Client ID” | `VENDOR_DOCUMENTED`; exact OAuth callback, DCR/CIMD behavior and identity `UNKNOWN` |
+| Hermes reusable agent-authored skills | [Hermes skills](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md): “The agent can create, update, and delete its own skills via the `skill_manage` tool” | `PROJECT_DOCUMENTED`; does not imply MCTL has managed skills |
+| OpenAI dots always-on cloud agent | [OpenAI dots](https://openai.com/index/introducing-dots/): “Dots can do nearly anything using their own cloud computer, their own browser, and the apps you’ve connected” | `VENDOR_DOCUMENTED`; no MCTL parity/entitlement inference |
+| Gemini scheduled-task triggers | [Gemini help](https://support.google.com/gemini/answer/17094710): “A schedule acts as the automated trigger for a task” | `VENDOR_DOCUMENTED`; plan/region limits are separate |
+| Town MCP transport | [Town MCP docs](https://www.town.com/docs/integrations/mcp-servers): “Town talks to MCP servers over Streamable HTTP only” | `VENDOR_DOCUMENTED`; does not prove CIMD vs DCR on the observed connection |
+| Telegram content use constraints | [Telegram licensing](https://telegram.org/tos/content-licensing): “all relevant users individually provide explicit, informed, affirmative and continued consent” | `VENDOR_DOCUMENTED`; policy/legal interpretation remains an open gate |
+
+**Direct MCTL evidence, separate class:** owner-observed Grok (grok.com) and Town sign-in, token and tool calls are `OWNER_OBSERVED_WORKS` in [mctl-telegram#1393](https://github.com/mctlhq/mctl-telegram/pull/1393). Grok Bot-specific identity is `UNKNOWN`; the admin-scope overgrant is `OBSERVED_AUDIT` historically, but current grant state is `UNKNOWN` pending [mctl-telegram#1433](https://github.com/mctlhq/mctl-telegram/issues/1433). Execution status for future vendor negative/sandbox tests is `NOT_EXECUTED`.
+
+The original P2-01/P2-05 partial findings are addressed at the source-ledger level; all vendor tests and consent-policy decisions remain separately gated. No production changes, owner GO, merge, or implementer. A Grok Bot-specific negative/sandbox test remains `NOT_EXECUTED`.
