@@ -12,8 +12,8 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.150.2"
-  digest: "sha256:4b67deb7aecc75bbe3c34280fbed8798ded1681b006d2b91506d6514fa817b8a"
+  tag: "0.150.3"
+  digest: "sha256:1ee392ecaa6796cc5ed970c927033718e5cd8c4881c89fce1907c243aecdabf3"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
