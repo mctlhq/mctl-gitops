@@ -1,73 +1,85 @@
-# Payment rail interoperability decision, refreshed 2026-11-22 (x402, MPP, account-funded, Hedera, MCP Payments / SEP-2007)
+# Payment rail interoperability decision, revision 3 (x402, MPP, account-funded, Hedera, MCP Payments / SEP-2007)
 
 ## Context
 
-Issue mctlhq/mctl-api#549 (roadmap item `payment-interop`, optional child of
-the completed Agent Commerce epic mctlhq/.github#173) asks for an
-evidence-driven choice of the first external payment rail shape that can plug
-into the existing commerce core in `internal/commerce` without creating a
-second authorization path. The MCTL invariant stays: `has funds` AND
+Issue mctlhq/mctl-api#549 (roadmap `payment-interop`, optional item of the closed
+Agent Commerce epic mctlhq/.github#173) asks which external payment rail shape
+could plug into the existing commerce core in `internal/commerce` without
+creating a second authorization path. The MCTL invariant stays: `has funds` AND
 `authorized` AND `within policy` AND `within budget` AND `approved when
 required` -> execute. Payment proof never grants capability authority. The
-2026-11-22 owner refresh adds MCP Payments (SEP-2007) as a fourth research
-pillar. It also asks for a merchant/buyer split, a client/host matrix, an
-inventory of the evidence gathered so far, a single isolated merchant
-experiment (offline first), a synthetic composed scenario, and an ADR with an
-outcome from `KEEP_SIMULATED | EXTEND_X402_PILOT | EVALUATE_MPP |
-ACCOUNT_FUNDED_FIRST | DEFER`.
+2026-11-22 owner refresh adds MCP Payments (SEP-2007) and merchant/buyer
+separation. It also requires a source-pinned matrix and an ADR with one of
+`KEEP_SIMULATED | EXTEND_X402_PILOT | EVALUATE_MPP | ACCOUNT_FUNDED_FIRST | DEFER`.
+Spending, wallets, onboarding, production changes and the implementer are not
+authorized.
 
-The 2026-10-25 proposal is stale in three material ways. (1) x402 now
-publishes an `auth-capture` scheme with authorize/capture/void/refund/reclaim
-(x402-foundation/x402 `e35bf884`, SDK "auth capture sdk v1.1" `28376d64`,
-2026-10-06). The earlier finding "x402 cannot void" therefore holds for
-`exact` only. (2) SEP-2007's PR #2007 was closed as dormant and unmerged on
-2026-06-24. The SEP file at its head still reads `Status: Draft`, which
-contradicts the issue's "stage proposal". (3) The three MCP payment wire
-formats are mutually incompatible. This revision delivers documentation, an
-ADR and test-only classification checks. It changes no runtime behaviour.
+The independent review of revision 2 (REQUEST_CHANGES, 2 P1 / 3 P2) found five
+problems:
+
+- P1-PAY-01: the crash gap between an external money side effect and the
+  Postgres commit in `Store.Reserve`/`Store.Finalize`.
+- P1-PAY-02: the MCTL payment key was conflated with the payer-signed nonce.
+- P2-PAY-03: the verdict was hard-coded before verification.
+- P2-PAY-04: a fixture that declares simulated funds was a false-positive
+  eligibility.
+- P2-PAY-05: the static capture-deadline rule and the asset boundary were not
+  executable checks.
+
+Revision 3 changes only documentation and test-only negative classification
+fixtures. It keeps the isolated #616/PR #617 testnet boundary unchanged. Every
+outcome is a **proposed** recommendation with measured conditions. The owner
+decision is left unissued.
 
 ## User stories
 
-- AS the platform owner I WANT one evidence-backed recommendation with pinned sources SO THAT I can decide the next payment step without re-reading every vendor page.
-- AS a commerce-core maintainer I WANT every rail classified against the existing `PaymentAuthorizer` contract (`Authorize`, `Capture`, `Void`, `Status`, `requiredFeatures`) SO THAT no adapter fakes an operation the rail cannot do.
-- AS a security reviewer I WANT custody, replay, ambiguity and reconciliation analysed per rail SO THAT no rail introduces MCTL key custody or duplicate economic charges.
-- AS the owner of MCP Check (#616/#617) I WANT a bounded offline-fixture backlog for the merchant experiment SO THAT the pilot can advance without live funds or a second ledger.
-- AS a buyer-side integrator I WANT a host/client compatibility matrix with explicit "not observed" cells SO THAT catalog support is never mistaken for native host payment support.
+- AS the platform owner I WANT one evidence-based proposed recommendation, with separate merchant and buyer answers and pinned sources, SO THAT I can make a digest-bound decision without trusting vendor marketing.
+- AS a commerce-core maintainer I WANT the external-side-effect/DB-commit gap and the identifier separation specified before any live adapter is designed, SO THAT no future rail can move funds without a committed, recoverable operation record.
+- AS a reviewer I WANT executable negative fixtures that show which rail shapes `checkAdapter` refuses and which pass only on contract shape, SO THAT a fixture can never be read as live-rail eligibility.
+- AS a tenant owner I WANT accounting currency and settlement asset kept distinct, with deadlines checked at every step, SO THAT no implicit FX or payer reclaim can desynchronize my budget.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the decision record is written THE SYSTEM SHALL compare x402 (`exact` and `auth-capture`), MPP (`charge`, `session`, Stripe `charge`), account-funded entitlements and Hedera (Agent Accounts, Payments MCP, Network MCP, x402 `exact` on Hedera, MPP `hedera` methods) against the same contract: `PaymentAuthorizer`, `requiredFeatures`, the phase machine and the receipt in `internal/commerce`.
-- WHEN a protocol claim is material to the decision THE SYSTEM SHALL cite a pinned source (commit SHA, draft revision, or vendor URL with access date) and label vendor pages and third-party comments as vendor self-report.
-- WHEN a rail is classified THE SYSTEM SHALL mark each of `authorize`, `capture`, `void`, `status_lookup`, `partial_capture`, `refund` and `async_settlement` as `native`, `emulated-with-evidence` or `unsupported`, and SHALL state whether the rail could pass `checkAdapter` as written.
-- WHEN the classification is encoded THE SYSTEM SHALL include test-only `AdapterInfo` fixtures in `internal/commerce` that assert the result of `checkAdapter` per rail, without changing `requiredFeatures`, `checkAdapter`, `SimulatedAuthorizer` or the live-funds refusal.
-- WHEN evidence is inventoried THE SYSTEM SHALL classify each of #173, #546, #547, #548, #614, mctl-agents#619/#620/#631, #616/PR #617 and .github#346 as `simulated-proof`, `offline-tests`, `external-testnet-settlement`, `production-available`, `open` or `unknown`, with commit or PR references.
-- WHILE no separate owner approval exists THE SYSTEM SHALL NOT perform or plan inside this scope any purchase, testnet or mainnet transfer, wallet or private-key creation, merchant registration, account linking or production configuration change.
-- WHILE any rail is described THE SYSTEM SHALL keep accounting currency (ISO 4217 `Money`) separate from the settlement asset (CAIP-2 network plus asset id plus atomic amount), and SHALL NOT introduce implicit EUR/USD/USDC/HBAR conversion.
-- IF a rail's lost-response or settlement ambiguity cannot be resolved by a status or reconciliation lookup keyed by the existing `mctl-pay/v1:<invocation_id>:<operation>` key THEN THE SYSTEM SHALL classify that rail as unable to avoid duplicate economic charge under retry.
-- IF a rail requires MCTL to hold a payer signing key THEN THE SYSTEM SHALL reject that rail shape for buyer-side use.
-- WHEN streaming or long-running calls are evaluated THE SYSTEM SHALL explicitly reject them for the first proof, with the reason tied to `dispatch_deadline` (60 s), `reconciliation_deadline` (24 h) and the rail's capture or settlement deadlines.
-- WHEN the ADR is written THE SYSTEM SHALL record exactly one refresh outcome (`EXTEND_X402_PILOT`) and exactly one original-issue token (`DEFER_EXTERNAL_PAYMENT`). It SHALL explain why each beats every rejected alternative and SHALL make separate merchant-side and buyer-side recommendations.
-- WHEN deferral is recorded THE SYSTEM SHALL define measurable re-entry criteria, name the leading retest candidate (x402 `auth-capture` with `escrow` flow on Base Sepolia), and define separate owner gates for testnet, merchant registration and production.
-- WHEN the merchant experiment backlog is drafted THE SYSTEM SHALL scope it to offline fixtures on MCP Check. It SHALL include negative tests for identity, scope, revocation, wrong payee, changed quote, unusable receipt, failed execution, retry, replay and concurrent reserve, and SHALL NOT promise exactly-once behaviour across external systems.
-- WHEN the composed reference scenario is described THE SYSTEM SHALL mark it synthetic, and SHALL show that event delivery and payment receipt are never authorization inputs.
-- WHERE a rail-independent receipt envelope is recommended THE SYSTEM SHALL document it only. It SHALL NOT add fields to the public `Receipt` or to the MCP tool responses in this revision.
+- WHEN a protocol claim is material to the recommendation THE SYSTEM SHALL cite a pinned source (commit SHA or blob SHA, draft name and revision, or vendor URL with access date). It SHALL label vendor pages and third-party comments (including Screwtape) as self-report.
+- WHEN the comparison is written THE SYSTEM SHALL compare x402, MPP, account-funded and Hedera against the same `PaymentAuthorizer` (`Authorize`/`Capture`/`Void`/`Status`), ledger and governance contract in `internal/commerce/budget.go`. It SHALL classify each adapter capability as native, emulated-with-evidence, unsupported or unknown.
+- WHEN a rail-shape fixture is evaluated THE SYSTEM SHALL record two separate results: the `checkAdapter` outcome, and an `eligible_for_mctl` verdict. The verdict SHALL be `false` for every external rail in this revision. A fixture that passes `checkAdapter` only by declaring `FundsModeSimulated` without a proven real simulator SHALL be labelled `contract-shape only`.
+- WHEN the design describes any future external adapter THE SYSTEM SHALL require a durable pre-call payment intent. The intent SHALL be committed before the external call, and the result SHALL be recorded in a separate transaction, with a recovery reconciler. No external call SHALL be made from inside the `withTx` transaction that records its result.
+- IF an external call succeeds and the recording transaction then rolls back, the process dies or the response is lost THEN THE SYSTEM SHALL resolve the operation only through status lookup on persisted protocol identifiers. It SHALL never issue a second external authorize, settle or capture for the same invocation.
+- WHEN identifiers are specified THE SYSTEM SHALL keep separate, domain-bound values:
+  - the internal invocation id and `mctl-pay/v1` operation key;
+  - the protocol payment identifier (x402 `payment-identifier` id, MPP challenge `id`);
+  - the payer-signed nonce or commitment (EIP-3009 `nonce`, auth-capture `signatureNonce`/`salt`/`saltNonce`/`paymentInfoHash`);
+  - the binding tuple (chain, asset, payee, amount, expiry, quote digest, args digest).
+
+  The server SHALL never derive or dictate a payer-signed nonce for a generic client.
+- IF a presented proof's binding tuple differs from the persisted intent (other payer, network, asset, payee, amount, quote, args or rail) THEN THE SYSTEM SHALL reject it without an external call. The test plan SHALL contain a negative case for each of these.
+- WHILE an escrowed or deadline-bound payment is reserved, dispatched or `outcome_unknown` THE SYSTEM SHALL check a deadline invariant at reserve, capture and reconcile. The invariant covers the capture deadline, clock skew, finality, pause margin and the remaining ledger deadlines. IF the invariant cannot be met THEN THE SYSTEM SHALL refuse the reserve, void before capture, or move the row to manual reconciliation, and SHALL never count a reclaimable hold as captured.
+- WHILE `Money` accepts only ISO 4217 codes (`currencyExponents` in `internal/commerce/types.go`) THE SYSTEM SHALL record settlement asset (CAIP-2 network + CAIP-19 asset + atomic amount string) separately from accounting `Money`. No conversion SHALL be applied without a separately designed FX layer.
+- WHEN the ADR is written THE SYSTEM SHALL mark it `proposed`. It SHALL state the proposed merchant outcome and the proposed buyer outcome, each with the measurable conditions under which it falls back to `KEEP_SIMULATED` or `DEFER`. It SHALL map to exactly one original-issue token. It SHALL explain why the proposal beats each rejected alternative. It SHALL be written only after the classification fixtures (task 2) and the evidence inventory (task 1) are complete.
+- WHEN the merchant experiment is described THE SYSTEM SHALL bound it to MCP Check (#616/PR #617), offline fixtures first. It SHALL use separate owner gates for testnet (G1), merchant registration (G2) and production (G3). It SHALL make no purchases or live financial calls, and SHALL not promise exactly-once across external systems.
+- WHEN MCP wire formats are compared THE SYSTEM SHALL distinguish:
+  - SEP-2007 `-32402` + `params.payment`, a draft whose PR was closed without merging;
+  - x402 MCP transport `isError` + `_meta["x402/payment"]`;
+  - MPP MCP transport `-32042` + `_meta["org.paymentauth/credential"]`.
+
+  It SHALL expose none of them on a public production endpoint in this revision.
+- WHEN streaming or long-running calls are assessed THE SYSTEM SHALL reject them for the first proof, with the reason recorded.
+- WHERE a rail-independent receipt/reconciliation envelope is recommended THE SYSTEM SHALL document it only. It SHALL not change `Receipt` in `internal/commerce/receipt.go` or any MCP tool.
+- WHEN the revision is delivered THE SYSTEM SHALL include a finding-to-change table for P1-PAY-01..P2-PAY-05, citing the source lines each change rests on.
 
 ## Out of scope
 
-- Mainnet or production funds, and any testnet transfer (separate explicit approval needed).
-- MCTL custody of wallet private keys; stored card data; stored-value or top-up products.
-- Provider marketplace, merchant onboarding or KYC, payouts or revenue share, a tax/VAT/FX engine.
-- Changing canonical identity, authorization, policy, approval or budget semantics, `requiredFeatures` or `checkAdapter`.
-- Any new route, MCP tool, migration, env var or persisted envelope type.
-- Merging or closing #616/PR #617; changing #346 scope (ChatGPT Wallet checkout spike).
-- Invoking third-party purchase endpoints named in issue comments (for example Screwtape).
-- A new commerce epic.
+- Any live, testnet or mainnet transfer, purchase, wallet, private key, facilitator account, Stripe or Hedera account, merchant registration or KYC.
+- Any production code change in `internal/commerce` (only a new `_test.go` file and docs are added), any migration, route, MCP tool or Helm change.
+- Changing `checkAdapter`, `requiredFeatures`, `FundsMode*` semantics or ADR 020 (amendments are named as future scope only).
+- Changes to PR #617 or closing #616; changes to #346 scope.
+- Approving the existing DevLoop, editing `.status.yaml`, restarting the completed Temporal execution, or running the implementer before a new independent review and an owner digest-bound approval.
+- FX, tax/VAT, payouts, revenue share, marketplace, a new commerce epic, or invoking third-party purchase tools.
 
 ## Open questions
 
-- Is `auth-capture` (EVM) offered by the hosted facilitator `https://x402.org/facilitator` on Base Sepolia? Only spec, SDK and e2e/example code (`examples/go/facilitator/auth-capture`) were observed, not a hosted `/supported` answer. A live probe is a network call against an external service and was not made.
-- SEP-2007 status conflict: the issue cites the SEP tracker as `proposal`; PR #2007 is closed as dormant (2026-06-24) and its text says `Status: Draft`. A 2026-11-20 comment proposes reviving it as an experimental extension. Treated here as "not adopted, wire format unstable".
-- Hedera Agent Accounts / Payments MCP availability is known only from secondary press (limited partner testnet Q4 2026, public testnet Q1 2027, Payments MCP "coming soon"). No pinned developer specification was found.
-- The deployed mctl-api commerce configuration (`COMMERCE_DB_URL`, `COMMERCE_ACCEPT_DISABLED`, dispatch key) could not be observed (see design.md "Deployed state checked"). Production availability of paid capabilities is therefore recorded as `unknown`, apart from the fact that #631 (shared tenants) is open.
-- Native payment support in ChatGPT, Claude, Antigravity and Grok hosts was not observed for any of the three MCP wire formats. The matrix records `not observed`, not `unsupported`.
-- Whether the owner wants the refresh outcome and the original token in one ADR, or the original token retired. This proposal records both, mapped explicitly.
+- mctl-api's deployed commerce configuration (for example `COMMERCE_ACCEPT_DISABLED`, whether a non-simulated adapter could be configured) could not be observed. `mctl_get_service_config admins/mctl-api` answered "service not found", and no mctl-api values file exists under the gitops `services/` checkout. This is recorded as a gap, not as absence.
+- No official public spec or repository named "Hedera Agent Accounts" or "Hedera Payments MCP" was found. Hedera is assessed through the pinned x402 `exact` Hedera scheme and the MPP Hedera charge/session methods, plus `hashgraph/hedera-agent-kit-js` as SDK context. Delegated-spend claims remain unverified.
+- The official SEP tracker stage ("proposal", according to the issue) was not re-fetched. PR #2007 is closed and unmerged (2026-06-24), and its text says `Status: Draft`. Whether a successor SEP exists is unknown.
+- It is unknown whether any hosted facilitator advertises x402 `auth-capture` for `eip155:84532` in `/supported`. This is condition C2 of the proposed merchant outcome.
+- It is an owner decision whether ADR 020 will later admit asset-denominated terms or an FX layer. Until then every on-chain rail stays blocked for the ledger.
