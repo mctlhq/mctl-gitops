@@ -1343,6 +1343,38 @@ jobs:
         # Role. Red on each mutation of a copied chart. Needs helm.
         run: python3 tests/test_prepull_render.py
 
+      - name: Check the bootstrap chart sources against their structural pin
+        # Structural only, not a semantic check of rendered output. Every file
+        # under platform-gitops/bootstrap, read from the git tree (not the
+        # worktree), is pinned by path and SHA-256, so a source added, removed
+        # or changed without tests/fixtures/bootstrap-source-pin.json changing
+        # in the same PR is red (#1033). In a pull request the fixture and the
+        # pinned content must also change together against the merge base.
+        #
+        # What this is NOT: an enforced owner review. main-protection has
+        # require_code_owner_review=false and one writer, and this job is not
+        # a required status check (required: cloudflare-plan, reserved-hosts),
+        # so a red pin is visible, not blocking. A PR that changes a source and
+        # regenerates the fixture passes: the control is that the change is on
+        # the page for claude[bot] to review, nothing more.
+        #
+        # Not pinned at all: helm-charts/base-service, helm-charts/tenant,
+        # services/*/*/values.yaml, tenants/*/values.yaml.
+        run: |
+          python3 tests/test_bootstrap_source_pin.py --selftest
+          python3 tests/test_bootstrap_source_pin.py
+
+      - name: Check the in-cluster Access login probe against its sources
+        # The CronJob in infra-components/observability/blackbox carries two
+        # copies it cannot read at run time: scripts/access-login-probe.py as
+        # a ConfigMap, and the ZITADEL client id from
+        # infrastructure/cloudflare/account/zitadel-idp.tf as an argument. A
+        # drifted copy would probe for a client that no longer exists, or run
+        # an old script, and stay green doing it (#1329).
+        run: |
+          python3 scripts/access-login-probe.py --selftest
+          python3 tests/test_access_login_probe_cronjob.py
+
       - name: Release gate diff judges a push by content
         # Includes the two sanctioned steps of a pre-pulled deploy (green) and
         # every other change to the pre-pulled file (red), with mutants.

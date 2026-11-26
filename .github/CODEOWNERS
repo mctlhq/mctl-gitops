@@ -83,6 +83,15 @@ platform-gitops/agents-state/*/proposals/*/.status.yaml @mashkovd
 platform-gitops/agent-platform/** @mashkovd
 
 # ---------------------------------------------------------------------------
+# Bootstrap source pin (#1033, B4)
+# ---------------------------------------------------------------------------
+# ROUTING ONLY, and redundant with the `*` default above: it states intent,
+# it does not enforce anything (`require_code_owner_review` is false and
+# mashkovd is the only writer). The independent control is inside the test:
+# the pin fixture may change only together with a pinned bootstrap source.
+tests/test_bootstrap_source_pin.py @mashkovd
+tests/fixtures/bootstrap-source-pin.json @mashkovd
+
 # Argo CD AppProjects and sync-window guards
 # ---------------------------------------------------------------------------
 # An AppProject carries spec.syncWindows, sourceRepos and roles. A window
