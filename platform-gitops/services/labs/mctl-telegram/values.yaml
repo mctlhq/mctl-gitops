@@ -86,6 +86,14 @@ env:
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
+  # Controlled Workspace canary on the existing /mcp route (mctlhq/mctl-telegram#650,
+  # #1494). Requires 0.150.2+, MCP_APPS_ENABLED="false", AUTH_MODE=local-jwt,
+  # AUTH_REQUIRED="true", and CANARY_TELEGRAM_IDS. Exposes read-only Workspace ONLY
+  # to interactive OAuth clients authenticated as CANARY_TELEGRAM_IDS (8745115872);
+  # ordinary users and the k8s-sa monitoring canary retain the normal handler.
+  # Rollback: remove MCP_APPS_PILOT or set it to "false".
+  MCP_APPS_ENABLED: "false"
+  MCP_APPS_PILOT: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
