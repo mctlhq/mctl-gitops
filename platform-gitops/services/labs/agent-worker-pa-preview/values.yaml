@@ -26,8 +26,8 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "main-5b8edb9"
-  digest: "sha256:5e7fe12f5a0485d2ef2a121761d492eeb29771095ddfaab8e770fb2ddabce977"
+  tag: "main-66aca8f"
+  digest: "sha256:ffdb37c725c3ceaf71ef0b1bbc2bf5be032321fa7ec643f63a022eb956498d37"
   # Built from mctl-telegram 5b8edb9 (carries pa_mode.go and the streaming path of #1459;
   # agent-worker-managed-preview stays on its own tag). preview-deploy.yml does not bump this
   # file yet; until it does, the tag is moved by hand alongside
