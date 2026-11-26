@@ -31,3 +31,22 @@ back, revert the PR. This removes `roadmap/spikes/agent-ui-ag-ui-phase-b.yaml`,
 `AGENTS.md` bullet. No runtime, data or deployment is affected. If only the CI step
 misbehaves, delete that step and its path filters and keep the model and report.
 `roadmap/spikes/agent-ui-ag-ui.yaml` (Phase A) is untouched either way.
+
+
+---
+
+
+## S3 architecture amendment tasks — research/review only (2026-11-24)
+
+The original tasks 1–10 remain a contract/reference-model baseline. The following are **proposed follow-up design tasks**, not automatically executable S3 implementer tasks. Retain `.status.yaml: proposed`, do not merge/approve this proposal or change S1/S2 authority without the normal gates.
+
+- [ ] S3-A. Evidence inventory: map canonical `ExecutionView`/WorkItem/stages, tool invocation and approval *status* (not grants) to exact `mctl-api` records/SHAs; separate `OBSERVED | PLANNED | UNOBSERVABLE`. No frontend joins of raw Temporal/Argo/GitHub.
+- [ ] S3-B. Reuse `mctl-telegram#650` actual-host test matrix and `.github#376` G1–G6 to decide whether an isolated read-only MCP App Inspector is portable. Unknown/unsupported host coverage is not success. Keep a plain-text fallback.
+- [ ] S3-C. Produce a minimal **synthetic read-only** Inspector fixture: one execution, recorded stage sequence, actual referenced tool identity if present, evidence/trace links, stale/UNKNOWN state; all callbacks display/navigation only. Verify direct MCP unauthorized write/tool calls are denied server-side, regardless of UI metadata.
+- [ ] S3-D. Compare `MCP_APP_FIRST | BACKSTAGE_ONLY | DUAL_HOST_SAME_READ_MODEL | DEFER` with measured cost, complexity, support matrix, accessibility/CSP, tenant authorization, reload/revocation and rollback. Backstage is an optional engineering operator view; no duplicate approval/store.
+- [ ] S3-E. Keep original S2 `TestResume*`, `TestInjectedEventRefused`, cancel and replay tests **unchanged**; check their canonical handler behavior independently from read-only MCP App S3. Do not expose approve/edit/reject/cancel buttons in initial S3.
+- [ ] S3-F. Obtain independent review of revised `requirements.md`, `design.md`, `tasks.md` at exact SHAs, update finding-to-change matrix, then request a new digest-bound owner decision before any changed S3 implementation. No adoption verdict from docs-only claims.
+
+**Acceptance:** a single source of truth for execution/approval state; two independently demonstrable presentation options (external MCP App + optional Backstage), explicit fallback and provenance; no new privileges, auth or agent runtime; published comparison with actual host verification separated from static fixtures.
+
+**References:** https://github.com/mctlhq/.github/issues/393 , https://github.com/mctlhq/.github/issues/376 , https://github.com/mctlhq/mctl-telegram/issues/650 , https://github.com/mctlhq/mctl-portal/issues/111 .

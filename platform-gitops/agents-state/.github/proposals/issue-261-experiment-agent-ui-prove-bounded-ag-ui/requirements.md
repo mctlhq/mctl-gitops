@@ -88,3 +88,22 @@ Report and contract
 - Exit verdict before live evidence. With only `[REF]` evidence the report cannot honestly claim PROMOTE. Assumption: the report states the verdict the available evidence supports. The expected default is `KEEP_LIMITED_OPERATOR_ADAPTER` with `KEEP_AS_AGENT_PLATFORM_FOLLOWUP`. If S2 cannot fail closed without a second authority, the verdict is `STOP_AG_UI_EXPERIMENT`. The verdict is labelled a recommendation, and the owner records the binding decision on the manifest.
 - `timebox.decisionBy` is not given in the issue. Assumption: `2026-12-15`, after the Phase A timebox of 2026-11-30. The owner may change it.
 - Exact numeric bounds (event cap, byte cap, retention, write budget) are not specified. Assumption: 512 events, 256 KiB per stream window, the last 24 h of history before snapshot-only, and a 5 s write budget. These are recorded in the contract as experiment defaults.
+
+
+---
+
+
+## Architecture alignment amendment — S3 UI-optional (2026-11-24; .github#393)
+
+**Owner direction, proposed / not accepted.** The Phase B AG-UI experiment and S1/S2 reference-model authority remain unchanged; this amendment refines only *which user-facing surface is required by S3*. It is a design proposal pending independent review and exact-content human approval. It is not a runtime change or renewed implementation GO.
+
+- **S3-R1 / canonical truth:** `mctl-api` owns the authenticated tenant-scoped `ExecutionView` / event/read model and existing human-input/approval handlers. Neither an MCP App, A2UI component, AG-UI adapter nor Backstage owns authorization, WorkItem state, approval/MFA or tool execution.
+- **S3-R2 / first consumer:** compare a **read-only DevLoop Inspector MCP App** in actual supporting AI hosts (subject to mctl-telegram#650/.github#376 portability gates) against a semantic plain-text MCP/tool fallback. Display canonical execution identity, stage/status, bounded event/trace/evidence references, UNKNOWN/STALE and recorded tool-call identities only.
+- **S3-R3 / alternate consumer:** `mctl-portal` (existing Backstage engineering portal) may render the *same* canonical read model as an **optional operator host**. Do not mandate that Backstage must be the first or only S3 frontend. Distinguish Cloudflare MCP Portal (`mcp.mctl.ai`) from Backstage (`app.mctl.ai`).
+- **S3-R4 / AG-UI:** keep #261's existing bounded, removable AG-UI SSE projection and replay/negative tests. A read-only MCP App does not require full AG-UI streaming; measure the two independently. No adapter may synthesize canonical events or tool calls.
+- **S3-R5 / actions:** the first cross-host S3 Inspector has *no* approve/reject/edit/cancel/retry controls. S2's existing, separately governed resume/cancel semantics and negative tests remain part of the original bounded AG-UI experiment but do not grant write-capable UI. Any later action needs an explicit revised scope, existing authenticated canonical handler, exact intent/digest and independent approval.
+- **S3-R6 / transport:** capability-detect MCP Apps, compare bundle digest/render/refresh/authorization and text fallback using synthetic data. Do not assume host-native A2UI support or introduce a common SDK until two verified consumer cases justify extraction.
+- **S3-R7 / security:** read-only server registration allowlist + minimum read scopes, deny unknown config and direct raw MCP calls to writes, prevent cross-tenant/stale/replayed reads or app-origin escalation, keep credentials server-side, independently verify resource auth where user data is involved.
+- **S3-R8 / evidence:** label every host/route cell `DOCUMENTED | FIXTURE_TESTED | REAL_HOST_VERIFIED | BLOCKED | UNSUPPORTED | UNMEASURED`. Host validation must be observed, not inferred from OAuth/tools-only compatibility; no raw Telegram or customer data.
+
+**Gate:** #650's actual host-read evidence and .github#376 G1–G6 are prerequisites for a portability verdict, not an excuse to pause independent offline S1/S2 tests. Distinguish original #261 Phase B scope from any newly authorized S3 changes. Existing `.status.yaml: proposed` must remain unchanged. References: https://github.com/mctlhq/.github/issues/393 , https://github.com/mctlhq/.github/issues/261 , https://github.com/mctlhq/mctl-portal/issues/111 .
