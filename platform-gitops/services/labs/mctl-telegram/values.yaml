@@ -86,7 +86,10 @@ env:
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
-  MCP_APPS_ENABLED: "true"
+  # Enable only after the running image supports Workspace-only mode and
+  # the independent review and target-host evidence are recorded in #650.
+  MCP_APPS_ENABLED: "false"
+  MCP_APPS_WORKSPACE_ONLY: "true"
   LOG_LEVEL: info
   PUBLIC_BASE_URL: https://tg.mctl.ai
   OAUTH_ISSUER_URL: https://tg.mctl.ai
