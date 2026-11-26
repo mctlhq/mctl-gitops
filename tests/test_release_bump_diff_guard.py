@@ -101,6 +101,14 @@ BAD = {
     "deleted file": diff(SVC, TAGS, extra="deleted file mode 100644\n"),
     "mode change": diff(SVC, TAGS, extra="old mode 100644\nnew mode 100755\n"),
     "rename": "diff --git a/" + SVC + " b/platform-gitops/services/x/y/values.yaml\nsimilarity index 90%\n",
+    "rename with a tag move": (
+        f"diff --git a/{SVC} b/platform-gitops/services/x/y/values.yaml\n"
+        f"similarity index 90%\n"
+        f"rename from {SVC}\n"
+        f"rename to platform-gitops/services/x/y/values.yaml\n"
+        f"--- a/{SVC}\n+++ b/platform-gitops/services/x/y/values.yaml\n"
+        f"@@ -1,3 +1,3 @@\n ctx\n-  tag: \"1.0.0\"\n+  tag: \"1.1.0\"\n"
+    ),
     "binary patch": diff(SVC, TAGS, extra="GIT binary patch\n"),
     "header without a changed line": f"diff --git a/{SVC} b/{SVC}\nindex 1..2 100644\n--- a/{SVC}\n+++ b/{SVC}\n@@ -1 +1 @@\n ctx\n",
     "tag moves backwards": diff(SVC, [("  tag: 1.2.0", "  tag: 1.1.0")]),
@@ -144,99 +152,134 @@ SIG = "\n-- \n2.39.0\n\n"
 PATCH_HEAD = "From abc Mon Sep 17 00:00:00 2001\nFrom: t <t@t>\nSubject: [PATCH] bump\n\n---\n"
 
 
-def option_verdicts(script):
+def option_verdicts(script, witness=None):
     out = []
 
-    def case(name, r, want):
+    def case(name, diff_text, args, want, patch=None):
+        if witness is not None and witness != name:
+            return
+        r = run_opts(script, diff_text, args, patch=patch)
         ok = (r.returncode == 0) if want == "accept" else (r.returncode == 1 and b"REFUSED" in r.stderr)
         out.append((name, ok, r))
 
-    case("strict-order accepts a forward semver move", run_opts(script, diff(SVC, TAGS), ["--strict-order"]), "accept")
-    case("strict-order refuses tags that cannot be ordered", run_opts(script, diff(SVC, [("  tag: sha-aaa", "  tag: sha-bbb")]), ["--strict-order"]), "refuse")
-    case("strict-order refuses a move between a semver and a non-semver tag", run_opts(script, diff(SVC, [("  tag: 1.0.0", "  tag: sha-bbb")]), ["--strict-order"]), "refuse")
+    case("strict-order accepts a forward semver move", diff(SVC, TAGS), ["--strict-order"], "accept")
+    case("strict-order refuses tags that cannot be ordered", diff(SVC, [("  tag: sha-aaa", "  tag: sha-bbb")]), ["--strict-order"], "refuse")
+    case("strict-order refuses a move between a semver and a non-semver tag", diff(SVC, [("  tag: 1.0.0", "  tag: sha-bbb")]), ["--strict-order"], "refuse")
     patch = PATCH_HEAD + diff(SVC, TAGS) + SIG
-    case("same-lines-as accepts the same lines (format-patch signature ignored)", run_opts(script, diff(SVC, TAGS), [], patch=patch), "accept")
-    case("same-lines-as refuses an extra changed line of the same identity", run_opts(script, diff(SVC, TWO), [], patch=patch), "refuse")
+    case("same-lines-as accepts the same lines (format-patch signature ignored)", diff(SVC, TAGS), [], "accept", patch=patch)
+    case("same-lines-as refuses an extra changed line of the same identity", diff(SVC, TWO), [], "refuse", patch=patch)
     case("same-lines-as refuses the same identity moved to a different tag",
-         run_opts(script, diff(SVC, [('  tag: "1.0.0"', '  tag: "1.2.0"')]), [], patch=patch), "refuse")
-    case("same-lines-as refuses a different file", run_opts(script, diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]), [], patch=patch), "refuse")
-    case("same-lines-as refuses a different identity", run_opts(script, diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]), [], patch=PATCH_HEAD + diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]) + SIG), "refuse")
+         diff(SVC, [('  tag: "1.0.0"', '  tag: "1.2.0"')]), [], "refuse", patch=patch)
+    case("same-lines-as refuses a different file", diff(API, [('        tag: "4.154.0"', '        tag: "4.154.1"')]), [], "refuse", patch=patch)
+    case("same-lines-as refuses a different identity", diff(CWFT, [("        image: ghcr.io/mctlhq/mctl-agents:1.1.0", "        image: ghcr.io/mctlhq/mctl-agents:1.2.0")]), [], "refuse", patch=PATCH_HEAD + diff(CWFT, [('          value: "ghcr.io/mctlhq/mctl-agents:1.1.0"', '          value: "ghcr.io/mctlhq/mctl-agents:1.2.0"')]) + SIG)
     DPATCH = PATCH_HEAD + block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]) + SIG
     case("same-lines-as accepts the same tag and digest",
-         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]), [], patch=DPATCH), "accept")
+         block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D1]), [], "accept", patch=DPATCH)
     case("same-lines-as refuses the same tag with another digest",
-         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D2]), [], patch=DPATCH), "refuse")
+         block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"', "+" + D2]), [], "refuse", patch=DPATCH)
     case("same-lines-as refuses a patch digest the resolution left out",
-         run_opts(script, block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"']), [], patch=DPATCH), "refuse")
-    case("same-lines-as refuses a patch that changes no line", run_opts(script, diff(SVC, TAGS), [], patch=PATCH_HEAD + SIG), "refuse")
-    r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as", "/nonexistent/bump.patch"])
-    out.append(("same-lines-as with an unreadable patch exits 2", r.returncode == 2, r))
-    r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as"])
-    out.append(("same-lines-as without a path exits 2", r.returncode == 2, r))
+         block(SVC, ['-  tag: "1.0.0"', '+  tag: "1.1.0"']), [], "refuse", patch=DPATCH)
+    case("same-lines-as refuses a patch that changes no line", diff(SVC, TAGS), [], "refuse", patch=PATCH_HEAD + SIG)
+    if witness is None or witness == "same-lines-as with an unreadable patch exits 2":
+        r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as", "/nonexistent/bump.patch"])
+        out.append(("same-lines-as with an unreadable patch exits 2", r.returncode == 2, r))
+    if witness is None or witness == "same-lines-as without a path exits 2":
+        r = run_opts(script, diff(SVC, TAGS), ["--same-lines-as"])
+        out.append(("same-lines-as without a path exits 2", r.returncode == 2, r))
     return out
 
 
-def verdicts(script):
+def verdicts(script, witness=None):
     out = []
     for n, t in GOOD.items():
+        name = f"accepts: {n}"
+        if witness is not None and witness != name:
+            continue
         r = run(script, t)
-        out.append((f"accepts: {n}", r.returncode == 0, r))
+        out.append((name, r.returncode == 0, r))
     for n, t in BAD.items():
+        name = f"refuses: {n}"
+        if witness is not None and witness != name:
+            continue
         r = run(script, t)
         # A refusal is the guard's own verdict (exit 1, REFUSED on stderr), not a crash.
-        out.append((f"refuses: {n}", r.returncode == 1 and b"REFUSED" in r.stderr, r))
-    r = subprocess.run([sys.executable, str(script)], input=b"\xff\xfe", capture_output=True)
-    out.append(("refuses: undecodable input (exit 2)", r.returncode == 2, r))
-    return out + option_verdicts(script)
+        out.append((name, r.returncode == 1 and b"REFUSED" in r.stderr, r))
+    if witness is None or witness == "refuses: undecodable input (exit 2)":
+        r = subprocess.run([sys.executable, str(script)], input=b"\xff\xfe", capture_output=True)
+        out.append(("refuses: undecodable input (exit 2)", r.returncode == 2, r))
+    return out + option_verdicts(script, witness=witness)
 
 
-for n, ok, r in verdicts(GUARD):
+baseline = verdicts(GUARD)
+baseline_names = {n for n, _, _ in baseline}
+for n, ok, r in baseline:
     check(n, ok, f"rc={r.returncode} {r.stderr[-200:]!r}")
 
 src = GUARD.read_text()
 MUT = [
     ("empty diff passes (both emptiness checks removed)",
      [('    if not files:\n        problems.append("the diff names no file")', "    pass"),
-      ('    if changed == 0:\n        problems.append("the diff changes no line")', "    pass")]),
-    ("a header-only diff passes", [('    if changed == 0:\n        problems.append("the diff changes no line")', "    pass")]),
-    ("any file accepted", [("not cur.startswith(ALLOWED_PREFIXES) or ", "")]),
-    ("non-yaml accepted", [(' or not cur.endswith((".yaml", ".yml"))', "")]),
-    ("traversal accepted", [('".." in cur.split("/") or ', "")]),
-    ("file cap removed", [("    if len(files) > MAX_FILES:", "    if False:")]),
-    ("duplicate files accepted", [("    if len(set(files)) != len(files):", "    if False:")]),
-    ("non-tag lines accepted", [("            if s is None:\n                problems.append", "            if s is None:\n                continue\n                problems.append")]),
-    ("identity (key, image) not compared", [("            if ri != ai:", "            if False:")]),
-    ("same-tag rewrite accepted", [("            elif rt == at:", "            elif False:")]),
+      ('    if changed == 0:\n        problems.append("the diff changes no line")', "    pass")],
+     "refuses: empty diff"),
+    ("a header-only diff passes", [('    if changed == 0:\n        problems.append("the diff changes no line")', "    pass")],
+     "refuses: header without a changed line"),
+    ("any file accepted", [("not cur.startswith(ALLOWED_PREFIXES) or ", "")], "refuses: workflow file"),
+    ("non-yaml accepted", [(' or not cur.endswith((".yaml", ".yml"))', "")], "refuses: not yaml"),
+    ("traversal accepted", [('".." in cur.split("/") or ', "")], "refuses: path traversal"),
+    ("file cap removed", [("    if len(files) > MAX_FILES:", "    if False:")], "refuses: nine files"),
+    ("duplicate files accepted", [("    if len(set(files)) != len(files):", "    if False:")], "refuses: same file twice"),
+    ("non-tag lines accepted", [("            if s is None:\n                problems.append", "            if s is None:\n                continue\n                problems.append")],
+     "refuses: another key changed"),
+    ("identity (key, image) not compared", [("            if ri != ai:", "            if False:")], "refuses: image name swapped with the tag"),
+    ("same-tag rewrite accepted", [("            elif rt == at:", "            elif False:")], "refuses: digest under a tag that keeps its value"),
     ("unpaired lines accepted (tag lines no longer paired per block)",
-     [("        if cur is not None and len(blk_removed) != len(blk_added):", "        if False:")]),
+     [("        if cur is not None and len(blk_removed) != len(blk_added):", "        if False:")],
+     "refuses: tag line added without a removal"),
     ("context lines do not end a block",
-     [('            end_block()\n            continue\n        if line[0] in "+-":', '            continue\n        if line[0] in "+-":')]),
+     [('            end_block()\n            continue\n        if line[0] in "+-":', '            continue\n        if line[0] in "+-":')],
+     "refuses: tag key moved to another block"),
     ("new/deleted/mode/rename headers accepted (both defences removed)",
      [("            if HEADER_REFUSE.match(line):", "            if HEADER_REFUSE.match(line) and False:"),
-      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")]),
+      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")],
+     "refuses: new file"),
     ("renames accepted (both defences removed)",
      [("m.group(1) != m.group(2)", "False"), ("            if HEADER_REFUSE.match(line):", "            if False:"),
-      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")]),
+      ('            problems.append(f"{cur}: unrecognised header line {line[:80]}")', "            pass")],
+     "refuses: rename with a tag move"),
     ("file markers skipped anywhere, not only before the first hunk",
-     [("                in_header = False\n                continue", "                continue")]),
-    ("a tag may move backwards", [("elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):", "elif False:")]),
-    ("semver compared as strings", [("_semver(at) < _semver(rt)", "at < rt")]),
-    ("strict-order ignored", [("    strict_order = \"--strict-order\" in argv", "    strict_order = False")]),
-    ("unorderable tags pass strict-order", [("elif strict_order and (_semver(rt) is None or _semver(at) is None):", "elif False:")]),
-    ("same-lines comparison skipped", [("        elif got != want:", "        elif False:")]),
-    ("same-lines compares identities only", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, None, None) for (ai, at, ad) in added]")]),
-    ("same-lines ignores the digest", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, at, None) for (ai, at, ad) in added]")]),
-    ("a digest line accepted anywhere in the repo", [("                if not cur.startswith(DIGEST_PREFIX):", "                if False:")]),
+     [("                in_header = False\n                continue", "                continue")],
+     "accepts: tag line in a values file"),
+    ("a tag may move backwards", [("elif _semver(rt) is not None and _semver(at) is not None and _semver(at) < _semver(rt):", "elif False:")],
+     "refuses: tag moves backwards"),
+    ("semver compared as strings", [("_semver(at) < _semver(rt)", "at < rt")], "accepts: a prerelease-free upgrade across digits"),
+    ("strict-order ignored", [("    strict_order = \"--strict-order\" in argv", "    strict_order = False")],
+     "strict-order refuses tags that cannot be ordered"),
+    ("unorderable tags pass strict-order", [("elif strict_order and (_semver(rt) is None or _semver(at) is None):", "elif False:")],
+     "strict-order refuses tags that cannot be ordered"),
+    ("same-lines comparison skipped", [("        elif got != want:", "        elif False:")],
+     "same-lines-as refuses an extra changed line of the same identity"),
+    ("same-lines compares identities only", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, None, None) for (ai, at, ad) in added]")],
+     "same-lines-as refuses the same identity moved to a different tag"),
+    ("same-lines ignores the digest", [("collect[cur] = [(ai, at, ad) for (ai, at, ad) in added]", "collect[cur] = [(ai, at, None) for (ai, at, ad) in added]")],
+     "same-lines-as refuses the same tag with another digest"),
+    ("a digest line accepted anywhere in the repo", [("                if not cur.startswith(DIGEST_PREFIX):", "                if False:")],
+     "refuses: digest outside a service values file"),
     ("a digest line accepted away from its tag line",
-     [('                elif not (isinstance(last, tuple) and last == ("tag", d.group("ind"))):', "                elif False:")]),
-    ("a pinned digest may be dropped", [("            if rd is not None and ad is None:", "            if False:")]),
-    ("a tag may move under an unchanged digest", [('            if stale and blk_last["+"] == ("tag", stale.group("ind")):', "            if False:")]),
-    ("digest charset loosened", [("(?P<digest>sha256:[0-9a-f]{64})", "(?P<digest>[^\\n]+)")]),
-    ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")]),
-    ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")]),
-    ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')]),
+     [('                elif not (isinstance(last, tuple) and last == ("tag", d.group("ind"))):', "                elif False:")],
+     "refuses: digest without a tag move"),
+    ("a pinned digest may be dropped", [("            if rd is not None and ad is None:", "            if False:")],
+     "refuses: pinned digest dropped"),
+    ("a tag may move under an unchanged digest", [('            if stale and blk_last["+"] == ("tag", stale.group("ind")):', "            if False:")],
+     "refuses: tag moves under an unchanged digest"),
+    ("digest charset loosened", [("(?P<digest>sha256:[0-9a-f]{64})", "(?P<digest>[^\\n]+)")], "refuses: digest too short"),
+    ("an empty patch passes same-lines (both defences removed)", [("        if not want:", "        if False:"), ("        elif got != want:", "        elif False:")],
+     "same-lines-as refuses a patch that changes no line"),
+    ("unreadable patch is not an error", [("            print(f\"release-bump-diff-guard: cannot read the patch: {type(exc).__name__}: {exc}\", file=sys.stderr)\n            return 2", "            return 0")],
+     "same-lines-as with an unreadable patch exits 2"),
+    ("tag charset loosened", [('TAG = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"', 'TAG = r"[^\\n]+"')], "refuses: tag with a newline smuggle"),
 ]
-for name, reps in MUT:
+for name, reps, witness in MUT:
+    check(f"mutant target exists: {name}", witness in baseline_names, f"unknown witness {witness!r}")
     for old, _ in reps:
         check(f"mutant anchor exists: {name}", src.count(old) == 1, f"count={src.count(old)}")
     with tempfile.TemporaryDirectory() as d:
@@ -245,7 +288,8 @@ for name, reps in MUT:
         for old, new in reps:
             text = text.replace(old, new)
         m.write_text(text)
-        killed = not all(ok for _, ok, _ in verdicts(m))
+        res = verdicts(m, witness=witness)
+        killed = bool(res) and not all(ok for _, ok, _ in res)
         check(f"mutant killed: {name}", killed)
 
 if failures:

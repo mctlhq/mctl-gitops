@@ -80,10 +80,17 @@ def check(name, got, want, fails):
         fails.append(f"{name}: got {got!r}, want {want!r}")
 
 
-def cases(script_text):
+def cases(script_text, witness=None, seen=None):
     fails = []
 
+    def mark(key):
+        if seen is not None:
+            seen.add(key)
+
     def case(name, releases, args, code, expect_text=None, current=None, guard=True):
+        mark(name)
+        if witness is not None and witness != name:
+            return
         d = repo(releases, current)
         before = (d / SVC).read_text()
         rc, after, out = run(script_text, d, *args)
@@ -139,28 +146,30 @@ def cases(script_text):
     case("digest line not a sha256", [bad], ["--tag", "1.0.0", "--digest", D1], 9)
 
     # --- history cannot be read ---
-    d2 = pathlib.Path(tempfile.mkdtemp())
-    git(d2, "init", "-q")
-    (d2 / "README").write_text("x")  # a commit exists, but none touches the values file
-    git(d2, "add", "-A")
-    git(d2, "commit", "-qm", "unrelated")
-    (d2 / SVC).parent.mkdir(parents=True, exist_ok=True)
-    (d2 / SVC).write_text(values("1.1.0", D2))  # uncommitted: no history at all
-    rc, after, out = run(script_text, d2, "--tag", "1.0.0")
-    check("no history, pinned: refused", rc, 8, fails)
-    check("no history is reported as unreadable history, not as an unused tag", "no history" in out, True, fails)
-    check("no history, pinned: untouched", after, values("1.1.0", D2), fails)
-    d3 = pathlib.Path(tempfile.mkdtemp())
-    git(d3, "init", "-q")
-    (d3 / "README").write_text("x")
-    git(d3, "add", "-A")
-    git(d3, "commit", "-qm", "unrelated")
-    (d3 / SVC).parent.mkdir(parents=True, exist_ok=True)
-    (d3 / SVC).write_text(values("1.1.0"))
-    rc, after, _ = run(script_text, d3, "--tag", "1.0.0")
-    check("no history, not pinned: tag alone moves", (rc, after), (0, values("1.0.0")), fails)
-    rc, after, _ = run(script_text, d2, "--tag", "1.0.0", "--digest", D1)
-    check("no history, explicit digest cannot be verified: refused", (rc, after), (8, values("1.1.0", D2)), fails)
+    mark("no_history")
+    if witness is None or witness == "no_history":
+        d2 = pathlib.Path(tempfile.mkdtemp())
+        git(d2, "init", "-q")
+        (d2 / "README").write_text("x")  # a commit exists, but none touches the values file
+        git(d2, "add", "-A")
+        git(d2, "commit", "-qm", "unrelated")
+        (d2 / SVC).parent.mkdir(parents=True, exist_ok=True)
+        (d2 / SVC).write_text(values("1.1.0", D2))  # uncommitted: no history at all
+        rc, after, out = run(script_text, d2, "--tag", "1.0.0")
+        check("no history, pinned: refused", rc, 8, fails)
+        check("no history is reported as unreadable history, not as an unused tag", "no history" in out, True, fails)
+        check("no history, pinned: untouched", after, values("1.1.0", D2), fails)
+        d3 = pathlib.Path(tempfile.mkdtemp())
+        git(d3, "init", "-q")
+        (d3 / "README").write_text("x")
+        git(d3, "add", "-A")
+        git(d3, "commit", "-qm", "unrelated")
+        (d3 / SVC).parent.mkdir(parents=True, exist_ok=True)
+        (d3 / SVC).write_text(values("1.1.0"))
+        rc, after, _ = run(script_text, d3, "--tag", "1.0.0")
+        check("no history, not pinned: tag alone moves", (rc, after), (0, values("1.0.0")), fails)
+        rc, after, _ = run(script_text, d2, "--tag", "1.0.0", "--digest", D1)
+        check("no history, explicit digest cannot be verified: refused", (rc, after), (8, values("1.1.0", D2)), fails)
 
     # --- history that is not what it seems ---
     other = lambda tag, digest=None: values(tag, digest).replace(IMG, "ghcr.io/mctlhq/old")
@@ -183,30 +192,32 @@ def cases(script_text):
     case("two tags, two digests: unaffected", [values("1.0.0", D1), values("1.1.0", D2), values("1.2.0", D3)], ["--tag", "1.1.0"], 0, values("1.1.0", D2))
 
     # --- a blobless clone whose remote goes away: could not observe is not absent ---
-    d4 = repo([values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D2)])
-    git(d4, "config", "uploadpack.allowFilter", "true")
-    git(d4, "config", "uploadpack.allowAnySHA1InWant", "true")
-    lazy = pathlib.Path(tempfile.mkdtemp()) / "lazy"
-    cl = subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy)],
-                        env=ENV, capture_output=True, text=True)
-    if cl.returncode != 0:
-        fails.append("blobless clone setup failed: " + cl.stderr[:200])
-    else:
-        git(lazy, "checkout", "-q", "HEAD")
-        ok_rc, ok_text, _ = run(script_text, lazy, "--tag", "1.0.0", "--digest", D3)
-        check("blobless clone, remote up: blobs fetched, retag resolved", ok_rc, 0, fails)
-        git(lazy, "checkout", "-q", "--", SVC)
-        lazy2 = pathlib.Path(tempfile.mkdtemp()) / "lazy"
-        subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy2)],
-                       env=ENV, capture_output=True, text=True)
-        git(lazy2, "checkout", "-q", "HEAD")
-        git(lazy2, "remote", "set-url", "origin", "file:///nonexistent/gone")
-        before = (lazy2 / SVC).read_text()
-        rc, after, out = run(script_text, lazy2, "--tag", "1.0.0")
-        check("blobless clone, remote gone: refused, not a guess from the blobs at hand", rc, 8, fails)
-        check("blobless clone, remote gone: file untouched", after, before, fails)
-        rc, after, out = run(script_text, lazy2, "--tag", "1.0.0", "--digest", D1)
-        check("blobless clone, remote gone: explicit digest is not waved through", rc, 8, fails)
+    mark("blobless_clone")
+    if witness is None or witness == "blobless_clone":
+        d4 = repo([values("1.0.0", D1), values("1.1.0", D2), values("1.0.0", D3), values("1.2.0", D2)])
+        git(d4, "config", "uploadpack.allowFilter", "true")
+        git(d4, "config", "uploadpack.allowAnySHA1InWant", "true")
+        lazy = pathlib.Path(tempfile.mkdtemp()) / "lazy"
+        cl = subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy)],
+                            env=ENV, capture_output=True, text=True)
+        if cl.returncode != 0:
+            fails.append("blobless clone setup failed: " + cl.stderr[:200])
+        else:
+            git(lazy, "checkout", "-q", "HEAD")
+            ok_rc, ok_text, _ = run(script_text, lazy, "--tag", "1.0.0", "--digest", D3)
+            check("blobless clone, remote up: blobs fetched, retag resolved", ok_rc, 0, fails)
+            git(lazy, "checkout", "-q", "--", SVC)
+            lazy2 = pathlib.Path(tempfile.mkdtemp()) / "lazy"
+            subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--no-tags", f"file://{d4}", str(lazy2)],
+                           env=ENV, capture_output=True, text=True)
+            git(lazy2, "checkout", "-q", "HEAD")
+            git(lazy2, "remote", "set-url", "origin", "file:///nonexistent/gone")
+            before = (lazy2 / SVC).read_text()
+            rc, after, out = run(script_text, lazy2, "--tag", "1.0.0")
+            check("blobless clone, remote gone: refused, not a guess from the blobs at hand", rc, 8, fails)
+            check("blobless clone, remote gone: file untouched", after, before, fails)
+            rc, after, out = run(script_text, lazy2, "--tag", "1.0.0", "--digest", D1)
+            check("blobless clone, remote gone: explicit digest is not waved through", rc, 8, fails)
 
     # --- argument and path validation: exit 2 ---
     base = [values("1.0.0", D1), values("1.1.0", D2)]
@@ -215,23 +226,33 @@ def cases(script_text):
                        ("digest uppercase", ["--tag", "1.0.0", "--digest", "sha256:" + "A" * 64]),
                        ("digest short", ["--tag", "1.0.0", "--digest", "sha256:abc"]),
                        ("digest wrong algo", ["--tag", "1.0.0", "--digest", "md5:" + "1" * 64])):
+        mark(name)
+        if witness is not None and witness != name:
+            continue
         d = repo(base)
         rc, after, _ = run(script_text, d, *args)
         check(name, rc, 2, fails)
         check(name + " untouched", after, base[-1], fails)
     for name, p in (("absolute path", "/etc/passwd"), ("outside services", "platform-gitops/other/values.yaml"),
                     ("dotdot", "platform-gitops/services/../services/labs/foo/values.yaml")):
+        mark(name)
+        if witness is not None and witness != name:
+            continue
         d = repo(base)
         rc, _, _ = run(script_text, d, "--tag", "1.0.0", path=p)
         check(name, rc, 2, fails)
-    d = repo(base)
-    link = d / "platform-gitops/services/labs/bar"
-    link.symlink_to(d / "platform-gitops/services/labs/foo")
-    rc, _, _ = run(script_text, d, "--tag", "1.0.0", path="platform-gitops/services/labs/bar/values.yaml")
-    check("symlinked path", rc, 2, fails)
-    d = repo(base)
-    rc, _, _ = run(script_text, d, "--tag", "1.0.0", path="platform-gitops/services/labs/nope/values.yaml")
-    check("missing file", rc, 9, fails)
+    mark("symlinked path")
+    if witness is None or witness == "symlinked path":
+        d = repo(base)
+        link = d / "platform-gitops/services/labs/bar"
+        link.symlink_to(d / "platform-gitops/services/labs/foo")
+        rc, _, _ = run(script_text, d, "--tag", "1.0.0", path="platform-gitops/services/labs/bar/values.yaml")
+        check("symlinked path", rc, 2, fails)
+    mark("missing file")
+    if witness is None or witness == "missing file":
+        d = repo(base)
+        rc, _, _ = run(script_text, d, "--tag", "1.0.0", path="platform-gitops/services/labs/nope/values.yaml")
+        check("missing file", rc, 9, fails)
     return fails
 
 
@@ -246,28 +267,28 @@ def cases(script_text):
 # trigger); the blob fetch and blob read refusals are two layers of one guard, so
 # they are mutated together.
 MUTATIONS = {
-    "rewrite ignores the digest": ('    if digest:\n        line = f\'{ind}digest: "{digest}"\'', '    if False:\n        line = f\'{ind}digest: "{digest}"\''),
-    "no refusal for a pinned file without a digest": ('    elif cur["digest"]:\n        why', '    elif False:\n        why'),
-    "history conflict with --digest allowed": ('if trusted and digest not in trusted:', 'if False:'),
-    "leftover digest vetoes the explicit one": ('trusted = [d for d in pinned_known if not (tags_of.get(d, set()) - {a.tag})]', 'trusted = list(pinned_known)'),
-    "two digests in history allowed": ('if len(pinned_known) > 1 and digest not in pinned_known:', 'if False:'),
-    "repository ignored in history": ('if b["repository"] != repository:', 'if False:'),
+    "rewrite ignores the digest": ('    if digest:\n        line = f\'{ind}digest: "{digest}"\'', '    if False:\n        line = f\'{ind}digest: "{digest}"\'', "tag-only with explicit digest pins it"),
+    "no refusal for a pinned file without a digest": ('    elif cur["digest"]:\n        why', '    elif False:\n        why', "pinned: tag alone is never enough (unknown tag)"),
+    "history conflict with --digest allowed": ('if trusted and digest not in trusted:', 'if False:', "pinned: digest that disagrees with history"),
+    "leftover digest vetoes the explicit one": ('trusted = [d for d in pinned_known if not (tags_of.get(d, set()) - {a.tag})]', 'trusted = list(pinned_known)', "... the real digest of the tag, passed explicitly, gets past the leftover"),
+    "two digests in history allowed": ('if len(pinned_known) > 1 and digest not in pinned_known:', 'if False:', "pinned: tag bound to two digests in history"),
+    "repository ignored in history": ('if b["repository"] != repository:', 'if False:', "history of another repository is not used"),
     "blob fetch and blob read both ignored": ([
         ('            if f.returncode != 0:\n                raise Unreadable(f"cannot fetch', '            if False:\n                raise Unreadable(f"cannot fetch'),
-        ('        if show.returncode != 0:\n            raise Unreadable(f"cannot read blob', '        if False:\n            raise Unreadable(f"cannot read blob')], None),
-    "shared digest trusted": ('        if shared:\n            fail(8', '        if False:\n            fail(8'),
-    "unverifiable explicit digest accepted": ('if digest and known is None:', 'if False:'),
-    "history limit hit tolerated": ('if len(shas) >= limit:', 'if False:'),
-    "history digest ignored": ('    elif pinned_known:\n        shared =', '    elif False:\n        shared ='),
-    "several blocks tolerated": ('if len(found) != 1:', 'if len(found) < 1:'),
-    "digest line not validated": ('if not dm:', 'if False:'),
-    "duplicate digest tolerated": ('if len(digests) > 1:', 'if False:'),
-    "digest grammar not enforced": ('if digest and not DIGEST_RE.fullmatch(digest):', 'if False:'),
-    "tag grammar not enforced": ('if not TAG_RE.fullmatch(a.tag):', 'if False:'),
-    "path prefix not enforced": ('or not norm.startswith(SERVICES_PREFIX)', 'or False'),
-    "symlink not refused": ('if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), norm):', 'if False:'),
-    "shallow history treated as empty": ('    if not shas:\n        raise Unreadable', '    if False:\n        raise Unreadable'),
-    "tag style not kept": ('lines[block["tag_at"]] = f"{ind}tag: {q}{tag}{q}"', 'lines[block["tag_at"]] = f\'{ind}tag: "{tag}"\''),
+        ('        if show.returncode != 0:\n            raise Unreadable(f"cannot read blob', '        if False:\n            raise Unreadable(f"cannot read blob')], None, "blobless_clone"),
+    "shared digest trusted": ('        if shared:\n            fail(8', '        if False:\n            fail(8', "old sed rollback left tag next to a newer digest: not trusted"),
+    "unverifiable explicit digest accepted": ('if digest and known is None:', 'if False:', "no_history"),
+    "history limit hit tolerated": ('if len(shas) >= limit:', 'if False:', "history as long as the limit is unseen, refused"),
+    "history digest ignored": ('    elif pinned_known:\n        shared =', '    elif False:\n        shared =', "pinned back, digest from history"),
+    "several blocks tolerated": ('if len(found) != 1:', 'if len(found) < 1:', "two image blocks"),
+    "digest line not validated": ('if not dm:', 'if False:', "digest line not a sha256"),
+    "duplicate digest tolerated": ('if len(digests) > 1:', 'if False:', "two digest keys"),
+    "digest grammar not enforced": ('if digest and not DIGEST_RE.fullmatch(digest):', 'if False:', "digest uppercase"),
+    "tag grammar not enforced": ('if not TAG_RE.fullmatch(a.tag):', 'if False:', "tag with a pipe"),
+    "path prefix not enforced": ('or not norm.startswith(SERVICES_PREFIX)', 'or False', "outside services"),
+    "symlink not refused": ('if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), norm):', 'if False:', "symlinked path"),
+    "shallow history treated as empty": ('    if not shas:\n        raise Unreadable', '    if False:\n        raise Unreadable', "no_history"),
+    "tag style not kept": ('lines[block["tag_at"]] = f"{ind}tag: {q}{tag}{q}"', 'lines[block["tag_at"]] = f\'{ind}tag: "{tag}"\'', "tag-only unquoted keeps its style"),
 }
 
 
@@ -297,7 +318,8 @@ def template_checks():
 
 
 def main():
-    base = cases(SCRIPT)
+    seen = set()
+    base = cases(SCRIPT, seen=seen)
     base += template_checks()
     status = 0
     if base:
@@ -307,7 +329,11 @@ def main():
         status = 1
     else:
         print("ok: all cases pass on the real script")
-    for name, (a, b) in MUTATIONS.items():
+    for name, (a, b, witness) in MUTATIONS.items():
+        if witness not in seen:
+            print(f"MUTATION TARGET UNKNOWN: {name} ({witness!r})")
+            status = 1
+            continue
         pairs = a if isinstance(a, list) else [(a, b)]
         mutated, bad = SCRIPT, False
         for x, y in pairs:
@@ -318,11 +344,11 @@ def main():
             mutated = mutated.replace(x, y)
         if bad:
             continue
-        if not cases(mutated):
+        if not cases(mutated, witness=witness):
             print(f"MUTATION SURVIVED: {name}")
             status = 1
     if status == 0:
-        print(f"ok: all {len(MUTATIONS)} mutations turn at least one case red")
+        print(f"ok: all {len(MUTATIONS)} mutations turn their witness case red")
     return status
 
 

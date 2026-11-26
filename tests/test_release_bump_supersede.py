@@ -60,78 +60,102 @@ def run_block(text, listing, *, new_tag, pr_no=50, service="mctl-api", list_ok=T
         return r.returncode, closed, r.stdout + r.stderr
 
 
-def cases(text):
+def cases(text, witness=None, seen=None):
     out = []
 
-    def case(name, got, want):
+    def mark(key):
+        if seen is not None:
+            seen.add(key)
+
+    def check_case(name, build_got, want):
+        mark(name)
+        if witness is not None and witness != name:
+            return
+        got = build_got()
         out.append((name, got == want, f"got {got}, want {want}"))
 
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0")], new_tag="1.3.0")
-    case("an older bump of the same service is closed, own PR is kept", (rc, closed), (0, ["41"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(60, "1.4.0")], new_tag="1.3.0")
-    case("a NEWER open bump closes this one and fails the run", (rc, closed), (1, ["50"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.10.0"), pr(41, "1.9.0")], new_tag="1.10.0")
-    case("ordering is numeric, 1.9.0 < 1.10.0", (rc, closed), (0, ["41"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.9.0"), pr(41, "1.10.0")], new_tag="1.9.0")
-    case("ordering is numeric, 1.10.0 is newer than 1.9.0", (rc, closed), (1, ["50"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mashkovd")], new_tag="1.3.0")
-    case("a bump by another author is never closed", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mctl-gitops-pr[bot]")], new_tag="1.3.0")
-    case("the App's REST login (mctl-gitops-pr[bot]) is recognised", (rc, closed), (0, ["41"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="evil-mctl-gitops-pr[bot]")], new_tag="1.3.0")
-    case("a look-alike bot login is never closed", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="app/other-app")], new_tag="1.3.0")
-    case("a bump by another App is never closed", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0", service="foo"), pr(41, "1.0.0", service="foo-2")], new_tag="1.3.0", service="foo")
-    case("another service named <service>-<digit> is never closed", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0", service="foo"), pr(41, "9.0.0", service="foo-2")], new_tag="1.3.0", service="foo")
-    case("another service's newer bump does not fail this run", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "abc"), pr(41, "1.2.0")], new_tag="abc")
-    case("a tag that cannot be ordered closes nothing", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0-rc1")], new_tag="1.3.0")
-    case("an open bump with a non-semver suffix is left alone", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0")], new_tag="1.3.0")
-    case("no other bump: nothing closed", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.3.0-x")], new_tag="1.3.0")
-    case("equal-looking but different suffix is left alone", (rc, closed), (0, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.10.0"), pr(41, "1.08.0")], new_tag="1.10.0")
-    case("a zero-padded component is read as decimal", (rc, closed), (0, ["41"]))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0")], new_tag="1.3.0", list_ok=False)
-    case("a failed listing fails the job and closes nothing", (rc != 0, closed), (True, []))
-    rc, closed, _ = run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0"), pr(42, "1.2.5"), pr(43, "1.1.0")], new_tag="1.3.0")
-    case("every older bump is closed", (rc, sorted(closed)), (0, ["41", "42", "43"]))
+    check_case("an older bump of the same service is closed, own PR is kept",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0")], new_tag="1.3.0")[:2], (0, ["41"]))
+    check_case("a NEWER open bump closes this one and fails the run",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(60, "1.4.0")], new_tag="1.3.0")[:2], (1, ["50"]))
+    check_case("ordering is numeric, 1.9.0 < 1.10.0",
+               lambda: run_block(text, [pr(50, "1.10.0"), pr(41, "1.9.0")], new_tag="1.10.0")[:2], (0, ["41"]))
+    check_case("ordering is numeric, 1.10.0 is newer than 1.9.0",
+               lambda: run_block(text, [pr(50, "1.9.0"), pr(41, "1.10.0")], new_tag="1.9.0")[:2], (1, ["50"]))
+    check_case("a bump by another author is never closed",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mashkovd")], new_tag="1.3.0")[:2], (0, []))
+    check_case("the App's REST login (mctl-gitops-pr[bot]) is recognised",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="mctl-gitops-pr[bot]")], new_tag="1.3.0")[:2], (0, ["41"]))
+    check_case("a look-alike bot login is never closed",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="evil-mctl-gitops-pr[bot]")], new_tag="1.3.0")[:2], (0, []))
+    check_case("a bump by another App is never closed",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0", author="app/other-app")], new_tag="1.3.0")[:2], (0, []))
+    check_case("another service named <service>-<digit> is never closed",
+               lambda: run_block(text, [pr(50, "1.3.0", service="foo"), pr(41, "1.0.0", service="foo-2")], new_tag="1.3.0", service="foo")[:2], (0, []))
+    check_case("another service's newer bump does not fail this run",
+               lambda: run_block(text, [pr(50, "1.3.0", service="foo"), pr(41, "9.0.0", service="foo-2")], new_tag="1.3.0", service="foo")[:2], (0, []))
+    check_case("a tag that cannot be ordered closes nothing",
+               lambda: run_block(text, [pr(50, "abc"), pr(41, "1.2.0")], new_tag="abc")[:2], (0, []))
+    check_case("an open bump with a non-semver suffix is left alone",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0-rc1")], new_tag="1.3.0")[:2], (0, []))
+    check_case("no other bump: nothing closed",
+               lambda: run_block(text, [pr(50, "1.3.0")], new_tag="1.3.0")[:2], (0, []))
+    check_case("equal-looking but different suffix is left alone",
+               lambda: run_block(text, [pr(50, "1.3.0"), pr(41, "1.3.0-x")], new_tag="1.3.0")[:2], (0, []))
+    check_case("a zero-padded component is read as decimal",
+               lambda: run_block(text, [pr(50, "1.10.0"), pr(41, "1.08.0")], new_tag="1.10.0")[:2], (0, ["41"]))
+    check_case("a failed listing fails the job and closes nothing",
+               lambda: (lambda rc, closed, _: (rc != 0, closed))(*run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0")], new_tag="1.3.0", list_ok=False)), (True, []))
+    check_case("every older bump is closed",
+               lambda: (lambda rc, closed, _: (rc, sorted(closed)))(*run_block(text, [pr(50, "1.3.0"), pr(41, "1.2.0"), pr(42, "1.2.5"), pr(43, "1.1.0")], new_tag="1.3.0")), (0, ["41", "42", "43"]))
     return out
 
 
 IND = "    "  # indentation of the elif body after YAML strips the block scalar
 MUTANTS = [
-    ("older/newer inverted", "(( 10#${a[i]} < 10#${b[i]} )) && return 0", "(( 10#${a[i]} > 10#${b[i]} )) && return 0"),
-    ("lexical-ish compare drops the numeric base", "10#${a[i]} < 10#${b[i]}", "${a[i]} < ${b[i]}"),
-    ("minor and patch ignored", "for i in 0 1 2; do", "for i in 0; do"),
-    ("newer open bump no longer fails the run", [('is not newer"\n' + IND + 'exit 1', 'is not newer"\n' + IND + 'true')]),
-    ("author filter dropped", 'select(.author.login | test("^(app/)?mctl-gitops-pr(\\\\[bot\\\\])?$")) | ', ""),
-    ("REST [bot] login no longer recognised", '(\\\\[bot\\\\])?$', '$'),
-    ("tag-shape filter dropped and unorderable closes", [(' and ($h[($p | length):] | test("^[0-9]+\\\\.[0-9]+\\\\.[0-9]+$"))', ""), ('if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then')]),
-    ("own PR may be closed", '[[ -n "$n" && "$n" != "$pr" ]] || continue', '[[ -n "$n" ]] || continue'),
-    ("unorderable tag closes anyway", 'if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then'),
-    ("listing failure swallowed", [("others=$(gh pr list", 'gh() { command gh "$@" || true; }; others=$(gh pr list')]),
+    ("older/newer inverted", [("(( 10#${a[i]} < 10#${b[i]} )) && return 0", "(( 10#${a[i]} > 10#${b[i]} )) && return 0")],
+     "an older bump of the same service is closed, own PR is kept"),
+    ("lexical-ish compare drops the numeric base", [("10#${a[i]} < 10#${b[i]}", "${a[i]} < ${b[i]}")],
+     "a zero-padded component is read as decimal"),
+    ("minor and patch ignored", [("for i in 0 1 2; do", "for i in 0; do")],
+     "an older bump of the same service is closed, own PR is kept"),
+    ("newer open bump no longer fails the run", [('is not newer"\n' + IND + 'exit 1', 'is not newer"\n' + IND + 'true')],
+     "a NEWER open bump closes this one and fails the run"),
+    ("author filter dropped", [('select(.author.login | test("^(app/)?mctl-gitops-pr(\\\\[bot\\\\])?$")) | ', "")],
+     "a bump by another author is never closed"),
+    ("REST [bot] login no longer recognised", [('(\\\\[bot\\\\])?$', '$')],
+     "the App's REST login (mctl-gitops-pr[bot]) is recognised"),
+    ("tag-shape filter dropped and unorderable closes", [(' and ($h[($p | length):] | test("^[0-9]+\\\\.[0-9]+\\\\.[0-9]+$"))', ""), ('if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then')],
+     "an open bump with a non-semver suffix is left alone"),
+    ("own PR may be closed", [('[[ -n "$n" && "$n" != "$pr" ]] || continue', '[[ -n "$n" ]] || continue')],
+     "an older bump of the same service is closed, own PR is kept"),
+    ("unorderable tag closes anyway", [('if [[ "$rc" == 0 ]]; then', 'if [[ "$rc" != 1 ]]; then')],
+     "a tag that cannot be ordered closes nothing"),
+    ("listing failure swallowed", [("others=$(gh pr list", 'gh() { command gh "$@" || true; }; others=$(gh pr list')],
+     "a failed listing fails the job and closes nothing"),
 ]
 
 
-def judge(text):
-    return cases(text)
+def judge(text, witness=None, seen=None):
+    return cases(text, witness=witness, seen=seen)
 
 
 def main():
     texts = {fn: block(fn) for fn in ("release-deploy.yaml", "gitops-bump.yaml")}
+    seen_per_fn = {}
     for fn, text in texts.items():
-        for name, ok, detail in judge(text):
+        seen = set()
+        for name, ok, detail in judge(text, seen=seen):
             print(("ok   " if ok else "FAIL ") + f"{fn}: {name}")
             if not ok:
                 failures.append(f"{fn}: {name}: {detail}")
+        seen_per_fn[fn] = seen
     for fn, text in texts.items():
-        for name, *spec in MUTANTS:
-            pairs = spec[0] if len(spec) == 1 else [(spec[0], spec[1])]
+        for name, pairs, witness in MUTANTS:
+            if witness not in seen_per_fn[fn]:
+                failures.append(f"{fn}: mutant target unknown: {name} ({witness!r})")
+                print(f"FAIL {fn}: mutant target unknown: {name}")
+                continue
             mutated, bad = text, False
             for old, new in pairs:
                 if mutated.count(old) != 1:
@@ -142,7 +166,7 @@ def main():
                 mutated = mutated.replace(old, new)
             if bad:
                 continue
-            red = [n for n, ok, _ in judge(mutated) if not ok]
+            red = [n for n, ok, _ in judge(mutated, witness=witness) if not ok]
             print(("ok   " if red else "FAIL ") + f"{fn}: mutant killed: {name}")
             if not red:
                 failures.append(f"{fn}: mutant survives: {name}")

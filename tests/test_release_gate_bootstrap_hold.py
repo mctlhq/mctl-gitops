@@ -125,7 +125,7 @@ def policy_with(allow):
     return pol
 
 
-def cases(script):
+def cases(script, witness=None):
     """(name, got, want) triples; a case is green when got == want."""
     out = []
 
@@ -133,154 +133,224 @@ def cases(script):
         out.append((name, got, want))
 
     # --- positive controls: ordinary releases still pass ---------------------
-    add("positive: the unmodified live tree verifies (live tag with the live allow list)", gate(script, ROOT, "verify"), 0)
-    add("positive: baseline tree verifies", verify(script, tree()), 0)
-    add("positive: mctl-api 4.154.1 bump passes", bump(script, tree(), "4.154.1"), 0)
-    add("positive: mctl-api 4.99.0 (older) bump passes", bump(script, tree(), "4.99.0"), 0)
-    add("positive: other service plain image.tag bump passes",
-        gate(script, tree(), "check", "--files", "platform-gitops/services/labs/x/values.yaml", "--new-tag", "9.9.9"), 0)
-    add("positive: 4.155.0 with a valid allow passes (bump)", bump(script, tree(allow=[GOOD]), "4.155.0"), 0)
-    add("positive: 4.155.0 in tree with a valid allow passes (verify)",
-        verify(script, tree(with_tag('tag: "4.155.0"'), allow=[GOOD])), 0)
+    if witness is None or witness == 'positive: the unmodified live tree verifies (live tag with the live allow list)':
+        add("positive: the unmodified live tree verifies (live tag with the live allow list)", gate(script, ROOT, "verify"), 0)
+    if witness is None or witness == 'positive: baseline tree verifies':
+        add("positive: baseline tree verifies", verify(script, tree()), 0)
+    if witness is None or witness == 'positive: mctl-api 4.154.1 bump passes':
+        add("positive: mctl-api 4.154.1 bump passes", bump(script, tree(), "4.154.1"), 0)
+    if witness is None or witness == 'positive: mctl-api 4.99.0 (older) bump passes':
+        add("positive: mctl-api 4.99.0 (older) bump passes", bump(script, tree(), "4.99.0"), 0)
+    if witness is None or witness == 'positive: other service plain image.tag bump passes':
+        add("positive: other service plain image.tag bump passes",
+            gate(script, tree(), "check", "--files", "platform-gitops/services/labs/x/values.yaml", "--new-tag", "9.9.9"), 0)
+    if witness is None or witness == 'positive: 4.155.0 with a valid allow passes (bump)':
+        add("positive: 4.155.0 with a valid allow passes (bump)", bump(script, tree(allow=[GOOD]), "4.155.0"), 0)
+    if witness is None or witness == 'positive: 4.155.0 in tree with a valid allow passes (verify)':
+        add("positive: 4.155.0 in tree with a valid allow passes (verify)",
+            verify(script, tree(with_tag('tag: "4.155.0"'), allow=[GOOD])), 0)
 
     # --- negative: held version -------------------------------------------------
-    add("neg: bump to 4.155.0 without an allow record", bump(script, tree(), "4.155.0"), REFUSED)
-    add("neg: bump to 4.200.0 (any version above the hold) without an allow", bump(script, tree(), "4.200.0"), REFUSED)
-    add("neg: 4.155.0 already in the tree without an allow (verify)", verify(script, tree(with_tag('tag: "4.155.0"'))), REFUSED)
-    add("neg: allow record for a different version", bump(script, tree(allow=[dict(GOOD, version="4.155.1")]), "4.155.0"), REFUSED)
-    add("neg: allow record expired", bump(script, tree(allow=[dict(GOOD, expires="2000-01-01")]), "4.155.0"), REFUSED)
-    add("neg: allow record without approved_by (unsigned)",
-        bump(script, tree(allow=[{k: v for k, v in GOOD.items() if k != "approved_by"}]), "4.155.0"), REFUSED)
-    add("neg: allow record without grant",
-        bump(script, tree(allow=[{k: v for k, v in GOOD.items() if k != "grant"}]), "4.155.0"), REFUSED)
-    add("neg: allow record with a non-date expiry", bump(script, tree(allow=[dict(GOOD, expires="soon")]), "4.155.0"), REFUSED)
-    add("neg: two allow records for one version", bump(script, tree(allow=[GOOD, GOOD]), "4.155.0"), REFUSED)
-    add("neg: non-semver new tag", bump(script, tree(), "latest"), REFUSED)
-    add("neg: prerelease new tag", bump(script, tree(), "4.155.0-rc.1"), REFUSED)
+    if witness is None or witness == 'neg: bump to 4.155.0 without an allow record':
+        add("neg: bump to 4.155.0 without an allow record", bump(script, tree(), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: bump to 4.200.0 (any version above the hold) without an allow':
+        add("neg: bump to 4.200.0 (any version above the hold) without an allow", bump(script, tree(), "4.200.0"), REFUSED)
+    if witness is None or witness == 'neg: 4.155.0 already in the tree without an allow (verify)':
+        add("neg: 4.155.0 already in the tree without an allow (verify)", verify(script, tree(with_tag('tag: "4.155.0"'))), REFUSED)
+    if witness is None or witness == 'neg: allow record for a different version':
+        add("neg: allow record for a different version", bump(script, tree(allow=[dict(GOOD, version="4.155.1")]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: allow record expired':
+        add("neg: allow record expired", bump(script, tree(allow=[dict(GOOD, expires="2000-01-01")]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: allow record without approved_by (unsigned)':
+        add("neg: allow record without approved_by (unsigned)",
+            bump(script, tree(allow=[{k: v for k, v in GOOD.items() if k != "approved_by"}]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: allow record without grant':
+        add("neg: allow record without grant",
+            bump(script, tree(allow=[{k: v for k, v in GOOD.items() if k != "grant"}]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: allow record with a non-date expiry':
+        add("neg: allow record with a non-date expiry", bump(script, tree(allow=[dict(GOOD, expires="soon")]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: two allow records for one version':
+        add("neg: two allow records for one version", bump(script, tree(allow=[GOOD, GOOD]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: non-semver new tag':
+        add("neg: non-semver new tag", bump(script, tree(), "latest"), REFUSED)
+    if witness is None or witness == 'neg: prerelease new tag':
+        add("neg: prerelease new tag", bump(script, tree(), "4.155.0-rc.1"), REFUSED)
 
     # --- negative: could not observe the bootstrap tag ------------------------------
-    add("neg: bootstrap file missing", bump(script, tree(drop_api=True), "4.154.1"), REFUSED)
-    add("neg: bootstrap file missing (verify)", verify(script, tree(drop_api=True)), REFUSED)
-    add("neg: no values block scalar", bump(script, tree(REAL_API.replace("values: |", "values: x", 1)), "4.154.1"), REFUSED)
-    add("neg: two values block scalars",
-        bump(script, tree(REAL_API.replace("  ignoreDifferences:", "  x:\n    values: |\n      a: 1\n  ignoreDifferences:", 1)), "4.154.1"), REFUSED)
-    add("neg: malformed block scalar (broken YAML inside)",
-        bump(script, tree(with_tag(OLD_TAG + '\n            bad: [unclosed')), "4.154.1"), REFUSED)
-    add("neg: duplicate image.tag line",
-        bump(script, tree(with_tag(OLD_TAG + '\n            tag: "4.155.0"')), "4.154.1"), REFUSED)
-    add("neg: duplicate image.tag line, verify",
-        verify(script, tree(with_tag(OLD_TAG + '\n            tag: "4.155.0"'))), REFUSED)
+    if witness is None or witness == 'neg: bootstrap file missing':
+        add("neg: bootstrap file missing", bump(script, tree(drop_api=True), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: bootstrap file missing (verify)':
+        add("neg: bootstrap file missing (verify)", verify(script, tree(drop_api=True)), REFUSED)
+    if witness is None or witness == 'neg: no values block scalar':
+        add("neg: no values block scalar", bump(script, tree(REAL_API.replace("values: |", "values: x", 1)), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: two values block scalars':
+        add("neg: two values block scalars",
+            bump(script, tree(REAL_API.replace("  ignoreDifferences:", "  x:\n    values: |\n      a: 1\n  ignoreDifferences:", 1)), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: malformed block scalar (broken YAML inside)':
+        add("neg: malformed block scalar (broken YAML inside)",
+            bump(script, tree(with_tag(OLD_TAG + '\n            bad: [unclosed')), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: duplicate image.tag line':
+        add("neg: duplicate image.tag line",
+            bump(script, tree(with_tag(OLD_TAG + '\n            tag: "4.155.0"')), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: duplicate image.tag line, verify':
+        add("neg: duplicate image.tag line, verify",
+            verify(script, tree(with_tag(OLD_TAG + '\n            tag: "4.155.0"'))), REFUSED)
     second_ref = REAL_API.replace(
         "          ingress:\n",
         "          sidecar:\n            repository: ghcr.io/mctlhq/mctl-api\n            tag: \"4.155.0\"\n          ingress:\n", 1)
-    add("neg: second image reference with its own tag", bump(script, tree(second_ref), "4.154.1"), REFUSED)
-    add("neg: tag is an unquoted number", bump(script, tree(with_tag("tag: 4.155")), "4.154.1"), REFUSED)
-    add("neg: tag is empty", bump(script, tree(with_tag("tag:")), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: second image reference with its own tag':
+        add("neg: second image reference with its own tag", bump(script, tree(second_ref), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: tag is an unquoted number':
+        add("neg: tag is an unquoted number", bump(script, tree(with_tag("tag: 4.155")), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: tag is empty':
+        add("neg: tag is empty", bump(script, tree(with_tag("tag:")), "4.154.1"), REFUSED)
     # The text pair the bump rewrites sits under another key, while `image` names a different repository.
     moved = REAL_API.replace("          image:\n            repository: ghcr.io/mctlhq/mctl-api\n",
                              "          image:\n            repository: ghcr.io/other/img\n            tag: \"1.0.0\"\n"
                              "          sidecar:\n            repository: ghcr.io/mctlhq/mctl-api\n", 1)
     assert moved != REAL_API
-    add("neg: image.repository is another image", bump(script, tree(moved), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: image.repository is another image':
+        add("neg: image.repository is another image", bump(script, tree(moved), "4.154.1"), REFUSED)
 
     # --- negative: the policy itself -------------------------------------------------
     nohold = copy.deepcopy(REAL_POLICY)
     del nohold["version_holds"]
-    add("neg: policy without a version_holds section", bump(script, tree(policy=nohold), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: policy without a version_holds section':
+        add("neg: policy without a version_holds section", bump(script, tree(policy=nohold), "4.154.1"), REFUSED)
     badhold = copy.deepcopy(REAL_POLICY)
     badhold["version_holds"][0]["held_from"] = "later"
-    add("neg: malformed hold (held_from not X.Y.Z)", bump(script, tree(policy=badhold), "4.154.1"), REFUSED)
+    if witness is None or witness == 'neg: malformed hold (held_from not X.Y.Z)':
+        add("neg: malformed hold (held_from not X.Y.Z)", bump(script, tree(policy=badhold), "4.154.1"), REFUSED)
 
     # --- the policy is read from a trusted revision, not the tree --------------------
-    d = tree()
-    git = lambda *a: subprocess.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=True)  # noqa: E731
-    git("init", "-q")
-    git("add", "-A")
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base", "--no-gpg-sign")
-    git("branch", "-M", "trusted")
-    pol = yaml.safe_load((d / GATE).read_text())
-    pol["version_holds"][0]["allow"] = [dict(GOOD, expires=_date(GOOD["expires"]))]
-    (d / GATE).write_text(yaml.safe_dump(pol))  # a pending commit grants itself an allow
-    add("neg: self-granted allow in the tree, trusted rev has none",
-        gate(script, d, "check", "--files", API, "--new-tag", "4.155.0", "--policy-rev", "trusted"), REFUSED)
-    add("pos: same tree without --policy-rev trusts the tree", gate(script, d, "check", "--files", API, "--new-tag", "4.155.0"), 0)
-    add("neg: policy rev does not exist",
-        gate(script, d, "check", "--files", API, "--new-tag", "4.154.1", "--policy-rev", "nosuchrev"), REFUSED)
-    (d / API).write_text(with_tag('tag: "4.155.0"'))
-    add("neg: verify of 4.155.0 with --policy-rev trusted", gate(script, d, "verify", "--policy-rev", "trusted"), REFUSED)
-    (d / API).write_text(REAL_API)
-    add("pos: verify of 4.154.0 with --policy-rev trusted", gate(script, d, "verify", "--policy-rev", "trusted"), 0)
+    trusted_rev_cases = {
+        "neg: self-granted allow in the tree, trusted rev has none",
+        "pos: same tree without --policy-rev trusts the tree",
+        "neg: policy rev does not exist",
+        "neg: verify of 4.155.0 with --policy-rev trusted",
+        "pos: verify of 4.154.0 with --policy-rev trusted",
+    }
+    if witness is None or witness in trusted_rev_cases:
+        d = tree()
+        git = lambda *a: subprocess.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=True)  # noqa: E731
+        git("init", "-q")
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base", "--no-gpg-sign")
+        git("branch", "-M", "trusted")
+        pol = yaml.safe_load((d / GATE).read_text())
+        pol["version_holds"][0]["allow"] = [dict(GOOD, expires=_date(GOOD["expires"]))]
+        (d / GATE).write_text(yaml.safe_dump(pol))  # a pending commit grants itself an allow
+        if witness is None or witness == 'neg: self-granted allow in the tree, trusted rev has none':
+            add("neg: self-granted allow in the tree, trusted rev has none",
+                gate(script, d, "check", "--files", API, "--new-tag", "4.155.0", "--policy-rev", "trusted"), REFUSED)
+        if witness is None or witness == 'pos: same tree without --policy-rev trusts the tree':
+            add("pos: same tree without --policy-rev trusts the tree", gate(script, d, "check", "--files", API, "--new-tag", "4.155.0"), 0)
+        if witness is None or witness == 'neg: policy rev does not exist':
+            add("neg: policy rev does not exist",
+                gate(script, d, "check", "--files", API, "--new-tag", "4.154.1", "--policy-rev", "nosuchrev"), REFUSED)
+        (d / API).write_text(with_tag('tag: "4.155.0"'))
+        if witness is None or witness == 'neg: verify of 4.155.0 with --policy-rev trusted':
+            add("neg: verify of 4.155.0 with --policy-rev trusted", gate(script, d, "verify", "--policy-rev", "trusted"), REFUSED)
+        (d / API).write_text(REAL_API)
+        if witness is None or witness == 'pos: verify of 4.154.0 with --policy-rev trusted':
+            add("pos: verify of 4.154.0 with --policy-rev trusted", gate(script, d, "verify", "--policy-rev", "trusted"), 0)
     # --- expiry gates new writes only; the deployed state stays verifiable ---------------
     expired = dict(GOOD, expires="2000-01-01")
     deployed = with_tag('tag: "4.155.0"')
-    add("pos: expired allow, 4.155.0 already deployed: verify stays green",
-        verify(script, tree(deployed, allow=[expired])), 0)
-    add("neg: expired allow, a new bump to 4.155.0 is refused", bump(script, tree(allow=[expired]), "4.155.0"), REFUSED)
-    add("neg: expired allow, bump to 4.155.0 when 4.155.0 is already deployed is refused",
-        bump(script, tree(deployed, allow=[expired]), "4.155.0"), REFUSED)
-    add("neg: expired allow for 4.155.0 does not cover a deployed 4.155.1",
-        verify(script, tree(with_tag('tag: "4.155.1"'), allow=[expired])), REFUSED)
+    if witness is None or witness == 'pos: expired allow, 4.155.0 already deployed: verify stays green':
+        add("pos: expired allow, 4.155.0 already deployed: verify stays green",
+            verify(script, tree(deployed, allow=[expired])), 0)
+    if witness is None or witness == 'neg: expired allow, a new bump to 4.155.0 is refused':
+        add("neg: expired allow, a new bump to 4.155.0 is refused", bump(script, tree(allow=[expired]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: expired allow, bump to 4.155.0 when 4.155.0 is already deployed is refused':
+        add("neg: expired allow, bump to 4.155.0 when 4.155.0 is already deployed is refused",
+            bump(script, tree(deployed, allow=[expired]), "4.155.0"), REFUSED)
+    if witness is None or witness == 'neg: expired allow for 4.155.0 does not cover a deployed 4.155.1':
+        add("neg: expired allow for 4.155.0 does not cover a deployed 4.155.1",
+            verify(script, tree(with_tag('tag: "4.155.1"'), allow=[expired])), REFUSED)
 
     # --- bump mode judges only the image being bumped --------------------------------------
-    add("pos: bump of another image through a glob over the held file is not judged",
-        bump(script, tree(), "4.155.0", "--image", "ghcr.io/mctlhq/mctl-portal"), 0)
-    add("neg: bump of the held image (named) is judged", bump(script, tree(), "4.155.0", "--image", "ghcr.io/mctlhq/mctl-api"), REFUSED)
-    add("neg: image not named: judged (fail closed)", bump(script, tree(), "4.155.0"), REFUSED)
+    if witness is None or witness == 'pos: bump of another image through a glob over the held file is not judged':
+        add("pos: bump of another image through a glob over the held file is not judged",
+            bump(script, tree(), "4.155.0", "--image", "ghcr.io/mctlhq/mctl-portal"), 0)
+    if witness is None or witness == 'neg: bump of the held image (named) is judged':
+        add("neg: bump of the held image (named) is judged", bump(script, tree(), "4.155.0", "--image", "ghcr.io/mctlhq/mctl-api"), REFUSED)
+    if witness is None or witness == 'neg: image not named: judged (fail closed)':
+        add("neg: image not named: judged (fail closed)", bump(script, tree(), "4.155.0"), REFUSED)
 
     # --- the post-push watcher (`diff`): the parent policy judges the pushed content -------
-    add("diff pos: no change", diff_rc(script, lambda d: None), 0)
-    add("diff pos: push of 4.154.1", diff_rc(script, lambda d: set_tag(d, "4.154.1")), 0)
-    add("diff neg: push of 4.155.0, no allow in the parent policy", diff_rc(script, lambda d: set_tag(d, "4.155.0")), REFUSED)
-    add("diff pos: push of 4.155.0, valid allow already in the parent policy",
-        diff_rc(script, lambda d: set_tag(d, "4.155.0"), policy_with([GOOD])), 0)
-    add("diff neg: push of 4.155.0, allow expired in the parent policy",
-        diff_rc(script, lambda d: set_tag(d, "4.155.0"), policy_with([expired])), REFUSED)
+    if witness is None or witness == 'diff pos: no change':
+        add("diff pos: no change", diff_rc(script, lambda d: None), 0)
+    if witness is None or witness == 'diff pos: push of 4.154.1':
+        add("diff pos: push of 4.154.1", diff_rc(script, lambda d: set_tag(d, "4.154.1")), 0)
+    if witness is None or witness == 'diff neg: push of 4.155.0, no allow in the parent policy':
+        add("diff neg: push of 4.155.0, no allow in the parent policy", diff_rc(script, lambda d: set_tag(d, "4.155.0")), REFUSED)
+    if witness is None or witness == 'diff pos: push of 4.155.0, valid allow already in the parent policy':
+        add("diff pos: push of 4.155.0, valid allow already in the parent policy",
+            diff_rc(script, lambda d: set_tag(d, "4.155.0"), policy_with([GOOD])), 0)
+    if witness is None or witness == 'diff neg: push of 4.155.0, allow expired in the parent policy':
+        add("diff neg: push of 4.155.0, allow expired in the parent policy",
+            diff_rc(script, lambda d: set_tag(d, "4.155.0"), policy_with([expired])), REFUSED)
 
     def grant_and_bump(d):  # one commit grants itself the allow and ships the version
         (d / GATE).write_text(yaml.safe_dump(policy_with([GOOD])))
         set_tag(d, "4.155.0")
-    add("diff neg: one push adds the allow and bumps the tag", diff_rc(script, grant_and_bump), REFUSED)
+    if witness is None or witness == 'diff neg: one push adds the allow and bumps the tag':
+        add("diff neg: one push adds the allow and bumps the tag", diff_rc(script, grant_and_bump), REFUSED)
 
     def remove_file(d):
         (d / API).unlink()
-    add("diff neg: push removes the held file (violation, not unknown)", diff_rc(script, remove_file, marker="held file was removed"), REFUSED)
+    if witness is None or witness == 'diff neg: push removes the held file (violation, not unknown)':
+        add("diff neg: push removes the held file (violation, not unknown)", diff_rc(script, remove_file, marker="held file was removed"), REFUSED)
 
     def file_to_dir(d):  # the path becomes a directory: the read itself fails
         (d / API).unlink()
         (d / API).mkdir()
         (d / API / "x").write_text("x")
-    add("diff unknown: held file unreadable in the pushed tree", diff_rc(script, file_to_dir, marker="is not a regular file"), 7)
+    if witness is None or witness == 'diff unknown: held file unreadable in the pushed tree':
+        add("diff unknown: held file unreadable in the pushed tree", diff_rc(script, file_to_dir, marker="is not a regular file"), 7)
 
     nohold = copy.deepcopy(REAL_POLICY)
     del nohold["version_holds"]
-    add("diff unknown: parent policy without version_holds", diff_rc(script, lambda d: None, nohold, marker="parent gate policy unreadable"), 7)
+    if witness is None or witness == 'diff unknown: parent policy without version_holds':
+        add("diff unknown: parent policy without version_holds", diff_rc(script, lambda d: None, nohold, marker="parent gate policy unreadable"), 7)
     # content outside the tag line (the deploy-key bypass can edit anything)
-    add("diff pos: only the tag line changes", diff_rc(script, lambda d: set_tag(d, "4.154.2")), 0)
-    add("diff neg: values block edited, tag untouched",
-        diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("replicaCount: 2", "replicaCount: 9")), marker="content other than the image tag"), REFUSED)
+    if witness is None or witness == 'diff pos: only the tag line changes':
+        add("diff pos: only the tag line changes", diff_rc(script, lambda d: set_tag(d, "4.154.2")), 0)
+    if witness is None or witness == 'diff neg: values block edited, tag untouched':
+        add("diff neg: values block edited, tag untouched",
+            diff_rc(script, lambda d: (d / API).write_text(REAL_API.replace("replicaCount: 2", "replicaCount: 9")), marker="content other than the image tag"), REFUSED)
     # Match whatever commit the chart is pinned to, so moving the pin in a
     # release PR does not silently turn this mutation into a no-op.
     evil_pin, n_pin = re.subn(r"targetRevision: [0-9a-f]{40}\b", "targetRevision: evil", REAL_API, count=1)
     if n_pin != 1:
         raise SystemExit("fixture: no 40-hex targetRevision pin in the real mctl-api.yaml")
-    add("diff neg: targetRevision edited, tag untouched",
-        diff_rc(script, lambda d: (d / API).write_text(evil_pin), marker="content other than the image tag"), REFUSED)
-    add("diff neg: second image reference added",
-        diff_rc(script, lambda d: (d / API).write_text(second_ref), marker="content other than the image tag"), REFUSED)
-    add("diff neg: repository changed",
-        diff_rc(script, lambda d: (d / API).write_text(moved), marker="content other than the image tag"), REFUSED)
-    add("diff neg: held file is not text",
-        diff_rc(script, lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="held file is not text"), REFUSED)
+    if witness is None or witness == 'diff neg: targetRevision edited, tag untouched':
+        add("diff neg: targetRevision edited, tag untouched",
+            diff_rc(script, lambda d: (d / API).write_text(evil_pin), marker="content other than the image tag"), REFUSED)
+    if witness is None or witness == 'diff neg: second image reference added':
+        add("diff neg: second image reference added",
+            diff_rc(script, lambda d: (d / API).write_text(second_ref), marker="content other than the image tag"), REFUSED)
+    if witness is None or witness == 'diff neg: repository changed':
+        add("diff neg: repository changed",
+            diff_rc(script, lambda d: (d / API).write_text(moved), marker="content other than the image tag"), REFUSED)
+    if witness is None or witness == 'diff neg: held file is not text':
+        add("diff neg: held file is not text",
+            diff_rc(script, lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="held file is not text"), REFUSED)
 
     # the state after 4.155.0 ships under its allow stays green, whatever the live file says
     shipped = with_tag('tag: "4.155.0"')
-    add("pos: shipped state (4.155.0 + matching allow) verifies", verify(script, tree(shipped, allow=[GOOD])), 0)
-    add("pos: shipped state: an unrelated push is green",
-        diff_rc(script, lambda d: None, policy_with([GOOD]), base_api=shipped), 0)
-    add("neg: shipped state: a push to 4.155.1 needs its own record",
-        diff_rc(script, lambda d: set_tag(d, "4.155.1"), policy_with([GOOD]), base_api=shipped), REFUSED)
-    add("diff unknown: pushed block no longer parses",
-        diff_rc(script, lambda d: (d / API).write_text(with_tag("tag: [")), marker="pushed image.tag unreadable"), 7)
+    if witness is None or witness == 'pos: shipped state (4.155.0 + matching allow) verifies':
+        add("pos: shipped state (4.155.0 + matching allow) verifies", verify(script, tree(shipped, allow=[GOOD])), 0)
+    if witness is None or witness == 'pos: shipped state: an unrelated push is green':
+        add("pos: shipped state: an unrelated push is green",
+            diff_rc(script, lambda d: None, policy_with([GOOD]), base_api=shipped), 0)
+    if witness is None or witness == 'neg: shipped state: a push to 4.155.1 needs its own record':
+        add("neg: shipped state: a push to 4.155.1 needs its own record",
+            diff_rc(script, lambda d: set_tag(d, "4.155.1"), policy_with([GOOD]), base_api=shipped), REFUSED)
+    if witness is None or witness == 'diff unknown: pushed block no longer parses':
+        add("diff unknown: pushed block no longer parses",
+            diff_rc(script, lambda d: (d / API).write_text(with_tag("tag: [")), marker="pushed image.tag unreadable"), 7)
 
     # A failed or unusable read of the PARENT's held file is UNKNOWN, never "nothing changed".
     def restore(d):
@@ -296,16 +366,21 @@ def cases(script):
     def parent_symlink(d):
         (d / API).unlink()
         (d / API).symlink_to("/etc/hostname")
-    add("diff unknown: parent path is a directory (read fails)",
-        diff_rc(script, restore, base_mutate=parent_dir, marker="is not a regular file"), 7)
-    add("diff unknown: parent path is a symlink",
-        diff_rc(script, restore, base_mutate=parent_symlink, marker="is not a regular file"), 7)
-    add("diff unknown: held file absent in the parent",
-        diff_rc(script, restore, base_mutate=lambda d: (d / API).unlink(), marker="absent in parent"), 7)
-    add("diff unknown: parent content is not text",
-        diff_rc(script, restore, base_mutate=lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="parent content is not text"), 7)
-    add("diff unknown: parent image.tag unreadable",
-        diff_rc(script, restore, base_mutate=lambda d: (d / API).write_text(with_tag("tag: [")), marker="parent image.tag unreadable"), 7)
+    if witness is None or witness == 'diff unknown: parent path is a directory (read fails)':
+        add("diff unknown: parent path is a directory (read fails)",
+            diff_rc(script, restore, base_mutate=parent_dir, marker="is not a regular file"), 7)
+    if witness is None or witness == 'diff unknown: parent path is a symlink':
+        add("diff unknown: parent path is a symlink",
+            diff_rc(script, restore, base_mutate=parent_symlink, marker="is not a regular file"), 7)
+    if witness is None or witness == 'diff unknown: held file absent in the parent':
+        add("diff unknown: held file absent in the parent",
+            diff_rc(script, restore, base_mutate=lambda d: (d / API).unlink(), marker="absent in parent"), 7)
+    if witness is None or witness == 'diff unknown: parent content is not text':
+        add("diff unknown: parent content is not text",
+            diff_rc(script, restore, base_mutate=lambda d: (d / API).write_bytes(b"\xff\xfe"), marker="parent content is not text"), 7)
+    if witness is None or witness == 'diff unknown: parent image.tag unreadable':
+        add("diff unknown: parent image.tag unreadable",
+            diff_rc(script, restore, base_mutate=lambda d: (d / API).write_text(with_tag("tag: [")), marker="parent image.tag unreadable"), 7)
     return out
 
 
@@ -401,16 +476,19 @@ def main():
         if not ok:
             failures.append(f"{name}: {detail}")
 
-    for name, got, want in cases(SCRIPT) + wiring():
+    baseline_cases = cases(SCRIPT)
+    baseline_names = {name for name, _, _ in baseline_cases}
+    for name, got, want in baseline_cases + wiring():
         report(name, got == want, f"got {got}, want {want}")
 
     src = SCRIPT.read_text()
     for name, (old, new, red) in MUTANTS.items():
+        report(f"mutant target exists: {name}", red in baseline_names, f"unknown witness {red!r}")
         report(f"mutant anchor exists: {name}", src.count(old) == 1, f"count={src.count(old)}")
         with tempfile.TemporaryDirectory() as t:
             m = pathlib.Path(t) / "release-gate.py"
             m.write_text(src.replace(old, new))
-            red_cases = [n for n, g, w in cases(m) if g != w]
+            red_cases = [n for n, g, w in cases(m, red) if g != w]
         report(f"mutant killed: {name} (red: {red!r})", red in red_cases, f"red cases: {red_cases}")
 
     print()
