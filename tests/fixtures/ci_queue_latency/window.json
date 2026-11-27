@@ -1,0 +1,28 @@
+{
+  "runs": [
+    {"id": 1, "event": "merge_group", "name": "Validate Manifests", "display_title": "x", "created_at": "2026-11-22T10:00:00Z", "conclusion": "success"},
+    {"id": 2, "event": "merge_group", "name": "Validate Manifests", "display_title": "x", "created_at": "2026-11-22T11:00:00Z", "conclusion": "success"},
+    {"id": 3, "event": "pull_request", "name": "Validate Manifests", "display_title": "x", "created_at": "2026-11-22T11:05:00Z", "conclusion": "cancelled"},
+    {"id": 4, "event": "workflow_dispatch", "name": "Release & Deploy", "display_title": "release-deploy labs/mctl-telegram-preview main-abc1234", "created_at": "2026-11-22T12:00:00Z", "conclusion": "success"},
+    {"id": 5, "event": "merge_group", "name": "Validate Manifests", "display_title": "x", "created_at": "2026-11-22T13:00:00Z", "conclusion": "success"},
+    {"id": 7, "event": "workflow_dispatch", "name": "Release & Deploy", "display_title": "release-deploy labs/other-preview main-zzz9999", "created_at": "2026-11-22T15:00:00Z", "conclusion": "success"},
+    {"id": 6, "event": "pull_request", "name": "Validate Manifests", "display_title": "x", "created_at": "2026-11-22T14:00:00Z", "conclusion": "cancelled"}
+  ],
+  "jobs": {
+    "1": [{"started_at": "2026-11-22T10:01:00Z"}, {"started_at": "2026-11-22T10:02:00Z"}],
+    "2": [{"started_at": "2026-11-22T11:10:00Z"}],
+    "3": [{"started_at": null}],
+    "4": [{"started_at": "2026-11-22T12:00:05Z"}],
+    "7": [{"started_at": "2026-11-22T15:00:05Z"}],
+    "6": [{"started_at": "2026-11-22T14:00:30Z"}]
+  },
+  "prs": [
+    {"number": 12, "merged_at": "2026-11-22T09:00:00Z", "head_ref": "release-bump/mctl-telegram-main-abc1234"},
+    {"number": 10, "merged_at": "2026-11-22T10:30:00Z", "head_ref": "feat/x"},
+    {"number": 11, "merged_at": "2026-11-22T12:40:00Z", "head_ref": "release-bump/mctl-telegram-main-abc1234"}
+  ],
+  "timelines": {
+    "10": [{"event": "added_to_merge_queue", "created_at": "2026-11-22T10:00:00Z"}, {"event": "added_to_merge_queue", "created_at": "2026-11-22T10:20:00Z"}],
+    "11": []
+  }
+}
