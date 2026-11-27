@@ -21,10 +21,11 @@ import json
 import statistics
 import subprocess
 import sys
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 REPO = "mctlhq/mctl-gitops"
-RELEASE_WORKFLOW = "release-deploy"
+RELEASE_WORKFLOW = "Release & Deploy"  # workflow name as the runs API reports it
 
 
 class ReadError(Exception):
@@ -53,6 +54,12 @@ def summarize(values):
     return {"n": len(ordered), "p50": statistics.median(ordered), "p95": p95, "max": ordered[-1]}
 
 
+def needs_jobs(run):
+    """Only these runs enter a metric, so only their jobs are fetched."""
+    return (run["event"] == "merge_group" or run.get("name") == RELEASE_WORKFLOW
+            or run.get("conclusion") == "cancelled")
+
+
 def report(data):
     """Pure function: window data (see collect) -> metrics dict."""
     runs, jobs = data["runs"], data["jobs"]
@@ -61,6 +68,8 @@ def report(data):
 
     for run in runs:
         rid = str(run["id"])
+        if not needs_jobs(run):
+            continue
         if rid not in jobs:
             unknown.append(run["id"])
             continue
@@ -125,7 +134,8 @@ def render(metrics, window):
 
 
 def gh_json(path, *params):
-    cmd = ["gh", "api", "--paginate", "--slurp", path, *params]
+    # -f/-F make `gh api` default to POST; every read here must be an explicit GET.
+    cmd = ["gh", "api", "--method", "GET", "--paginate", "--slurp", path, *params]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise ReadError(f"gh api {path} failed: {r.stderr.strip()}")
@@ -138,17 +148,41 @@ def gh_json(path, *params):
     return pages
 
 
+def chunks(since, until, hours=6):
+    """Split the window so each runs query stays under the API's 1000-result cap."""
+    start, end, step = ts(since), ts(until), timedelta(hours=hours)
+    while start < end:
+        stop = min(start + step, end)
+        yield start.strftime("%Y-%m-%dT%H:%M:%SZ"), stop.strftime("%Y-%m-%dT%H:%M:%SZ")
+        start = stop
+
+
+def collect_runs(since, until):
+    pages = gh_json(f"repos/{REPO}/actions/runs", "-f", f"created={since}..{until}", "-f", "per_page=100")
+    got = sum(len(pg["workflow_runs"]) for pg in pages)
+    # The runs API serves at most 1000 results per query; a larger total_count means
+    # the list would be a silently shorter one, so refuse instead.
+    if pages and pages[0]["total_count"] > got:
+        raise ReadError(f"{since}..{until} holds {pages[0]['total_count']} runs but the API "
+                        f"returned {got}; use a narrower window")
+    return [{"id": r["id"], "event": r["event"], "name": r["name"], "display_title": r["display_title"],
+             "created_at": r["created_at"], "conclusion": r["conclusion"]}
+            for pg in pages for r in pg["workflow_runs"]]
+
+
 def collect(since, until):
-    created = f"{since}..{until}"
-    runs = []
-    for page in gh_json(f"repos/{REPO}/actions/runs", "-f", f"created={created}", "-f", "per_page=100"):
-        for r in page["workflow_runs"]:
-            runs.append({"id": r["id"], "event": r["event"], "name": r["name"], "display_title": r["display_title"],
-                         "created_at": r["created_at"], "conclusion": r["conclusion"]})
-    jobs = {}
-    for run in runs:
+    runs = {}
+    for lo, hi in chunks(since, until):
+        for r in collect_runs(lo, hi):
+            runs[r["id"]] = r
+    runs = list(runs.values())
+    def fetch_jobs(run):
         pages = gh_json(f"repos/{REPO}/actions/runs/{run['id']}/jobs", "-f", "per_page=100")
-        jobs[str(run["id"])] = [{"started_at": j["started_at"]} for p in pages for j in p["jobs"]]
+        return str(run["id"]), [{"started_at": j["started_at"]} for p in pages for j in p["jobs"]]
+
+    # A failed read raises out of map(): the whole report aborts, never a shorter list.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        jobs = dict(pool.map(fetch_jobs, [r for r in runs if needs_jobs(r)]))
     prs = []
     for page in gh_json(f"repos/{REPO}/pulls", "-f", "state=closed", "-f", "per_page=100",
                         "-f", "sort=updated", "-f", "direction=desc"):
