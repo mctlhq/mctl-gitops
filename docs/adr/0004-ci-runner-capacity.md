@@ -1,7 +1,7 @@
 # ADR 0004: CI runner capacity for mctl-gitops
 
-**Status:** Proposed (the decision is the org owner's; merging this ADR changes
-no runtime, runner or workflow)
+**Status:** Accepted 2026-11-28 by the org owner: option A (hosted runners plus
+Stage 1). Merging this ADR changes no runtime, runner or workflow.
 
 Issue: mctlhq/mctl-gitops#2993. Related: #2931 (merge-queue starvation).
 Stage 1 (superseding stale runs) merged in #2995 and #3010. The measuring script
@@ -156,7 +156,15 @@ constraints (task 8 of the proposal implements the CI half):
 - No host secrets in the job environment; rollback is reverting `runs-on` to
   `ubuntu-latest` and disabling the group.
 
-## Decision (proposed)
+## Decision
+
+**Accepted 2026-11-28 by the org owner: option A** (hosted runners plus
+Stage 1). No paid plan is bought and no self-hosted runner is attached. The
+re-measure under 22-23.11-scale load is the follow-up mctlhq/mctl-gitops#3060;
+if it shows merge-group p95 start latency above 5 minutes, the decision is
+reopened with option B first.
+
+The reasoning recorded while the ADR was proposed:
 
 1. Adopt Stage 1 (done). Treat option A as the standing answer until the
    "after" window says otherwise.
@@ -169,8 +177,7 @@ constraints (task 8 of the proposal implements the CI half):
    trusted-events-only option under the constraints above, and only if the
    host is given enough headroom first.
 
-Owner of the final choice: the org owner. Until they accept it, the status
-stays Proposed.
+Owner of the final choice: the org owner (accepted, see above).
 
 ## Housekeeping recorded here
 
@@ -185,7 +192,9 @@ file in this repository. It is left in place; it occupies no slot.
 ## Open items
 
 - Live proof of preview-build cancellation (T4 of the proposal): **done
-  2026-11-27.** Two back-to-back `workflow_dispatch` runs of
+  2026-11-27.** It proves that a superseded run is cancelled; it does not
+  prove, and was not meant to prove, a successful preview deployment. Two
+  back-to-back `workflow_dispatch` runs of
   `release-deploy.yaml` for a fictitious probe component `t4-probe-preview`
   (tags `main-aaaaaaa`, then `main-bbbbbbb`, seconds apart): the older run
   46066658762 ended `cancelled` with `build` skipped; the newer run 46066662656
@@ -197,8 +206,7 @@ file in this repository. It is left in place; it occupies no slot.
   `release-bump/*` pull requests (n=5 before, n=2 after); it is empty for
   preview-only windows.
 - Re-measure on the next day with load comparable to 2026-11-22/23 (several
-  hundred merge-group runs in 48 hours) before treating option A as settled
-  for that load.
+  hundred merge-group runs in 48 hours): mctlhq/mctl-gitops#3060.
 - `await-bump` (up to 55 minutes holding a hosted slot per release) could move
   off Actions into a merge-queue webhook; that changes the release-red signal
   contract pinned by `tests/test_release_bump_enqueue.py`, so it is a separate
