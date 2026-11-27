@@ -413,6 +413,11 @@ jobs:
         # resolve to a per-run group. The test pins every expression.
         run: python3 tests/test_workflow_concurrency.py
 
+      - name: CI queue latency report (fixture numbers, failed read is exit 2)
+        # mctlhq/mctl-gitops#2993: scripts/ci-queue-latency.py feeds the ADR 0004
+        # measurements. The test also mutates the script and wants each mutant red.
+        run: python3 tests/test_ci_queue_latency.py
+
       - name: Release window PR-opener (wiring, input binding, insert script)
         # Proposal issue-2828, 8.2: release-window-pr.yml opens a release-window/*
         # pull request with the App token (open-pr) and queues it for merge
