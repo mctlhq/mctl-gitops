@@ -57,6 +57,9 @@ SECRET_SHAPED = re.compile(r"(ghp_|github_pat_|hvs\.|AKIA|-----BEGIN)")
 # neighbouring line without a Glovo or assistants reference (an ingress
 # `paths:` entry such as `- /mcp`) needs no entry, and listing one would be a
 # dead entry. The self-test pins this both ways.
+# Only a line that matches LEAK needs an entry (see leak_guard below): lines of
+# a listed file that do not name the connector pass without one, so an entry
+# set is normally much smaller than the diff that introduced it.
 ALLOWED_LINES: dict[str, frozenset[str]] = {
     # Step D1: the Basket canary managed roles (mctlhq/mctl-api#1006).
     "platform-gitops/infra-components/data/cnpg/shared/cluster.yaml": frozenset({
