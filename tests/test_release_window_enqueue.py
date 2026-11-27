@@ -37,7 +37,7 @@ def run_script(*, script_text=None, kind=None, additions=1, deletions=0, author=
                state="open",
                merged="false", pr_ok=True, files=(TARGET,), changed=None, prev="", files_ok=True, cur=HEAD,
                pr_head=HEAD, expect=HEAD, target=TARGET, gstate="OPEN", decision="APPROVED", on_head=1,
-               review_ok=True, runs=None, total=None, runs_ok=True, wait_seconds=100000):
+               review_ok=True, runs=None, total=None, runs_ok=True, wait_seconds=100000, stage=None):
     """Run the wait script with a fake gh. Returns (rc, outputs, log)."""
     runs = green() if runs is None else runs
     if head_ref is None:
@@ -82,6 +82,8 @@ def run_script(*, script_text=None, kind=None, additions=1, deletions=0, author=
                "TARGET": target, "GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(d), "WAIT_SECONDS": str(wait_seconds)}
         if kind is not None:
             env["WINDOW_KIND"] = kind
+        if stage is not None:
+            env["STAGE"] = stage
         r = subprocess.run(["bash", str(d / "scripts/release-window-enqueue-wait.sh")], env=env,
                            capture_output=True, text=True, timeout=60, cwd=d)
         assert not (d / "enqueue").exists(), "the wait script must never enqueue itself"
@@ -103,12 +105,21 @@ def cases(script_text=None):
 
     def hints(**kw):
         _, _, log = run_script(script_text=script_text, **kw)
-        return log.count("::warning::no agy-formal-review")
+        return log.count("::notice::no agy-formal-review")
 
     def hinted(**kw):
         _, _, log = run_script(script_text=script_text, **kw)
         return ("gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main "
                 f"-f repository=o/r -f pr_number=7 -f head_sha={HEAD}") in log
+
+    def asks(want, **kw):  # STAGE=dispatch: the verdict, and never an enqueue verdict
+        rc, out, _ = run_script(script_text=script_text, stage="dispatch", **kw)
+        head = f"head_sha={HEAD}" in out
+        return rc == 0 and f"dispatch={want}" in out and "ready=true" not in out and head == (want == "true")
+
+    def no_ask(**kw):
+        rc, out, log = run_script(script_text=script_text, stage="dispatch", **kw)
+        return "dispatch=true" not in out and (("::error::" in log and rc != -9) or "waiting" in log or "ready=false" in out)
 
     def done(**kw):
         rc, out, _ = run_script(script_text=script_text, **kw)
@@ -145,6 +156,23 @@ def cases(script_text=None):
         ("APPROVED with no approval on this head waits", lambda: idle(on_head=0), True),
         ("a pending check waits", lambda: idle(runs=pending), True),
         ("a missing required check waits", lambda: idle(runs=[r for r in green() if r["name"] != "validate"]), True),
+        ("dispatch: approved with no formal review -> ask, even with CI pending",
+         lambda: asks("true", runs=[run_for("validate", "in_progress", None)]), True),
+        ("dispatch: a failed formal review is asked again",
+         lambda: asks("true", runs=[run_for("agy-formal-review", conclusion="failure")]), True),
+        ("dispatch: a passed formal review is not asked again", lambda: asks("false", runs=green()), True),
+        ("dispatch: a running formal review is not asked again",
+         lambda: asks("false", runs=[run_for("agy-formal-review", "in_progress", None)]), True),
+        ("dispatch: the newest formal review decides",
+         lambda: asks("false", runs=[run_for("agy-formal-review", conclusion="failure"), run_for("agy-formal-review")]), True),
+        ("dispatch: no approval, no request", lambda: no_ask(decision="REVIEW_REQUIRED", on_head=0), True),
+        ("dispatch: an approval on another head, no request", lambda: no_ask(on_head=0), True),
+        ("dispatch: changes requested, no request", lambda: no_ask(decision="CHANGES_REQUESTED", runs=[]), True),
+        ("dispatch: a moved head, no request", lambda: no_ask(cur="b" * 40, runs=[]), True),
+        ("dispatch: a human author, no request", lambda: no_ask(author="mashkovd", runs=[]), True),
+        ("dispatch: an unreadable check list, no request", lambda: no_ask(runs_ok=False), True),
+        ("dispatch: a truncated check list, no request", lambda: no_ask(runs=[], total=3), True),
+        ("an unknown stage is refused", lambda: refused(stage="merge"), True),
         ("a failed check is refused", lambda: refused(runs=green() + [run_for("trivy", conclusion="failure")]), True),
         ("a missing formal review waits",
          lambda: idle(runs=[r for r in green() if r["name"] != "agy-formal-review"]), True),
@@ -183,8 +211,12 @@ def cases(script_text=None):
 
 
 MUTANTS = {
+    "dispatch repeated over a pass": ('if [ "$formal" = "completed success" ]; then', 'if false; then'),
+    "dispatch over a running review": ('absent|"completed "*) ;;', '*) ;;'),
+    "truncated list dispatches": ('[ "$(jq -s length <<<"$runs")" = "$total" ]', 'true'),
+    "unknown stage accepted": ('case "$STAGE" in enqueue|dispatch) ;;', 'case "$STAGE" in *) ;;'),
     "formal review not required": ("REQUIRED_CHECKS=agy-formal-review,", "REQUIRED_CHECKS="),
-    "no dispatch hint": ('echo "::warning::no agy-formal-review', 'true "'),
+    "no dispatch hint": ('echo "::notice::no agy-formal-review', 'true "'),
     "dispatch hint repeated": ("          hinted=1\n", ""),
     "pushed head not compared": ('[ "$head_sha" = "$EXPECT_HEAD" ] ||', 'true ||'),
     "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),

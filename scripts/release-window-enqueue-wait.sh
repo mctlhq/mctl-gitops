@@ -40,12 +40,15 @@ set -euo pipefail
 
 : "${REPO:?REPO is required}" "${PR:?PR is required}" "${EXPECT_HEAD:?EXPECT_HEAD is required}" "${TARGET:?TARGET is required}" "${GITHUB_OUTPUT:?}" "${RUNNER_TEMP:?}"
 WAIT_SECONDS=${WAIT_SECONDS:-2700}
+# enqueue: wait for the approval and every check. dispatch: stop at the approval
+# and say whether the formal review still has to be requested.
+STAGE=${STAGE:-enqueue}
 WINDOW_KIND=${WINDOW_KIND:-add}
 APP_LOGIN='mctl-gitops-pr[bot]'
 # The required status checks of ruleset main-protection (id 18465404). Keep in
 # step with the ruleset and with release-bump-enqueue-wait.sh.
-# Nothing dispatches agy-formal-review for this head yet (#3047), so the wait
-# below prints the command an operator has to run.
+# The dispatch-formal-review job of the same workflow requests that review: it
+# runs this script with STAGE=dispatch (#3047).
 REQUIRED_CHECKS=agy-formal-review,cloudflare-plan,reserved-hosts,validate
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
@@ -57,6 +60,7 @@ case "$WINDOW_KIND" in
 esac
 not_ready() { echo "::notice::$*"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0; }
 
+case "$STAGE" in enqueue|dispatch) ;; *) die "STAGE must be enqueue or dispatch (got '${STAGE}')." ;; esac
 [[ "$PR" =~ ^[0-9]+$ ]] || die "no pull request number (got '${PR}'); not enqueueing."
 [[ "$EXPECT_HEAD" =~ ^[0-9a-f]{40}$ ]] || die "no pushed head sha (got '${EXPECT_HEAD}'); not enqueueing."
 [[ "$TARGET" =~ ^platform-gitops/bootstrap/templates/projects/project-(apps|platform)\.yaml$ ]] \
@@ -123,6 +127,25 @@ while :; do
             --jq '.check_runs[] | {id, name, status, conclusion}'); then
       die "could not read the check runs of ${head_sha}; not enqueueing."
     fi
+    if [ "$STAGE" = dispatch ]; then
+      [ "$(jq -s length <<<"$runs")" = "$total" ] \
+        || die "the check runs of ${head_sha} were not read in full; not dispatching."
+      formal=$(jq -rs '[.[] | select(.name == "agy-formal-review")] | sort_by(.id) | last
+        | if . == null then "absent" else "\(.status) \(.conclusion)" end' <<<"$runs") \
+        || die "could not evaluate the check runs of ${head_sha}; not dispatching."
+      case "$formal" in
+        absent|"completed "*) ;;
+        *) echo "::notice::agy-formal-review on ${head_sha} is already running (${formal})."
+           echo "dispatch=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+      esac
+      if [ "$formal" = "completed success" ]; then
+        echo "::notice::agy-formal-review already passed on ${head_sha}."
+        echo "dispatch=false" >> "$GITHUB_OUTPUT"; exit 0
+      fi
+      { echo "dispatch=true"; echo "head_sha=${head_sha}"; } >> "$GITHUB_OUTPUT"
+      echo "::notice::#${PR} is approved on ${head_sha}; requesting the formal review (now: ${formal})."
+      exit 0
+    fi
     # No check run of the enqueueing job lives on the PR head (it runs in the
     # release workflow on main), so nothing is excluded: an empty --own-check
     # matches no run, because a run without a name is already "unknown".
@@ -141,7 +164,7 @@ while :; do
       10)
         echo "waiting for checks: ${verdict}"
         if [ "$hinted" = 0 ] && [[ "$verdict" == *"agy-formal-review: not reported"* ]]; then
-          echo "::warning::no agy-formal-review on ${head_sha}. Dispatch it: gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main -f repository=${REPO} -f pr_number=${PR} -f head_sha=${head_sha}"
+          echo "::notice::no agy-formal-review on ${head_sha} yet; the dispatch-formal-review job requests it. If that job failed, run: gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main -f repository=${REPO} -f pr_number=${PR} -f head_sha=${head_sha}"
           hinted=1
         fi ;;
       *) die "#${PR} is not mergeable: ${verdict}" ;;

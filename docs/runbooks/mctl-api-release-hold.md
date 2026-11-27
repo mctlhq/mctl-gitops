@@ -248,27 +248,31 @@ workflow and the environment secret arrived empty), or a bump approved more
 than 45 minutes after `publish-pr` opened it (the wait gives up; re-running
 the failed `enqueue-bump` job also works while the release run is retained).
 
-### enqueue-bump waits for agy-formal-review (#3047)
+### agy-formal-review on bump and window PRs (#3047)
 
-`agy-formal-review` is a required check, and nothing dispatches it for the head
-of a `release-bump/*` or release-window pull request. The enqueue job
-(`enqueue-bump`, `enqueue-window`) waits for it and prints a warning with the
-command once the PR is approved:
+`agy-formal-review` is a required check. For `release-bump/*` and release-window
+pull requests the `dispatch-formal-review` job requests it once the head is
+approved, and the enqueue job (`enqueue-bump`, `enqueue-window`) waits for it.
+The dispatch job holds the `mctl-gitops-dispatch` App key from the main-only
+`app-dispatch-main` environment. That App has a second private key in
+`app-dispatch-queue` (used by `agy-formal-queue.yml`); rotate them separately.
+
+If the dispatch job failed, or the review never reports, request it by hand:
 
 ```bash
 gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main \
   -f repository=mctlhq/mctl-gitops -f pr_number=<N> -f head_sha=<head>
 ```
 
-Dispatch it and leave the enqueue to the job. Do not enqueue by hand while the
-job is still waiting (`tools/merge-gitops-pr.sh` does): whichever comes second
-is refused, and the run can go red. The job waits 45 minutes in total, approval
-included. A failed review fails the job and the PR does not merge; after a new
-dispatch succeeds, re-run only the failed enqueue job.
+Leave the enqueue to the job. Do not enqueue by hand while it is still waiting
+(`tools/merge-gitops-pr.sh` does): whichever comes second is refused, and the run
+can go red. The job waits 45 minutes in total, approval included. A failed review
+fails the job and the PR does not merge; after a new review succeeds, re-run only
+the failed enqueue job.
 
 If the ruleset stops requiring `agy-formal-review`, remove it from
-`REQUIRED_CHECKS` in both wait scripts, or each of these jobs waits for a review
-nobody dispatches and times out.
+`REQUIRED_CHECKS` in both wait scripts and remove the dispatch jobs, or the
+enqueue jobs wait for a check that gates nothing.
 
 ### After the fact: release-gate-watch reads the ledger (S4b, #2774)
 

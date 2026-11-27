@@ -157,7 +157,8 @@ def judge(files):
         # nothing but the two publishing jobs names an environment
         envs = {n: j.get("environment") for n, j in jobs.items() if "environment" in j}
         out.append((f"{label}: only the publishing jobs and enqueue-bump have an environment",
-                    set(envs) == {"publish-direct", "publish-pr", "enqueue-bump"} and envs.get("enqueue-bump") == "app-gitops-pr", envs))
+                    set(envs) == {"publish-direct", "publish-pr", "enqueue-bump", "dispatch-formal-review"} and envs.get("enqueue-bump") == "app-gitops-pr"
+                    and envs.get("dispatch-formal-review") == "app-dispatch-main", envs))
 
     am = files["auto-merge.yml"]
     amdoc = load(am)
