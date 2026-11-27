@@ -1,16 +1,15 @@
 # Sync-window write path: what is built, and the mctl-api step (#2828 S1)
 
-**Status (updated 2026-11-22, evening): steps 1 and 2 are built and merged.
-The mctl-api step is built in three slices: S1, S2 and S3 are merged
-(mctl-api#1153, #1154, #1155), released as mctl-api 4.173.0, and switched on
-with `RELEASE_WINDOWS_ENABLED=true` (gitops#2909). The first real run was
-made and watched the same evening (section 2). No window is on `main`.
-On 2026-11-23 the owner decided that the MFA approval itself queues the
-window pull request for merge (section 5, item 6); that is built and was run
-live the same day (gitops#2975 merged). Removal of a window is designed in
-section 6 and not built yet. Section 5 records which
-decisions are now made and which are still open. This file authorises nothing;
-merging it is not a GO.**
+**Status (updated 2026-11-27): the write path adds and removes windows, and
+both were run live. Steps 1 and 2 are built and merged. The mctl-api step was
+built in three slices (S1 to S3: mctl-api#1153, #1154, #1155, released as
+4.173.0) and switched on with `RELEASE_WINDOWS_ENABLED=true` (gitops#2909).
+Since 2026-11-23 the MFA approval itself queues the window pull request for
+merge (section 5, item 6); the first window reached `main` that way
+(gitops#2975). Removal (section 6) is built and released as mctl-api 4.177.0,
+and removed that window on 2026-11-24 (gitops#3017), so this path has no
+window left on `main`. Section 5 records which decisions are made. This file
+authorises nothing; merging it is not a GO.**
 
 This is the "new proposal" that section 1 of the #2828 design
 (`platform-gitops/agents-state/mctl-gitops/proposals/issue-2828-spike-release-governed-release-calendar/design.md`)
@@ -19,8 +18,9 @@ it says any AppProject, window, MCP tool or production change needs a separate
 owner security GO. Steps 1 and 2 below were built on the owner's direction in
 a working session. The owner gave the written GO for them as built on
 2026-11-22, in session (section 5, item 1).
-None of them applies a window: every step opens or checks a pull request that
-a person reviews and merges.
+As first built, none of them applied a window: every step opened or checked a
+pull request that a person reviewed and merged. Section 5, items 6 and 7,
+changed that for the window and removal pull requests only.
 
 ## 1. What exists
 
@@ -115,7 +115,8 @@ not observed (the trial PR #2893 did pass it). Observed: the REST read
 `GET /api/v1/release/windows` lists windows from git, not approval state; the
 approval state is read by repeating the same `POST`, which is idempotent.
 
-Not in this step: removing or shortening a window, the exception path
+Not in this step (removal came later, section 6): removing or shortening a
+window, the exception path
 (`release.freeze_exception`, broker), a calendar policy file, activation
 checks. Each needs its own proposal.
 
@@ -184,7 +185,10 @@ generic route.
    `mctl_propose_release_window` are enabled on the Cloudflare MCP portal,
    because the owner is its only user (mctl-api#1159). The portal switch
    decides visibility only; the API's role check, the MFA page and the receipt
-   gate stay the access control.
+   gate stay the access control. On 2026-11-27 the owner decided the same for
+   `mctl_propose_window_removal` (mctl-api#1199); like any allowlist change it
+   reaches the portal only after the vendoring pull request and an approved
+   `cloudflare-apply`.
 
 6. **Auto-merge after the MFA approval.** Decided 2026-11-23, in session, by
    the owner. It reverses the rule that a window pull request is never
@@ -217,10 +221,9 @@ generic route.
      stale `base_sha` or a refused enqueue leaves the pull request open and no
      window on `main`. Nothing here forces a merge.
    - **Not decided here.** Whether the Claude review approves a pull request on
-     those paths is not verified; if it does not, the approval is the open
-     question for the first live run, and the pull request simply stays open
-     until it is settled. Removal of a window is its own proposal, section 6 and
-     item 7.
+     those paths was not verified at the time; both live runs (gitops#2975 and
+     #3017) were approved. Removal of a window is its own proposal, section 6
+     and item 7.
    - **Order of work.** (1) this record; (2) mctl-api: decide-page and tool
      text; (3) mctl-gitops: the enqueue step and the narrowed exclusion, with a
      test that a pull request outside the exception is still refused. A window
@@ -235,74 +238,97 @@ generic route.
    section 6. This item authorises building it; releasing it, switching it on
    the portal and the first live removal are separate steps, each asked for.
 
-## 6. Removal of a window (design, not built)
+## 6. Removal of a window (built and run live)
 
-Why it is not a flag on the existing tool: an approval to add a block is
-never to be spendable as an approval to lift one. Removal is therefore its own
-kind, its own hash domain and its own decide-page text.
+Built in gitops#2987 and mctl-api#1173, released as mctl-api 4.177.0 on
+2026-11-24. Why it is not a flag on the existing tool: an approval to add a
+block is never to be spendable as an approval to lift one. Removal is therefore
+its own kind, its own hash domain and its own decide-page text.
 
-**Tool.** `mctl_propose_window_removal`, two calls like the add tool. Call 1
-takes `project` (`apps` or `platform`) and the window exactly as
-`mctl_get_sync_windows` reports it (`applications`, `schedule`, `duration`),
-reads main's template, and requires exactly one `deny` window in that
-project's `spec.syncWindows` that matches field for field. No match, more than
-one match, or a template it could not read is a refusal, never a guess or an
-empty result. It returns a pending approval and a decide URL and changes
-nothing. Call 2 takes only `approval_id` and dispatches the removal workflow.
-Admin-only, requester-only, same as the add tool.
+**Tool.** `mctl_propose_window_removal`, two calls like the add tool, and the
+REST routes `POST /api/v1/release/window-removals` and
+`.../{approval_id}/execute`. Call 1 takes `project` (`apps` or `platform`) and
+the window as `mctl_get_sync_windows` reports it (`applications`, `schedule`,
+`duration`), reads main's head as `base_sha`, and runs a pre-check against Argo
+CD. It returns a pending approval and a decide URL and changes nothing. Call 2
+takes only `approval_id` and dispatches the removal workflow; it does not read
+Argo CD. Admin-only, requester-only, same as the add tool.
+
+**Pre-check, and where it differs from the first design.** The design had
+call 1 read main's template. As built, mctl-api reads Argo CD and the workflow
+reads main. In 4.177.0 the pre-check asked, per Application, for an assigned
+deny window with the same schedule and duration, which let a request naming
+only part of a window's Application list through to the owner. mctl-api#1198
+replaces it with the project's `spec.syncWindows`: exactly one deny window with
+the same schedule, duration and Application list and no other restriction. It is
+live with the first mctl-api release after 4.178.2. Either way it is a
+pre-check: Argo CD can lag main, and the workflow is the authority. A read that
+fails is a refusal, never "no window".
+
+**Read tool.** The removal work showed that `mctl_get_sync_windows` answered an
+empty list for a project whose windows were all closed at that moment, because
+it read the endpoint for windows in effect. mctl-api#1174 reads the configured
+windows from the project (4.177.0).
 
 **Approval.** Kind `release.window.removal`, policy
 `release.window.removal.owner`. The approval hash is over
 `{"action":"remove","project":P,"window":W}` (canonical JSON, same rules as
-`release-window-insert.py hash`), and the args digest uses its own domain
-string, so an approval for an addition cannot be replayed as a removal or the
-reverse, even for the same project and window. The idempotency key carries
-`base_sha` as for additions.
+`release-window-insert.py hash`; the script's `hash-remove`), and the args
+digest uses its own domain string, so an approval for an addition cannot be
+replayed as a removal or the reverse, even for the same project and window. The
+window id starts with `r-`. The idempotency key carries `base_sha` as for
+additions.
 
-**Decide page.** Same fresh sign-in and MFA as the add page, with its own text:
-it names the project, the applications, the schedule and the duration being
-lifted, and says that approving means the window is removed, a pull request
-for it is queued for merge into `main` with no person reviewing or merging it,
-and the listed applications may sync during that time once Argo CD has applied
-it. Until the second call nothing is changed.
+Test vector: project `apps`, window
+`{"kind":"deny","schedule":"0 3 * * 0","duration":"1h","applications":["labs-portfolio"]}`
+has removal hash
+`5cd82b2271abd883ee222722b9395be5187fbdd717c8e27bf2f3249140f52e9e`.
+
+**Decide page.** Same fresh sign-in and MFA as the add page, on the same
+callback, with its own text: it names the project, the applications, the
+schedule and the duration being lifted, and says that approving means the window
+is removed, a pull request for it is queued for merge into `main` with no
+person reviewing or merging it, and the listed applications may sync during that
+time once Argo CD has applied it. Until the second call nothing is changed.
 
 **Workflow.** `release-window-removal-pr.yml`, a sibling of
 `release-window-pr.yml` with the same guards: dispatch on main, App
 `mctl-gitops-pr`, environment `app-gitops-pr`, a branch
 `release-window-removal/<id>`, an existing branch or open pull request for the
 id is refused, the window is rebuilt from the inputs and must hash to the
-approved value, `base_sha` must be an ancestor of main with the target
-template unchanged since. Its own script deletes exactly one window block by
-text (the templates are Helm templates, so never load and dump), and removes
-the `syncWindows:` key too when that was the last window, so that adding and
-then removing a window returns the file byte for byte. A shape the script does
-not recognise is exit 2. The job re-renders and requires the matched window to
-be gone and everything else unchanged. The diff must be deletions of that one
-block in one file, the apps or platform template, with no added line.
+approved value, `base_sha` must be an ancestor of main with the target template
+unchanged since, and the window must be held exactly once.
+`release-window-insert.py remove` deletes that one block by text (the templates
+are Helm templates, so never load and dump), and removes the `syncWindows:` key
+too when that was the last window, so that adding and then removing a window
+returns the file byte for byte. A shape the script does not recognise is
+refused. The job re-renders and requires the matched window to be gone and
+everything else unchanged. The diff must be deletions only, in the one project
+template. Both workflows share the concurrency group `release-window-pr`; GitHub
+keeps one pending run per group, so a dispatch cancelled that way has already
+spent its approval and has to be requested again.
 
 **Merge.** The same `enqueue-window` shape as item 6, driven by
-`scripts/release-window-enqueue-wait.sh`, which is parameterised by the kind
-(`add` or `remove`, nothing else) and checks the branch prefix and the diff
-direction for that kind. A removal pull request is refused by the add guard
-and an addition by the removal guard. Fail closed: red checks, a review that
-does not approve, a stale `base_sha` or a refused enqueue leave the pull
-request open and the window in place.
+`scripts/release-window-enqueue-wait.sh`, which takes the kind (`add` or
+`remove`, nothing else) and checks the branch prefix and the diff direction for
+that kind. A removal pull request is refused by the add guard and an addition by
+the removal guard. Fail closed: red checks, a review that does not approve, a
+stale `base_sha` or a refused enqueue leave the pull request open and the window
+in place.
 
 **What it can and cannot remove.** Any `deny` window in the `apps` or
-`platform` template that the read tool reports and that matches exactly,
-including one that was not added by this path. It never touches `default`, and
-it never edits anything but the window block. The decide page shows what is
-being lifted, which is the control; nothing marks a window as one the tool may
-not remove.
+`platform` template that matches exactly, including one that was not added by
+this path. It never touches `default`, and it never edits anything but the
+window block. The decide page shows what is being lifted, which is the control;
+nothing marks a window as one the tool may not remove.
 
-**Order of work.** (1) this record; (2) mctl-gitops: the removal script, the
-workflow, the parameterised enqueue guard and tests, each guard proven by a
-mutation; (3) mctl-api: the kind, the request route, the decide page, the
-tool and the execute route, dark behind the existing flag; (4) release through
-the ledger, the portal catalogue line and allowlist entry, then one live
-removal of the `labs-portfolio` window, each with the owner's word. Until
-then a window is removed by a hand-made gitops pull request.
+**First live removal, 2026-11-24.** The `labs-portfolio` window (deny,
+`0 3 * * 0`, 1h): request `aar_28d10ad6398448a9afc77c08d67e560c` (window id
+`r-5cd82b2271ab`), decided with MFA at 17:59:11Z and executed at 17:59:20Z.
+Workflow run 45454553149 opened gitops#3017 (8 deletions, one file), its
+`enqueue-window` job queued it, and it merged at 18:30:00Z with no person
+merging it. On 2026-11-27 `mctl_get_sync_windows` showed no window in `apps`
+and none assigned to `labs-portfolio`.
 
-**Open question, not decided here.** Whether the new tool is exposed on the
-Cloudflare portal like the add tool. Recommended: yes, the owner is the only
-portal user and the portal switch decides visibility only; asked at step 4.
+**Portal.** Exposure was left open when this was designed; decided on
+2026-11-27 (section 5, item 5).
