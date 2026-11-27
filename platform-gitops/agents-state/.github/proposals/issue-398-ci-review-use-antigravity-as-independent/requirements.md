@@ -110,7 +110,7 @@ Activation (deferred, not part of this implementation)
 ## Open questions
 
 - Does a `claude[bot]` or `mctl-agy-reviewer[bot]` `APPROVED` review count toward mctl-gitops' `required_approving_review_count: 1`? This is unobserved. mctlhq/mctl-gitops#3023 currently has zero reviews and is blocked. The deferred fixture must observe this; nothing may assume it.
-- Which revision is the owner-approved review-policy version boundary for trusted reviewer SHAs, and where is it recorded (for example a constant on `mctlhq/.github` main changed only by reviewed PR)? Until the owner names it, the check fails closed.
+- Which revision is the owner-approved review-policy version boundary for trusted reviewer SHAs, and where is it recorded (for example a constant on `mctlhq/.github` main changed only by reviewed PR)? Until the owner names it, the check fails closed. Because the hardening merge SHA does not exist before that PR merges, the constant is set in a follow-up PR (tasks.md 6b) before any consumer bump.
 - What actually satisfied merge of mctlhq/mctl-telegram#1485 and mctlhq/mctl-telegram#1481 (zero reviews, merged by `mashkovd`)? The classic protection endpoint returned HTTP 403 to this run. `enforcement_level: non_admins` suggests admin enforcement exemption, but required-review settings and whether an admin override was used are unknown.
 - Is the reviewer App (ID 5732062, `mctl-agy-reviewer`) installed on mctl-telegram? Not observable with this run's token. The plan step 3 installed it on mctl-gitops only.
 - Current values of `AGY_REVIEW_GATE_ENABLED` and `AGY_REVIEW_GATE_REPOS` in `.github` (variables API returned HTTP 403). The `skipped` scheduled runs imply `AGY_REVIEW_GATE_ENABLED != 'true'`, but this is inferred, not read.

@@ -220,8 +220,11 @@ asked for, and later tasks update it rather than restate it.
   the publisher finishes its check, re-read the live head, base,
   `pr_diff_digest_v1`, blocking reviews and the owned check (its id and external
   id). Any change, any blocking review, or any failed read gives no success. The
-  publisher's existing post-publish re-read and self-dismissal stay as they are;
-  where the controller already does a step, the task adds tests rather than code.
+  publisher's existing post-publish re-read and self-dismissal are extended: after
+  posting an approval it re-reads head, base AND blocking reviews, and dismisses its
+  just-posted approval in enforce mode when any moved or a `CHANGES_REQUESTED`
+  review appeared meanwhile (a failed re-read also dismisses); where the controller
+  already does a step, the task adds tests rather than code.
   Events, dispatches and verdicts that refer to a non-live head, base or digest,
   or replay a consumed run attempt, are ignored for completion. Concurrent Claude
   and Agy verdicts resolve by blocking precedence and then by the single external
