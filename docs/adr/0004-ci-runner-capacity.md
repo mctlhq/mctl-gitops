@@ -62,23 +62,17 @@ what the "after" row will show.
 
 ## Facts about the existing hardware and org (read 2026-11-27)
 
-- Org plan `free`. Two org-level self-hosted runners (macOS, x64) are online,
-  with the label `agy-reviewer`; no workflow in this repository references a
-  self-hosted label today.
-- Runner group `Default` is visible to all repositories and allows public
-  repositories; it is not restricted to selected workflows. Fork PR approval
-  policy is `all_external_contributors` for the org and this repository.
-- The machine hosting those runners is an Intel Mac mini: 4 cores
-  (i3-8100B), 8 GB RAM, about 20 GB free disk, load about 1.4 with 18 days of
-  uptime. It also runs, as a different OS user, four runner registrations for
-  other projects, and as the operator user several always-on services: an
-  agent worker, an events session, a tunnel, a Codex daemon, a media stack and
-  a Colima/Lima Linux VM. The operator's login Keychain, API keys and other
-  credentials live on the same host. No hostnames or account names are
-  recorded here because this repository is public.
-- It counts as existing infrastructure, not a new node (rule "no new nodes"):
-  nothing would be provisioned, only an additional runner registration. It
-  would still add a new trust boundary, covered below.
+- Org plan `free`. No workflow in this repository references a self-hosted
+  label today; all CI here runs on hosted runners.
+- The org already operates a small number of self-hosted runners on a shared
+  operator machine. That machine has no isolation between CI and its other
+  duties and no spare headroom for a burst of validate jobs. It would be
+  existing infrastructure, not a new node (rule "no new nodes"), but using it
+  for this repository would add a trust boundary.
+- Host, group and account specifics are deliberately not recorded here: this
+  repository is public, and a description of where CI code would run and what
+  else lives next to it is useful mainly to an attacker. They are kept in a
+  private note.
 
 ## Options
 
@@ -100,17 +94,15 @@ owner confirms it before this option can be chosen.
 Rejected as a first step, for these reasons:
 
 1. **Fit.** Almost every job assumes `ubuntu-latest` (apt, Docker, pinned
-   linux binaries such as kubeconform). The host is macOS x64 with 8 GB RAM and
-   about 20 GB free disk. Running linux jobs means a Linux VM on a machine that
-   already runs one for other services; a 4-core, 8 GB host already carrying
-   its current services has little headroom, and a burst of parallel validate
-   jobs would compete with the always-on services it hosts.
+   linux binaries such as kubeconform). Running them on the existing host means
+   a Linux VM there, on a machine that has no headroom for a burst of parallel
+   validate jobs next to the work it already does.
 2. **Required checks have no fallback.** A required check cannot fall back to
    a hosted runner. A sleeping, updating or overloaded Mac would stall the
    merge queue, which is the failure this ADR is trying to remove.
 3. **Trust boundary.** This repository is public. A self-hosted runner that
    can pick up a job from a fork pull request executes attacker-chosen code on
-   hardware that holds operator credentials.
+   hardware that is shared with other duties.
 4. **Secrets.** `release-deploy.yaml` passes `APP_PRIVATE_KEY` and
    `GH_PACKAGES_TOKEN` to the build, and `agy-formal-queue.yml` reads
    `DISPATCH_APP_PRIVATE_KEY`. Neither moves to this hardware.
@@ -119,11 +111,11 @@ If option C is still wanted later, it is allowed only under all of these
 constraints (task 8 of the proposal implements the CI half):
 
 - A dedicated runner group `mctl-gitops-trusted`, restricted to this repository
-  and to selected workflow files (an org setting, outside this repo). Not the
-  `Default` group.
+  and to selected workflow files (an org setting, outside this repo), never the
+  shared default group.
 - Ephemeral/JIT runners (`--ephemeral`, re-registered after every job) in a
-  Linux VM under a dedicated non-admin user; no access to the operator
-  Keychain, home directory or LAN; egress limited to GitHub and ghcr.
+  Linux VM under a dedicated non-admin user; no access to the host's
+  credentials, home directories or LAN; egress limited to GitHub and ghcr.
 - Only trusted events: `push` to `main` and `workflow_dispatch`. A CI test
   rejects any workflow that has a `pull_request`, `pull_request_target` or
   `issue_comment` trigger and a job using a self-hosted label.
