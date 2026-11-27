@@ -89,7 +89,7 @@ More hosted concurrency, no hardware to maintain, covers required checks, and
 adds no trust boundary. The monthly figure is **not known to this ADR**; the
 owner confirms it before this option can be chosen.
 
-### C. Self-hosted runners on the Mac mini (cost: operator time, host load)
+### C. Self-hosted runners on existing org hardware (cost: operator time, host load)
 
 Rejected as a first step, for these reasons:
 
