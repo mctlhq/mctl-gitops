@@ -1,73 +1,95 @@
-# Antigravity as independent fallback reviewer (mctlhq/.github#398)
+# Provider-neutral independent review gate: activate the Claude-primary / Agy-fallback controller for mctl-gitops and mctl-telegram
 
 ## Context
 
-On 2026-11-25, `mctlhq/mctl-gitops#3023` (a preview-only environment flag change at head `3e60a75cbad7d8cf70934288012c0aa2144c9180`) demonstrated a recurring review-gate failure class:
+Issue mctlhq/.github#398 asks for a provider-neutral independent review gate:
+Claude reviews first, and Antigravity (Agy) acts as a formal fallback only when
+Claude genuinely has no verdict (quota, provider unavailability, timeout). It must
+fail closed, never treat a model comment, green CI, owner MFA or a manual advisory
+receipt as a GitHub approving review, and must keep every existing required check,
+real approval requirement and the merge queue. The 2026-11-26 owner refresh makes
+it P1 because the shared Claude quota is exhausted. It also adds mctl-telegram as
+a second consumer alongside mctl-gitops, using the same reviewer rather than a
+parallel one.
 
-1. `.github/workflows/claude-review.yml` (workflow run `45643936821`) exhausted both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN_2` on the shared usage limit, posted a soft transient comment (`issuecomment-7166702352`), and exited `0` (`claude-review / review` concluded `SUCCESS` with `reviews: []`). This is the fail-open defect tracked in `mctlhq/.github#287`.
-2. `.github/workflows/agy-review.yml` (workflow run `45643936946`, job `139309714628`) produced `<!-- VERDICT: PASS -->` (`issuecomment-7166721240`), but ran with `formal_review: false`, so it was informational only and skipped `formal_record`. The PR rightly remained blocked without a GitHub approving review.
-3. Meanwhile, `mctlhq/.github` (`origin/main` at `60e9db522f18299e73dac23fffedfe5b4ce81930`) already ships `.github/workflows/agy-review.yml` (`formal_review: true`), `.github/workflows/agy-formal-review.yml`, `.github/workflows/agy-formal-dispatch.yml`, and `.github/scripts/agy_review_publish.py` with `mctl-agy-reviewer` (`app_id: 5732062`). However, in `mctlhq/mctl-gitops`, `agy-formal-review` was removed from ruleset `18465404` on 2026-11-16 while `.github/workflows/agy-formal-queue.yml` remained active on `merge_group`, causing every merge-queue formal dispatch (for example run `45647591593` on PR `#3024`) to fail in `formal / prepare`.
-
-This proposal defines a provider-neutral independent review gate (`independent-review`) with Claude as primary reviewer and Antigravity (`agy`) as fallback reviewer only when Claude hits an explicitly allowlisted transient unavailability, quota exhaustion across all configured Claude tokens, or timeout without a valid verdict. It coordinates `mctlhq/.github#287`, `#347`, `#351`, and `#299` without duplicating reviewers or weakening any branch protection, review assurance, or merge-queue guarantee.
-
-Phase 0 produces specification, design, task breakdown, evidence matrix, and migration/rollback plan only. No production workflows, permissions, rulesets, or `mctlhq/mctl-gitops#3023` are modified before independent review and explicit owner `GO_IMPLEMENT`.
+Investigation shows the core mechanism already exists on `mctlhq/.github` main
+(233dc60, PRs #400 and #415). That mechanism is `.github/workflows/review-gate-controller.yml`,
+`.github/scripts/review_gate_controller.py` with the six-outcome contract,
+`agy-formal-dispatch.yml` and `agy-formal-review.yml` with
+`agy_review_publish.py`. None of it is effective yet. Scheduled controller runs
+are `skipped`. Both consumer repositories pin a Claude reusable workflow that
+predates the outcome classifier, so a quota no-verdict run is indistinguishable
+from any other no-verdict run and can never trigger the fallback. The required
+check `independent-review` is not in any ruleset. In mctl-gitops, the
+always-on formal Agy check `agy-formal-review` is required, and PR-head
+reviews are dispatched by hand. mctl-telegram has no review-related required
+check, and its last two observed PRs merged with zero reviews. This proposal
+therefore does not build a new reviewer. It closes the gaps between the merged
+code and an effective, evidence-backed, owner-gated pilot, and it records exactly
+what is observed and what is unknown per repository.
 
 ## User stories
 
-- AS a repository maintainer I WANT PRs blocked by Claude quota exhaustion or transient unavailability to fall back automatically to an independent formal Antigravity review SO THAT safe changes are not stranded while false-green CI is eliminated.
-- AS the org owner I WANT Antigravity to run only on genuine transient no-verdict failures and never override Claude P1/P2 findings or refusals SO THAT provider shopping is impossible and self-hosted runner capacity is preserved.
-- AS a security reviewer I WANT formal approvals and required check updates to run only from trusted default-branch code with isolated credentials, exact subject/diff-digest binding, and fail-closed API reads SO THAT untrusted PR content, forged comments, or stale heads cannot mint approval.
-- AS a GitOps operator using the merge queue I WANT the provider-neutral gate to support `merge_group` with verified diff-preserving carry-forward SO THAT valid PRs land without the `BEHIND` loop or extra LLM calls when the diff is unchanged.
-- AS an auditor I WANT metrics and immutable provenance on every gate evaluation SO THAT fallback rate, no-verdict rate, queue wait, and time to valid verdict are measurable.
+- AS the platform owner I WANT PRs to obtain a qualifying independent verdict when Claude quota is exhausted SO THAT review does not stall and no PR is approved on a green-without-verdict job.
+- AS the platform owner I WANT an evidence matrix of publishers, required checks, rulesets and identities per repository SO THAT I can authorize each permission or ruleset change separately and knowingly.
+- AS a reviewer of shared CI I WANT the fallback to reuse the existing trusted publisher and outcome contract SO THAT no second reviewer or publisher is created.
+- AS a PR author I WANT a single stable provider-neutral required check SO THAT I know whether review is satisfied without reading model comments.
+- AS a security reviewer I WANT Agy unable to override Claude blocking findings, refusals or ambiguous output SO THAT the fallback cannot be used for provider shopping.
+- AS the mctl-telegram maintainer I WANT the repository observed in shadow mode first SO THAT its real review policy is known before anything is enforced.
 
 ## Acceptance criteria (EARS)
 
-Outcome contract and fail-closed primary (`#287`)
+Outcome contract and trigger
 
-- THE SYSTEM SHALL classify every review-gate evaluation into exactly one structured outcome from `{PASS, BLOCKING_FINDINGS, NO_VERDICT_TRANSIENT, SELF_EDIT, NO_VERDICT_OTHER, STALE, UNKNOWN}`.
-- WHEN `.github/workflows/claude-review.yml` exhausts all configured Claude tokens on a usage limit (`shape == "limit"`) or fails with no readable terminal verdict on the pinned `(head_sha, base_sha)` THEN `claude-review / review` SHALL exit non-zero (eliminating the `exit 0` false green of `#287`) and emit machine-verifiable transient/non-transient diagnostics.
-- IF `claude-review.yml` produces a missing, corrupt, or non-array execution output, fails to post a commit-bound `APPROVED` or `CHANGES_REQUESTED` review naming `HEAD_SHA`, or skips execution due to an error in `gate` THEN THE SYSTEM SHALL NOT report `PASS` and SHALL classify the outcome as `NO_VERDICT_OTHER` or `UNKNOWN` (or `NO_VERDICT_TRANSIENT` only on allowlisted pre-verdict timeout/runner/quota failure).
-- WHEN `claude-review.yml` detects a workflow self-edit (`self_edit == true`) THEN THE SYSTEM SHALL preserve non-failing `self_edit=true` semantics on `claude-review / review` as a non-review signal AND the provider-neutral gate SHALL route the PR exclusively to trusted `mctlhq/.github` `main`-executed `.github/workflows/agy-formal-review.yml` (`formal_review: true`, ignoring PR workflow files and caller `conventions`) rather than silently deadlocking required `independent-review` or trusting unreviewed workflow edits.
+- WHEN the controller evaluates an open, non-draft, same-repository PR against its default branch THE SYSTEM SHALL classify the primary result into exactly one of `PASS`, `BLOCKING_FINDINGS`, `NO_VERDICT_TRANSIENT`, `NO_VERDICT_OTHER`, `STALE`, `UNKNOWN` (plus the existing trusted `SELF_EDIT` deferral), as implemented in `review_gate_controller.py` and emitted by `claude-review.yml` `review_outcome`.
+- WHEN Claude posted a trusted, unedited `claude[bot]` `APPROVED` review bound to the live head (and to the live base under strict policy, or to the live `pr_diff_digest_v1`) THE SYSTEM SHALL mark the provider-neutral check successful without dispatching Agy.
+- WHEN any `CHANGES_REQUESTED` review from `claude[bot]` or the Agy reviewer App exists on the live head THE SYSTEM SHALL fail the provider-neutral check, even if another provider passes.
+- WHEN the latest trusted Claude run for the live head is `NO_VERDICT_TRANSIENT` (quota or rate limit after both tokens, or an allowlisted `timed_out` / `startup_failure` with no verdict review and an unmodified caller) and no Agy dispatch is active for that head THE SYSTEM SHALL dispatch exactly one `agy-formal-dispatch.yml` run pinned to the live `head_sha`.
+- IF the Claude outcome is `NO_VERDICT_OTHER`, a refusal, a malformed, truncated or unreadable verdict, or the run comes from an untrusted caller THEN THE SYSTEM SHALL fail the check and SHALL NOT dispatch Agy.
+- IF the consumer's Claude caller pins a `claude-review.yml` commit that does not emit the `Classify outcome:` steps THEN THE SYSTEM SHALL report the distinct reason `caller pinned before outcome classifier`. It SHALL NOT dispatch Agy and SHALL NOT mark the check successful.
+- IF a formal Agy result already completed for the exact repository, PR, head and `pr_diff_digest_v1` from the trusted `agy-formal-review.yml` on `.github` main, with an unedited App `APPROVED` review carrying the matching `agy-formal:` marker THEN THE SYSTEM SHALL reuse it instead of dispatching again.
+- IF the only Agy evidence is an informational comment, a check from another integration, a carried mark, a forged comment or a PR-uploaded artifact THEN THE SYSTEM SHALL NOT count it.
+- IF neither provider yields qualifying evidence THEN THE SYSTEM SHALL leave the provider-neutral check failed or in progress, never successful.
 
-Fallback trigger policy and precedence
+Publication and identity
 
-- WHEN Claude produces a valid, unedited `PASS` (`APPROVED` by `claude[bot]` `type=Bot` with `commit_id == head_sha`, exact `Reviewed head=<head_sha> base=<reviewed_base_sha>` verified unchanged via GraphQL, and caller run trust verified via `referenced_workflows` + unchanged entry-workflow blob relative to merge-base `blob(head_sha) == blob(merge_base)` matching an allowlisted default-branch revision plus either `reviewed_base_sha == live_base_sha` or `strict == false` with identical `(merge_base, head_sha)` `pr_diff_digest_v1`) THEN THE SYSTEM SHALL conclude `PASS` for `independent-review` without triggering Antigravity, provided zero `claude[bot]` or `mctl-agy-reviewer[bot]` `CHANGES_REQUESTED` reviews (edited or unedited, regardless of body markers) exist on `head_sha`.
-- WHEN `claude[bot]` or `mctl-agy-reviewer[bot]` has any `CHANGES_REQUESTED` review (edited or unedited, regardless of body markers) on `head_sha` (or `live_pr_head` in `merge_group` mode) THEN THE SYSTEM SHALL conclude `BLOCKING_FINDINGS` (`failure`) and SHALL NOT trigger Antigravity fallback; even if an Antigravity review reports `PASS` on the same subject, `CHANGES_REQUESTED` SHALL keep the gate blocked and SHALL prevent `agy_review_publish.py` publication or `merge_group` carry-forward.
-- WHEN Claude ends with `NO_VERDICT_TRANSIENT` after primary and fallback Claude tokens are exhausted (verified from trusted `referenced_workflows`, unchanged `blob(head_sha) == blob(merge_base)` matching an allowlisted default-branch revision, and absence of any `claude[bot]` verdict), OR `SELF_EDIT` verified from trusted `claude-review.yml` run state, THEN THE SYSTEM SHALL reuse an existing Antigravity result ONLY IF it was produced by a formal, trusted `agy-formal-review.yml` run for the exact `(repository, pr_number, base_ref, head_sha)` with matching full `pr_diff_digest_v1` against live `merge_base`, valid non-contradictory verdict, and unedited `mctl-agy-reviewer[bot]` provenance; otherwise THE SYSTEM SHALL dispatch `.github/workflows/agy-formal-review.yml` (`formal_review: true`).
-- IF Claude ends with `NO_VERDICT_OTHER`, `STALE`, or `UNKNOWN` THEN THE SYSTEM SHALL NOT trigger Antigravity fallback and SHALL NOT mark `independent-review` as `success`.
-- IF an informational `.github/workflows/agy-review.yml` (`formal_review: false`) comment, forged PR comment, or PR-uploaded artifact claims `PASS` THEN THE SYSTEM SHALL ignore it completely and SHALL NOT treat it as formal evidence or approval.
-- IF Antigravity fallback ends with `FAIL:P1`, `FAIL:P2`, `FAIL:P1,P2`, no verdict, quota exhaustion, timeout, truncated/empty/oversized/binary diff, contradictory `PASS` containing `P1`/`P2`, stale `head_sha`/`base_sha`, runner unavailability, auth failure, or unreadable/partially-paginated GitHub API response THEN THE SYSTEM SHALL NOT post an approval and SHALL leave `independent-review` non-successful (`failure` or `in_progress` only while an active current-head run is legitimately executing).
+- WHEN the Agy publisher posts a review THE SYSTEM SHALL bind repository, PR, head, base, source run, attempt, model, digest and verdict. It SHALL re-read live head and base immediately before and after posting, and SHALL dismiss its own approval if either moved.
+- WHILE the PR author equals the reviewer App identity THE SYSTEM SHALL fail the check rather than self-approve.
+- THE SYSTEM SHALL NOT impersonate a human, request bypass permission, enable `GITHUB_TOKEN` approvals, or substitute an App review for a human approval that policy requires.
+- WHEN validating a reusable workflow reference (`review_trust.is_trusted_reusable_ref`) THE SYSTEM SHALL accept `@main` or an exact SHA only if that SHA is reachable from `mctlhq/.github` main. An unreadable ancestry check SHALL be treated as untrusted.
+- WHILE the Agy model runs THE SYSTEM SHALL keep the reviewer App key out of the model runner and SHALL NOT check out or execute PR-controlled code in privileged jobs.
 
-Trusted publisher, diff verification, and security boundaries
+Concurrency, staleness and merge queue
 
-- THE SYSTEM SHALL reuse `.github/workflows/agy-review.yml` (`formal_review: true`), `.github/workflows/agy-formal-review.yml`, and `.github/scripts/agy_review_publish.py` rather than creating a parallel reviewer or publisher.
-- WHILE executing formal review, `.github/workflows/agy-review.yml` SHALL run with no `AGY_REVIEW_APP_PRIVATE_KEY` or write App credentials, SHALL ignore caller-supplied `conventions`, SHALL fail closed on empty, truncated (`> 150000` bytes), or binary diffs, and SHALL include `provider` (`"agy"`) and a canonical full-diff `diff_digest` (`sha256` over the exact reviewed diff) in `review_record`.
-- BEFORE publishing any formal `APPROVE` or `REQUEST_CHANGES` review or check conclusion, `.github/scripts/agy_review_publish.py` SHALL resolve its own trusted source SHA from `referenced_workflows`, verify `repository`, `pr_number`, `base_ref` == `default_branch`, non-fork same-repo PR, `head_sha`, `base_sha`, full `diff_digest` against live GitHub tree/compare state, `provider`, structured `verdict`, branch protection policy (`dismiss_stale_reviews_on_push` AND (`strict` OR `merge_queue` with `MERGE`) AND App-bound required check in `enforce` mode), and author separation (`pr.user.login != agy_login`).
-- IMMEDIATELY BEFORE and AFTER posting `APPROVE`, the trusted publisher SHALL re-read live PR `head_sha`, `base_ref`, and live `(merge_base, head_sha)` `pr_diff_digest_v1` (plus verify zero `claude[bot]` or `mctl-agy-reviewer[bot]` `CHANGES_REQUESTED` reviews — edited or unedited — on `head_sha` and, in `merge_group` mode, `live_pr_head`, plus `queue_state`); IF `head_sha`, `base_ref`, or `pr_diff_digest_v1` changed (or `base_sha` moved under `strict: true` or `queue_ref` moved) OR `CHANGES_REQUESTED` is present OR any API read fails, THEN THE SYSTEM SHALL dismiss any just-posted approval and fail closed.
-- WHEN `gate_mode == "shadow"` THEN THE SYSTEM SHALL NOT post `APPROVE` or `REQUEST_CHANGES` PR reviews and SHALL publish only diagnostic/shadow status (`independent-review-shadow` check-run summary) without altering required branch checks.
-- THE SYSTEM SHALL NOT grant bypass actors, weaken existing required checks during migration, impersonate human reviewers, or satisfy `require_code_owner_review` / human-only approval policies with a bot review.
+- WHEN a PR head moves while a formal Agy run is queued or running and its `publish` job has not started THE SYSTEM SHALL cancel the superseded run.
+- WHEN duplicate events, replays or concurrent provider results arrive THE SYSTEM SHALL produce at most one effective check per (repository, PR, head, mode, digest) and SHALL never mark an older head successful.
+- WHILE the provider-neutral check is required in a merge-queue repository THE SYSTEM SHALL supply that check on the queue commit only by a fresh review or by the existing `carry_proof` rules (queue parents exactly `[base, live PR head]`, identical file set and blobs, trusted head verdict that is not itself carried).
+- WHILE migrating a repository THE SYSTEM SHALL keep every existing required check, including `agy-formal-review` in mctl-gitops. Any check is removed only by a separate owner-authorized ruleset change.
 
-Stable required check, `merge_group`, and concurrency
+Activation and observability
 
-- THE SYSTEM SHALL expose a single App-bound required status check context `independent-review` (published by `mctl-agy-reviewer`, `integration_id: 5732062`) compatible with both `pull_request` / `workflow_dispatch` heads and `merge_group` commits.
-- WHEN a `merge_group` entry (`refs/heads/gh-readonly-queue/<branch>/pr-<N>-<base>`) is evaluated THEN the trusted publisher SHALL verify live `queue_state` (`parents == [base, live_pr_head]`) and SHALL carry `independent-review = success` without an LLM call ONLY IF `compare_files(base, pr_head) == compare_files(base, queue_head)` (non-empty, `< 300` files, no mode-only/pure-rename, unmoved queue ref after comparison) AND the live PR head carries either a qualifying trusted unedited `claude[bot]` `PASS` or both a non-carried `agy/v2` App-owned formal check-run `success` (matching live `(merge_base, live_pr_head)` `pr_diff_digest_v1`) and an active unedited `mctl-agy-reviewer[bot]` `APPROVED` review (with zero `CHANGES_REQUESTED` — edited or unedited — from either bot on `live_pr_head`); IF `live_pr_head` has `CHANGES_REQUESTED` OR any GitHub API/queue read is unreadable (`UNKNOWN`), THE SYSTEM SHALL fail closed immediately (`failure`) without falling through to `agy-review.yml`; otherwise (diff mismatch, `> 300` files, stale/missing PR-head verdict) it SHALL run `agy-review.yml` (`formal_review: true`) on the queued commit and fail the queue entry on any non-`PASS` or unreadable state.
-- WHEN duplicate events or head updates arrive THEN concurrency groups and the controller SHALL dedupe per `(repository, pr_number, head_sha)` and cancel stale queued runs for superseded heads (never cancelling a `publish` job already in progress).
-- THE SYSTEM SHALL compute and emit per-run metrics (`fallback_rate`, `no_verdict_rate`, `queue_wait_seconds`, `time_to_valid_verdict_seconds`) in workflow job summaries/artifacts without exposing PR prose or secrets.
+- WHILE repository variable `AGY_REVIEW_GATE_ENABLED` is not `true` THE SYSTEM SHALL write no check run and dispatch nothing; manual dry runs SHALL use the read-only installation token.
+- WHEN a repository is configured `shadow` THE SYSTEM SHALL write only `independent-review-shadow`, which is never a required context.
+- IF a shadow repository lacks baseline protection (stale-review dismissal and strict checks or merge queue) THEN THE SYSTEM SHALL still evaluate and report it as `baseline missing, not enforceable` in shadow. Enforce mode SHALL keep refusing such a repository.
+- WHEN the controller finishes a tick THE SYSTEM SHALL publish metrics `fallback_rate`, per-provider no-verdict counts, `queue_wait_seconds` and `time_to_valid_verdict_seconds`, the last two populated from real timestamps.
 
 ## Out of scope
 
-- Modifying any GitHub workflow, GitHub App permission/installation, repository environment, or branch ruleset in Phase 0.
-- Approving, unblocking, force-merging, or auto-approving `mctlhq/mctl-gitops#3023`.
-- Promoting informational `agy-review` comments, green CI runs, owner MFA alone, or manual advisory receipts into GitHub PR approvals.
-- Replacing `mctl-api` `internal/reviewstore` / `mctl/review-evidence` (`mctlhq/.github#299`); this gate runs in GitHub Actions reusing `agy-review.yml` and `agy_review_publish.py` and remains orthogonal to `#299`.
-- Making Antigravity formal review mandatory on every PR when Claude already produced a valid `PASS`.
-- Migrating `mctl-agents` `run_shepherd.py` (`GATING_BOTS`) or `mctl-claude-remote` `pr-steward` in the first `.github` PR (tracked as explicit follow-up tasks in `tasks.md`).
+- Any permission, App installation, ruleset, classic protection, environment or repository-variable change. Each is listed as an owner-gated task with separate explicit authorization.
+- Approving, force-merging or re-reviewing mctlhq/mctl-gitops#3023 or any other live PR as part of this work.
+- A new reviewer workflow, a second publisher, or a per-PR always-on Agy caller (superseded draft #348).
+- Release-metadata-only exemptions (for example release-please PRs such as mctl-telegram#1481). They get the same gate. Any lighter policy is a separate owner decision.
+- Fixing the merge-queue BEHIND loop itself (#351); this proposal only coordinates with it.
+- Reworking #287 (closed, fixed by the classifier in `claude-review.yml`); this proposal only makes consumers run that fix.
+- Production activation (enforce mode) in any repository without a separate owner GO_IMPLEMENT and independent review.
 
 ## Open questions
 
-- **App installation scope beyond `mctl-gitops` (`UNKNOWN`):** `orgs/mctlhq/installations/181323208/repositories` returned 404 under a user OAuth token (requires App JWT). Live runs `43966181276` and `45647591593` prove `mctl-agy-reviewer` is installed on `mctl-gitops`; installation on the other 24 active org repos is `UNKNOWN`. Default: pilot on `mctl-gitops` only; owner explicitly adds non-pilot repos to `mctl-agy-reviewer` before Phase 4 cutover.
-- **Private repository branch rules (`UNKNOWN`):** `pfeifenpatenschaft-backend`, `mctl-rules`, `projects-mcp`, and `mctl-support` returned HTTP 403 on `rules/branches/main` (private-repo rulesets require GitHub Pro/Team) and had no visible classic protection. Default: `policy()` fails closed on any repo lacking observable `dismiss_stale_reviews` + (`strict` or `merge_queue`) + App-bound required check; owner verifies/upgrades or excludes those repos before onboarding.
-- **Classic branch protection review counting (`UNVERIFIED` outside Rulesets):** `mctl-agy-reviewer[bot]` `APPROVED` reviews were observed live on Ruleset-protected `mctl-gitops#2716` and `#2720`, but not yet verified live on classic-protected `mctl-telegram`, `mctl-loyalty`, or `mctl-academy`. Default: verify live on one classic-protected repo before Phase 4 migration.
-- **Disposition of open `mctlhq/.github#348` and `mctlhq/mctl-gitops#2605`:** Both PRs predate this design. Default: supersede `#348` (reusing its fail-closed `agy_formal_auto_dispatch.py` patterns inside the new `review_gate_controller.py`) and close/replace `#2605` after Phase 0 owner approval.
-- **Controller trigger cadence vs immediate dispatch:** Central `*/5` scheduled controller in `mctlhq/.github` needs zero secrets in caller repos; an optional `workflow_run` relay on target repo `main` (minting an `actions: write`-only dispatch token like `agy-formal-queue.yml`) cuts latency from 0-5 min to ~15s. Default: Phase 1-2 pilot uses central `*/5` + `workflow_dispatch` controller (no new caller secrets), with `workflow_run` wakeup relay added in Phase 3 if queue wait / time-to-verdict telemetry warrants it.
-- **Downstream automation (`run_shepherd.py` and `pr-steward`):** Today `run_shepherd.py:1660` sets `has_responded` from `claude[bot]` only and `pr-steward` configs default `review_bots: ["claude[bot]"]`. Default: file cross-repo follow-up issues in `mctl-agents` and `mctl-claude-remote` as part of tasks 9-10 so implementer PRs can accept `mctl-agy-reviewer[bot]` + `independent-review` once `mctl-gitops` pilot passes (`NEVER_MERGE_SERVICES` stays human-merged).
+- Does a `claude[bot]` or `mctl-agy-reviewer[bot]` `APPROVED` review count toward mctl-gitops' `required_approving_review_count: 1`? This is unobserved. mctl-gitops#3023 currently has zero reviews and is blocked. The pilot must observe this; nothing may assume it.
+- What actually satisfied merge of mctl-telegram#1485 and #1481 (zero reviews, merged by `mashkovd`)? The classic protection endpoint returned HTTP 403 to this run. `enforcement_level: non_admins` suggests admin enforcement exemption, but required-review settings and whether an admin override was used are unknown.
+- Is the reviewer App (ID 5732062, `mctl-agy-reviewer`) installed on mctl-telegram? Not observable with this run's token. The plan step 3 installed it on mctl-gitops only.
+- Current values of `AGY_REVIEW_GATE_ENABLED` and `AGY_REVIEW_GATE_REPOS` in `.github` (variables API returned HTTP 403). The `skipped` scheduled runs imply `AGY_REVIEW_GATE_ENABLED != 'true'`, but this is inferred, not read.
+- The ruleset `bypass_actors` field read back as `null` for mctl-gitops ruleset 18465404. That may be a permission-limited read rather than "no bypass actors".
+- Cause of the scheduled controller failure 45754471179 (2026-11-26 04:19 UTC, commit 768949d, before #415) was not determined.
+- Which isolated fixture repository should host the enforce-mode pilot? None was identified. The proposal assumes the owner designates or creates one.
+- Final mctl-gitops end state: keep both `agy-formal-review` and `independent-review` required (Agy always runs), or replace `agy-formal-review` with `independent-review` (Agy only on fallback). The proposal migrates additively and leaves the removal to an explicit owner decision.

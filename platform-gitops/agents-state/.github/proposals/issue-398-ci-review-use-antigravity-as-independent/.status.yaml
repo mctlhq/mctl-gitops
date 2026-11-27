@@ -1,6 +1,11 @@
 status: proposed
-updated_at: '2026-11-25T16:11:00Z'
-updated_by: agy
+updated_at: '2026-11-27T11:36:56Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-3e693ec2a8d3fdf5
+  trace_id: 1593befadc6a409ebf58ddf7dd7e66d5
+  agent: issue-investigator
+  version: ''
 source:
   type: github_issue
   repo: mctlhq/.github
@@ -8,3 +13,8 @@ source:
   url: https://github.com/mctlhq/.github/issues/398
 control:
   requires_human_approval: true
+context:
+  snapshot_id: cs-bd71c24268e628d0
+  content_hash: sha256:bd71c24268e628d04cfea58026018b19849ac2e505a8dcf06ef9ad40e988a0cb
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0

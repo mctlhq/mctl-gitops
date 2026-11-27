@@ -1,217 +1,309 @@
 # Design: issue-398-ci-review-use-antigravity-as-independent
 
-## Current state (source-pinned inventory, 2026-11-25)
+## Current state
 
-Every repository, workflow, ruleset, and app identity below was read directly from `origin/main` or live GitHub REST/GraphQL endpoints on 2026-11-25. Items that could not be read with the available token are explicitly marked `UNKNOWN`.
+Source pins: `mctlhq/.github` main `233dc60548ae628b3a9a6804d15fd85dd90adf48`
+(2026-11-26, merge of #415). `mctlhq/mctl-gitops` main `5c61adc1642a134bce26b1afd80f7c10e7711d4f`.
+`mctlhq/mctl-telegram` main `c74249b9cbd01c88a54e7f86e1431e0f4db116f2`. All read on
+2026-11-27.
 
-### 1. Shared review workflows (`mctlhq/.github` at `60e9db522f18299e73dac23fffedfe5b4ce81930`)
+### What already exists in `mctlhq/.github` (read in the clone)
 
-| File | Trigger / Role | Current Behaviour & Findings |
-| --- | --- | --- |
-| `.github/workflows/claude-review.yml` | `workflow_call`; outputs `self_edit` (`#384`) | Runs primary (`CLAUDE_CODE_OAUTH_TOKEN`) then fallback (`CLAUDE_CODE_OAUTH_TOKEN_2`). `Classify reviewer outcome` (lines 1453-1468) matches quota on `shape == "limit"` (final attempt unbilled) and executes `exit 0` -> false green (`#287`). Also fails open if execution output is missing/unreadable in `review-check`/`review-final`, if no review is posted (`#204`/`#1555`), or if `gate` skips `review` (`#287` sweep). |
-| `.github/workflows/agy-review.yml` | `workflow_call`; outputs `review_record` | Runs on `[self-hosted, agy-reviewer]` (two Mac minis) with NO App write key. Supports `formal_review: true` (`EXTRA_CONVENTIONS=""`, rejects binary `-	-	`, empty, or `> 150000` byte diffs, requires exact last-line `<!-- VERDICT: ... -->`, rejects `PASS` containing `\bP[12]\b`). `review_record` (`agy-review/v1`) lacks `provider` and full `diff_digest`. `formal_review: false` is informational comment only. |
-| `.github/workflows/agy-formal-review.yml` | `workflow_call` (`prepare` -> `review` -> `publish`) | Runs `prepare`/`publish` on `ubuntu-latest` in `environment: agy-review-publisher` (`main` branch policy). Resolves script commit from `referenced_workflows`, sparse-checks out `.github/scripts` from that SHA, mints short-lived `mctl-agy-reviewer` token (`contents: read`, `pull-requests: write`, `checks: write`, `administration: read`). |
-| `.github/workflows/agy-formal-dispatch.yml` | `workflow_dispatch` on `main` | Calls `./.github/workflows/agy-formal-review.yml` with `repository`, `pr_number`, `queue_head_ref`, `queue_head_sha`, `queue_base_sha`. |
-| `.github/scripts/agy_review_publish.py` | Trusted publisher (`prepare` / `publish` / `fail`) | Hardcodes `CHECK = 'agy-formal-review'`. `policy()` refuses unless target default branch has `dismiss_stale_reviews_on_push`, (`strict` OR `merge_queue` with `MERGE`), AND `agy-formal-review` bound to `integration_id == AGY_REVIEW_APP_ID`. Supports `merge_group` `carry_proof` (`#363`) for identical diffs only when PR head already has an App-owned non-carried `agy-formal-review` `success`. Does not yet carry `claude[bot]` `APPROVED` reviews or check `diff_digest` / author-reviewer separation. |
-| `.github/workflows/pr-review.yml` & `agy-pr-review.yml` | `.github` callers on `pull_request` | `pr-review.yml` calls local `./.github/workflows/claude-review.yml`; `agy-pr-review.yml` calls `agy-review.yml@main` with `blocking: false`. |
-| `.github/workflows/agy-canary.yml` | Daily cron probing `agy` defaults | Checks `agy models` and one-line prompt on `AGY_HOME_PRIMARY` / `AGY_HOME_FALLBACK`; distinguishes `absent`, `run-failed`, `unknown`. |
-| `.github/tests/test_*.py` | `workflow-tests.yml` unit + mutation suite | Covers `agy_review_publish.py` (including 20 mutations in `test_agy_formal_reviews.py`), `claude-review` dedup/classify/denials/selfedit/settle/usage, `agent-trailer`, `steward-usage`. |
-| Open PR `mctlhq/.github#348` | `ci/agy-formal-auto-dispatch` (`#347`) | Adds `agy-formal-auto-dispatch.yml` (`*/5` cron) + `agy_formal_auto_dispatch.py` (25 mutation-tested guards) + `head_sha` pinning in `agy-formal-dispatch.yml`. Currently waits on `claude[bot]` verdict rather than acting as Claude fallback. |
+- `.github/workflows/claude-review.yml` (1676 lines). The primary reviewer. Steps
+  `Classify outcome: PASS | BLOCKING_FINDINGS | NO_VERDICT_TRANSIENT |
+  NO_VERDICT_OTHER | STALE | SELF_EDIT` (lines 1648-1673) and the job output
+  `review_outcome` (lines 45-49, 329) implement the #287 fix. A usage-limit hit
+  now exits 1 and is marked `NO_VERDICT_TRANSIENT`.
+- `.github/workflows/agy-review.yml` (975 lines). The reusable Agy reviewer:
+  formal mode, full-diff validation, structured `review_result`.
+- `.github/workflows/agy-formal-review.yml`. The formal wrapper.
+  `.github/scripts/agy_review_publish.py` is the trusted publisher.
+  `ALLOWED_CHECKS = {'agy-formal-review', 'independent-review'}` and
+  `SHADOW_CHECK = 'independent-review-shadow'`. `carry_proof` handles merge-queue
+  commits from a trusted Agy head verdict or a trusted unedited `claude[bot]` PASS.
+- `.github/workflows/agy-formal-dispatch.yml`. The `workflow_dispatch` entrypoint
+  with inputs `repository, pr_number, head_sha, check_name, gate_mode,
+  queue_head_ref/sha, queue_base_sha`. Its `run-name` encodes repo, PR, head and
+  check, and the controller parses it with `RUN_TITLE_RE`.
+- `.github/workflows/review-gate-controller.yml`. Runs `*/5` plus
+  `workflow_dispatch` (`dry_run` default true, `force_rerun`). The job runs only on
+  `mctlhq/.github` `refs/heads/main`, in environment `agy-review-publisher`. It runs
+  live only when `vars.AGY_REVIEW_GATE_ENABLED == 'true'`, with
+  `AGY_REVIEW_GATE_REPOS` defaulting to `mctlhq/mctl-gitops:shadow`. A
+  write-scoped App token is minted only when live. Otherwise it mints a read-only one.
+- `.github/scripts/review_gate_controller.py` (968 lines). Relevant pieces:
+  - `parse_policy`: reads rulesets plus classic protection; derives `strict`,
+    `stale_dismissal`, `queued`, and `required_bound` (context
+    `independent-review` with `integration_id` equal to the App ID).
+  - `evaluate_repo`: raises `Unknown` (no decision at all) unless the policy has
+    stale dismissal and (strict or queue), in shadow and enforce alike. It also
+    raises in enforce mode unless `required_bound` holds. It cancels superseded
+    dispatch runs whose `publish` has not started. It writes `independent-review`
+    or `independent-review-shadow` via `upsert_check_run` with external id
+    `gate/v1:<repo>:<pr>:<head>:<mode>:<digest>`.
+  - `decide_pr`: checks blocking precedence first
+    (`review_trust.has_blocking_changes_requested`). It then checks trusted Claude
+    PASS (`review_trust.verify_claude_pass`). It then classifies the latest
+    completed Claude run (`classify_claude_run`), which keys off the `Classify outcome:`
+    step names. After that come reuse (`find_qualifying_agy_reuse`), the terminal
+    failure guard (`has_terminal_fallback_failure`), dedupe of active dispatches, and
+    `MAX_ACTIVE_FORMAL_RUNS = 2`.
+  - `Metrics`: `queue_wait_seconds` and `time_to_valid_verdict_seconds` are
+    declared and serialized but never appended to anywhere in `.github/scripts`.
+- `.github/scripts/review_trust.py`: `caller_allowlist_for(repo)` expects the
+  consumer caller at `.github/workflows/claude-review.yml`.
+  `is_trusted_reusable_ref` accepts `...claude-review.yml@main`, or `@<sha>` when
+  the ref equals the resolved SHA. It does not check that the SHA is reachable from
+  `.github` main.
+- `.github/tests/test_review_gate_controller.py` (17 tests) and
+  `test_agy_formal_reviews.py` (60 tests) run under `workflow-tests.yml`.
+- `docs/plans/agy-formal-reviews.md` documents the App trust boundary, the
+  activation steps, `carry_proof`, and the controller section for #398. It is
+  marked "NOT LIVE".
 
-### 2. GitOps callers, rulesets, and live failures (`mctlhq/mctl-gitops` at `9bb8076f9a69d72bfe9cd5c60e76747e973ab3a6`)
+### Deployed state checked
 
-- `.github/workflows/claude-review.yml`: pins `mctlhq/.github/.github/workflows/claude-review.yml@84f51e2d83868aa1205e41c5ad6684d8666b5797` (pre-#381/#382/#384, already emits `Reviewed head= base=`).
-- `.github/workflows/agy-review.yml`: calls `@main` with `blocking: false` (informational).
-- `.github/workflows/agy-formal-queue.yml`: triggers on `merge_group: [checks_requested]`, mints `mctl-gitops-dispatch` (`app-dispatch-queue` environment restricted to `gh-readonly-queue/main/*`), dispatches `agy-formal-dispatch.yml@main` in `mctlhq/.github`.
-- Ruleset `18465404` (`main-protection`, updated `2026-11-16T23:09:46+01:00`):
-  - `required_approving_review_count: 1`, `dismiss_stale_reviews_on_push: true`, `require_extra_approval_for_unattributed_changes: true`, `require_code_owner_review: false`.
-  - `required_status_checks` (`strict: false`): `cloudflare-plan`, `reserved-hosts`, `validate` (all `integration_id: 15368`). `agy-formal-review` is absent.
-  - `merge_queue`: `MERGE`, `ALLGREEN`, group size 1, `check_response_timeout_minutes: 120`.
-  - `bypass_actors`: `DeployKey` (`always`) only (`gitops-bump.yaml` / `release-deploy.yaml`).
-- **Live `merge_group` failure observed today:** Run `45647591593` (2026-11-25T15:39:15Z, PR `#3024`, queue head `9bb8076f9a69d72bfe9cd5c60e76747e973ab3a6`) failed in `formal / prepare` at `agy_review_publish.py:192` (`Refused: formal approval needs stale-review dismissal, strict checks or a merge queue, and the App-bound agy-formal-review check`) because `agy-formal-review` is no longer required in ruleset `18465404`.
-- **Live reproducer `mctlhq/mctl-gitops#3023`:** Head `3e60a75cbad7d8cf70934288012c0aa2144c9180`; Claude run `45643936821` concluded `SUCCESS` after usage-limit comment `7166702352` (`reviews: []`); informational Agy run `45643936946` commented `PASS` (`7166721240`); PR stays blocked.
-- **Historical live proof of formal `mctl-agy-reviewer`:** On 2026-11-16, `agy-formal-dispatch.yml` succeeded on `mctl-gitops#2720` (PR head `43966181276` -> `mctl-agy-reviewer[bot]` `APPROVED` at `22:04:16Z`; queue `43966531006` `success`) and `#2716` (`43952192441` `APPROVED`; queue `43959611609` / `43961068128` `success`).
-- Open draft PR `mctlhq/mctl-gitops#2605` (`ci/agy-formal-review-pilot`) stages an always-on `pull_request_target` caller; inactive.
+- `gh api repos/mctlhq/.github/actions/workflows/review-gate-controller.yml/runs`:
+  scheduled runs 45941981695, 45907862998 and 45834994317 (2026-11-26/27) were all
+  `skipped`. Manual run 45821382776 (2026-11-26 12:37, dry run) succeeded. It
+  evaluated `mctlhq/mctl-gitops#3032` in `shadow` as `SELF_EDIT -> dispatch` (dry,
+  nothing dispatched), with `fallback_rate 0.5`. Scheduled run 45754471179
+  (2026-11-26 04:19, commit 768949d) failed; the cause was not determined.
+- `gh api repos/mctlhq/.github/actions/variables`: HTTP 403. The values of
+  `AGY_REVIEW_GATE_ENABLED` and `AGY_REVIEW_GATE_REPOS` are unknown (only inferred
+  from the skipped runs).
+- `gh api repos/mctlhq/mctl-gitops/rules/branches/main`: active ruleset 18465404
+  `main-protection`, updated 2026-11-26T14:30:10Z. It requires 1 approving review,
+  with `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: false`
+  and `require_extra_approval_for_unattributed_changes: true`. Required checks are
+  `cloudflare-plan`, `reserved-hosts`, `validate` (integration 15368, GitHub
+  Actions) and `agy-formal-review` (integration 5732062, the reviewer App).
+  `strict_required_status_checks_policy: false`. The merge queue uses `MERGE`,
+  groups of one, `ALLGREEN`, and a 120 min check timeout. Ruleset 14564982 `main` is
+  disabled. `bypass_actors` read back as `null` (may be permission-limited).
+  Classic protection: HTTP 403, unknown. `independent-review` is not required.
+- mctl-gitops callers (contents API at main):
+  - `claude-review.yml` uses `claude-review.yml@84f51e2d...`, which is 59 commits
+    behind `.github` main and contains zero `Classify outcome` steps.
+  - `agy-review.yml` uses `agy-review.yml@main` with `blocking: false`
+    (informational).
+  - `agy-formal-queue.yml` runs on `merge_group`. It mints a `DISPATCH_APP` token
+    (environment `app-dispatch-queue`) and dispatches `agy-formal-dispatch.yml` with
+    queue inputs and the default `check_name=agy-formal-review`.
+- `gh api .../agy-formal-dispatch.yml/runs` (latest 30): PR-head runs titled `@ any`
+  were triggered manually by `mashkovd`. Head-pinned runs were triggered by
+  `mctl-gitops-dispatch[bot]` (the queue path). So the required `agy-formal-review`
+  on PR heads is currently produced by owner-dispatched formal Agy reviews. It is
+  always-on, not a fallback.
+- mctl-gitops#3023: open, head `3e60a75cbad7d8cf70934288012c0aa2144c9180`,
+  base `e305a4c83374d17cd18630e1f5f4e8c6a0f228b3`, auto-merge on, author
+  `mashkovd`, zero reviews, no `agy-formal-review` check run on the head. Claude
+  run 45643936821 concluded `success` via `@84f51e2`, so the controller would
+  classify it `NO_VERDICT_OTHER` and would not fall back.
+- `gh api repos/mctlhq/mctl-telegram/rules/branches/main`: no rules; rulesets list
+  empty. `branches/main` summary shows classic protection with required checks
+  `test`, `docker` and `product-updates` (app 15368) and `enforcement_level:
+  non_admins`. Full classic protection (required reviews, strict, stale dismissal)
+  returned HTTP 403, so it is unknown.
+- mctl-telegram callers: `claude-review.yml@1a23d779...` (163 commits behind,
+  zero `Classify outcome` steps, `sensitive-paths` set). `agy-review.yml@main` is
+  informational. There is no formal or queue caller.
+- mctl-telegram#1485 (head `176cb7012e73...`) and #1481 (release PR by
+  `mctl-agents[bot]`) both merged on 2026-11-26, merged by `mashkovd`, with zero
+  reviews recorded. Whether that reflects no review requirement or an admin
+  override is unknown.
+- Reviewer App installation on mctl-telegram: not observable with this run's
+  token. Unknown.
+- `$MCTL_GITOPS_ROOT` services/tenants and the mctl MCP tools were not used. This
+  change concerns GitHub Actions and branch protection, not a deployed tenant
+  service, so no tenant, hostname or service config is asserted.
 
-### 3. Org-wide repository inventory (25 active repositories)
+### Issue coordination
 
-| Group | Repositories | Protection / Rules Observed | Claude / Agy Callers Observed |
-| --- | --- | --- | --- |
-| Ruleset `1` approval + `dismiss_stale` + `merge_queue` | `mctl-gitops` | Ruleset `18465404`; required checks `cloudflare-plan`, `reserved-hosts`, `validate` (`15368`) | `claude-review.yml` (`@84f51e2d`), `agy-review.yml`, `agy-formal-queue.yml` |
-| Ruleset `1` approval + `dismiss_stale` + `require_code_owner_review` | `mctl-agents` | Ruleset `18455891`; required checks include `claude-review / review` (unpinned app) | `claude-review.yml` (`@2ae26326`), `agy-review.yml` |
-| Ruleset `1` approval + `dismiss_stale` (public) | `mctl-portal`, `mctl-web`, `mctl-api`, `mctl-agent`, `mctl-docs`, `mctl-design`, `mctl-claude-remote`, `mctl-pairdesk`, `seerrsense`, `portfolio`, `mctl-alice`, `newton-mcp-gateway`, `mctl-glovo`, `bridge-step0-sandbox` (14 repos) | Rulesets active (`strict: false`, `require_extra_approval_for_unattributed_changes: true`); build/lint/validate checks required | 13 have `claude-review.yml` (SHAs range `25478e95`..`648bf5eb`); 9 also have `agy-review.yml`; `bridge-step0-sandbox` has neither |
-| Ruleset without PR approval rule | `mctl-coolify-mcp` | Deletion, non-FF, build/snapshot checks only | Neither workflow |
-| Classic branch protection only (`rules: []`) | `mctl-telegram` (`approvals=1, dismiss=true, strict=true`), `mctl-academy` (`approvals=1, dismiss=true`), `mctl-loyalty` (`approvals=1, dismiss=true`), `.github` (`approvals=0, strict=false`, `Analyze (actions)`) | Classic protection active | All 4 wire Claude (`pr-review.yml` in `.github`); 3 wire Agy (`agy-pr-review.yml` in `.github`, `mctl-loyalty` does not) |
-| Private repos (`rules` HTTP 403) | `pfeifenpatenschaft-backend`, `mctl-rules`, `projects-mcp`, `mctl-support` | `rules/branches/main` HTTP 403 (`Upgrade to GitHub Pro...`); classic protection `NONE` -> effective rules `UNKNOWN` | 3 wire `claude-review.yml` (`pfeifenpatenschaft-backend` also `agy-review.yml`); `mctl-rules` has neither |
+#287 is closed (classifier merged). #347 is closed. #351 (merge-queue BEHIND loop
+on head-bound `agy-formal-review`) is open. #348 (always-on per-PR draft) is open
+but superseded by the controller per the plan doc. #400 and #415 delivered the
+controller.
 
-### 4. GitHub App identities and environments
+### Gap summary
 
-| Identity / Environment | ID / Scope | Permissions / Secrets Observed | Unknown / Gaps |
-| --- | --- | --- | --- |
-| `claude[bot]` (`claude`) | User ID `209825114`, App inst `109526686` (`all`) | `checks: write`, `pull_requests: write`, `issues: write`, `contents: write`, `workflows: write` | Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`, `_2`) live in repo/org Actions secrets |
-| `mctl-agy-reviewer[bot]` (`mctl-agy-reviewer`) | App ID `5732062`, Bot ID `355912856`, Inst `181323208` (`selected`) | `administration: read`, `checks: write`, `contents: read`, `metadata: read`, `pull_requests: write`; no bypass role | `mctl-gitops` verified installed; installation on other 24 repos is `UNKNOWN` (404 on app-only endpoint) |
-| `mctl-gitops-dispatch` | Inst `179684760` (`selected`) | `actions: write`, `metadata: read` | Key in `mctl-gitops` env `app-dispatch-queue` (`gh-readonly-queue/main/*`) |
-| `mctl-org-read` | Inst `179684981` (`all`) | `actions: read`, `contents: read`, `issues: read`, `metadata: read` | Available if central controller needs read access to private repos |
-| `mctlhq/.github` env `agy-review-publisher` | Protected `branch_policy: main` | Holds `AGY_REVIEW_APP_ID=5732062` and `AGY_REVIEW_APP_PRIVATE_KEY` | Ready for central controller reuse |
-| `mctl-gitops` env `agy-review-publisher` | Protected `branch_policy: main` | Empty (no vars, no secrets) | Intentionally left unpopulated under central controller design |
-
-### 5. Downstream consumers of review state
-
-- `mctl-agents` `orchestrator/run_shepherd.py`: `REVIEW_BOT = "claude[bot]"`, `GATING_BOTS = ("claude[bot]", "chatgpt-codex-connector[bot]")`; `has_responded` (line 1660) tracks `claude[bot]` only; `NEVER_MERGE_SERVICES = frozenset({"mctl-academy", "mctl-gitops", ".github"})`.
-- `mctl-claude-remote` `skills/pr-steward/SKILL.md`: `review_bots[]` defaults to `["claude[bot]"]`, gates merges on `approved_at_head` + `checks_green` excluding the review workflow's own check.
+| # | Gap | Effect today |
+|---|-----|--------------|
+| G1 | Both consumers pin a Claude reusable without the classifier | Quota runs look like `NO_VERDICT_OTHER`; the fallback can never fire, which fails closed but is useless |
+| G2 | Controller not live; `independent-review` not required anywhere | The gate exists only as shadow dry runs |
+| G3 | mctl-gitops requires always-on `agy-formal-review`, dispatched by hand | Agy runs on every PR; contradicts "fallback only"; stalls when the owner does not dispatch (#3023) |
+| G4 | Queue caller always dispatches `check_name=agy-formal-review` | `independent-review` would never appear on queue commits; interacts with #351 |
+| G5 | `is_trusted_reusable_ref` accepts any SHA, not only SHAs reachable from main | A caller could pin an unmerged `.github` branch commit and still be "trusted" |
+| G6 | `queue_wait_seconds` and `time_to_valid_verdict_seconds` never populated | Required metrics are missing |
+| G7 | `evaluate_repo` refuses even shadow evaluation without baseline protection | mctl-telegram cannot even be observed without first changing protection |
+| G8 | Telegram review policy and App installation unknown | Enforcement there cannot be designed on evidence yet |
 
 ## Proposed solution
 
-### 1. Structured outcome contract (`review_outcome/v1`)
+Close G1-G8 in the smallest order that keeps everything fail-closed. Reuse the
+merged controller, dispatcher, wrapper and publisher unchanged except for the
+targeted hardening below. Every step that changes a permission, an installation,
+a variable or a ruleset is an owner-only step with its own explicit
+authorization. It is never bundled into a code PR.
 
-Every gate evaluation for subject `S = (repository, pr_number, base_ref, head_sha, diff_digest)` (plus `reviewed_base_sha`, or `merge_group` `(repository, pr_number, queue_head_ref, queue_head_sha, queue_base_sha)`) produces one deterministic state:
+### 1. Evidence matrix (docs only)
 
-| State | Meaning | Triggers Agy Fallback? | Gate Check (`independent-review`) | GitHub Review Action |
-| --- | --- | --- | --- | --- |
-| `PASS` | Primary (`claude[bot]`) or verified fallback (`mctl-agy-reviewer[bot]`) completed full review of exact `S` with zero P1/P2 findings | No (if Claude); already satisfied (if formal Agy) | `success` | `claude[bot]` or `mctl-agy-reviewer[bot]` `APPROVE` at `head_sha` (PR mode); none in `merge_group` |
-| `BLOCKING_FINDINGS` | Trusted reviewer reported P1/P2 findings on exact `S` (`CHANGES_REQUESTED` / `FAIL:P1`/`P2`) | **Never** (even if concurrent/informational Agy passes) | `failure` | `CHANGES_REQUESTED` at `head_sha` |
-| `NO_VERDICT_TRANSIENT` | Claude primary and fallback tokens exhausted allowlisted transient limit/unavailable/timeout with no valid verdict on `S` | **Yes** (reuse valid formal Agy on exact `S` if present; else dispatch `agy-formal-review.yml`) | `in_progress` while Agy formal runs; `failure` if fallback cannot start or fails | None until Agy formal publishes valid `PASS` or `FAIL` |
-| `SELF_EDIT` | Trusted `claude-review` deferred review (`self_edit=true`) because PR touched `.github/workflows/` | **Yes (main-only trusted review)** via `agy-formal-review.yml` on `mctlhq/.github` `main` (ignoring PR workflow edits) | `in_progress` while formal Agy runs; never bypasses review | Formal `mctl-agy-reviewer[bot]` `APPROVE` or `REQUEST_CHANGES` on reviewed diff |
-| `NO_VERDICT_OTHER` | Billed Claude failure, refusal, `skip-paths` without policy, or Agy non-transient failure / malformed / binary / oversized / contradictory / missing verdict | **Never** | `failure` | None (or `REQUEST_CHANGES` if Agy returned explicit `FAIL:P1`/`P2`) |
-| `STALE` | Live `head_sha`, `base_ref`, `(merge_base, head_sha)` `diff_digest` (or `base_sha` under `strict: true`), or `merge_group` ref changed before/during evaluation or publication | Cancel superseded queued run; evaluate new head | Existing head check stays non-success; dismiss race approval | Dismiss if posted during race; non-conflicting `base_sha` advances under `strict: false` with unchanged `diff_digest` remain valid |
-| `UNKNOWN` | Any failed/partial/malformed API read, missing/corrupt execution file, ambiguous run source, or unreadable branch policy | **Never** (retry read in controller without approving) | Leave non-success (`failure` on publisher failure; do not mark `success`) | None |
+Add a section `Evidence matrix (2026-11-27)` to `docs/plans/agy-formal-reviews.md`
+with the per-repository table from "Deployed state checked". It covers the
+publisher identity, required checks with integration IDs, the review requirement,
+the merge queue, caller pins, observed and unknown items, and source SHAs. Each row
+is marked `observed` / `unknown (reason)`. This is the first deliverable the owner
+asked for, and later tasks update it rather than restate it.
 
-### 2. Coordinated `#287` fix and explicit outcome signals in `.github/workflows/claude-review.yml`
+### 2. Shared-code hardening in `mctlhq/.github` (one PR, independent review)
 
-Fix all five false-green paths identified in `#287` in one cohesive update (no separate duplicate `#287` patch):
+- **G5 ancestry:** in `review_trust.is_trusted_reusable_ref`, keep the current
+  shape check and add an injected `is_on_main(sha)` predicate. The controller and
+  publisher implement it via `GET repos/mctlhq/.github/compare/<sha>...main` with
+  `status in {'ahead','identical'}`. Any error is untrusted (raise
+  `TrustError`/`Unknown`). `@main` keeps its meaning (resolved SHA must be on
+  main). Cache per tick.
+- **G1 diagnosability:** in `classify_claude_run`, when the review job has none of
+  the `Classify outcome:` steps, return `NO_VERDICT_OTHER` with reason
+  `caller pinned before outcome classifier (<referenced sha>)`. The behaviour is
+  unchanged (fail, no dispatch), but the summary tells the operator to bump the
+  caller instead of suggesting a model problem.
+- **G7 shadow observation:** in `evaluate_repo`, if `gate_mode == 'shadow'` and
+  the baseline is missing, record `baseline missing, not enforceable` in metrics,
+  continue evaluating, and add that text to the `independent-review-shadow` check
+  summary. Enforce mode is unchanged and still raises. Shadow never dispatches a
+  live formal run that would post an App `APPROVED` review. In shadow,
+  `agy-formal-dispatch` runs with `gate_mode=shadow`, and `agy_review_publish`
+  already maps that to `independent-review-shadow`. The review-publishing path is
+  kept. Task 2 adds a test that the shadow path posts no `APPROVE` review in a
+  repository where the App review would count. If the publisher cannot guarantee
+  that, shadow for that repository stays dry-run only.
+- **G6 metrics:** `time_to_valid_verdict_seconds` is the time from the head commit's
+  first matching Claude run `created_at` to the qualifying PASS review's
+  `submitted_at`, or to the reused Agy check's `completed_at`.
+  `queue_wait_seconds` is the time from the dispatch run `created_at` to `run_started_at`
+  for active and completed dispatches seen this tick. No new API calls beyond
+  those already paged.
+- **G4 queue check name:** document in `agy-formal-dispatch.yml` and the plan
+  that a queue caller for an `independent-review` repository passes
+  `check_name=independent-review`. `agy_review_publish.py` already accepts it
+  (`ALLOWED_CHECKS`), and `carry_proof` already carries a trusted Claude PASS, so no
+  publisher change is needed. Add a test for exactly that path. Coordinate with
+  #351: this change must not alter the head-bound `agy-formal-review` behaviour
+  #351 is fixing, and it adds a cross-link only.
 
-1. **Non-zero exit on transient quota exhaustion:** In `Classify reviewer outcome`, keep posting the explanatory transient PR comment for `shape = "limit"`, emit explicit classification outputs/markers (`outcome=NO_VERDICT_TRANSIENT`), and end with `exit 1` (`::error::`) instead of `exit 0`.
-2. **Fail closed on missing/unreadable execution output (`review-check` and `review-final`):** Treat absent or non-JSON `$OUT` or missing `result` entry as `failed=true` (`UNKNOWN` / `NO_VERDICT_OTHER`) rather than defaulting `is_error="false"`.
-3. **Verify a terminal review was posted:** Add step `Verify terminal verdict posted` after `review-final` (when `failed != 'true'` and not `selfedit`/`stale`, **including `dedup == 'true'`**). It queries `pulls/$PR_NUMBER/reviews` (`--paginate`) and GraphQL edit status for either ANY `claude[bot]` `CHANGES_REQUESTED` review on `HEAD_SHA` (`BLOCKING_FINDINGS`, even if edited or missing markers) OR an unedited `claude[bot]` `APPROVED` review on `HEAD_SHA` carrying `Reviewed head=$HEAD_SHA base=$reviewed_base` where `reviewed_base == $BASE_SHA` OR (when `dedup == 'true'` after a non-conflicting `base_sha` advance) `pr_diff_digest_v1(merge_base($reviewed_base, $HEAD_SHA), $HEAD_SHA) == pr_diff_digest_v1(merge_base($BASE_SHA, $HEAD_SHA), $HEAD_SHA)`. If absent or unreadable, fail the job (`NO_VERDICT_OTHER` / `UNKNOWN`) so permission denials (`#204`/`#1555`) or edited/tampered `dedup` reviews never go green. When `gate` sets `skip == 'true'`, emit `Classify outcome: NO_VERDICT_OTHER` (non-`PASS`).
-4. **Machine-readable step markers + `workflow_call` outputs:** Expose `review_outcome`, `reviewed_head`, `reviewed_base` on `jobs.review` and `on.workflow_call.outputs`, backed by dedicated deterministic outcome-gate steps (`Classify outcome: PASS`, `Classify outcome: BLOCKING_FINDINGS`, `Classify outcome: NO_VERDICT_TRANSIENT`, `Classify outcome: NO_VERDICT_OTHER`, `Classify outcome: STALE`, `Classify outcome: SELF_EDIT`) so a default-branch controller can inspect exact `steps[]` state via the GitHub Jobs API without trusting PR comments or PR artifacts.
-5. **Preserve `#384` self-edit handling without workflow-PR deadlock:** On `self_edit=true`, `claude-review / review` remains non-failing with `self_edit=true` and `Classify outcome: SELF_EDIT` (never running `claude` with PR-modified workflow context). Because ruleset `18465404` has `bypass_actors: DeployKey` only, classifying `SELF_EDIT` as dead-end `failure` would permanently block `.github/workflows/` PRs (including pin bumps). Instead, the central controller treats a trusted `SELF_EDIT` as an explicit trigger for `agy-formal-review.yml` executing purely from `mctlhq/.github` `main` (never reading PR-head workflows or caller `conventions`, sandboxed with zero repo execution), ensuring every workflow diff receives an independent formal review.
+No change to the outcome vocabulary, the reuse rules, the terminal-failure guard,
+the cancellation of stale runs, `MAX_ACTIVE_FORMAL_RUNS`, App permissions or the
+controller's trigger allowlist (`NO_VERDICT_TRANSIENT`, allowlisted `timed_out` /
+`startup_failure`, trusted `SELF_EDIT`).
 
-### 3. Trusted fallback orchestrator (`review-gate-controller.yml` + `.github/scripts/review_gate_controller.py`)
+### 3. Consumer caller bumps (one PR per consumer repo, reviewed there)
 
-Keep all credentials (`AGY_REVIEW_APP_PRIVATE_KEY` in `agy-review-publisher`) centralized in `mctlhq/.github` `main`:
+- mctl-gitops `.github/workflows/claude-review.yml`: bump the pin from `84f51e2`
+  to the merged `.github` SHA from step 2. Inputs and secrets are unchanged.
+- mctl-telegram `.github/workflows/claude-review.yml`: bump from `1a23d779` to
+  the same SHA. Keep `sensitive-paths`. Review the 163-commit delta for input
+  changes before merging.
+- These are ordinary workflow edits. The Claude self-edit path (`SELF_EDIT`)
+  applies to these PRs by design, and they are reviewed by the existing process.
 
-- **Entry workflow (`.github/workflows/review-gate-controller.yml`):**
-  - Triggers ONLY on `schedule: '*/5 * * * *'` (safety sweep across configured target repos, superseding PR `#348`'s `agy-formal-auto-dispatch.yml`) AND `workflow_dispatch` (accepting untrusted hint `repository`, optional `pr_number`, `dry_run`, optional `gate_mode` defaulting to `""`/`config` to use each repository's configured mode on `main` — allowing explicit `gate_mode=shadow` only as a downgrade and never promoting a `shadow`-configured repo to `enforce` — and `force_rerun: boolean` defaulting to `false`), both executing strictly on `refs/heads/main`. (`workflow_call` is intentionally omitted because `environment: agy-review-publisher` enforces `branch_policy: main` and would reject `pull_request`-ref callers such as `pr-review.yml`; `.github`'s own PRs are evaluated from `main` via `schedule` / `workflow_dispatch` in shadow/reporting mode.)
-  - Runs on `ubuntu-latest` inside `environment: agy-review-publisher` (`main` only), checks out `.github/scripts` from verified `referenced_workflows` SHA, mints short-lived `mctl-agy-reviewer` token (`contents: read`, `pull-requests: write`, `checks: write`, `administration: read`) for the target repository (and uses `mctl-org-read` / `GITHUB_TOKEN` only for read-only discovery).
-  - Never checks out PR code and never reads PR titles, PR bodies, PR branch names, PR artifacts, or `github-actions[bot]` issue comments as verdict or trigger evidence.
-- **Controller decision algorithm per open non-draft same-repo PR targeting `default_branch`:**
-  1. Compute `target_check = "independent-review-shadow" if gate_mode == "shadow" else "independent-review"` (so `shadow` mode never writes to or leaves `independent-review` stuck `in_progress`). Read live PR (`head_sha`, `base_sha`, `base_ref`, `author`), branch rules/classic protection (`strict` vs non-strict), paginated `pulls/{n}/reviews` + GraphQL edit metadata, paginated `commits/{head_sha}/check-runs`, and active/completed `review-gate` / `agy-formal-dispatch` workflow runs. Compute current `live_diff_digest` (`pr_diff_digest_v1` over live `(merge_base(live_base_sha, head_sha), head_sha)`). Any failed, partial, or `total_count`-mismatched read returns `UNKNOWN` and changes nothing.
-  2. **Check `claude[bot]` / `mctl-agy-reviewer[bot]` blocking reviews first, then `claude[bot]` `APPROVED` on `(head_sha, base_ref)`:**
-     - **Fail-closed blocking precedence:** Before any `APPROVED` or caller-trust filter, inspect all `claude[bot]` and `mctl-agy-reviewer[bot]` `CHANGES_REQUESTED` reviews on `head_sha` (whether edited or unedited, and regardless of body markers). Any such `CHANGES_REQUESTED` -> `BLOCKING_FINDINGS`: publish/ensure `target_check` = `failure` (never dispatch Agy; ignore any Agy `PASS`).
-     - **Approval caller-trust guard:** For `APPROVED` reviews (`claude[bot]` on `head_sha`), apply strict anti-tampering filters: locate the matching `claude-review` workflow run associated with the PR/`head_sha` (including `@claude review` `issue_comment` triggers matched by PR/review commit linkage rather than relying solely on `workflow_run.head_sha`), require `run.path` to match the repository's allowlisted caller workflow path (e.g., `.github/workflows/pr-review.yml` on `mctlhq/.github`, `.github/workflows/claude-review.yml` on other target repos), require `referenced_workflows` to name a trusted `mctlhq/.github/.github/workflows/claude-review.yml@<trusted_sha>`, AND verify the PR did not modify `run.path` relative to its merge base (`blob(run.path, head_sha) == blob(run.path, merge_base(live_base_sha, head_sha))` and that merge-base blob matches an allowlisted default-branch workflow revision — preventing a PR from adding/altering any workflow caller while avoiding spurious rejections on unchanged open PRs under `strict: false` when `default_branch` updates the workflow pin).
-     - Match a parsed `Reviewed head=<head_sha> base=<reviewed_base_sha>` **unedited** `claude[bot]` `APPROVED` review as current-subject when `head == head_sha` AND (`reviewed_base_sha == live_base_sha` OR (`strict == false` AND live `compare(reviewed_base_sha...head_sha)` `pr_diff_digest_v1 == live_diff_digest`, proving `main` advances did not alter the PR's three-dot reviewed diff; otherwise mark `STALE`)).
-     - A qualifying unedited `claude[bot]` `APPROVED` (with zero `CHANGES_REQUESTED` on `head_sha`) -> `PASS`: publish/ensure `target_check` = `success` (`Satisfied by primary reviewer claude[bot] for <head_sha>`). Note: for older pinned callers still emitting pre-`Reviewed head=` verdicts, require pin bump to the updated `claude-review.yml` before `enforce` cutover.
-  3. **Check whether Claude run requires trusted Antigravity review (`NO_VERDICT_TRANSIENT` or `SELF_EDIT`):**
-     - Locate completed `claude-review` workflow runs associated with the PR/`head_sha` on the target repo (matching both `pull_request` runs by `head_sha` and `issue_comment` reruns via verified PR/head association rather than `workflow_run.head_sha`).
-     - For `NO_VERDICT_TRANSIENT`: verify `run.path` is in the repository's allowlisted caller paths, `referenced_workflows` names `mctlhq/.github/.github/workflows/claude-review.yml@<trusted_sha>`, AND `blob(run.path, head_sha) == blob(run.path, merge_base(live_base_sha, head_sha))` (matching an allowlisted default-branch revision), with steps showing `Classify outcome: NO_VERDICT_TRANSIENT` (`conclusion == "success"`) OR `review` job concluded `timed_out` / `startup_failure` with no `self_edit` and no `claude[bot]` verdict.
-     - For `SELF_EDIT`: verify `run.path` is in the repository's allowlisted caller paths, `referenced_workflows` names `mctlhq/.github/.github/workflows/claude-review.yml@<trusted_sha>`, and `review` job steps show `Classify outcome: SELF_EDIT` (`conclusion == "success"`) with zero `claude[bot]` `CHANGES_REQUESTED`. (Even if the PR modified `.github/workflows/*`, entry-workflow modification is expected on `SELF_EDIT` and execution is strictly handed off to `mctlhq/.github` `main`'s `agy-formal-review.yml`, which executes zero PR workflow code.)
-     - Otherwise (still queued/in_progress -> `target_check = in_progress` / wait; `NO_VERDICT_OTHER` -> `target_check = failure` without fallback; missing Claude run -> wait/pending).
-  4. **Reuse, preserve terminal failure, or dispatch Antigravity formal review (only on `NO_VERDICT_TRANSIENT` or `SELF_EDIT`, with zero `claude[bot]` `CHANGES_REQUESTED`):**
-     - **Concurrent formal reuse check:** Inspect `mctl-agy-reviewer[bot]` reviews on `head_sha` and `target_check` (`independent-review` / `independent-review-shadow`) / `agy-formal-review` non-carried check-runs by `app_id == 5732062`.
-       - In `gate_mode == "enforce"`: reuse ONLY IF an unedited formal `mctl-agy-reviewer[bot]` PR review (`<!-- agy-formal:<run>:<attempt>:<head_sha>:<VERDICT> -->`) exists from a verified `agy-formal-review.yml` run for `(repo, pr, base_ref, head_sha)` with matching `live_diff_digest` (and zero `CHANGES_REQUESTED`); a `shadow` check-run never satisfies `enforce`.
-       - In `gate_mode == "shadow"`: treat EITHER that qualifying formal `mctl-agy-reviewer[bot]` PR review OR a completed non-carried `independent-review-shadow` check-run with `conclusion == "success"` (owned by `app_id == 5732062`, backed by a verified `agy-formal-review.yml` run for `(repo, pr, base_ref, head_sha)` with matching `live_diff_digest` and zero `CHANGES_REQUESTED`) as already satisfied for `shadow` reporting, avoiding `*/5` re-dispatch loops unless `force_rerun == true`.
-       - Never reuse informational `agy-review` comments (`formal_review: false`).
-     - **Terminal fallback failure guard (no infinite `*/5` re-dispatch loop):** Inspect completed `agy-formal-dispatch.yml` runs and completed non-carried `target_check` check-runs by `app_id == 5732062` scoped to `(repo, pr, head_sha, gate_mode, target_check)` (matching `external_id` / current `live_diff_digest`, so a `shadow` failure never suppresses a later `enforce` run). If a completed formal fallback run (excluding `UNKNOWN` transient API/runner errors) for `(subject, gate_mode, target_check)` reached terminal `failure` (`NO_VERDICT_OTHER`, binary/`>150000`-byte diff, `FAIL:P1`/`P2`, contradictory output, or quota exhaustion), preserve `target_check = failure` and **do NOT re-dispatch** until `head_sha` or `live_diff_digest` changes or a manual `workflow_dispatch` explicitly sets `force_rerun: true` (automated relays leave `force_rerun` unset/`false`).
-     - **Dedupe / stale cancellation:** If an `agy-formal-dispatch.yml` run is already active for `(repo, pr, head_sha)`, wait (`target_check = in_progress`). Cancel active dispatch runs for older heads of the same PR unless their `publish` job has already started. Respect `MAX_ACTIVE_FORMAL_RUNS = 2` (two self-hosted Mac mini runners).
-     - **Dispatch:** Ensure `target_check` check run exists as `in_progress` on `head_sha`, then dispatch `agy-formal-dispatch.yml` (`ref=main`, `repository`, `pr_number`, `head_sha`, `check_name=independent-review`, `gate_mode=<mode>`).
-- **Optional low-latency wakeup relay (`.github/workflows/review-gate-dispatch.yml`, Phase 3 opt-in on target repos):**
-  - Triggers on `workflow_run: workflows: ["Claude PR review"], types: [completed]` (always runs from target repo `main`!).
-  - Uses a minimal `actions: write`-only dispatch App token (`app-dispatch-review` env restricted to `main`) to call `workflow_dispatch` on `review-gate-controller.yml` with `(repository, pr_number)` only (`force_rerun` stays `false` so the terminal-failure guard is preserved). Even if dropped or unavailable, the `*/5` schedule guarantees completion.
+### 4. Shadow activation (owner-only)
 
-### 4. Trusted publisher & canonical `pr_diff_digest_v1` hardening (`.github/workflows/agy-review.yml`, `agy-formal-review.yml`, `.github/scripts/agy_review_publish.py`)
+The owner sets `AGY_REVIEW_GATE_REPOS=mctlhq/mctl-gitops:shadow mctlhq/mctl-telegram:shadow`
+and `AGY_REVIEW_GATE_ENABLED=true` on `.github`. For mctl-telegram, the owner
+decides whether to install `mctl-agy-reviewer` on that repository (needed even for
+a read-only token). Until then, mctl-telegram is reported `UNKNOWN` by the
+controller, which is the correct fail-closed result. Shadow writes only
+`independent-review-shadow`. It changes no required check and is observed for an
+agreed window (proposal: 7 days or 30 evaluated PRs) with the metrics from G6.
 
-Extend the existing formal pipeline without creating a second reviewer:
+### 5. Fixture pilot in enforce mode (owner-only)
 
-1. **Single canonical `pr_diff_digest_v1` and `provider` in `agy-review.yml` (`formal_review: true`):**
-   - In `Prepare review prompt`, resolve three-dot merge-base `mb=$(git merge-base "$BASE_SHA" "$HEAD_SHA")` and compute `diff_digest` using the exact `pr_diff_digest_v1` canonical byte serialization from `#299` over `git diff-tree -r --no-renames --full-index -z "$mb" "$HEAD_SHA"`: `"pr_diff_digest_v1\n"` + sorted entries `"<old_mode> <new_mode> <old_blob> <new_blob> <status>\t<len(path)>\n<path>\n"` + `"<count>\n"` (in addition to existing empty/binary/`150000`-byte cap gates).
-   - Include `'provider': 'agy'` and `'diff_digest': diff_digest` in `formal_record` (`schema_version: 'agy-review/v2'`, defaulting `agy_review_publish.py` to require `v2` once workflow and script ship together).
-2. **Pre-publish verification in `agy_review_publish.py`:**
-   - Parameterize `CHECK` via allowlisted `CHECK_NAME in {'independent-review', 'agy-formal-review'}` (default `'agy-formal-review'` for backward compatibility until callers opt into `'independent-review'`) and `GATE_MODE in {'enforce', 'shadow'}`.
-   - Compute live `pr_diff_digest_v1` on the publisher without trusting PR working trees or downloading file blobs: query GitHub compare API `/compare/{live_base}...{head_sha}` to obtain the authoritative `merge_base_commit.sha`, then in an isolated empty temp git repo (`GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null`, `-c core.fsmonitor=false`, zero checkout) run `git fetch --no-tags --filter=blob:none --depth=1 origin <merge_base> <head_sha>` and `git diff-tree -r --no-renames --full-index -z <merge_base> <head_sha>` to compute the exact same `pr_diff_digest_v1`.
-   - In `prepare` and `publish`, cross-check `result['provider'] == 'agy'`, verify `pr['user']['login'] != self.login` (author/reviewer separation), verify `result['diff_digest'] == live_diff_digest`, and verify **zero `claude[bot]` (or `mctl-agy-reviewer[bot]`) `CHANGES_REQUESTED` reviews** (edited or unedited, regardless of body markers) exist on `head_sha` **and** (in `merge_group` mode) on `live_pr_head` — checked both before and after posting `APPROVE` (failing closed immediately as `UNKNOWN` on any unreadable API, or dismissing any just-posted `APPROVE` and failing closed if `CHANGES_REQUESTED` appears or `head_sha`/`base_ref`/`live_diff_digest` moved). Under `strict: false`, a live `base_sha` advance that preserves `head_sha`, `base_ref`, and `live_diff_digest` is accepted rather than rejected as `STALE`.
-   - In `enforce` mode, `policy(branch)` requires `dismiss_stale_reviews_on_push == True`, (`strict == True` OR `merge_queue` with `MERGE`), AND `CHECK_NAME` bound to `integration_id == self.app`.
-   - In `shadow` mode, `policy(branch)` checks `dismiss_stale_reviews_on_push` + (`strict` OR `merge_queue`) **without** requiring `CHECK_NAME` in `required_status_checks`, maps `effective_check = 'independent-review-shadow'` (never touching `independent-review`), posts **only** non-blocking diagnostic check-run context `independent-review-shadow`, and never calls `POST .../reviews` for `APPROVE` / `REQUEST_CHANGES`.
+This uses an isolated fixture repository designated by the owner, with a ruleset
+requiring `independent-review` bound to integration 5732062, stale dismissal,
+strict checks and a merge queue. It runs the acceptance fixtures (see tasks.md
+Tests) live, records run URLs and exact SHAs in the evidence matrix, and observes
+whether the App or `claude[bot]` `APPROVED` review counts toward the review
+requirement there.
 
-### 5. `merge_group` support (`#351`) and `carry_proof` extension
+### 6. mctl-gitops opt-in pilot (owner-only, separate GO_IMPLEMENT)
 
-1. Unify `mctl-gitops/.github/workflows/agy-formal-queue.yml` with `independent-review` using a two-step shadow-first cutover (preventing `prepare` deadlocks between queue workflow updates and ruleset updates):
-   - First update `agy-formal-queue.yml` to pass `check_name=independent-review` with `gate_mode=shadow` (passes while `independent-review` is not yet in ruleset `18465404`).
-   - Next, owner adds `independent-review` (`integration_id: 5732062`) to `required_status_checks` in ruleset `18465404`, and flips `agy-formal-queue.yml` (`gate_mode=shadow` -> `gate_mode=enforce`) + enables controller `enforce`. Because `merge_group` executes `.github/workflows/agy-formal-queue.yml` from the queue commit itself, the cutover PR runs with `gate_mode=enforce` against the already-updated ruleset with zero unmergeable window.
-2. Extend `Publisher.carry_proof(pr, branch)` in `agy_review_publish.py` so a `merge_group` commit can carry `independent-review = success` without invoking Antigravity when:
-   - Live `queue_state` holds (`ref` live, `parents == [queue_base, live_pr_head]`, PR open & non-draft);
-   - `compare_files(queue_base, live_pr_head) == compare_files(queue_base, queue_head)` (non-empty, `< 300` files, no mode-only/pure-rename, queue ref unmoved afterward);
-   - **Zero `claude[bot]` or `mctl-agy-reviewer[bot]` `CHANGES_REQUESTED` reviews (edited or unedited, regardless of body markers) exist on `live_pr_head`**; AND
-   - Live PR head holds EITHER:
-     - a qualifying **unedited** `claude[bot]` `APPROVED` review with `Reviewed head=<live_pr_head> base=<reviewed_base>` matching `(live_pr_head, pr_base)` (exact `base` under `strict: true`, or matching `pr_diff_digest_v1` under `strict: false`), verified trusted (`referenced_workflows` + `blob(live_pr_head) == blob(merge_base)` matching an allowlisted default-branch workflow revision), OR
-     - a qualifying non-carried App-owned `independent-review` / `agy-formal-review` `completed`/`success` check-run (`agy/v2` formal publisher `external_id` persisting `pr_diff_digest_v1` matching live `(merge_base(pr_base, live_pr_head), live_pr_head)`, plus source repo and PR match) **AND** an active, unedited `mctl-agy-reviewer[bot]` `APPROVED` review on `live_pr_head`, paired with zero `claude[bot]` or `mctl-agy-reviewer[bot]` `CHANGES_REQUESTED` (edited or unedited) on `live_pr_head`. (Legacy `agy/v1` checks lacking `diff_digest` do not satisfy `strict: false` carry-forward unless resolved and verified against the originating formal run.)
-3. Fail-closed distinction in `prepare()` vs benign fallthrough:
-   - If `carry_proof` refuses due to any **unreadable API / malformed state (`UNKNOWN`)** or any **`CHANGES_REQUESTED` review on `live_pr_head` (`BLOCKING_FINDINGS`)**, `prepare()` **fails closed immediately** (`target_check = failure`) and NEVER falls through to running `agy-review.yml` on `queue_head_sha`.
-   - Only on verifiable non-blocking carry misses (changed diff against base, `> 300` files, pure-rename/mode-only entry, missing/stale PR-head verdict) does `prepare()` fall through to running `agy-review.yml` (`formal_review: true`) on `queue_head_sha`, followed by `publish()` checking both `queue_head_sha` and `live_pr_head` for `CHANGES_REQUESTED` before publishing `success`. If the model review fails or returns findings/no-verdict, `independent-review` concludes `failure` and GitHub's merge queue evicts the entry.
+The change is additive. The owner adds `independent-review` (integration
+5732062) to ruleset 18465404 alongside the existing `agy-formal-review`. Nothing
+is removed. The owner switches mctl-gitops to `:enforce` in
+`AGY_REVIEW_GATE_REPOS`. A mctl-gitops queue caller variant (or input) dispatches
+`check_name=independent-review` for queue commits. The pilot runs on one
+preview-only PR, opened for the pilot, with an exact head SHA, not #3023. It
+proves queue behaviour and rollback. Whether `agy-formal-review` is later removed
+(making Agy truly fallback-only) is a separate owner decision recorded in the plan.
+Until then Agy still runs on every mctl-gitops PR, and the controller adds the
+Claude path in parallel without weakening anything.
 
-### 6. Observability & metrics
+### 7. mctl-telegram enforcement (deferred)
 
-Emit one structured JSON metric record (artifact + `$GITHUB_STEP_SUMMARY` table, no secrets/diff text) from `review_gate_controller.py` and `agy_review_publish.py`:
-- `fallback_rate`: `agy_fallback_dispatched / (claude_evaluated + agy_fallback_dispatched)` per window.
-- `no_verdict_rate`: counts of `NO_VERDICT_TRANSIENT`, `NO_VERDICT_OTHER`, `UNKNOWN` by provider (`claude`, `agy`).
-- `queue_wait_seconds`: `job.started_at - run.created_at` for formal fallback runs.
-- `time_to_valid_verdict_seconds`: `check_run.completed_at - head_commit.committer.date` (or `pr_sync_event_ts`) for terminal `PASS`/`BLOCKING_FINDINGS`.
+It is designed only after step 4 evidence shows the real review requirement. Any
+protection change (stale dismissal, strict, required `independent-review`) is a
+separate owner authorization. Release-please PRs get the same gate.
 
-## Evidence matrix
+### Trust and failure behaviour (unchanged, restated)
 
-| Requirement / Acceptance Test | Component / Symbol | Verification Method | Observed Status (2026-11-25) | Required Proof Before Cutover |
-| --- | --- | --- | --- | --- |
-| Claude PASS -> no fallback; P1/P2 blocks even if Agy passes | `review_gate_controller.decide_pr` | Unit + negative fixtures + mutation tests | Not yet implemented (`#348` exists for always-on agy) | Mutation tests fail when `BLOCKING_FINDINGS` guard is removed; live pilot PR PASS without Agy |
-| `#287` Claude quota `exit 1` + fail-closed missing/unposted verdict | `claude-review.yml` (`Classify`, `review-check`, `review-final`, `Verify terminal verdict`) | `test_claude_review_classify.py` + mutation tests | Reproduced live fail-open on `mctl-gitops#3023` (`45643936821`) | All `#287` negative fixtures exit `1`; reverted guard turns test red |
-| Claude both tokens exhausted -> Agy formal PASS -> `APPROVE` + `independent-review=success` | `review-gate-controller.yml`, `agy-formal-review.yml`, `agy_review_publish.py` | Unit + live shadow + opt-in preview PR pilot | `mctl-agy-reviewer` `APPROVE` proved on `#2716`/`#2720`; fallback orchestration not yet built | Live preview-only pilot PR obtains `mctl-agy-reviewer[bot]` `APPROVE` + `independent-review=success` |
-| Agy P1/P2, no-verdict, malformed/truncated/binary, contradictory `PASS`, stale, API error -> no approval | `agy-review.yml` (`formal_record`, `Prepare`), `agy_review_publish.py` | `test_agy_formal_reviews.py` + `MutationTests` | Existing 20 mutations verified in repo; `diff_digest`/author checks pending | Added mutations for `diff_digest`, `provider`, author!=reviewer, `gate_mode=shadow` |
-| Informational Agy PASS / forged comment / PR workflow edit / PR artifact -> rejected | `review_gate_controller.py` (`referenced_workflows`, entry blob check), `agy_review_publish.py` | Unit + negative security fixtures + mutation tests | Reproduced informational Agy `PASS` on `mctl-gitops#3023` (`45643936946`); stays unapproved | Negative fixtures proving forged comment, PR-edited `skip-paths`, and PR artifact cannot trigger fallback or approval |
-| `merge_group` compatibility & diff-preserving carry-forward (`#351`) | `agy_review_publish.py` (`carry_proof`, `queue_state`), `agy-formal-queue.yml` | `CarryTests`, `QueueTests`, live `mctl-gitops` queue pilot | `agy-formal-queue.yml` currently failing (`45647591593`) due to ruleset mismatch | Live pilot PR (Claude PASS) & fallback pilot PR (Agy formal PASS) both merge through `mctl-gitops` merge queue |
-| Stale cancellation, duplicate events, concurrent formal reuse | `review_gate_controller.py`, `agy-review.yml` concurrency | `test_review_gate_controller.py` + `MutationTests` | `#348` stale-cancel pattern reviewed | Replay, duplicate dispatch, and superseded-head tests pass and kill mutations |
-
-## Migration and rollback plan
-
-### Migration phases
-
-1. **Phase 0 (This proposal — no runtime changes):** Merge proposal at `status: proposed` in `mctl-gitops`; independent review + explicit owner **`GO_IMPLEMENT`** decision on `mctlhq/.github#398` / DevLoop decide page. Leave `mctl-gitops#3023` blocked until valid review/approval.
-2. **Phase 1 (Shared `.github` implementation in shadow, zero runtime disruption):**
-   - Implement `#287` + outcome markers in `claude-review.yml` (pinned callers are unaffected until their pin SHA is updated).
-   - Extend `agy-review.yml`, `agy-formal-review.yml`, `agy-formal-dispatch.yml`, `agy_review_publish.py`, and add `review_gate_controller.py` / `review-gate-controller.yml` (default `AGY_REVIEW_GATE_ENABLED=false` / `shadow` dry-run).
-   - Supersede `mctlhq/.github#348` and close/update `mctl-gitops#2605`.
-   - Pass full `.github/tests` unit + mutation suite + `actionlint`.
-3. **Phase 2 (Isolated fixture + opt-in `mctl-gitops` preview-only pilot):**
-   - Bump `mctl-gitops/.github/workflows/claude-review.yml` pin to the new `.github` SHA. (Verify `#287` fails honestly when Claude hits quota.)
-   - Run `review-gate-controller.yml` in `gate_mode=shadow` against an isolated fixture / opt-in preview-only PR on `mctl-gitops` (`dry_run=false`, `gate_mode=shadow`, zero `APPROVE` writes, zero ruleset changes).
-   - Measure `fallback_rate`, `no_verdict_rate`, `queue_wait_seconds`, `time_to_valid_verdict_seconds` and verify `false_green_incidents == 0`.
-4. **Phase 3 (`mctl-gitops` `enforce` cutover — owner-gated):**
-   - Step 3a: Update `mctl-gitops/.github/workflows/agy-formal-queue.yml` to pass `check_name=independent-review` and `gate_mode=shadow` (zero ruleset errors before `independent-review` is added to ruleset `18465404`).
-   - Step 3b (Owner action): Update ruleset `18465404` on `mctl-gitops` to add `independent-review` (`integration_id: 5732062`) to `required_status_checks` (preserving `cloudflare-plan`, `reserved-hosts`, `validate`, `required_approving_review_count: 1`, `dismiss_stale_reviews_on_push: true`, `merge_queue`, and `DeployKey` bypass) and flip `review-gate-controller` config for `mctl-gitops` to `enforce`. Record before/after JSON on `#398`.
-   - Step 3c: Merge the follow-up PR flipping `mctl-gitops/.github/workflows/agy-formal-queue.yml` from `gate_mode=shadow` to `gate_mode=enforce` (`merge_group` executes the queue commit's updated `agy-formal-queue.yml` with `enforce` against the already-updated ruleset). Prove one normal Claude `PASS` PR and one simulated/real Claude-quota fallback preview PR through the merge queue.
-   - Step 3d: Optionally add `workflow_run` wakeup relay (`review-gate-dispatch.yml`) on `mctl-gitops` `main` to cut wakeup latency from 0-5 min to ~15s.
-5. **Phase 4 (Org-wide rollout — per-repo owner gate):**
-   - Pre-check per repo: verify `mctl-agy-reviewer` installation, confirm `dismiss_stale_reviews_on_push` + (`strict` or `merge_queue`), resolve private-repo rulesets (4 private repos) and `mctl-agents` `claude-review / review` required check swap (`claude-review / review` -> `independent-review` in the same window so merges never stall).
-   - Land follow-up PRs in `mctl-agents` (`run_shepherd.py`) and `mctl-claude-remote` (`pr-steward`) if automated remediation/merge should accept `mctl-agy-reviewer[bot]` fallback approvals.
-
-### Rollback plan
-
-Because removing a check from `required_status_checks` must happen **before** stopping the publisher that reports it (otherwise every PR hangs awaiting a missing required check), rollback follows strict reverse order:
-1. **Before Phase 3 (Shadow / `.github` code only):** Set `AGY_REVIEW_GATE_ENABLED=false` (or revert `review-gate-controller.yml` / `.github` PR). Zero ruleset or caller impact; pinned callers keep working.
-2. **After Phase 3 (`mctl-gitops` `enforce` active):**
-   - Step 1 (Owner): Remove `independent-review` from `required_status_checks` in ruleset `18465404` (restore pre-cutover snapshot JSON), leaving `cloudflare-plan`, `reserved-hosts`, `validate`, `required_approving_review_count: 1`, `dismiss_stale_reviews_on_push: true`, and `merge_queue` intact.
-   - Step 2: Set `mctl-gitops` back to `shadow` or disable `review-gate-controller` for `mctl-gitops` (and disable `agy-formal-queue.yml` if not using `agy-formal-review`, eliminating the current `45647591593` error noise).
-   - Step 3: If needed, revert caller pin in `mctl-gitops/.github/workflows/claude-review.yml` (while noting reverting `#287` would re-expose false-green on quota, so prefer keeping `#287` fix and relying on manual `@claude review` / human review during outage).
-3. Existing approvals already published by `mctl-agy-reviewer[bot]` remain auditable in GitHub review history; no audit data is deleted on rollback.
+- The provider-neutral check is written only by the App (integration 5732062)
+  and is required by `integration_id`, so an Actions job cannot spoof it.
+- A Claude PASS counts only if it is unedited (GraphQL `lastEditedAt`), bound to
+  the head and to the base or digest, and produced by a trusted caller. An Agy PASS
+  counts only if it comes from formal `agy-formal-review.yml` on main, matches the
+  exact head and digest, is not carried, and has an unedited App review with the
+  marker.
+- Any `CHANGES_REQUESTED` from either bot wins. There is no "try the other
+  provider" on blocking, `NO_VERDICT_OTHER`, refusal or malformed output.
+- An API failure, an unreadable page or an unknown active dispatch gives `UNKNOWN`:
+  no write, no approval.
+- No human approval is replaced. Where a ruleset demands a human reviewer, the App
+  or bot review does not satisfy it, and this design does not try to.
 
 ## Alternatives
 
-1. **Per-repository `pull_request_target` formal workflow with replicated `AGY_REVIEW_APP_PRIVATE_KEY` (`mctl-gitops#2605` style):**
-   - Dropped: requires provisioning and rotating `AGY_REVIEW_APP_PRIVATE_KEY` across 20+ repository environments, runs unconditionally on pushes unless gated by extra API polling, and exposes a larger App-key blast radius. Centralizing `AGY_REVIEW_APP_PRIVATE_KEY` in `mctlhq/.github` `agy-review-publisher` keeps a single secret boundary.
-2. **Wait for `mctl-api` OIDC `mctl/review-evidence` (`mctlhq/.github#299`):**
-   - Complementary, not a blocker/substitute here: `#299` requires implementing three new `mctl-api` slices (D/E/F) and migrating all rulesets away from GitHub `APPROVE` reviews, and is currently blocked on `issue-299` approval/slices. Reusing `agy-review.yml` (`formal_review: true`) + `agy_review_publish.py` solves the P1 `#3023` outage using infrastructure already deployed on `mctlhq/.github`, while remaining cleanly replaceable by `#299` later.
-3. **Cron-only `#348` (`agy-formal-auto-dispatch`) without fixing `#287` or supporting Claude fallback:**
-   - Dropped: `#348` assumes `agy-formal-review` is always required on every PR (which saturated the two Mac mini runners and was removed on 2026-11-16) and leaves `#287` false-green on `claude-review / review`.
+1. **New provider-neutral reviewer workflow per consumer repo** (a caller that
+   runs Claude then Agy in one job). Dropped. It duplicates the reviewer and the
+   publisher, puts the fallback decision in PR-triggered context, and the issue
+   forbids duplication. The central controller already reads only trusted main
+   code.
+2. **Keep always-on required `agy-formal-review` and simply automate its
+   dispatch on every PR** (#348 draft). Dropped as the target. It spends Agy on
+   every PR, makes Agy the primary rather than the fallback, and keeps the #351
+   BEHIND-loop exposure. It remains the status quo during migration.
+3. **Promote the informational Agy PASS comment when Claude has no verdict.**
+   Rejected. It is not formal, not subject-bound, and is forgeable. The issue
+   explicitly excludes it.
+4. **Relax the controller to dispatch Agy on any Claude non-PASS.** Rejected. That
+   is provider shopping, and it lets Agy override refusals and ambiguous output.
 
 ## Platform impact
 
-- **Runner capacity:** Normal PRs with Claude `PASS` invoke zero Antigravity formal runs (saving both Mac mini runner slots and Antigravity quota compared to always-on `#347`/`#2605`). Only Claude `NO_VERDICT_TRANSIENT` (plus `merge_group` entries whose diff changed against the base) consume `[self-hosted, agy-reviewer]` capacity (`MAX_ACTIVE_FORMAL_RUNS = 2`).
-- **Security:** `AGY_REVIEW_APP_PRIVATE_KEY` stays confined to `mctlhq/.github` `agy-review-publisher` (`main`-only). Reviewer runners hold no App keys. PR-controlled files, workflow inputs (`conventions`), comments, and artifacts cannot steer fallback or mint approval.
-- **Backward compatibility:** Pinned callers on older `claude-review.yml` SHAs continue operating unchanged until bumped. Existing informational `agy-review.yml` callers remain non-blocking and non-authoritative.
+- **Backward compatibility:** the step 2 code changes are no-ops while
+  `AGY_REVIEW_GATE_ENABLED` is unset. G5 can only make a previously trusted ref
+  untrusted, which is fail-closed. Consumer pins pointing at merged SHAs stay
+  valid.
+- **Migration:** additive only. `agy-formal-review` stays required in mctl-gitops
+  until a separate owner decision. mctl-telegram gets no required check from this
+  proposal.
+- **Resources:** the controller runs a GitHub-hosted job every 5 min (about 1 min
+  each), within the existing concurrency group with no cancel. The ancestry check
+  adds at most one compare call per distinct SHA per tick. Agy runner load drops
+  once mctl-gitops stops requiring always-on Agy, if the owner decides so.
+- **Risks and mitigations:**
+  - *Required check never appears, so PRs hang:* the pilot uses one PR and a
+    fixture. Rollback removes only the added context. The controller writes
+    `failure`, not silence, on terminal outcomes.
+  - *Stale approval after a push:* stale dismissal is required by the baseline
+    check, the publisher rechecks head and base, and external ids include the head
+    and digest.
+  - *Queue commit lacks the check (G4 / #351):* there is an explicit queue test,
+    and the mctl-gitops pilot waits on #351 status.
+  - *App review counting is unknown:* it is observed in the fixture before the
+    mctl-gitops pilot, and nothing assumes it.
+  - *Secret exposure:* the App key stays only in environment `agy-review-publisher`
+    on main. No PR code is checked out in privileged jobs. The model runner never
+    receives the key.
+  - *Shadow posting real approvals:* guarded by the step 2 test. If it is not
+    provable, shadow stays dry-run for that repo.
