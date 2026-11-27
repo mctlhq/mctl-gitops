@@ -5,7 +5,7 @@ no runtime, runner or workflow)
 
 Issue: mctlhq/mctl-gitops#2993. Related: #2931 (merge-queue starvation).
 Stage 1 (superseding stale runs) merged in #2995 and #3010. The measuring script
-is `scripts/ci-queue-latency.py` (#3038).
+is `scripts/ci-queue-latency.py` (#3038, with the release-run fix in #3043).
 
 ## Context
 
@@ -38,13 +38,16 @@ truncated or failed read aborts the report).
 |---|---|---|---|---|
 | merge-group run created -> first job started | 513 | 0m23s | 6m24s | 11m50s |
 | PR enqueue -> merged | 86 | 11m35s | 1h19m48s | 2h20m54s |
-| release-deploy dispatch -> bump PR merged | 0 | not measured | not measured | not measured |
+| release-deploy dispatch -> bump PR merged | 5 | 55m27s | 1h23m11s | 1h23m11s |
 
+Release runs without a matched bump PR in the window (excluded, counted): 104.
 Runs cancelled before any job started: 26. Runs with unreadable jobs: 0.
 
-The release metric is empty because release bumps for previews are direct
-pushes, not `release-bump/*` pull requests; it does not mean releases were
-fast.
+The release row covers only releases that went through a `release-bump/*` pull
+request (5 of 109 release runs). The other 104 are excluded, not counted as
+fast: preview bumps are direct pushes to `main`, so they have no bump PR to
+measure against. Read the row as "releases that needed the PR route", not as
+the typical release.
 
 **After (a window of equal length that includes a DevLoop burst, after #2995
 merged at 2026-11-24T02:39Z): not measured.** No burst had happened when this
