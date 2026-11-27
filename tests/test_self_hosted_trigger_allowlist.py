@@ -31,17 +31,26 @@ ALLOWED_EVENTS = {"push", "workflow_dispatch"}
 ALLOWED_PUSH_BRANCHES = ["main"]
 
 # Reusable workflows outside this repository, keyed by path without the @ref.
-# Each entry was read on mctlhq/.github main; "hosted" means every job runs on
-# GitHub-hosted labels. A self-hosted entry needs the guard that keeps fork
-# pull requests off the runner, quoted here so a reviewer can re-check it.
+# Each entry was read on mctlhq/.github main. "hosted" means every job runs on
+# GitHub-hosted labels, from any caller. A "fork-guarded" entry runs on a
+# self-hosted runner and is allowed ONLY from the caller files listed in
+# `callers`, each with exactly the listed caller events and `uses` ref: any
+# other caller, event or ref fails, so the exception cannot spread.
 EXTERNAL_REUSABLE = {
-    "mctlhq/.github/.github/workflows/agent-trailer.yml": "hosted",
-    "mctlhq/.github/.github/workflows/claude-review.yml": "hosted",
-    # Runs on [self-hosted, agy-reviewer] for pull_request, but its job `if:`
-    # requires `github.event.pull_request.head.repo.full_name ==
+    "mctlhq/.github/.github/workflows/agent-trailer.yml": {"verdict": "hosted"},
+    "mctlhq/.github/.github/workflows/claude-review.yml": {"verdict": "hosted"},
+    # Runs on [self-hosted, agy-reviewer]. Its job `if:` requires, for the
+    # non-formal path, `github.event.pull_request.head.repo.full_name ==
     # github.repository`, so pull requests from forks never reach the runner;
-    # only branches pushed by collaborators with write access do.
-    "mctlhq/.github/.github/workflows/agy-review.yml": "self-hosted, fork-guarded",
+    # only branches pushed by collaborators with write access do. The guard
+    # reads `github.event.pull_request`, which only a pull_request caller
+    # provides, hence the single allowed event. Residual risk: the callee is
+    # referenced by `@main`, so a change to that guard in mctlhq/.github is not
+    # visible to this offline test; it is reviewed in that repository.
+    "mctlhq/.github/.github/workflows/agy-review.yml": {
+        "verdict": "fork-guarded",
+        "callers": {"agy-review.yml": {"events": {"pull_request"}, "ref": "main"}},
+    },
 }
 
 
@@ -69,8 +78,21 @@ def labels(job):
             return None
         m = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", value)
         if m:
-            literal = ((job.get("strategy") or {}).get("matrix") or {}).get(m.group(1))
-            if not isinstance(literal, list) or not all(isinstance(v, str) for v in literal):
+            matrix = (job.get("strategy") or {}).get("matrix")
+            if not isinstance(matrix, dict):  # an expression matrix is unresolvable
+                return None
+            key = m.group(1)
+            literal = matrix.get(key, [])
+            include = matrix.get("include", [])
+            if not isinstance(literal, list) or not isinstance(include, list):
+                return None
+            # `include` entries may add new values for the key.
+            for entry in include:
+                if not isinstance(entry, dict):
+                    return None
+                if key in entry:
+                    literal = literal + [entry[key]]
+            if not literal or not all(isinstance(v, str) for v in literal):
                 return None
             out.extend(literal)
         elif "${{" in value:
@@ -109,12 +131,22 @@ def violations(workflows):
                         continue
                     check_jobs(callee, workflows[callee], evts, via=f" (called from {fname}:{jid})")
                     continue
-                key = uses.split("@", 1)[0]
-                verdict = EXTERNAL_REUSABLE.get(key)
-                if verdict is None:
+                key, _, ref = uses.partition("@")
+                entry = EXTERNAL_REUSABLE.get(key)
+                if entry is None:
                     out.append(f"{where}: external reusable {key} is not reviewed in EXTERNAL_REUSABLE")
-                elif verdict != "hosted" and "fork-guarded" not in verdict:
-                    out.append(f"{where}: external reusable {key} is {verdict!r}")
+                elif entry.get("verdict") == "hosted":
+                    pass
+                elif entry.get("verdict") == "fork-guarded":
+                    allowed = (entry.get("callers") or {}).get(fname)
+                    if allowed is None:
+                        out.append(f"{where}: fork-guarded {key} may not be called from {fname}")
+                    elif set(evts) != allowed["events"]:
+                        out.append(f"{where}: fork-guarded {key} called on {sorted(evts)}, allowed only {sorted(allowed['events'])}")
+                    elif ref != allowed["ref"]:
+                        out.append(f"{where}: fork-guarded {key} called at @{ref}, reviewed at @{allowed['ref']}")
+                else:
+                    out.append(f"{where}: external reusable {key} has verdict {entry.get('verdict')!r}")
                 continue
             if labels(job) is None:
                 for reason in trusted_only(evts):
@@ -158,6 +190,10 @@ def test_rejects():
         "matrix not literal": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": "${{ fromJSON(x) }}"}}),
         "matrix with self-hosted": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": ["ubuntu-latest", "self-hosted"]}}),
         "unreviewed external": {"on": {"workflow_dispatch": None}, "jobs": {"j": {"uses": "someone/else/.github/workflows/x.yml@main"}}},
+        "matrix include adds self-hosted": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": ["ubuntu-latest"], "include": [{"os": "self-hosted"}]}}),
+        "matrix only via include": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"include": [{"os": "self-hosted"}]}}),
+        "matrix include expression": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": ["ubuntu-latest"], "include": "${{ fromJSON(x) }}"}}),
+        "matrix is an expression": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": "${{ fromJSON(x) }}"}),
     }
     for name, doc in bad.items():
         assert violations({"w.yml": doc}), f"accepted but must reject: {name}"
@@ -165,6 +201,19 @@ def test_rejects():
     caller = {"on": {"pull_request": None}, "jobs": {"c": {"uses": "./.github/workflows/callee.yml"}}}
     callee = {"on": {"workflow_call": None}, "jobs": {"x": {"runs-on": "self-hosted"}}}
     assert violations({"caller.yml": caller, "callee.yml": callee}), "self-hosted callee under pull_request accepted"
+    # The fork-guarded agy exception stays narrow: other caller file, extra or
+    # different event, or another ref are all refused.
+    agy = "mctlhq/.github/.github/workflows/agy-review.yml"
+    narrow = {
+        "other caller file": ("other.yml", {"pull_request": None}, "main"),
+        "issue_comment caller": ("agy-review.yml", {"issue_comment": None}, "main"),
+        "pull_request_target caller": ("agy-review.yml", {"pull_request_target": None}, "main"),
+        "extra event": ("agy-review.yml", {"pull_request": None, "workflow_run": {"workflows": ["a"]}}, "main"),
+        "other ref": ("agy-review.yml", {"pull_request": None}, "feature"),
+    }
+    for name, (fname, on, ref) in narrow.items():
+        doc = {"on": on, "jobs": {"j": {"uses": f"{agy}@{ref}"}}}
+        assert violations({fname: doc}), f"fork-guarded exception widened: {name}"
 
 
 def test_accepts():
@@ -174,7 +223,10 @@ def test_accepts():
         "hosted on pr": wf({"pull_request": None}, "ubuntu-latest"),
         "hosted matrix on pr": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": ["ubuntu-latest", "macos-latest"]}}),
         "reviewed external": {"on": {"pull_request": None}, "jobs": {"j": {"uses": "mctlhq/.github/.github/workflows/claude-review.yml@abc"}}},
+        "hosted matrix with include": wf({"pull_request": None}, "${{ matrix.os }}", strategy={"matrix": {"os": ["ubuntu-latest"], "include": [{"os": "macos-latest", "x": 1}, {"x": 2}]}}),
     }
+    agy_ok = {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"j": {"uses": "mctlhq/.github/.github/workflows/agy-review.yml@main"}}}
+    assert not violations({"agy-review.yml": agy_ok}), "the reviewed agy caller must be accepted"
     for name, doc in good.items():
         found = violations({"w.yml": doc})
         assert not found, f"rejected but must accept: {name}: {found}"
