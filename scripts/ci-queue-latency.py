@@ -25,7 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 REPO = "mctlhq/mctl-gitops"
-RELEASE_WORKFLOW = "Release & Deploy"  # workflow name as the runs API reports it
+# The runs API reports `name` = the run-name ("release-deploy <team>/<component> <tag>"),
+# not the workflow name, so release runs are recognised by their workflow file.
+RELEASE_PATH = ".github/workflows/release-deploy.yaml"
 
 
 class ReadError(Exception):
@@ -56,7 +58,7 @@ def summarize(values):
 
 def needs_jobs(run):
     """Only these runs enter a metric, so only their jobs are fetched."""
-    return (run["event"] == "merge_group" or run.get("name") == RELEASE_WORKFLOW
+    return (run["event"] == "merge_group" or run.get("path") == RELEASE_PATH
             or run.get("conclusion") == "cancelled")
 
 
@@ -78,7 +80,7 @@ def report(data):
             merge_group.append(seconds(run["created_at"], start))
         if run.get("conclusion") == "cancelled" and start is None:
             cancelled_unstarted.append(run["id"])
-        if run.get("name") == RELEASE_WORKFLOW:
+        if run.get("path") == RELEASE_PATH:
             release_runs.append(run)
 
     queue = []
@@ -100,10 +102,15 @@ def report(data):
         if len(parts) < 3:
             unknown.append(run["id"])
             continue
-        tag = parts[2]
-        merged = next((m for m, ref in bumps if ref.endswith(f"-{tag}") and m >= ts(run["created_at"])), None)
+        component, tag = parts[1].split("/")[-1], parts[2]
+        refs = {ref for m, ref in bumps if ref.endswith(f"-{tag}") and m >= ts(run["created_at"])}
+        if len(refs) > 1:
+            # The same tag on unrelated images (e.g. 0.1.0): prefer the branch named
+            # after the component, otherwise refuse to guess.
+            refs = {r for r in refs if r == f"release-bump/{component}-{tag}"}
+        merged = next((m for m, ref in bumps if ref in refs and m >= ts(run["created_at"])), None)
         if merged is None:
-            release_unmatched += 1  # no bump PR merged in the window; not a zero-latency release
+            release_unmatched += 1  # no (or an ambiguous) bump PR; not a zero-latency release
             continue
         release.append((merged - ts(run["created_at"])).total_seconds())
 
@@ -194,7 +201,7 @@ def collect_runs(since, until):
     if pages and pages[0]["total_count"] > got:
         raise ReadError(f"{since}..{until} holds {pages[0]['total_count']} runs but the API "
                         f"returned {got}; use a narrower window")
-    return [{"id": r["id"], "event": r["event"], "name": r["name"], "display_title": r["display_title"],
+    return [{"id": r["id"], "event": r["event"], "name": r["name"], "path": r["path"], "display_title": r["display_title"],
              "created_at": r["created_at"], "conclusion": r["conclusion"]}
             for pg in pages for r in pg["workflow_runs"]]
 
