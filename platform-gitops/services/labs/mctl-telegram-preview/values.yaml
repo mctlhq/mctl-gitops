@@ -339,15 +339,24 @@ env:
   # Each capability flag is explicit. Step G6 (owner GO) turns tools and the
   # tg server on together: an allowlisted user can link their own Telegram
   # account through the Mini App and the model may call the pinned tg READ
-  # tools, each one executed server-side. Writes stay off on preview. Rollback: PA_EXTERNAL_TOOLS_ENABLED "false" stops every
-  # tool call at the next dispatch (re-read per call), PA_SERVER_TG_ENABLED
-  # "false" also closes linking.
+  # tools, each one executed server-side. Rollback: PA_EXTERNAL_TOOLS_ENABLED
+  # "false" stops every tool call at the next dispatch (re-read per call),
+  # PA_SERVER_TG_ENABLED "false" also closes linking.
   PA_EXTERNAL_TOOLS_ENABLED: "true"
-  PA_WRITES_ENABLED: "false"
+  # Writes (mctlhq/mctl-telegram#1322, #1323; owner GO 2026-11-27, preview
+  # only, S2 gate closed on mctl-telegram fed843b5). Offered: media control,
+  # volume, light and play music on the alice server, which is the live
+  # alice.mctl.ai: an approved action reaches real devices. They need the
+  # consent to actions and an alice connection with iot:control; each call
+  # needs a tap on its card unless a standing permission covers it. Expected
+  # start line: "pa writes on ... gate=true"; a start check that refuses stops
+  # the process. Rollback: this flag back to "false".
+  PA_WRITES_ENABLED: "true"
   PA_SERVER_TG_ENABLED: "true"
   # The alice server (owner direction for the preview pilot: preview only,
-  # read scope iot:view; mctlhq/mctl-telegram#1319): an allowlisted user can link a
-  # smart-home account and the model may call the pinned alice READ tools.
+  # reads on scope iot:view, writes see PA_WRITES_ENABLED above;
+  # mctlhq/mctl-telegram#1319): an allowlisted user can link a smart-home
+  # account and the model may call the pinned alice READ tools.
   # An alice account is not a Telegram identity, so the link is bound to
   # whoever completes the sign-in on the authorization server (threat model
   # T1, S1-L14); this environment runs with that residual. Startup
