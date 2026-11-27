@@ -248,6 +248,28 @@ workflow and the environment secret arrived empty), or a bump approved more
 than 45 minutes after `publish-pr` opened it (the wait gives up; re-running
 the failed `enqueue-bump` job also works while the release run is retained).
 
+### enqueue-bump waits for agy-formal-review (#3047)
+
+`agy-formal-review` is a required check, and nothing dispatches it for the head
+of a `release-bump/*` or release-window pull request. The enqueue job
+(`enqueue-bump`, `enqueue-window`) waits for it and prints a warning with the
+command once the PR is approved:
+
+```bash
+gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main \
+  -f repository=mctlhq/mctl-gitops -f pr_number=<N> -f head_sha=<head>
+```
+
+Dispatch it and leave the enqueue to the job. Do not enqueue by hand while the
+job is still waiting (`tools/merge-gitops-pr.sh` does): whichever comes second
+is refused, and the run can go red. The job waits 45 minutes in total, approval
+included. A failed review fails the job and the PR does not merge; after a new
+dispatch succeeds, re-run only the failed enqueue job.
+
+If the ruleset stops requiring `agy-formal-review`, remove it from
+`REQUIRED_CHECKS` in both wait scripts, or each of these jobs waits for a review
+nobody dispatches and times out.
+
 ### After the fact: release-gate-watch reads the ledger (S4b, #2774)
 
 On every push to `main`, `release-gate-watch.yml` runs

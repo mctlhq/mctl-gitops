@@ -37,7 +37,7 @@ SCRIPT = ROOT / "scripts/release-bump-enqueue-wait.sh"
 WF_DIR = ROOT / ".github/workflows"
 CALLERS = ("release-deploy.yaml", "gitops-bump.yaml")
 WINDOWS = ("release-window-pr.yml", "release-window-removal-pr.yml")
-REQ = "cloudflare-plan,reserved-hosts,validate"
+REQ = "agy-formal-review,cloudflare-plan,reserved-hosts,validate"
 HEAD = "a" * 40
 APP = "mctl-gitops-pr[bot]"
 BUMP_FILE = "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml"
@@ -135,6 +135,15 @@ def script_cases(script_text=None):
         rc, out, log = run_script(script_text=script_text, **kw)
         return "ready=true" not in out and "waiting" in log
 
+    def hints(**kw):
+        _, _, log = run_script(script_text=script_text, **kw)
+        return log.count("::warning::no agy-formal-review")
+
+    def hinted(**kw):
+        _, _, log = run_script(script_text=script_text, **kw)
+        return ("gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main "
+                f"-f repository=o/r -f pr_number=7 -f head_sha={HEAD}") in log
+
     def done(**kw):
         rc, out, _ = run_script(script_text=script_text, **kw)
         return rc == 0 and "ready=false" in out and "ready=true" not in out
@@ -172,6 +181,19 @@ def script_cases(script_text=None):
         ("a pending auto-merge run is not ignored", lambda: idle(runs=green() + [run_for("auto-merge", "in_progress", None)]), True),
         ("a missing required check waits", lambda: idle(runs=[r for r in green() if r["name"] != "validate"]), True),
         ("a failed check is refused", lambda: refused(runs=green() + [run_for("trivy", conclusion="failure")]), True),
+        ("a missing formal review waits",
+         lambda: idle(runs=[r for r in green() if r["name"] != "agy-formal-review"]), True),
+        ("a missing formal review names the dispatch for this head", lambda: hinted(
+            runs=[r for r in green() if r["name"] != "agy-formal-review"]), True),
+        ("the dispatch hint is printed once", lambda: hints(
+            runs=[r for r in green() if r["name"] != "agy-formal-review"]), 1),
+        ("a reported formal review prints no dispatch hint", lambda: hints(runs=pending), 0),
+        ("a running formal review waits", lambda: idle(
+            runs=[r for r in green() if r["name"] != "agy-formal-review"]
+            + [run_for("agy-formal-review", "in_progress", None)]), True),
+        ("a failed formal review is refused", lambda: refused(
+            runs=[r for r in green() if r["name"] != "agy-formal-review"]
+            + [run_for("agy-formal-review", conclusion="failure")]), True),
         ("an unreadable check list is refused", lambda: refused(runs_ok=False), True),
         ("a truncated check list is refused", lambda: refused(total=len(green()) + 3), True),
         ("the deadline is a refusal", lambda: refused(runs=pending, wait_seconds=0), True),
@@ -180,6 +202,9 @@ def script_cases(script_text=None):
 
 
 SCRIPT_MUTANTS = {
+    "formal review not required": ("REQUIRED_CHECKS=agy-formal-review,", "REQUIRED_CHECKS="),
+    "no dispatch hint": ('echo "::warning::no agy-formal-review', 'true "'),
+    "dispatch hint repeated": ("          hinted=1\n", ""),
     "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),
     "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||'),
     "branch check dropped": ("case \"$head_ref\" in release-bump/?*) ;;", "case \"$head_ref\" in *) ;;"),
@@ -410,6 +435,8 @@ def main():
     # (tests/test_required_check_job_ids.py pins check name == job id).
     m = re.search(r"^REQUIRED_CHECKS=([a-z,-]+)$", src, re.M)
     assert m and m.group(1) == REQ, "REQUIRED_CHECKS drifted from the ruleset list"
+    window = (ROOT / "scripts/release-window-enqueue-wait.sh").read_text()
+    assert re.findall(r"^REQUIRED_CHECKS=([a-z,-]+)$", window, re.M) == [REQ], "the two wait scripts disagree"
     for wf, jobs in (("validate-manifests.yml", ["validate", "reserved-hosts"]), ("cloudflare-plan.yml", ["cloudflare-plan"])):
         have = yaml.safe_load(texts[wf])["jobs"]
         for j in jobs:

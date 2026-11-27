@@ -44,7 +44,9 @@ WINDOW_KIND=${WINDOW_KIND:-add}
 APP_LOGIN='mctl-gitops-pr[bot]'
 # The required status checks of ruleset main-protection (id 18465404). Keep in
 # step with the ruleset and with release-bump-enqueue-wait.sh.
-REQUIRED_CHECKS=cloudflare-plan,reserved-hosts,validate
+# Nothing dispatches agy-formal-review for this head yet (#3047), so the wait
+# below prints the command an operator has to run.
+REQUIRED_CHECKS=agy-formal-review,cloudflare-plan,reserved-hosts,validate
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 die() { echo "::error::$*"; exit 1; }
@@ -90,6 +92,7 @@ fi
 
 # --- Wait for the approval on head_sha and for green checks. ---------------
 deadline=$((SECONDS + WAIT_SECONDS))
+hinted=0
 while :; do
   # GraphQL variables and jq bindings, not shell expansions.
   # shellcheck disable=SC2016
@@ -135,7 +138,12 @@ while :; do
         } >> "$GITHUB_OUTPUT"
         echo "::notice::#${PR} is approved on ${head_sha} and its checks are green."
         exit 0 ;;
-      10) echo "waiting for checks: ${verdict}" ;;
+      10)
+        echo "waiting for checks: ${verdict}"
+        if [ "$hinted" = 0 ] && [[ "$verdict" == *"agy-formal-review: not reported"* ]]; then
+          echo "::warning::no agy-formal-review on ${head_sha}. Dispatch it: gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main -f repository=${REPO} -f pr_number=${PR} -f head_sha=${head_sha}"
+          hinted=1
+        fi ;;
       *) die "#${PR} is not mergeable: ${verdict}" ;;
     esac
   else
