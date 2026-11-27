@@ -98,7 +98,7 @@ Rejected as a first step, for these reasons:
    a Linux VM there, on a machine that has no headroom for a burst of parallel
    validate jobs next to the work it already does.
 2. **Required checks have no fallback.** A required check cannot fall back to
-   a hosted runner. A sleeping, updating or overloaded Mac would stall the
+   a hosted runner. A sleeping, updating or overloaded machine would stall the
    merge queue, which is the failure this ADR is trying to remove.
 3. **Trust boundary.** This repository is public. A self-hosted runner that
    can pick up a job from a fork pull request executes attacker-chosen code on
