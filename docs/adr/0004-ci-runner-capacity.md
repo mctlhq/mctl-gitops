@@ -116,9 +116,14 @@ constraints (task 8 of the proposal implements the CI half):
 - Ephemeral/JIT runners (`--ephemeral`, re-registered after every job) in a
   Linux VM under a dedicated non-admin user; no access to the host's
   credentials, home directories or LAN; egress limited to GitHub and ghcr.
-- Only trusted events: `push` to `main` and `workflow_dispatch`. A CI test
-  rejects any workflow that has a `pull_request`, `pull_request_target` or
-  `issue_comment` trigger and a job using a self-hosted label.
+- Only trusted events: `push` to `main` and `workflow_dispatch`. The CI test
+  `tests/test_self_hosted_trigger_allowlist.py` enforces this as an allowlist:
+  a job whose `runs-on` is self-hosted, or cannot be resolved to GitHub-hosted
+  labels, fails on any other trigger, and a reusable workflow from another
+  repository must be listed there with a reviewed verdict. The one existing
+  self-hosted entry is the agy reviewer (mctlhq/.github `agy-review.yml`),
+  which keeps fork pull requests off its runner with a
+  `head.repo.full_name == github.repository` guard.
 - First candidates are non-required jobs only (the `push: main` run of
   `validate-manifests.yml`, which is drift detection after direct bumps).
   Required merge-group checks move only after an availability fallback is
