@@ -177,7 +177,8 @@ Emitted once per first persisted summary (so duplicates do not double count):
 - `mctl_pa_model_calls_total{provider, model, outcome}`
 - `mctl_pa_model_tokens_total{kind=input|output|cached|reasoning, model}` (only supplied fields)
 - `mctl_pa_cost_usd_total{model, basis}` (`basis ∈ {estimated_list, subscription_shadow,
-  verified_billed}`) and `mctl_pa_run_cost_usd{basis, completeness}` histogram; the settled
+  verified_billed}`), a per-call counter: it adds only calls whose cost is known, so it carries
+  no completeness label; run-level completeness is on the histogram and in `pa_usage`) and `mctl_pa_run_cost_usd{basis, completeness}` histogram; the settled
   ledger cost has no new metric
 - `mctl_pa_model_match_total{match}` (`exact|verified_alias|mismatch|unknown`),
   `mctl_pa_usage_missing_total{field}`,

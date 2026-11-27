@@ -118,7 +118,9 @@ off.
   `ParentBased(AlwaysOff)` that, for `pa.job` only, returns the decision carried
   in the stored trace flags; every other parentless span keeps `AlwaysOff`. Attempt
   span ids are derived, not stored: the first 8 bytes of
-  SHA-256(trace id || root span id || attempt number). Any replica therefore
+  SHA-256(trace id || root span id || attempt number), and `pa.attempt` is
+  created through the same PA-scoped ID generator, which reads the derived
+  span id from the context the attempt-end code passes in. Any replica therefore
   derives the same attempt span id for the same attempt, and retries are
   siblings under `pa.job`. Rows from before the migration have no context
   and produce no spans; their observations count as `missing`.
