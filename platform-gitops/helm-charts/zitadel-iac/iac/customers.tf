@@ -320,6 +320,9 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
       zitadel_application_oidc.portal_ui.client_id,
       zitadel_application_oidc.mctl_api_oauth.client_id,
       zitadel_application_oidc.mctl_cli.client_id,
+      # The self-service access page (mctl-api.tf): it admits a person only
+      # on the proof of a Google sign-in in the customers organization.
+      zitadel_application_oidc.mctl_api_access_self.client_id,
     ])
     ZITADEL_HOOK_INTENT_SIGNING_KEYS = zitadel_action_target.identity_intent.signing_key
     ZITADEL_HOOK_CREATE_SIGNING_KEYS = zitadel_action_target.identity_create_user.signing_key
