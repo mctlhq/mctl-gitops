@@ -12,8 +12,11 @@
   `/usr/local/bin/mctl-api`.
 - `.github/workflows/security.yml`: a fail-closed `govulncheck ./...` (scanner pinned to v1.7.0, DB
   floating, Go from `go-version-file: go.mod`), then a Trivy fs scan v0.69.3 (SARIF report-only for
-  HIGH and CRITICAL, gate on CRITICAL, `ignore-unfixed`). There is **no image scan** and **no
-  binary-mode govulncheck**.
+  HIGH and CRITICAL, gate on CRITICAL, `ignore-unfixed`). Both Trivy steps use `scan-type: fs`.
+  There is **no image scan by digest** and **no binary-mode govulncheck**.
+- Evidence layers today: CI covers only the source/module graph, and only on go1.26.11. It does not
+  establish coverage of the stdlib that ships in the binary (go1.27.4) or of the container image. Those
+  two layers are UNKNOWN on current `main`, not clean.
 - `.github/workflows/validate.yml`: golangci-lint, plus `go test -p 2 -exec pgtestexec ./...` against
   Postgres 16, plus fail-closed bridge PG tests.
 - `.github/dependabot.yml`: weekly gomod, github-actions and docker updates. There may already be open
@@ -41,6 +44,7 @@
   - Advisory IDs are withheld here on purpose.
   - A rerun with `GOTOOLCHAIN=go1.27.4` failed while loading packages (govulncheck v1.7.0 cannot parse
     the 1.27 stdlib). The shipped toolchain's stdlib reachability is therefore **unknown**.
+  - "0 reachable" above means not detected by this scanner at this layer. It is not treated as safe.
 
 Deployed state checked:
 - `$MCTL_GITOPS_ROOT/services/` lists the tenants admins, karabu, labs, namax66 and redloop, and has no
@@ -59,38 +63,55 @@ Deployed state checked:
    - exception candidate.
 
    Re-run govulncheck v1.7.0 with JSON output. Keep the raw JSON as a private artifact and publish
-   only a summary table: level, module, current version and fixed version.
+   only a summary table: level, module, current version and fixed version. Obtain the "before" image
+   digest from the owner and record reproducible provenance for the before side (commit, digest,
+   scanner versions, DB snapshot, builder image and build flags), so that the after side can be scanned
+   under comparable conditions. Baseline items that cannot be reconciled stay UNKNOWN.
 2. **Smallest dependency-only change.** Run `go get golang.org/x/net@v0.62.0` (or the lowest tagged
    fix, if the baseline shows a lower one), then `go mod tidy`. Only `go.mod` and `go.sum` should
    change. Accept any transitive bumps that minimum version selection forces (for example
    `golang.org/x/text`, `x/sys` or `x/crypto`), but list each one in the PR. If a forced bump touches
    an auth-relevant module (`x/crypto`, `x/oauth2`, `go-jose`, `go-oidc`, `mcp-go`), flag it for review.
-3. **mcp-go stays at v1.0.0.** The finding is at module level only (the vulnerable symbols are not
-   called). The only fix is an untagged pseudo-version several minor versions ahead, and adopting it
+3. **mcp-go stays at v1.0.0.** The finding is at module level only (no vulnerable symbol was detected
+   as called). The only fix is an untagged pseudo-version several minor versions ahead, and adopting it
    would risk the MCP contract (`internal/mcp/server.go` and `server_test.go`). Record a SecurityFinding
    occurrence for it with:
    - `package_purl` pkg:golang/github.com/mark3labs/mcp-go@v1.0.0
    - repository mctlhq/mctl-api
    - an observation carrying the scan provenance
-   - a proposed disposition of exception, with the justification "not reachable at symbol level",
-     a review date, and the trigger "tagged upstream fix released".
+   - a reference to the private baseline item, without its contents;
+   - evidence from each relevant artifact layer (source, binary, image), each with its own UNKNOWN
+     state where it could not be produced;
+   - a proposed disposition of exception, with the justification "not detected as reachable at symbol
+     level", a named risk owner, an explicit expiry or review date, and re-review triggers: tagged
+     upstream fix released, change in reachability, change in exposure.
 
-   The exception takes effect only after owner approval.
+   This proposal does not approve the exception. It is decided only through the separate owner risk
+   process, and no advisory-level detail is published.
 4. **Verification at the exact candidate.**
    - Run CI as usual (validate and security workflows).
    - Run the targeted regression tests: `go test -count=1 ./internal/auth/... ./internal/mcp/...
      ./internal/api/ -run 'ClientIP|RateLimit|TrustedProxy|Loopback|OAuth'`.
-   - Build the image locally or in CI from the candidate SHA and record its digest.
-   - Scan the image by digest: govulncheck `-mode=binary` on the extracted `/usr/local/bin/mctl-api`.
-     This covers the stdlib that go1.27.4 links, which closes the unknown above, assuming binary mode
-     works with a go1.27 build; if it does not, the stdlib result stays explicitly unknown.
-   - Run a Trivy image scan with a recorded Trivy version and DB timestamp.
-   - Diff the before and after summaries. Any new finding blocks the candidate.
+   - Confirm that the Postgres-backed tests actually ran (no skip because the database was missing).
+   - Build the image locally or in CI from the candidate SHA and record its digest and build conditions.
+   - Verify that the chosen govulncheck release supports binary-mode scanning of a go1.27.4 build, then
+     run govulncheck `-mode=binary` on `/usr/local/bin/mctl-api` extracted from the image by digest.
+     This covers the stdlib that go1.27.4 links.
+   - Run a Trivy image scan by digest with a recorded Trivy version and DB snapshot.
+   - If the binary scanner is incompatible or either scan fails, report that layer as UNKNOWN. UNKNOWN
+     blocks mandatory verification; it is never rolled into PASS.
+   - Diff the before and after summaries, layer by layer, only where both sides have comparable
+     provenance; otherwise the comparison is UNKNOWN. Any new finding without an owner-approved
+     disposition blocks the candidate. No security sign-off is issued while a mandatory layer is
+     UNKNOWN, unless the owner risk process dispositions it.
 5. **Lifecycle recording.** Report each remaining or verified finding to the SecurityFinding store as
    an observation, with one occurrence for the source revision and one for the artifact digest. For the
    x/net fix, attach the remediation attempt (`sra_`) and a verification record (`svr_`) referencing
    the candidate SHA and digest.
-6. **Follow-ups, recorded but not implemented here.** These need separate approval:
+6. **Follow-ups, recorded but not implemented here.** First check whether the existing follow-ups
+   mctlhq/mctl-api#1196 (reproducible container image baseline) and mctlhq/mctl-gitops#3036 (image
+   assurance baseline for API releases) already cover each item; propose a new issue only for what they
+   do not. All of these need separate approval:
    - Align the `go.mod` `go` directive, the CI govulncheck toolchain and the Dockerfile builder.
    - Bump govulncheck once a release supports go1.27.
    - Add a binary or image scan job to `security.yml`.
@@ -102,6 +123,8 @@ Deployed state checked:
 - **Adopt the mcp-go pseudo-version now.** Rejected. It is untagged and a large version jump on the MCP
   server core, the finding is not reachable, and it would risk the MCP tool contracts that
   `server_test.go` guards.
+- **Report a missing binary or image scan as clean.** Rejected. Non-detection by a scanner that could
+  not load the target is not evidence; the layer is UNKNOWN and blocks sign-off.
 - **Fix the toolchain mismatch in the same PR (set `go 1.27.x` or change the builder).** Rejected for
   this slice. It is a build and release policy change and no longer dependency-only. It is recorded as
   a follow-up instead.
@@ -110,7 +133,9 @@ Deployed state checked:
 - No migrations, API or contract changes, or config changes. Only `go.mod` and `go.sum` change.
 - Risk: transitive bumps forced by x/net v0.62.0 could change HTTP/2 behaviour in the Kubernetes client
   (`internal/k8s`). The mitigation is the full test suite plus a check of the k8s client paths.
-- Risk: the scans could expose stdlib findings in go1.27.4 that were never checked before. These are
-  pre-existing and not new, so they should be recorded as baseline, not blocking, but they still need
-  an owner disposition.
-- Deployment is out of scope. Rollout follows the normal release-please process once the owner gives GO.
+- Risk: the scans could expose stdlib findings in go1.27.4 that were never checked before. A finding
+  counts as pre-existing only if it also appears in the before-image scan with comparable provenance;
+  otherwise it is new or UNKNOWN. Pre-existing findings still need an owner disposition before security
+  sign-off.
+- No implementation, exception decision, release or deployment is authorized by this proposal. Rollout
+  follows the normal release-please process once the owner gives a separate GO.
