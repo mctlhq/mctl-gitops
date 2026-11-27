@@ -47,7 +47,7 @@ jobs:
           fi
           echo "Explicit drill confirmation verified."
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       - name: Verify GitOps invariants (Ingress disabled & image pinned)
         run: |
@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 5
     environment: cloudflare-apply
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       - name: Run hardened drill harness
         id: run_drill
@@ -190,7 +190,7 @@ jobs:
       TF_VAR_email_routing_destination_moonqua: ${{ secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
       TF_IN_AUTOMATION: 1
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       - name: Point OpenTofu outside the workspace
         run: |
