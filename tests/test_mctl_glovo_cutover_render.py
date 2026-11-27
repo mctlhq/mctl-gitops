@@ -153,6 +153,23 @@ check(committed_ka == "12h", f"committed keepalive interval is {committed_ka!r},
 r = helm(SVC, "--set", "mctlGlovo.deploy=true", "--set", "mctlGlovo.c2=true", "--set", "mctlGlovo.allowlist=true", "--set", "mctlGlovo.consent=false", "--set", "mctlGlovo.control=false", "--set", "mctlGlovo.linkLogin=false", "--set", "mctlGlovo.ingress=false")
 check(r.returncode == 0 and server_env(docs(r)).get("GLOVO_C2_KEEPALIVE_INTERVAL") == "12h", "committed render does not carry the 12h keepalive")
 
+# 3d. the static principal list is off in the committed values (emergency lock
+# only): the gate is consent plus an approved access request. The committed
+# render must carry both halves of that gate and nothing of the list; with the
+# list off and consent off too the chart refuses to render.
+committed = yaml.safe_load((ROOT / "platform-gitops" / "bootstrap" / "values.yaml").read_text())["mctlGlovo"]
+check(committed.get("allowlist") is False, f"committed allowlist is {committed.get('allowlist')!r}, want false")
+check(committed.get("consent") is True, f"committed consent is {committed.get('consent')!r}, want true")
+r = helm(SVC)
+env = server_env(docs(r)) if r.returncode == 0 else {}
+check(r.returncode == 0, f"committed render failed: {r.stderr[-200:]}")
+check(bool(env.get("GLOVO_CONSENT_API_URL")), "committed render has no consent source while the list is off")
+check(env.get("GLOVO_C2_REQUIRE_ACCESS") == "true", f"committed render require-access is {env.get('GLOVO_C2_REQUIRE_ACCESS')!r}, want true")
+check("mctl-glovo-access" not in r.stdout and "GLOVO_C2_ALLOWED_PRINCIPALS" not in r.stdout, "committed render still carries the static principal list")
+r = helm(SVC, "--set", "mctlGlovo.allowlist=true")
+check(r.returncode == 0 and "GLOVO_C2_ALLOWED_PRINCIPALS" in r.stdout and r.stdout.count("name: mctl-glovo-access") >= 3, "turning the list back on does not render its secret and envFrom")
+fails(SVC, "--set", "mctlGlovo.consent=false", why="needs an access gate")
+
 # 4. link login
 r = helm(SVC, *BASE, "--set", "mctlGlovo.linkLogin=true")
 env = server_env(docs(r)) if r.returncode == 0 else {}

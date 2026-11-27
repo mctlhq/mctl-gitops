@@ -28,8 +28,9 @@ a reviewed PR:
              the placeholder.
   c2         switches the C2 code path on (the store ships KILLED), with its
              database, Vault, audit key and the tailnet egress sidecars.
-  allowlist  the pilot gate (principal ids from Vault). Keep on until the
-             cohort gate is decided.
+  allowlist  a static list of principal ids from Vault that narrows who the
+             consent gate admits. An emergency lock: off in normal operation,
+             where consent plus an approved access request is the gate.
   consent    mctl-api's consent read, with the ZITADEL token refresher.
   control    the kill switch endpoint mctl-api calls.
   linkLogin  fresh sign-in on the link routes (two optional variables).
