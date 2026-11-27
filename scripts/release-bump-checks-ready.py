@@ -3,7 +3,7 @@
 
     gh api --paginate .../commits/<sha>/check-runs --jq '.check_runs[]|{id,name,status,conclusion}' \
       | release-bump-checks-ready.py --own-check auto-merge --expect <total_count> \
-            --required cloudflare-plan,reserved-hosts,validate
+            --required agy-formal-review,cloudflare-plan,reserved-hosts,validate
 
 When auto-merge.yml did the wait, the job that waited was itself a check run on
 the PR head, pending until it exited, so a wait on "every check finished" never
