@@ -88,23 +88,30 @@ def report(data):
         if events and pr.get("merged_at"):
             queue.append(seconds(min(events), pr["merged_at"]))
 
-    merged_bumps = {p["head_ref"]: p["merged_at"] for p in data["prs"]
-                    if p.get("merged_at") and p.get("head_ref", "").startswith("release-bump/")}
-    release = []
+    # release-deploy names the bump branch release-bump/<basename of the image>-<tag>
+    # (release-deploy.yaml), and the runs API does not return the image, so a run
+    # is matched on the "-<tag>" suffix. Several components can share one image and
+    # one tag; they then share one bump PR, and the earliest merge after dispatch wins.
+    bumps = sorted((ts(p["merged_at"]), p["head_ref"]) for p in data["prs"]
+                   if p.get("merged_at") and p.get("head_ref", "").startswith("release-bump/"))
+    release, release_unmatched = [], 0
     for run in release_runs:
         parts = run["display_title"].split()
         if len(parts) < 3:
             unknown.append(run["id"])
             continue
-        component, tag = parts[1].split("/")[-1], parts[2]
-        merged = merged_bumps.get(f"release-bump/{component}-{tag}")
-        if merged and ts(merged) >= ts(run["created_at"]):
-            release.append(seconds(run["created_at"], merged))
+        tag = parts[2]
+        merged = next((m for m, ref in bumps if ref.endswith(f"-{tag}") and m >= ts(run["created_at"])), None)
+        if merged is None:
+            release_unmatched += 1  # no bump PR merged in the window; not a zero-latency release
+            continue
+        release.append((merged - ts(run["created_at"])).total_seconds())
 
     return {
         "merge_group_start": summarize(merge_group),
         "queue_enqueue_to_merge": summarize(queue),
         "release_dispatch_to_bump_merge": summarize(release),
+        "release_runs_without_matched_bump": release_unmatched,
         "cancelled_before_start": len(cancelled_unstarted),
         "unknown_runs": len(unknown),
         "runs_total": len(runs),
@@ -127,7 +134,9 @@ def render(metrics, window):
             out.append(f"| {label} | {m['n']} | {fmt(m['p50'])} | {fmt(m['p95'])} | {fmt(m['max'])} |")
         else:
             out.append(f"| {label} | 0 | not measured | not measured | not measured |")
-    out += ["", f"Runs cancelled before any job started: {metrics['cancelled_before_start']}",
+    out += ["", f"Release runs without a matched bump PR in the window (excluded): "
+                f"{metrics['release_runs_without_matched_bump']}",
+            f"Runs cancelled before any job started: {metrics['cancelled_before_start']}",
             f"Runs with unreadable jobs (excluded, not counted as zero): {metrics['unknown_runs']}",
             f"Runs in window: {metrics['runs_total']}"]
     return "\n".join(out)
