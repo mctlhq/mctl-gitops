@@ -33,9 +33,9 @@ if "--method" not in a or a[a.index("--method") + 1] != "GET":
     sys.exit("not GET")
 if path.endswith("/actions/runs"):
     print(json.dumps([{"total_count": 2, "workflow_runs": [
-        {"id": 1, "event": "merge_group", "name": "Validate Manifests", "display_title": "x",
+        {"id": 1, "event": "merge_group", "name": "Validate Manifests", "path": ".github/workflows/validate-manifests.yml", "display_title": "x",
          "created_at": "2026-11-22T10:00:00Z", "conclusion": "success"},
-        {"id": 2, "event": "pull_request", "name": "Validate Manifests", "display_title": "x",
+        {"id": 2, "event": "pull_request", "name": "Validate Manifests", "path": ".github/workflows/validate-manifests.yml", "display_title": "x",
          "created_at": "2026-11-22T10:01:00Z", "conclusion": "success"}]}]))
 elif path.endswith("/jobs"):
     print(json.dumps([{"jobs": [{"started_at": "2026-11-22T10:00:40Z"}]}]))
@@ -73,9 +73,9 @@ def run_cases(source):
         q = m["queue_enqueue_to_merge"]
         check("queue latency is 1800s from the EARLIEST enqueue", q["n"] == 1 and q["max"] == 1800)
         r = m["release_dispatch_to_bump_merge"]
-        check("release latency is 2400s", r["n"] == 1 and r["max"] == 2400)
-        check("release run keyed by image basename still matches (component differs)", r["n"] == 1)
-        check("release run without a bump is counted, not dropped", m["release_runs_without_matched_bump"] == 1)
+        check("release latencies are 2400s and 1800s", r["n"] == 2 and r["max"] == 2400 and r["p50"] == 2100)
+        check("release run keyed by image basename still matches (component differs)", r["n"] == 2)
+        check("release run without a bump is counted, not dropped", m["release_runs_without_matched_bump"] == 2)
         check("cancelled before start is 1", m["cancelled_before_start"] == 1)
         check("run with unreadable jobs is unknown, not zero", m["unknown_runs"] == 1)
         check("merge-group excludes the unreadable run", mg["n"] == 2)
@@ -163,9 +163,11 @@ MUTATIONS = {
     "paging never stops early": ('items[-1]["updated_at"] < since', 'False'),
     "PR window filter drops its lower bound": ('since <= p["merged_at"] <= until', 'p["merged_at"] <= until'),
     "jobs fetched for every run": ('def needs_jobs(run):', 'def needs_jobs(run):\n    return True'),
-    "release matched on component instead of the tag suffix": ('ref.endswith(f"-{tag}")', 'ref == f"release-bump/{parts[1].split(chr(47))[-1]}-{tag}"'),
+    "release matched on component instead of the tag suffix": ('ref.endswith(f"-{tag}")', 'ref == f"release-bump/{component}-{tag}"'),
+    "ambiguous tag guessed instead of refused": ('if len(refs) > 1:', 'if False:'),
+    "release runs recognised by name again": ('run.get("path") == RELEASE_PATH', 'run.get("name") == "Release & Deploy"'),
     "unmatched release run dropped silently": ('release_unmatched += 1', 'pass'),
-    "release bump may precede dispatch": ('and m >= ts(run["created_at"])', ''),
+    "release bump may precede dispatch": ('ref in refs and m >= ts(run["created_at"])', 'ref in refs'),
     "cancelled-before-start ignores start": ('and start is None', ''),
 }
 
