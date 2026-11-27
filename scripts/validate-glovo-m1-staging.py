@@ -110,6 +110,11 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '# The Glovo basket approval page (mctl-api#1006): an MCP client shows the',
         '# basket owner a link to api.mctl.ai/glovo/basket/approvals/{id}, and the',
         'resource "zitadel_application_oidc" "mctl_api_glovo_basket" {',
+        # The self-service access page client.
+        '  name       = "mctl-api-glovo-access"',
+        '  redirect_uris               = ["https://api.mctl.ai/glovo/access/callback"]',
+        '    GLOVO_ACCESS_SELF_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_access_self.client_id',
+        '    GLOVO_ACCESS_SELF_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_access_self.client_secret',
     }),
     "platform-gitops/helm-charts/zitadel-iac/iac/tests/mctl_api.tftest.hcl": frozenset({
         '      "GLOVO_BASKET_UI_CLIENT_ID",',
@@ -132,6 +137,12 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         '    values = { client_id = "glovo-basket-client-id", client_secret = "glovo-basket-client-secret" }',
         '# The client of the Glovo basket approval page (mctl-api#1006). The same',
         'run "glovo_basket_client_is_a_confidential_pkce_web_client" {',
+        # The self-service access page client.
+        '    condition     = zitadel_application_oidc.mctl_api_access_self.name == "mctl-api-glovo-access"',
+        '    condition     = zitadel_application_oidc.mctl_api_access_self.redirect_uris == tolist(["https://api.mctl.ai/glovo/access/callback"])',
+        '      "GLOVO_ACCESS_SELF_UI_CLIENT_ID",',
+        '      "GLOVO_ACCESS_SELF_UI_CLIENT_SECRET",',
+        '    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_ID"]) == "access-self-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_SECRET"]) == "access-self-client-secret"',
     }),
     "platform-gitops/helm-charts/zitadel-iac/values.yaml": frozenset({
         '#   Glovo basket approval page, in the MCTL API project): no new action; a',

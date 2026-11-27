@@ -484,8 +484,8 @@ run "customer_claims_reach_only_the_explicit_clients" {
     values = { client_id = "cli" }
   }
   override_resource {
-    target = zitadel_application_oidc.mctl_api_glovo_access
-    values = { client_id = "api-glovo-access" }
+    target = zitadel_application_oidc.mctl_api_access_self
+    values = { client_id = "api-access-self" }
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_PORTAL_CLIENT_ID"]) == "portal"
@@ -493,7 +493,7 @@ run "customer_claims_reach_only_the_explicit_clients" {
   }
   assert {
     condition = toset(split(",", nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_HOOK_CLAIM_CLIENT_IDS"]))) == toset([
-      "web", "web-dev", "portal", "api-oauth", "cli", "api-glovo-access"
+      "web", "web-dev", "portal", "api-oauth", "cli", "api-access-self"
     ])
     error_message = "Each approved customer sign-in client needs the proven customer claims; no other client may receive them."
   }

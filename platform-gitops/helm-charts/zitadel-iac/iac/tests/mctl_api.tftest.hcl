@@ -231,10 +231,10 @@ run "glovo_basket_client_is_a_confidential_pkce_web_client" {
 
 # The client of the self-service access page. The same attributes as the
 # other page clients, because the same things keep it closed.
-run "glovo_access_client_is_a_confidential_pkce_web_client" {
+run "access_self_client_is_a_confidential_pkce_web_client" {
   command = plan
   plan_options {
-    target = [zitadel_application_oidc.mctl_api_glovo_access]
+    target = [zitadel_application_oidc.mctl_api_access_self]
   }
 
   override_resource {
@@ -243,35 +243,35 @@ run "glovo_access_client_is_a_confidential_pkce_web_client" {
   }
 
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.name == "mctl-api-glovo-access"
-    error_message = "The client is named mctl-api-glovo-access."
+    condition     = zitadel_application_oidc.mctl_api_access_self.name == "mctl-api-glovo-access"
+    error_message = "The client carries the name the page's documentation gives it."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_glovo_access.org_id == "100000000000000001"
+    condition     = zitadel_application_oidc.mctl_api_access_self.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_access_self.org_id == "100000000000000001"
     error_message = "The client must be in the MCTL API project of MCTL: has_project_check there is what limits who can sign in."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.redirect_uris == tolist(["https://api.mctl.ai/glovo/access/callback"])
-    error_message = "The only redirect URI must be https://api.mctl.ai/glovo/access/callback."
+    condition     = zitadel_application_oidc.mctl_api_access_self.redirect_uris == tolist(["https://api.mctl.ai/glovo/access/callback"])
+    error_message = "The only redirect URI must be the page's callback on https://api.mctl.ai."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_glovo_access.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
+    condition     = zitadel_application_oidc.mctl_api_access_self.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_access_self.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
     error_message = "The client must be a confidential web client authenticating with client_secret_basic."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_glovo_access.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
+    condition     = zitadel_application_oidc.mctl_api_access_self.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_access_self.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
     error_message = "Authorization code only: no implicit, refresh token or device grant."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.access_token_type == "OIDC_TOKEN_TYPE_BEARER"
+    condition     = zitadel_application_oidc.mctl_api_access_self.access_token_type == "OIDC_TOKEN_TYPE_BEARER"
     error_message = "The access token must stay opaque (BEARER), never JWT."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.id_token_userinfo_assertion == true
+    condition     = zitadel_application_oidc.mctl_api_access_self.id_token_userinfo_assertion == true
     error_message = "id_token_userinfo_assertion must be on: mctl-api reads preferred_username from the ID token."
   }
   assert {
-    condition     = zitadel_application_oidc.mctl_api_glovo_access.dev_mode == false
+    condition     = zitadel_application_oidc.mctl_api_access_self.dev_mode == false
     error_message = "dev_mode must stay off: on, ZITADEL accepts http redirects."
   }
 }
@@ -408,8 +408,8 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     values = { client_id = "glovo-basket-client-id", client_secret = "glovo-basket-client-secret" }
   }
   override_resource {
-    target = zitadel_application_oidc.mctl_api_glovo_access
-    values = { client_id = "glovo-access-client-id", client_secret = "glovo-access-client-secret" }
+    target = zitadel_application_oidc.mctl_api_access_self
+    values = { client_id = "access-self-client-id", client_secret = "access-self-client-secret" }
   }
   override_resource {
     target = zitadel_application_oidc.mctl_api_deploy_approval
@@ -484,8 +484,8 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     error_message = "The Glovo basket keys must carry the mctl-api-glovo-basket client's credentials, never another flow's."
   }
   assert {
-    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_ID"]) == "glovo-access-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_SECRET"]) == "glovo-access-client-secret"
-    error_message = "The self-service access page keys must carry the mctl-api-glovo-access client's credentials, never another flow's."
+    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_ID"]) == "access-self-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["GLOVO_ACCESS_SELF_UI_CLIENT_SECRET"]) == "access-self-client-secret"
+    error_message = "The self-service access page keys must carry that page's client credentials, never another flow's."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["DEPLOY_APPROVAL_UI_CLIENT_ID"]) == "deploy-approval-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["DEPLOY_APPROVAL_UI_CLIENT_SECRET"]) == "deploy-approval-client-secret"

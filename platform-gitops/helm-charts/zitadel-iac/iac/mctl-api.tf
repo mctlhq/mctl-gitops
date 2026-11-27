@@ -257,7 +257,7 @@ resource "zitadel_application_oidc" "mctl_api_glovo_basket" {
   id_token_userinfo_assertion = true
 }
 
-# The self-service access page (api.mctl.ai/glovo/access): a customer signs
+# The self-service access page of the hosted connector: a customer signs
 # in here with Google, fresh (prompt=login, max_age=0, PKCE, nonce), to record
 # their consent and to open or withdraw their own access request for the
 # hosted connector. The owner's decision is taken elsewhere, on the access
@@ -274,7 +274,7 @@ resource "zitadel_application_oidc" "mctl_api_glovo_basket" {
 # a Google sign-in in the customers organization, and resolves the principal
 # from that proof. The customers organization reaches the project through
 # zitadel_project_grant.customers_mctl_api.
-resource "zitadel_application_oidc" "mctl_api_glovo_access" {
+resource "zitadel_application_oidc" "mctl_api_access_self" {
   org_id     = local.mctl_org_id
   project_id = zitadel_project.mctl_api.id
   name       = "mctl-api-glovo-access"
@@ -433,10 +433,10 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     GLOVO_BASKET_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_basket.client_id
     GLOVO_BASKET_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_basket.client_secret
     # The self-service access page client. Nothing reads these keys until
-    # the mctl-api values mount them and set GLOVO_ACCESS_SELF_UI_ENABLED to
-    # "true" (it is unset, so the page stays unmounted).
-    GLOVO_ACCESS_SELF_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_glovo_access.client_id
-    GLOVO_ACCESS_SELF_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_glovo_access.client_secret
+    # the mctl-api values mount them and switch the page on (the switch is
+    # unset, so the page stays unmounted).
+    GLOVO_ACCESS_SELF_UI_CLIENT_ID     = zitadel_application_oidc.mctl_api_access_self.client_id
+    GLOVO_ACCESS_SELF_UI_CLIENT_SECRET = zitadel_application_oidc.mctl_api_access_self.client_secret
     # The deploy approval page client (mctl-api#1026). Nothing reads these
     # keys until the mctl-api values mount them and set
     # DEPLOY_APPROVAL_UI_ENABLED to "true" (it is unset, so the page stays
