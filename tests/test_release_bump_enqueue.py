@@ -58,7 +58,7 @@ def green():
 def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="release-bump/mctl-api-4.154.1",
                state="open", merged="false", pr_ok=True, files=(BUMP_FILE,), changed=None, files_ok=True,
                diff=TAG_DIFF, diff_ok=True, cur=HEAD, gstate="OPEN", decision="APPROVED", on_head=1, review_ok=True,
-               runs=None, total=None, runs_ok=True, wait_seconds=100000):
+               runs=None, total=None, runs_ok=True, wait_seconds=100000, stage=None):
     """Run the wait script with a fake gh. Returns (rc, outputs, log)."""
     runs = green() if runs is None else runs
     with tempfile.TemporaryDirectory() as d:
@@ -111,6 +111,8 @@ def run_script(*, script_text=None, author=APP, head_repo="o/r", head_ref="relea
         out.write_text("")
         env = {"PATH": f"{bin_}:{os.environ['PATH']}", "GH_TOKEN": "x", "REPO": "o/r", "PR": "7",
                "GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(d), "WAIT_SECONDS": str(wait_seconds)}
+        if stage is not None:
+            env["STAGE"] = stage
         r = subprocess.run(["bash", str(d / "scripts/release-bump-enqueue-wait.sh")], env=env,
                            capture_output=True, text=True, timeout=60, cwd=d)
         assert not (d / "enqueue").exists(), "the wait script must never enqueue itself"
@@ -137,12 +139,21 @@ def script_cases(script_text=None):
 
     def hints(**kw):
         _, _, log = run_script(script_text=script_text, **kw)
-        return log.count("::warning::no agy-formal-review")
+        return log.count("::notice::no agy-formal-review")
 
     def hinted(**kw):
         _, _, log = run_script(script_text=script_text, **kw)
         return ("gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main "
                 f"-f repository=o/r -f pr_number=7 -f head_sha={HEAD}") in log
+
+    def asks(want, **kw):  # STAGE=dispatch: the verdict, and never an enqueue verdict
+        rc, out, _ = run_script(script_text=script_text, stage="dispatch", **kw)
+        head = f"head_sha={HEAD}" in out
+        return rc == 0 and f"dispatch={want}" in out and "ready=true" not in out and head == (want == "true")
+
+    def no_ask(**kw):
+        rc, out, log = run_script(script_text=script_text, stage="dispatch", **kw)
+        return "dispatch=true" not in out and (("::error::" in log and rc != -9) or "waiting" in log or "ready=false" in out)
 
     def done(**kw):
         rc, out, _ = run_script(script_text=script_text, **kw)
@@ -180,6 +191,23 @@ def script_cases(script_text=None):
         ("a pending check waits", lambda: idle(runs=pending), True),
         ("a pending auto-merge run is not ignored", lambda: idle(runs=green() + [run_for("auto-merge", "in_progress", None)]), True),
         ("a missing required check waits", lambda: idle(runs=[r for r in green() if r["name"] != "validate"]), True),
+        ("dispatch: approved with no formal review -> ask, even with CI pending",
+         lambda: asks("true", runs=[run_for("validate", "in_progress", None)]), True),
+        ("dispatch: a failed formal review is asked again",
+         lambda: asks("true", runs=[run_for("agy-formal-review", conclusion="failure")]), True),
+        ("dispatch: a passed formal review is not asked again", lambda: asks("false", runs=green()), True),
+        ("dispatch: a running formal review is not asked again",
+         lambda: asks("false", runs=[run_for("agy-formal-review", "in_progress", None)]), True),
+        ("dispatch: the newest formal review decides",
+         lambda: asks("false", runs=[run_for("agy-formal-review", conclusion="failure"), run_for("agy-formal-review")]), True),
+        ("dispatch: no approval, no request", lambda: no_ask(decision="REVIEW_REQUIRED", on_head=0), True),
+        ("dispatch: an approval on another head, no request", lambda: no_ask(on_head=0), True),
+        ("dispatch: changes requested, no request", lambda: no_ask(decision="CHANGES_REQUESTED", runs=[]), True),
+        ("dispatch: a moved head, no request", lambda: no_ask(cur="b" * 40, runs=[]), True),
+        ("dispatch: a human author, no request", lambda: no_ask(author="mashkovd", runs=[]), True),
+        ("dispatch: an unreadable check list, no request", lambda: no_ask(runs_ok=False), True),
+        ("dispatch: a truncated check list, no request", lambda: no_ask(runs=[], total=3), True),
+        ("an unknown stage is refused", lambda: refused(stage="merge"), True),
         ("a failed check is refused", lambda: refused(runs=green() + [run_for("trivy", conclusion="failure")]), True),
         ("a missing formal review waits",
          lambda: idle(runs=[r for r in green() if r["name"] != "agy-formal-review"]), True),
@@ -202,8 +230,12 @@ def script_cases(script_text=None):
 
 
 SCRIPT_MUTANTS = {
+    "dispatch repeated over a pass": ('if [ "$formal" = "completed success" ]; then', 'if false; then'),
+    "dispatch over a running review": ('absent|"completed "*) ;;', '*) ;;'),
+    "truncated list dispatches": ('[ "$(jq -s length <<<"$runs")" = "$total" ]', 'true'),
+    "unknown stage accepted": ('case "$STAGE" in enqueue|dispatch) ;;', 'case "$STAGE" in *) ;;'),
     "formal review not required": ("REQUIRED_CHECKS=agy-formal-review,", "REQUIRED_CHECKS="),
-    "no dispatch hint": ('echo "::warning::no agy-formal-review', 'true "'),
+    "no dispatch hint": ('echo "::notice::no agy-formal-review', 'true "'),
     "dispatch hint repeated": ("          hinted=1\n", ""),
     "author check dropped": ('[ "$author" = "$APP_LOGIN" ] ||', 'true ||'),
     "fork check dropped": ('[ "$head_repo" = "$REPO" ] ||', 'true ||'),
@@ -346,7 +378,73 @@ def wiring_cases(texts):
     return out
 
 
+def dispatch_cases(texts):
+    """The dispatch-formal-review job of all four workflows. (name, ok)."""
+    docs = {fn: yaml.safe_load(t) for fn, t in texts.items()}
+    out = []
+    readers = sorted((fn, jn) for fn, doc in docs.items() for jn, job in (doc.get("jobs") or {}).items()
+                     if "DISPATCH_APP_PRIVATE_KEY" in str(job))
+    out.append(("only the queue dispatcher and the four dispatch jobs read the dispatch App key", readers == sorted(
+        [("agy-formal-queue.yml", "dispatch")] + [(fn, "dispatch-formal-review") for fn in CALLERS + WINDOWS])))
+    jobs = [docs[fn]["jobs"].get("dispatch-formal-review") for fn in CALLERS]
+    out.append(("dispatch-formal-review is the same job in both release workflows", jobs[0] is not None and jobs[0] == jobs[1]))
+    for fn in CALLERS + WINDOWS:
+        needs = "open-pr" if fn in WINDOWS else "publish-pr"
+        cond = f"needs.{needs}.result == 'success'"
+        if fn in WINDOWS:
+            cond = "github.ref == 'refs/heads/main' && " + cond
+        job = docs[fn]["jobs"].get("dispatch-formal-review") or {}
+        steps = job.get("steps") or [{}]
+        out.append((f"{fn}: dispatch job follows {needs} in the main-only app-dispatch-main environment",
+                    job.get("needs") == needs and job.get("if") == cond and job.get("environment") == "app-dispatch-main"
+                    and "uses" not in job and "concurrency" not in job and len(steps) == 4
+                    and on_triggers(docs[fn]) == {"workflow_dispatch"}))
+        out.append((f"{fn}: the dispatch job's GITHUB_TOKEN is read-only",
+                    job.get("permissions") == {"contents": "read", "pull-requests": "read", "checks": "read"}))
+        if len(steps) != 4:
+            continue
+        co, wait, tok, send = steps
+        out.append((f"{fn}: the dispatch scripts come from main, without persisted credentials",
+                    (co.get("with") or {}).get("ref") == "main" and (co.get("with") or {}).get("persist-credentials") is False))
+        env = wait.get("env") or {}
+        script = "release-window-enqueue-wait.sh" if fn in WINDOWS else "release-bump-enqueue-wait.sh"
+        out.append((f"{fn}: the dispatch wait runs the guarded script in the dispatch stage with no secret",
+                    wait.get("id") == "ready" and env.get("STAGE") == "dispatch" and env.get("GH_TOKEN") == "${{ github.token }}"
+                    and str(wait.get("run", "")).strip().endswith(f"bash scripts/{script}") and "secrets." not in str(wait)
+                    and env.get("PR") == "${{ needs.%s.outputs.pr }}" % needs
+                    and (fn not in WINDOWS or env.get("EXPECT_HEAD") == "${{ needs.open-pr.outputs.head }}")
+                    and (("WINDOW_KIND=remove" in wait.get("run", "")) == (fn == "release-window-removal-pr.yml"))))
+        w = tok.get("with") or {}
+        out.append((f"{fn}: the dispatch token is minted only when needed, actions: write on .github alone",
+                    tok.get("id") == "token" and tok.get("if") == "steps.ready.outputs.dispatch == 'true'"
+                    and w.get("owner") == "mctlhq" and w.get("repositories") == ".github"
+                    and {k: v for k, v in w.items() if k.startswith("permission-")} == {"permission-actions": "write"}
+                    and w.get("private-key") == "${{ secrets.DISPATCH_APP_PRIVATE_KEY }}"
+                    and w.get("client-id") == "${{ vars.DISPATCH_APP_CLIENT_ID }}"))
+        env, run = send.get("env") or {}, send.get("run", "")
+        out.append((f"{fn}: the request names the trusted workflow on main and the approved head",
+                    send.get("if") == "steps.ready.outputs.dispatch == 'true'"
+                    and env.get("GH_TOKEN") == "${{ steps.token.outputs.token }}"
+                    and env.get("HEAD_SHA") == "${{ steps.ready.outputs.head_sha }}"
+                    and "gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main" in run
+                    and '-f pr_number="$PR"' in run and '-f head_sha="$HEAD_SHA"' in run and "set -euo pipefail" in run
+                    and "||" not in run and "secrets." not in str(send)))
+    return out
+
+
 RD, GB = CALLERS
+DISPATCH_MUTANTS = [
+    ("dispatch job without the environment", RD, "    environment: app-dispatch-main\n", ""),
+    ("dispatch job in the queue environment", GB, "environment: app-dispatch-main", "environment: app-dispatch-queue"),
+    ("dispatch wait in the enqueue stage", "release-window-pr.yml", "          STAGE: dispatch\n", ""),
+    ("removal dispatch loses its kind", "release-window-removal-pr.yml",
+     "          export WINDOW_KIND=remove\n          bash scripts/release-window-enqueue-wait.sh\n\n      - name: Mint",
+     "          bash scripts/release-window-enqueue-wait.sh\n\n      - name: Mint"),
+    ("dispatch token widened", RD, "          permission-actions: write\n", "          permission-actions: write\n          permission-contents: write\n"),
+    ("dispatch not pinned to the head", GB, ' -f head_sha="$HEAD_SHA"', ""),
+    ("dispatch from another ref", "release-window-pr.yml", "--repo mctlhq/.github --ref main", "--repo mctlhq/.github --ref x"),
+    ("refused dispatch ignored", RD, '-f head_sha="$HEAD_SHA"\n', '-f head_sha="$HEAD_SHA" || true\n'),
+]
 REUSABLE = """name: x
 on:
   workflow_call:
@@ -386,15 +484,15 @@ WIRING_MUTANTS = [
      "      - name: Enqueue the judged head with the App token\n        if: steps.ready.outputs.ready == 'true'\n",
      "      - name: Enqueue the judged head with the App token\n"),
     ("wait step gets the App key", GB,
-     "        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n",
-     "        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n          KEY: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
+     "      - name: Wait for the approval and the required checks on the bump head\n        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n",
+     "      - name: Wait for the approval and the required checks on the bump head\n        id: ready\n        env:\n          GH_TOKEN: ${{ github.token }}\n          KEY: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}\n"),
     ("environment dropped", RD, "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n    environment: app-gitops-pr\n",
      "    if: needs.publish-pr.result == 'success'\n    runs-on: ubuntu-latest\n"),
     ("job token gets write", GB,
      "    timeout-minutes: 50\n    permissions:\n      contents: read\n      pull-requests: read\n",
      "    timeout-minutes: 50\n    permissions:\n      contents: write\n      pull-requests: write\n"),
-    ("scripts from the caller's ref", RD, "          ref: main\n          persist-credentials: false\n\n      - name: Wait for the approval",
-     "          ref: ${{ github.sha }}\n          persist-credentials: false\n\n      - name: Wait for the approval"),
+    ("scripts from the caller's ref", RD, "          ref: main\n          persist-credentials: false\n\n      - name: Wait for the approval and the required checks",
+     "          ref: ${{ github.sha }}\n          persist-credentials: false\n\n      - name: Wait for the approval and the required checks"),
     ("refused enqueue ignored", GB, 'was refused: ${out}"\n            exit 1', 'was refused: ${out}"\n            exit 0'),
     ("the two jobs drift apart", RD, "    timeout-minutes: 50\n", "    timeout-minutes: 55\n"),
 ]
@@ -429,6 +527,15 @@ def main():
         except Exception:
             killed = True
         assert killed, f"wiring mutant survives: {name}"
+        print(f"mutant killed: {name}")
+
+    res = dispatch_cases(texts)
+    failed = [n for n, ok in res if not ok]
+    assert not failed, f"dispatch wiring: {failed}"
+    print(f"ok   {len(res)} dispatch wiring checks")
+    for name, fn, old, new in DISPATCH_MUTANTS:
+        assert texts[fn].count(old) == 1, f"mutant anchor {name}: {texts[fn].count(old)}"
+        assert any(not ok for _, ok in dispatch_cases({**texts, fn: texts[fn].replace(old, new)})), f"dispatch mutant survives: {name}"
         print(f"mutant killed: {name}")
 
     # The script's required checks are the ruleset's, and each is a real job id

@@ -370,3 +370,67 @@ jobs:
             exit 1
           fi
           echo "::notice::#${PR} enqueued at ${HEAD_SHA}: ${out}"
+
+  # Request agy-formal-review for the pull request head (mctlhq/mctl-gitops#3047):
+  # the ruleset requires it for queue entry and nothing else asks for it on a
+  # head Claude approved. Requested after the approval, so the formal reviewer's
+  # own approval is never the only review. Same guards as the enqueue wait
+  # (STAGE=dispatch). The dispatch App key (actions: write on mctlhq/.github
+  # only) is a secret of the main-only app-dispatch-main environment and is
+  # minted only when a review is needed. A failed or negative review leaves the
+  # required check unmet, so the enqueue job refuses.
+  dispatch-formal-review:
+    needs: open-pr
+    if: github.ref == 'refs/heads/main' && needs.open-pr.result == 'success'
+    runs-on: ubuntu-latest
+    environment: app-dispatch-main
+    timeout-minutes: 48
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the approval on the pushed head
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          EXPECT_HEAD: ${{ needs.open-pr.outputs.head }}
+          PROJECT: ${{ inputs.project }}
+          STAGE: dispatch
+        run: |
+          set -euo pipefail
+          case "$PROJECT" in apps|platform) ;; *) echo "::error::project must be apps or platform"; exit 1 ;; esac
+          export TARGET="platform-gitops/bootstrap/templates/projects/project-${PROJECT}.yaml"
+          export WINDOW_KIND=remove
+          bash scripts/release-window-enqueue-wait.sh
+
+      - name: Mint a dispatch token for mctlhq/.github
+        id: token
+        if: steps.ready.outputs.dispatch == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: .github
+          permission-actions: write
+
+      - name: Request the formal review of the approved head
+        if: steps.ready.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.open-pr.outputs.pr }}
+          HEAD_SHA: ${{ steps.ready.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh workflow run agy-formal-dispatch.yml --repo mctlhq/.github --ref main \
+            -f repository="$REPO" -f pr_number="$PR" -f head_sha="$HEAD_SHA"
+          echo "::notice::dispatched the formal review for #${PR} at ${HEAD_SHA}"

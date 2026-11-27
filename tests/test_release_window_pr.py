@@ -86,8 +86,8 @@ def problems(text):
     if doc.get("permissions") != {}:
         out.append("workflow-level permissions are not {}")
     job = doc["jobs"]["open-pr"]
-    if list(doc["jobs"]) != ["open-pr", "enqueue-window"]:
-        out.append("the workflow jobs are not exactly open-pr and enqueue-window")
+    if list(doc["jobs"]) != ["open-pr", "enqueue-window", "dispatch-formal-review"]:
+        out.append("the workflow jobs are not exactly open-pr, enqueue-window and dispatch-formal-review")
     if set(job.get("outputs", {})) != {"pr", "head"}:
         out.append("open-pr must hand the PR number and the pushed head to enqueue-window, nothing else")
     out += enqueue_problems(doc["jobs"].get("enqueue-window", {}))

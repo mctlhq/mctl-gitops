@@ -44,8 +44,8 @@ def problems(text):
         out.append(f"triggers are {sorted(map(str, on))}, expected only workflow_dispatch")
     if doc.get("permissions") != {}:
         out.append("workflow-level permissions are not {}")
-    if list(doc["jobs"]) != ["open-pr", "enqueue-window"]:
-        out.append("the workflow jobs are not exactly open-pr and enqueue-window")
+    if list(doc["jobs"]) != ["open-pr", "enqueue-window", "dispatch-formal-review"]:
+        out.append("the workflow jobs are not exactly open-pr, enqueue-window and dispatch-formal-review")
     job = doc["jobs"]["open-pr"]
     ejob = doc["jobs"].get("enqueue-window", {})
     out += add.enqueue_problems(ejob)
