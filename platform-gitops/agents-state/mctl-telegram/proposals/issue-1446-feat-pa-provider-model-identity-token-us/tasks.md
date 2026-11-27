@@ -25,7 +25,7 @@ operational artefacts are required before the pilot GO.
 ### Required before merge
 
 - [ ] T1. Fake provider, normal usage: prompt/completion/cached/reasoning recorded; run totals equal the sum of calls and equal `cost_usd`; `usage_consistent=true`; completeness `complete`.
-- [ ] T2. Missing vs zero: usage absent and all-zero -> fields null, basis `unknown`, `cost_usd` null on reply, settlement at full reservation as before, no zero token metric increments; then each of input, output, cached and reasoning absent alone and supplied as 0 alone -> only the absent field is null and a supplied 0 stays 0.
+- [ ] T2. Missing vs zero: usage absent -> all token fields null; usage supplied as all-zero -> the supplied zeros are stored as 0 (not null) but the usage counts as unreported for costing; in both cases basis `unknown`, `cost_usd` null on reply, settlement at full reservation as before, no zero token metric increments; then each of input, output, cached and reasoning absent alone and supplied as 0 alone -> only the absent field is null and a supplied 0 stays 0.
 - [ ] T3. Model identity and redaction of identifiers: configured `zai-org/GLM-5.3-Flash` returned identically -> `exact`; a listed `AGENT_MODEL_ALIASES` pair -> `verified_alias`; an unlisted different string -> `mismatch`; absent -> `unknown`; oversized or invalid-charset returned and configured strings are sanitized before records, logs and labels.
 - [ ] T4. Partial usage across calls: one call with usage, next without -> per-call costs listed, run estimate null, basis `unknown`, completeness `partial`, run ends with `errPACostLimit` exactly as today.
 - [ ] T5. Multiple tool rounds: N rounds produce N+1 model call records with monotonic `seq`; tool cap behaviour unchanged.
@@ -35,7 +35,7 @@ operational artefacts are required before the pilot GO.
 - [ ] T9. Fencing and attempt identity: a summary for a fenced or superseded attempt, or for a `(job_id, attempt)` without a settled row, writes nothing and counts `refused`; the identity comes from the token, not the summary.
 - [ ] T10. Redaction and bounded metrics: scrape the metrics registry and capture slog output in a run whose prompt, answer and tool arguments contain sentinel strings and synthetic principal/Telegram ids (personas Alice/Bob); assert none appear, and that model labels stay within the `UsageModel`/`UsageProvider` slots.
 - [ ] T11. Compatibility and negotiation: new worker against a server stub with no capability or an unknown version sends a byte-identical legacy payload; old-shape reply to a new server recorded as `absent`; old/new worker x old/new server all settle identically.
-- [ ] T12. Answer-size semantics: with and without `usage`, an answer at today's limit is accepted and one past it overflows exactly as today; a maximal answer plus maximal `usage` keeps the answer's outcome and bounds `usage` separately.
+- [ ] T12. Answer-size semantics: with and without `usage`, an answer at today's limit is accepted and one past it overflows exactly as today; a maximal answer plus a maximal valid `usage` (including the JSON wrapper overhead) fits the outer read limit and keeps the answer's outcome; a maximal answer plus an oversized `usage` keeps the answer's outcome and the `usage` is dropped and counted as `oversized`.
 - [ ] T13. Purge: principal deletion removes its `pa_usage_calls` rows, and a summary arriving after the purge writes nothing.
 
 ### Required before pilot GO

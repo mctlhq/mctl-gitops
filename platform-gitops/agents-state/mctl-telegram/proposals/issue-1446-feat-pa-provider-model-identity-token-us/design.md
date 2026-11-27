@@ -118,13 +118,18 @@ are separate, nullable observational fields; `ChatUsage` as budget input, `Price
   Relying on old servers' lenient decoding alone is not enough, because a usage field could push
   a legacy-size answer over the old body limit. A new server treats an absent field as "not
   reported".
-- Answer-size semantics are unchanged. The server reads the body with a limit of
-  `maxReplyBody + paUsageMaxBytes` only when it advertised the capability, decodes `usage` as a
-  separate raw field, and then applies today's `maxReplyBody` rule to the reply exactly as if the
-  `usage` field were absent: an answer accepted today is accepted, an answer that overflows today
-  overflows the same way, and its `cost_usd` is handled as today. `usage` is bounded
-  (`paUsageMaxBytes`, worst case well under 16 KiB) and validated on its own; an oversized or
-  malformed `usage` is dropped and counted, never affecting the reply.
+- Answer-size semantics are unchanged. Only when it advertised the capability, the server reads
+  the body with an outer transport limit of `maxReplyBody + paUsageReadHeadroom`, where
+  `paUsageReadHeadroom` is strictly larger than `paUsageMaxBytes` plus the JSON wrapper overhead
+  (`,"usage":` and whitespace), so that a maximal accepted answer plus a maximal valid `usage`
+  always fits, and an oversized `usage` can still be read far enough to be identified, skipped and
+  counted as `oversized` rather than truncating the request. The server decodes `usage` as a
+  separate raw field, measures it on its own against `paUsageMaxBytes`, and then applies today's
+  `maxReplyBody` rule to the remaining reply payload exactly as if the `usage` field were absent:
+  an answer accepted today is accepted, an answer that overflows today overflows the same way,
+  and its `cost_usd` is handled as today. An oversized or malformed `usage` is dropped and
+  counted, never affecting the reply. A body above the outer limit is handled by today's overflow
+  rule; the headroom only ever adds room, it never lowers the limit an answer sees today.
 - On the abandon path, `usage` is accepted even though `cost_usd` is refused with `fail_reason`
   (existing rule kept); it is recorded only.
 

@@ -113,7 +113,10 @@ off.
   traceparent. `pa.job` is the root of the trace and has no parent; it is
   created through a PA-scoped ID generator that returns the stored ids, and
   its sampling follows the stored flags rather than the `AlwaysOff` root
-  sampler. Attempt
+  sampler. Because the SDK consults the sampler before the ID generator for a
+  parentless span, this needs a PA-aware sampler wrapper around
+  `ParentBased(AlwaysOff)` that, for `pa.job` only, returns the decision carried
+  in the stored trace flags; every other parentless span keeps `AlwaysOff`. Attempt
   span ids are derived, not stored: the first 8 bytes of
   SHA-256(trace id || root span id || attempt number). Any replica therefore
   derives the same attempt span id for the same attempt, and retries are
