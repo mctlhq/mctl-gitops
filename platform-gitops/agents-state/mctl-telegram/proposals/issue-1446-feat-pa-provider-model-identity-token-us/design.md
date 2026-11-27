@@ -221,8 +221,17 @@ the guarantee that budget controls do not read telemetry. New field names are ch
   EXISTS` / `ALTER TABLE ADD COLUMN` pattern in `internal/db`, SQLite and Postgres. No backfill;
   existing rows read as "not reported".
 - Compatibility: a new worker against an old or unknown server sees no capability and sends the
-  legacy payload; an old worker against a new server records `absent`. Mixed rollout is safe in
-  either order, and answer-size and body-overflow behaviour are the same in every combination.
+  legacy payload; an old worker against a new server records `absent`. Server rollout is two-step:
+  every server replica must be headroom-aware before any of them advertises `usage_telemetry: 1`
+  (advertisement is behind its own default-off switch, enabled only after the rollout finished),
+  because a claim and its reply can reach different replicas; rollback turns advertisement off
+  first, then downgrades. Under that order answer-size and body-overflow behaviour are the same
+  in every combination.
+- Scope of `oversized`: the worker never sends a `usage` above `paUsageMaxBytes` (it drops the
+  field and counts locally), so a conforming worker cannot exceed the outer limit. On the server,
+  `oversized` covers a `usage` between `paUsageMaxBytes` and the headroom; a body above
+  `maxReplyBody + paUsageReadHeadroom` comes only from a non-conforming client and meets today's
+  transport cap, which is deliberate (the outer limit stays a DoS bound).
 - Resource impact: at most ~40 small rows per run in `pa_usage_calls`; a handful of new series
   bounded by 16 models x small provider and outcome sets.
 - Risks and mitigations:

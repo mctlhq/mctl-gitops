@@ -170,8 +170,12 @@ off.
   zero.
 - Dedup. The terminal observation (phase histograms, unanswered histogram,
   completeness counter) is recorded only by the process whose conditional
-  terminal update on `pa_jobs` (finish, fail, cancel, lease-expiry release)
-  affected the row. A losing or fenced request records nothing terminal.
+  terminal update on `pa_jobs` affected the row: finish, fail, cancel
+  (including `ReleaseCancel`) and lease expiry (`ExpirePAJobs` sets status
+  `expired`, which is terminal today). A release that returns the job to
+  `queued` (`ReleaseBackoff`, or a claim-failure backoff) is not terminal: it
+  ends only that `pa.attempt` and records no terminal observation and no
+  `pa.job` end, so the next attempt continues the same trace. A losing or fenced request records nothing terminal.
   Duplicate webhook deliveries are already deduplicated by
   `AcceptPAUpdate`, so they never reach enqueue.
 
