@@ -51,7 +51,11 @@ no other repository touched.
    - D1 Seller-eligibility frame: eligibility is a function of (legal entity type, registration
      jurisdiction, bank account jurisdiction/currency, product category), not residence. A decision
      table the owner fills privately: for each option, the published rule and the question the owner
-     answers yes/no/unknown for their entity.
+     answers for their actual entity with one of `confirmed`, `conditional` (eligible only if a
+     stated condition is met), `ineligible` or `unknown`. Every item is marked mandatory or
+     optional; an option with any mandatory item not `confirmed` is blocked for launch. The filled
+     checklist stays owner-private; the repository holds only the empty table, the published rules
+     with source dates and `<OWNER_PRIVATE:...>` placeholders.
    - D2 Provider comparison matrix, one column each for Creem, Paddle, and invoicing / bank
      acquiring fallback (direct invoice with bank transfer, optionally a card acquirer or payment
      link under the seller's own entity). Rows: supported seller countries; entity and identity
@@ -60,8 +64,9 @@ no other repository touched.
      files EU OSS / other VAT, what the seller still owes in its own jurisdiction); percentage fee;
      fixed fee; FX and currency-conversion spread; payout fee, minimum and cadence; refunds;
      chargebacks/disputes and fees; subscription cancellation and dunning; webhook signing scheme,
-     retries and sandbox availability. Each cell `[PRIMARY]` URL + access date or
-     `unknown (not observed)`. For the fallback the MoR boundary inverts: the seller owns VAT
+     retries and sandbox availability, including the provider's documented order and event
+     identifiers, signature header and timestamp fields, and which of them remain unresolved. Each
+     cell `[PRIMARY]` URL + access date or `unknown (not observed)`. For the fallback the MoR boundary inverts: the seller owns VAT
      registration/OSS, invoicing law and consumer-refund duties; the report states this as a
      boundary and defers the legal check to the owner's accountant.
    - D3 Minimal flow (below), D4 cost example, D5 separation from Agent Commerce, D6 checklist,
@@ -71,32 +76,52 @@ no other repository touched.
    buyer -> provider hosted checkout (no card data at MCTL)
          -> provider webhook (raw body, signature header, event id, timestamp)
          -> verify signature + timestamp window -> dedupe on (provider, event_id)
-         -> apply to Order(provider_order_id) state machine
-              pending -> paid -> refunded | disputed -> (won -> paid | lost -> revoked)
+         -> check sku, amount, currency against the order -> mismatch => hold
+         -> apply to Order(provider, provider_order_id) state machine
+              pending -> paid -> partially_refunded -> refunded
+              paid | partially_refunded -> disputed(dispute_id)
+                   -> won -> previous state (a later dispute opens again)
+                   -> lost -> revoked
               subscription: active -> past_due -> canceled (entitlement until period end)
-         -> Entitlement(subject, sku, source: webhook|manual, valid_until)
+              any ambiguous transition -> hold (owner review)
+         -> Entitlement(subject, sku, order key, source: webhook|manual, valid_until)
    manual path: owner verifies order in provider dashboard / bank statement
          -> records order ref -> Entitlement(source: manual)
+         -> a webhook for the same order key reuses that entitlement; disagreement => hold
    reconciliation (daily or on demand): provider order export vs entitlements
          -> matched | missing-entitlement | orphan-entitlement | amount-mismatch
-         -> ambiguous => flag for owner, never auto-revoke
+            | sku-mismatch | currency-mismatch | owner-review
+         -> ambiguous => owner review, never automatic grant or revocation
    ```
-   Monotonic event application uses the provider's event/occurred-at ordering plus a terminal-state
-   rule, so a late `paid` after `refunded` does not re-grant.
+   Order identity is per provider: `(provider, provider_order_id)` for orders and
+   `(provider, event_id)` for events, so identifiers from two providers never collide. Monotonic
+   event application uses the provider's event/occurred-at ordering plus a terminal-state rule, so
+   a late `paid` after `refunded` or `revoked` does not re-grant. A partial refund records the
+   refunded amount and keeps the entitlement, but is flagged for owner review rather than revoking
+   automatically; cumulative refunds reaching the order amount move it to `refunded`. Each dispute
+   is tracked by its own id, so a recurring dispute after a won one is a new dispute, not a replay.
+   A duplicate event is a no-op; conflicting events (for example two different amounts for one
+   order) and a manual grant that disagrees with a webhook put the order in `hold` and leave the
+   entitlement unchanged until the owner resolves it. Any permutation of a fixture's events either
+   converges to the in-order state or ends in an explicit hold.
 3. Reference model `docs/spikes/commercial-f1-seller-payments/model.py` (stdlib, Decimal): fee
    calculator (percentage + fixed + FX spread + payout fee, rounding per currency minor unit),
    HMAC-SHA256 webhook verifier with a synthetic secret and timestamp tolerance, idempotent event
-   store, order/entitlement state machine, manual grant, and reconciler. Fixtures in `fixtures/`
-   (synthetic events, a synthetic order export, `fee-params.json` copied from D2 with source URL and
-   access date per value, `oracle.json`). Tests in `tests/test_seller_payments.py`. The model does
-   not imitate any provider's exact signature format; it states that the real format is per
-   provider docs (D2).
-4. D4 cost example: illustrative first SKU (EUR monthly subscription and a one-off variant unless
-   #427 fixes a price), buyers in an EU country and a non-EU country, net-to-seller per option,
-   computed by the model; rows with `unknown` fee inputs are reported as not computable rather than
-   estimated.
-5. D5 separation from #173: revenue entitlements live outside `PaymentAuthorizer`, simulated
-   ledger and tenant budgets; a paid order never sets a budget or authorizes a capability; any
+   store, order/entitlement state machine with the hold state, manual grant, and reconciler.
+   Fixtures in `fixtures/` (synthetic events including permutation/replay, partial-refund,
+   dispute-recurrence, manual/webhook-conflict, wrong-SKU/amount/currency and invalid-signature
+   sets, a synthetic order export, `fee-params.json` copied from D2 with source URL and access date
+   per value, `oracle.json`). Tests in `tests/test_seller_payments.py`. The model does not imitate
+   any provider's exact signature format. The synthetic HMAC proves model invariants only, not
+   compatibility with the actual Creem or Paddle webhooks; the real format, and the fields still
+   unresolved, are per provider docs (D2).
+4. D4 cost example: the SKU proposed by the #428 spike when available; otherwise an illustrative
+   first SKU (EUR monthly subscription and a one-off variant), labeled illustrative. Buyers in an
+   EU country and a non-EU country, net-to-seller per option, computed by the model from fee
+   parameters with source dates; rows with `unknown` fee inputs are reported as not computable
+   rather than estimated, never as zero.
+5. D5 separation from #173: revenue entitlements live outside simulated Agent Commerce credits,
+   `PaymentAuthorizer`, the simulated ledger, tenant budgets and authorization; a paid order never sets a budget or authorizes a capability; any
    later link (for example a paid plan raising quota) is a separate, owner-approved design.
 6. `roadmap/spikes/commercial-f1-seller-payments.yaml`: `lifecycle: proposed`,
    `github.issue: mctlhq/.github#429`, `evidence.report` pointing at the report, outcomes
@@ -104,8 +129,10 @@ no other repository touched.
    block (owner-only). No `epic` binding until #427 has a manifest.
 7. AGENTS.md: one bullet under `# Spikes`.
 
-Recommendation logic for D9 (conditional, to be filled with evidence): prefer an MoR whose
-published rules accept the owner's entity type and jurisdiction and AI/SaaS products, because it
+Recommendation logic for D9 (conditional, to be filled with evidence): an option with any
+mandatory eligibility item not `confirmed` is blocked for launch and cannot be adopted. Among the
+rest, prefer an MoR whose published rules accept the owner's entity type and jurisdiction and
+AI/SaaS products, because it
 removes per-country VAT collection from a one-person operation; between MoRs, prefer the lower
 all-in cost at the first SKU's price and the stronger documented payout/sandbox story; if neither
 MoR is confirmed eligible, propose `INVOICE_FALLBACK_FIRST` for B2B with manual fulfillment; if
