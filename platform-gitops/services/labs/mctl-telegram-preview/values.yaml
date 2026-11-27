@@ -296,7 +296,10 @@ env:
   MANAGED_RUNTIME_ENABLED: "true"
   MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
   MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
-  MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
+  # Raised x10 from "5.00" (owner, 2026-11-28): the global day window sums the
+  # managed ledger AND pa_usage, so it caps the PA too. Managed spend stays
+  # bounded by MANAGED_BUDGET_USD_PER_ACCOUNT_DAY x MANAGED_RUNTIME_MAX_ACCOUNTS.
+  MANAGED_BUDGET_USD_GLOBAL_DAY: "50.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
   # Personal Assistant bot (mctlhq/mctl-telegram#1318), preview only. Step G1:
   # the plain values land with PA_ENABLED "false", so nothing PA runs and the
@@ -327,6 +330,14 @@ env:
   # of PA_SERVER_TG_ENABLED, PA_EXTERNAL_TOOLS_ENABLED and PA_ENABLED was
   # turned off alone on this service, its refusal observed, and restored.
   PA_ENABLED: "true"
+  # PA budgets, x10 the code defaults (0.25 / 2 / 20; owner, 2026-11-28).
+  # Acceptance evals hit the $2 day cap while the provider billed $0.05 that
+  # day: a run appears to settle at its full reservation, not its cost
+  # (mctlhq/mctl-telegram#1519). The per-job reservation stays at 0.25.
+  # Must hold JOB <= DAY <= MONTH and JOB <= MANAGED_BUDGET_USD_GLOBAL_DAY.
+  PA_BUDGET_USD_JOB: "0.25"
+  PA_BUDGET_USD_DAY: "20"
+  PA_BUDGET_USD_MONTH: "200"
   # Streaming (mctlhq/mctl-telegram#1431, owner GO 2026-11-24, preview
   # only): the partial answer and a fixed tool status are shown as a Telegram
   # draft while a run is in progress. The final reply is still sent once
