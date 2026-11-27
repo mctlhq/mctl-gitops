@@ -413,6 +413,13 @@ jobs:
         # resolve to a per-run group. The test pins every expression.
         run: python3 tests/test_workflow_concurrency.py
 
+      - name: Self-hosted runners only on trusted events (allowlist)
+        # mctlhq/mctl-gitops#2993, ADR 0004: a job that may run on a
+        # self-hosted runner is allowed only under push to main and
+        # workflow_dispatch; unresolvable runs-on and unreviewed external
+        # reusable workflows fail closed.
+        run: python3 tests/test_self_hosted_trigger_allowlist.py
+
       - name: CI queue latency report (fixture numbers, failed read is exit 2)
         # mctlhq/mctl-gitops#2993: scripts/ci-queue-latency.py feeds the ADR 0004
         # measurements. The test also mutates the script and wants each mutant red.
