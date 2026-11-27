@@ -10,17 +10,12 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-api.git
       # Pinned to a commit, not `main` (mctlhq/mctl-gitops#2528, hold P7): a
       # chart change merged to mctl-api main must not reach production without
-      # a GitOps change. a91f7fb4 is the 4.171.0 release commit (image live).
-      # With the current bootstrap values it renders the same objects as
-      # c5e5d6f9 (the 4.164.0 pin) except two things (helm template diff of
-      # the chart at the two commits): a new DEVLOOP_BEARER_APPROVE_ENABLED
-      # env with an empty value (the chart default; empty parses as off, so
-      # the live break-glass-off behaviour is unchanged) and one YAML comment.
-      # The chart also gains the extraContainers / extraVolumes /
-      # extraVolumeMounts slots (mctlhq/mctl-api bf7b27c, since 4.169.0) that
-      # apiC2Control needs, empty here. Move this pin in a reviewed PR, at a
-      # release commit whose image is deployed.
-      targetRevision: a91f7fb4a92e835f5f562f2cbab3ac2e2519c530
+      # a GitOps change. ddb6f57e is the 4.180.0 release commit (image live).
+      # The chart differs from the previous pin a91f7fb4 (4.171.0) only by the
+      # optional secret slot of the self-service access page (mctl-api#1201),
+      # empty by default. Move this pin in a reviewed PR, at a release commit
+      # whose image is deployed.
+      targetRevision: ddb6f57e6755b3a6977f265606c76e73120e789c
       path: helm
       helm:
         releaseName: mctl-api
@@ -539,6 +534,15 @@ spec:
             # the boot because the refusal is not implemented yet.
             # Rollback: delete this line.
             GLOVO_GOOGLE_ONLY_MODE: shadow
+            # The self-service access page (mctl-api >= 4.180.0): a Google
+            # customer records consent and opens or withdraws their own access
+            # request in a browser, behind a fresh sign-in of its own ZITADEL
+            # client. The owner's decision stays on the MFA page. Needs the
+            # secret slot of this page below, SELF_URL and the extra ingress
+            # path above; if an input is missing the page stays off and the pod
+            # logs it as disabled at Error level.
+            # Rollback: delete this line.
+            GLOVO_ACCESS_SELF_UI_ENABLED: "true"
             {{- end }}
             {{- if .Values.mctlGlovo.linkLogin }}
             # The account-link RFC 8707 resource (mctl-api >= 4.170.0, its
@@ -686,6 +690,12 @@ spec:
           # Secret (mctl-gitops#2730). Optional refs. Chart slot from
           # mctl-api#1095 (4.164.0). Rollback: delete this line and the flag.
           releaseApprovalUISecret: mctl-api-oidc-zitadel
+
+          # Client id and secret of the self-service access page,
+          # written by zitadel-iac into the same Secret (mctl-gitops#3019).
+          # Optional refs. Chart slot from mctl-api#1201 (4.180.0).
+          # Rollback: delete this line and the page flag.
+          glovoAccessSelfUISecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
