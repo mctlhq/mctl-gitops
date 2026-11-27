@@ -177,6 +177,9 @@ ALLOWED_LINES: dict[str, frozenset[str]] = {
         # consent routes and the shared cohort size, behind apiConsent.
         '            {{- if .Values.mctlGlovo.apiConsent }}',
         '            GLOVO_CONSENT_ENABLED: "true"',
+        # The self-service access page: its switch and its chart slot.
+        '            GLOVO_ACCESS_SELF_UI_ENABLED: "true"',
+        '          glovoAccessSelfUISecret: mctl-api-oidc-zitadel',
         '            GLOVO_C2_CAPACITY: "{{ int .Values.mctlGlovo.capacity }}"',
         '            GLOVO_ACCESS_REQUIRED: "true"',
         '            GLOVO_ACCESS_NOTIFY_ENABLED: "true"',
