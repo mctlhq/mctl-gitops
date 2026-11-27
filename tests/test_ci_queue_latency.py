@@ -25,6 +25,35 @@ def load(source):
     return mod
 
 
+FAKE_GH = r"""#!/usr/bin/env python3
+import json, sys
+a = sys.argv[1:]
+path = next(v for v in a if v.startswith("repos/"))
+if "--method" not in a or a[a.index("--method") + 1] != "GET":
+    sys.exit("not GET")
+if path.endswith("/actions/runs"):
+    print(json.dumps([{"total_count": 2, "workflow_runs": [
+        {"id": 1, "event": "merge_group", "name": "Validate Manifests", "display_title": "x",
+         "created_at": "2026-11-22T10:00:00Z", "conclusion": "success"},
+        {"id": 2, "event": "pull_request", "name": "Validate Manifests", "display_title": "x",
+         "created_at": "2026-11-22T10:01:00Z", "conclusion": "success"}]}]))
+elif path.endswith("/jobs"):
+    print(json.dumps([{"jobs": [{"started_at": "2026-11-22T10:00:40Z"}]}]))
+elif path.endswith("/pulls"):
+    n = [v for v in a if v.startswith("page=")][0]
+    if n == "page=1":
+        print(json.dumps([
+            {"number": 7, "merged_at": "2026-11-22T10:30:00Z", "updated_at": "2026-11-22T10:31:00Z", "head": {"ref": "feat/a"}},
+            {"number": 6, "merged_at": "2026-11-20T10:30:00Z", "updated_at": "2026-11-21T10:31:00Z", "head": {"ref": "feat/old"}}]))
+    else:
+        sys.exit("page 2 must never be read")
+elif path.endswith("/timeline"):
+    print(json.dumps([[{"event": "added_to_merge_queue", "created_at": "2026-11-22T10:10:00Z"}]]))
+else:
+    sys.exit("unexpected path " + path)
+"""
+
+
 def run_cases(source):
     """Returns the list of failed case names for the given script source."""
     bad = []
@@ -95,6 +124,22 @@ def run_cases(source):
             finally:
                 os.environ["PATH"] = old
         check("window splits into 6h chunks", len(list(mod.chunks("2026-11-22T00:00:00Z", "2026-11-23T00:00:00Z"))) == 4)
+        # collect() end to end against a routing fake gh: shapes, window filter, early stop.
+        with tempfile.TemporaryDirectory() as d:
+            gh = pathlib.Path(d) / "gh"
+            gh.write_text(FAKE_GH)
+            gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+            old = os.environ["PATH"]
+            os.environ["PATH"] = f"{d}:{old}"
+            try:
+                data = mod.collect("2026-11-22T00:00:00Z", "2026-11-22T12:00:00Z")
+                check("collect keeps both runs", len(data["runs"]) == 2)
+                check("collect fetches jobs only for runs that enter a metric", list(data["jobs"]) == ["1"])
+                check("collect keeps only PRs merged in the window", [p["number"] for p in data["prs"]] == [7])
+                check("collect builds timelines", list(data["timelines"]) == ["7"])
+                check("collect output feeds report", mod.report(data)["queue_enqueue_to_merge"].get("max") == 1200)
+            finally:
+                os.environ["PATH"] = old
         check("last chunk ends at the window end",
               list(mod.chunks("2026-11-22T00:00:00Z", "2026-11-22T07:00:00Z"))[-1]
               == ("2026-11-22T06:00:00Z", "2026-11-22T07:00:00Z"))
@@ -110,9 +155,12 @@ MUTATIONS = {
     "queue uses latest enqueue event": ('seconds(min(events)', 'seconds(max(events)'),
     "failed gh read treated as success": ('if r.returncode != 0:', 'if False:'),
     "failed read exits 0": ('return 2', 'return 0'),
-    "read drops the explicit GET": ('"--method", "GET", ', ''),
+    "read drops the explicit GET": ('["gh", "api", "--method", "GET"]', '["gh", "api"]'),
     "truncated listing accepted": ('["total_count"] >', '["total_count"] >= 10**9 or 0 >'),
     "chunks ignore the window end": ('stop = min(start + step, end)', 'stop = start + step'),
+    "paging never stops early": ('items[-1]["updated_at"] < since', 'False'),
+    "PR window filter drops its lower bound": ('since <= p["merged_at"] <= until', 'p["merged_at"] <= until'),
+    "jobs fetched for every run": ('def needs_jobs(run):', 'def needs_jobs(run):\n    return True'),
     "cancelled-before-start ignores start": ('and start is None', ''),
 }
 

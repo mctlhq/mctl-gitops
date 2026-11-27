@@ -133,19 +133,39 @@ def render(metrics, window):
     return "\n".join(out)
 
 
-def gh_json(path, *params):
+def gh_json(path, *params, paginate=True):
+    """Returns a list of pages (one page when paginate is False)."""
     # -f/-F make `gh api` default to POST; every read here must be an explicit GET.
-    cmd = ["gh", "api", "--method", "GET", "--paginate", "--slurp", path, *params]
+    cmd = ["gh", "api", "--method", "GET"] + (["--paginate", "--slurp"] if paginate else []) + [path, *params]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise ReadError(f"gh api {path} failed: {r.stderr.strip()}")
     try:
-        pages = json.loads(r.stdout)
+        body = json.loads(r.stdout)
     except json.JSONDecodeError as e:
         raise ReadError(f"gh api {path}: malformed body: {e}")
+    pages = body if paginate else [body]
     if not isinstance(pages, list):
         raise ReadError(f"gh api {path}: unexpected shape")
     return pages
+
+
+def merged_prs(since, until):
+    """Merged PRs in the window. The listing is newest-updated first and merged_at
+    <= updated_at, so it stops at the first page whose last PR was updated before
+    `since` instead of reading the repository's whole closed-PR history."""
+    prs, page = [], 1
+    while True:
+        (items,) = gh_json(f"repos/{REPO}/pulls", "-f", "state=closed", "-f", "per_page=100",
+                           "-f", "sort=updated", "-f", "direction=desc", "-f", f"page={page}", paginate=False)
+        if not isinstance(items, list):
+            raise ReadError("gh api pulls: unexpected shape")
+        for p in items:
+            if p.get("merged_at") and since <= p["merged_at"] <= until:
+                prs.append({"number": p["number"], "merged_at": p["merged_at"], "head_ref": p["head"]["ref"]})
+        if not items or items[-1]["updated_at"] < since:
+            return prs
+        page += 1
 
 
 def chunks(since, until, hours=6):
@@ -183,12 +203,7 @@ def collect(since, until):
     # A failed read raises out of map(): the whole report aborts, never a shorter list.
     with ThreadPoolExecutor(max_workers=8) as pool:
         jobs = dict(pool.map(fetch_jobs, [r for r in runs if needs_jobs(r)]))
-    prs = []
-    for page in gh_json(f"repos/{REPO}/pulls", "-f", "state=closed", "-f", "per_page=100",
-                        "-f", "sort=updated", "-f", "direction=desc"):
-        for p in page:
-            if p.get("merged_at") and since <= p["merged_at"] <= until:
-                prs.append({"number": p["number"], "merged_at": p["merged_at"], "head_ref": p["head"]["ref"]})
+    prs = merged_prs(since, until)
     timelines = {}
     for p in prs:
         pages = gh_json(f"repos/{REPO}/issues/{p['number']}/timeline", "-f", "per_page=100")
