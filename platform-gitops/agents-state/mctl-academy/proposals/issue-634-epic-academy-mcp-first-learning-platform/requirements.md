@@ -1,109 +1,37 @@
-# Academy MCP-first learning platform: portable MCP Apps, optional A2UI, cross-host progress (W0 investigation output)
+# Academy MCP-first learning platform — bounded W1a proposal amendment
 
-Status requested: **proposed**. This document is the W0 discovery deliverable for
-mctlhq/mctl-academy#634. It authorizes nothing: no implementation, no implementer
-run, no deploy, no new service/DB/gateway, no connector submission, no live account
-linking, no additional paid inference. Every workstream below W0 has its own GO/NO-GO
-gate (design.md, "GO/NO-GO gates") that requires separate owner approval.
+## Decision and authority
 
-Baseline: `main` at `bcf8302c90f98476e90df1cf4a520554825f39ca`, package version
-`0.1.101`, deployed `labs/mctl-academy` image `0.1.101` (verified, see design.md
-"Deployed state checked").
+Source: mctlhq/mctl-academy#634. W0 investigation completed. This amendment proposes exactly one executable Tier 2 slice, **W1a**, in mctlhq/mctl-academy. The existing grant is not approval for this amendment. Only a fresh human decision on the reviewed, merged proposal digest authorizes W1a implementation and its implementation PR; no other stage, merge, deploy or external publication is authorized. Until then this is proposed only. The original epic's investigation-only boundary remains in force until that decision. No edit to .status.yaml, no duplicate workflow.
 
-## Context
+Baseline rechecked on 2026-11-28: Academy main at bcf8302c90f98476e90df1cf4a520554825f39ca (0.1.101). See design.md for evidence and amendment rationale. Revalidate baseline and stop if the authorized slice cannot be implemented without widening it.
 
-Academy today is a Vue 3/Vite client and a Hono API in one Bun image
-(`Dockerfile`), with GitHub sign-in via better-auth (`server/auth.mjs:148`),
-server-graded attempts (`server/routes/attempts.mjs:34-73`) and progress computed
-client-side from a build-time, fail-closed content bundle
-(`scripts/build-content-bundle.mjs`, `client/src/services/progressStore.ts:680`).
-There is no MCP endpoint, no server-owned practice or exam session, and the global
-CSP forbids framing (`server/middleware/security-headers.mjs:31`).
+Product goal (not the scope of this grant): Learn anywhere. Progress everywhere. Build with AI. Use without AI. Portable MCP Apps, optional A2UI, and one learner-owned progress/session record across web and chat; deterministic functionality remains available without an LLM. W1a is foundation only, not a cross-host progress launch.
 
-The owner wants Academy to become an MCP-first learning product: learn in an
-external AI assistant (Claude, ChatGPT, Cursor and others) through portable MCP Apps
-UI, keep the same personal progress across web and chat, and still use the site
-without any LLM ("Learn anywhere. Progress everywhere. Build with AI. Use without
-AI."). Academy should become a reference implementation of portable MCTL UI. This
-matters because the learning logic is fully deterministic. An MCP surface must
-add reach without making learning depend on a model, and without weakening the
-evidence gate, spoiler protection, privacy or the existing site.
+## W1a acceptance requirements — the only executable scope
 
-## User stories
+R1. WHEN the existing bundle generator runs, THE SYSTEM SHALL emit the server's eligible bundle and catalog from the same validated in-memory outputs as the web artefacts, with a deterministic digest over their exact serialized bytes. There SHALL be one eligibility rule; no runtime evidence verification, source snapshot access, or evidence-gate relaxation. Counts, availability, and domain metadata SHALL come from eligible content, not README or the historical all-status grading inventory. Fixture/custom output paths SHALL isolate all outputs; existing web bytes and sitemap semantics SHALL remain unchanged.
 
-- AS a learner using an AI assistant I WANT to browse courses and see my Academy progress inside the chat SO THAT I do not have to switch to the website.
-- AS a signed-in learner I WANT to start a practice session in chat, answer in an embedded quiz, and resume the same session later on the web SO THAT my progress is one record wherever I learn.
-- AS a learner I WANT the AI assistant to be unable to answer questions on my behalf and have that counted as my work SO THAT my progress reflects what I actually know.
-- AS a guest on the website I WANT practice to keep working with no sign-in and no AI SO THAT the free product is unchanged.
-- AS a learner I WANT to revoke an assistant's access and to delete my account and history SO THAT I control which hosts can see my data.
-- AS the maintainer I WANT the MCP surface to serve only bundle-eligible content from the same build artefact as the web SO THAT evidence policy is enforced once, at build time.
-- AS an MCTL platform owner I WANT Academy to reuse existing MCTL contracts (`@mctlhq/ui`, identity, MCP Apps host matrix) SO THAT it is a reference consumer, not a fork.
+R2. THE SYSTEM SHALL extract a pure shared latest-per-question and progress projection, with typed client exports preserved, usable by the existing client and server tests. Same inputs (including sequence/ties) SHALL produce identical outputs, per course/domain: total, attempted, correct, mistakes, unseen, accuracy and solved; accuracy, coverage and solved SHALL remain distinct. In W1a no personal data is read through MCP, no DB queries or changes are added for progress, and no existing guest, offline, sync, erase, REST or historical-grading behavior is altered. Future canonical server ordering is deferred to W1b/W2, not claimed by a synthetic parity test.
 
-## Acceptance criteria (EARS)
+R3. WHEN ACADEMY_MCP is explicitly on in local/synthetic testing, THE SYSTEM SHALL expose only two anonymous read-only tools on an in-process Streamable HTTP MCP adapter: academy_catalog and academy_course. Only vendor-neutral allowlisted catalog metadata is returned; no question stems, options, correct flags, explanations, source excerpts, personal identifiers, attempts, raw bundle, or UI resource URI/metadata. Strict input schemas, bounded sizes and deterministic results; unknown tools/invalid input fail closed. No personal tool discovery, token issuance or UI resource advertisement.
 
-### Investigation deliverable (this proposal)
-- THE PROPOSAL SHALL pin the baseline commit, provide a file:line evidence matrix, a reuse map, an ADR with decision criteria, at least three compared options (including "no A2UI for MVP"), example tool schemas, errors and annotations, an MCP Apps contract, an auth/token flow, a threat model, a data model and migration plan, a test strategy with synthetic users, a cost model, and GO/NO-GO gates per workstream (design.md).
-- THE PROPOSAL SHALL distinguish proposed tests from executed results. No test, host pilot or production call was executed in this investigation.
+R4. THE SYSTEM SHALL pin a supported MCP SDK/protocol combination compatible with Bun/Hono and the platform target (see design.md); prove local interoperability using a synthetic MCP client, not a production host. If no compliant combination is available, stop and report NO-GO rather than invent a transport or fall back to a deprecated protocol. Enforce Origin validation, reject bearer/cookie credentials on this anonymous-only endpoint, never use ambient user identity, bounded payloads and anonymous rate limits. No outgoing runtime requests, LLM calls or credential logging. Preserve the existing site CSP and same-origin policy.
 
-### Content and catalog (W1)
-- WHEN any MCP tool returns questions, courses or counts THE SYSTEM SHALL derive them only from the same generated eligible artefact that `scripts/build-content-bundle.mjs` writes for the web client, never from the all-status answer key loaded by `server/questions.mjs:138-164`.
-- WHILE a question is absent from the eligible artefact THE SYSTEM SHALL NOT offer it in any new session, catalog count, recommendation or progress denominator. It MAY still grade a historical attempt for backfill, which is the existing behaviour of `gradeAttempt`.
-- THE SYSTEM SHALL NOT add a runtime evidence check, read private R2 snapshots, or relax evidence CI (CLAUDE.md "The gate").
-- THE SYSTEM SHALL NOT place certification naming in any MCP tool name, title, description, UI resource name or payload field other than verbatim course `prepares_for`/`description`/`disclaimer` from `content/courses/<id>.yaml` (LEGAL.md).
+R5. WHEN ACADEMY_MCP is unset/off, THE SYSTEM SHALL preserve the pre-change HTTP behavior of every route, including /mcp and /.well-known/oauth-protected-resource (measure baseline rather than assume a JSON 404). No new route, startup dependency or failure from the MCP loader. When on, missing/corrupt/mismatched eligible artefacts SHALL fail closed. Docker build SHALL ship only internal generated artefacts and the shared module, not expose them through static routes. Test image contents, fixture isolation, no public raw bundle, no UI metadata and old routes/SEO/accessibility.
 
-### Identity and authorization
-- WHEN an MCP request without a valid access token calls a personal tool THE SYSTEM SHALL answer HTTP 401 with a `WWW-Authenticate` header pointing at its OAuth Protected Resource Metadata (RFC 9728).
-- THE SYSTEM SHALL accept only access tokens whose audience/resource equals the Academy MCP resource URL, issued by the configured authorization server, unexpired and not revoked. Tokens for other resources SHALL be rejected, and tokens SHALL never be passed through to upstream services.
-- THE SYSTEM SHALL resolve the learner only from the token subject mapped to the Academy `user.id`. IF a tool argument names a user id THEN THE SYSTEM SHALL reject the argument, because no tool schema accepts one.
-- THE SYSTEM SHALL NOT link accounts by email address. The GitHub sign-in credential, any inference credential and the Academy MCP grant SHALL remain separate.
-- WHEN a learner revokes a host grant THE SYSTEM SHALL reject that grant's access and refresh tokens on their next use. WHEN a learner deletes their account THE SYSTEM SHALL cascade-delete grants, tokens, sessions and attempts (extending `server/routes/account.mjs:22-31`).
-- WHERE public catalog tools are called without a token THE SYSTEM SHALL return only public catalog data and no personal data.
+R6. THE IMPLEMENTER SHALL submit a single-repository, reviewable Academy PR for W1a with exact dependency pins and CI wired to execute new tests (explicit test lists), preserving security/evidence gates and existing tests. No new service, database, migration, gateway, external account, telemetry, paid inference, production config, GitOps deployment edits, or external network pilot. No merge/deployment authorization. Public MCP means anonymous contract in local tests only; enabling it outside local/synthetic tests is a separate rollout/publication decision, not implied by acceptance or by flag-off image delivery. No certification readiness/proctoring claims.
 
-### Progress parity (W1)
-- WHEN the same account reads progress through the web and through `academy_get_progress` THE SYSTEM SHALL return identical totals, attempted, correct, mistakes, unseen, accuracy and solved values per course and per domain. Both SHALL be computed by one shared pure implementation of `latestPerQuestion` and `calculateProgressStats`.
-- THE SYSTEM SHALL compute progress per course by intersecting latest-per-question attempts with that course's eligible question ids, and SHALL keep accuracy (correct/attempted), coverage (attempted/total) and solved (correct/total) distinct.
-- THE SYSTEM SHALL NOT present any value as certification readiness or a pass prediction.
+## Deferred mandatory gates (not executable in W1a)
 
-### Practice sessions (W2)
-- WHEN a learner starts practice through MCP or web THE SYSTEM SHALL create a server-owned session that is bound to the user, course, mode and content digest, and that holds a fixed question order. Option order SHALL be fixed per question within the session.
-- WHILE a session question is unanswered THE SYSTEM SHALL NOT include `correct` flags, the correct option id or explanations in any tool result, `structuredContent`, `_meta` or UI resource payload.
-- WHEN an answer is submitted THE SYSTEM SHALL require an explicit stable `optionId` ("a".."d"), an `idempotencyKey` and the session's `expectedVersion`, grade it server-side, and append exactly one `attempts` row for the first answer to that question in that session.
-- IF the same `idempotencyKey` is replayed THEN THE SYSTEM SHALL return the original result and SHALL NOT insert a row. IF `expectedVersion` is stale THEN THE SYSTEM SHALL return `session_conflict` with the current version and SHALL NOT change progress.
-- IF a session's content digest no longer matches the deployed artefact and a pending question is no longer eligible THEN THE SYSTEM SHALL skip it with `question_retired` and SHALL NOT serve it.
-- IF a session has expired or is owned by another user THEN THE SYSTEM SHALL return `session_expired` or `session_not_found` respectively. It SHALL return `session_not_found` for another user's session so the session's existence is not revealed.
-- THE SYSTEM SHALL count an answer as learner work only when it arrives from an app-originated UI action, or after an explicit learner confirmation in text-only hosts. The submit tool SHALL be marked app-only where the host supports tool visibility.
+W1b / G1b — Personal OAuth and read-only progress. Requires a separately reviewed and approved proposal: inspect existing MCTL Portal #35/#44 and stable subject mapping via ZITADEL and better-auth; pin actual supported SDK/AS/spec versions and prove protocol coverage with synthetic identities. Require PKCE S256, resource/audience binding, strict issuer/signature/expiry, consent, client registration policy including abuse controls, immediate next-use revocation for both token types (no TTL-only allowance), and deletion. Reject userId args and email-based linking, foreign subjects and tokens; no passthrough, no cookies. Separate anonymous and authenticated transport/tool exposure with negative tests. If neither AS option satisfies the gates, personal tools remain disabled. Before issuance review PRIVACY.md, consent, retention, erasure and host disclosure. Account identity must be stable and server-derived; synthetic pure projection alone does not prove web/chat parity.
 
-### Portable UI (W3)
-- THE SYSTEM SHALL expose versioned, immutable UI resources (`ui://academy/<view>/<semver>`) via `resources/list` and `resources/read`, and reference them from tool `_meta`. Each resource SHALL declare the CSP it needs and load no remote script.
-- WHILE a host cannot render MCP Apps THE SYSTEM SHALL return complete text plus `structuredContent` so that learning still works.
-- WHEN a learner selects an option inside the embedded quiz on a host that supports app-to-server tool calls THE SYSTEM SHALL complete the grade with zero model calls.
-- THE SYSTEM SHALL NOT render arbitrary model-generated markup or script. If A2UI is later added, only an allowlisted component catalogue validated against a schema SHALL be rendered.
-- THE SYSTEM SHALL keep `frame-ancestors 'none'`, `X-Frame-Options: DENY` and `requireSameOrigin` unchanged for the website.
+W2 / G2 — Server-owned practice writes; G2b separately authorizes web adoption. App visibility and elicitation are UX, not authorization. No scored write until trusted server-verifiable learner confirmation bound to user/client/session/question/option/content digest/expected version, expiry and nonce, with replay rejection. No scored write on untrusted/text-only hosts absent such proof; fallback is read-only or direct authenticated Academy confirmation. Grade on server, redact spoilers before answer (not proctoring; answer key is public). Exact-payload idempotency receipt + attempt + version update in one transaction, same-key mismatch conflict, exact replay before version check, deterministic ordering and generation fencing on clear/account erase, delayed/offline retries cannot restore deleted progress. Recheck eligibility for pending questions; retired questions skipped, historic grading preserved. Separate migration/rollback and synthetic concurrency, erase, IDOR and negative confirmation tests required.
 
-### Web, SEO, privacy, operations
-- THE SYSTEM SHALL keep every existing public route, canonical tag, sitemap, noscript content, noindex rule and keyboard focus behaviour (`client/src/router/index.ts`, `server/spa.mjs`) unchanged.
-- WHILE the web client runs THE SYSTEM SHALL make zero mandatory model calls and SHALL NOT require an MCP round trip to render practice.
-- THE SYSTEM SHALL NOT log learner answers, tokens, authorization codes or tool arguments. It SHALL extend the `apiErrorLog` path-only rule (`server/middleware/request-log.mjs:8-11`) to `/mcp`.
-- BEFORE any external host can obtain a grant THE SYSTEM SHALL update PRIVACY.md with a third-party host disclosure, a consent screen, retention terms and revocation.
-- THE SYSTEM SHALL ship the MCP surface behind a default-off feature flag. Deploying with the flag off SHALL change no observable behaviour.
+W3 / G3 — Portable MCP Apps: versioned immutable resources, tested before advertising URI, no UI metadata until resources actually exist, no remote scripts, no site framing relaxation, no arbitrary generated markup, complete headless fallback. A2UI G3b only with evidence of need, pinned schema and allowlisted deterministic components. Zero model calls for trusted direct UI actions; no such claim for text-only hosts.
 
-## Out of scope
+W4/G4 server-owned mock exam; W5/G5 homepage prototype; W6/G6 host pilots; W7/G7 distribution: separately authorized, no production changes by implication. Before any external MCP publication or host pilot, explicit owner GO plus content redistribution/LEGAL, license, source/naming and privacy review for every host-visible field (including catalog, question and explanation payloads where later proposed); evidence eligibility alone is not redistribution permission. No marketplace submission without separate approval. Maintain public SEO, accessibility, guest learning, and zero mandatory inference.
 
-- Any implementation, implementer run, PR merge, proposal acceptance, production deploy or config change during this investigation.
-- Connector marketplace or directory submission, live account linking, real-host pilots (each needs separate approval).
-- A new service, database, gateway, or second MCP gateway; new paid inference; new analytics or tracking of answer content; user-data export.
-- Academy #74 (interactive sandbox), #75 (OpenRouter inference OAuth), #81 (GitHub sign-in investigation) and #633 (source drift) beyond referencing them; MCTL #376, #393, #396, #401, #416, #426, #430, #35 and #44 are dependencies only, and none of them is started or modified.
-- Proctoring, certification claims, readiness scoring.
-- Changes to clean-room authorship, CONTENT-POLICY.md, SOURCES.md, LEGAL.md, licensing split or the evidence gate.
-- Server-side Mock exam (W4) and the homepage redesign (W5). Both are designed only to the level needed for compatibility and are deferred behind their own gates.
+## Platform dependencies and non-goals
 
-## Open questions
-
-1. **Authorization server.** Should Academy use better-auth's OAuth-provider/MCP plugin (identity stays in Academy's `user` table, so cascade erasure is simple) or the MCTL ZITADEL/MCP Portal identity (#35/#44)? The decision criteria are in design.md ADR-2. Proceeding assumption: better-auth acts as the authorization server, with a W1 spike that must verify the exact pinned plugin version supports RFC 9728 metadata, RFC 8707 resource binding, PKCE S256, dynamic or pre-registered clients, and revocation. If it does not, fall back to ZITADEL. ZITADEL is not configured in `labs` today, because `values.yaml` maps no ZITADEL_* secrets.
-2. **App-only submit visibility.** Host support for app-only tool visibility (MCP Apps `_meta.ui.visibility`) and for elicitation is unverified per host. W6 must record it. Until then, text-only hosts get a confirm-then-submit flow.
-3. **Guest progress in chat.** A guest's progress lives only in browser localStorage (`progressStore.ts:104`). Proceeding assumption: chat requires sign-in for personal tools, and guest-to-account merge stays web-only, with the existing backfill semantics.
-4. **Historical timestamps.** The server stamps `attempted_at` at insert time (`server/db.mjs:123-131`), so an offline backfill is re-timestamped. Should W2 accept a bounded client `answeredAt` for offline rows? Proceeding assumption: no. Server time stays authoritative, and the current behaviour is documented.
-5. **Course count discrepancy.** README.md:28 says five courses are published, but the committed generated `client/src/course-catalog.json` marks all seven `available: true` (91/53/37/28/39/22/45 questions). The generated artefact is authoritative, and counts must be re-derived at build time rather than hardcoded.
-6. **A2UI version.** A2UI is pre-1.0 and its spec version must be pinned at W3b. Proceeding assumption: A2UI is deferred (Option D for MVP).
-7. **MCTL MCP Portal (Option B).** No portal/gateway manifest is visible in the gitops checkout available to this run. Its capabilities (`ui://` passthrough, app-to-server bridge, audience-bound per-user tokens) could not be observed, and this is not evidence that the portal is absent. It must be confirmed against mctlhq/.github#35/#44 before G1.
-8. **Replica count.** The in-memory rate limiter (`server/middleware/rate-limit.mjs:17-20`) assumes a single replica. MCP traffic may require a Postgres-backed limiter before scaling out. The replica count is not set in `values.yaml`, so the chart default was not observed.
+Reuse mctlhq/.github#376 (host matrix), #396 (existing Portal / composition), #393 (server-authoritative, UI-optional), #416 (Workspace consumer), #426 (connector governance), #430 (Builder discovery), #401 (host diagnostics), #35/#44 (Portal). Do not change or duplicate them. Academy #74/#75/#81/#633 remain separate. No changes to CONTENT-POLICY.md, SOURCES.md, LEGAL.md, evidence CI or licenses. No production account, user-data export, new paid execution beyond the separately approved W1a implementer, or live host claims.
