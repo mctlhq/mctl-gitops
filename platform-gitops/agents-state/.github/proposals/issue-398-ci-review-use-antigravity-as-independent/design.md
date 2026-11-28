@@ -194,9 +194,16 @@ asked for, and later tasks update it rather than restate it.
   `meets_policy_boundary(sha)`: the SHA must be the owner-approved boundary
   commit or a descendant of it, checked with the same compare call
   (`compare/<boundary>...<sha>` in `ahead`/`identical`). The boundary is a
-  constant on `mctlhq/.github` main, changed only by a reviewed PR. An unset or
-  unreadable boundary is untrusted. The trust check is "on main AND meets the
-  boundary", so an obsolete revision still on main history is denied.
+  constant on `mctlhq/.github` main, changed only by a reviewed PR. The
+  predicate ships inert: until task 6b sets the constant, both
+  `review_gate_controller.py` and `agy_review_publish.py` (which runs live on
+  mctl-gitops `merge_group` through `agy-formal-queue.yml` ->
+  `agy-formal-dispatch.yml`, outside `AGY_REVIEW_GATE_ENABLED`) compute and log
+  it but do not enforce it, so today's trust decision is unchanged. Task 6b
+  sets the constant and turns enforcement on in the same reviewed PR; from
+  then on an unset or unreadable boundary is untrusted. The enforced check is
+  "on main AND meets the boundary", so an obsolete revision still on main
+  history is denied.
 - **G1 diagnosability:** in `classify_claude_run`, when the review job has none of
   the `Classify outcome:` steps, return `NO_VERDICT_OTHER` with reason
   `caller pinned before outcome classifier (<referenced sha>)`. The behaviour is
@@ -226,7 +233,12 @@ asked for, and later tasks update it rather than restate it.
   review appeared meanwhile (a failed re-read also dismisses); where the controller
   already does a step, the task adds tests rather than code.
   Events, dispatches and verdicts that refer to a non-live head, base or digest,
-  or replay a consumed run attempt, are ignored for completion. Concurrent Claude
+  or replay a consumed run attempt, are ignored for completion. A `success`
+  already written for an unchanged head and digest is not rewritten when only
+  base moves (the external id excludes base by design); readiness against the
+  new base is enforced by the merge queue in mctl-gitops, which reruns
+  required checks on the queue commit, and by required-up-to-date branches
+  where a repository uses them. Concurrent Claude
   and Agy verdicts resolve by blocking precedence and then by the single external
   id per (repository, PR, head, mode, digest). On merge-queue commits only a fresh
   review or `carry_proof` completes the check, as today.
@@ -350,10 +362,14 @@ separate owner authorization. Release-please PRs get the same gate.
 
 ## Platform impact
 
-- **Backward compatibility:** the step 2 code changes are no-ops while
-  `AGY_REVIEW_GATE_ENABLED` is unset. G5 and G9 can only make a previously
-  trusted ref untrusted, which is fail-closed. Consumer pins pointing at merged SHAs stay
-  valid.
+- **Backward compatibility:** the step 2 controller changes are no-ops while
+  `AGY_REVIEW_GATE_ENABLED` is unset. `agy_review_publish.py` runs live on
+  mctl-gitops `merge_group`, so its G9 predicate ships inert (logged, not
+  enforced) until task 6b, and today's consumer pins (`84f51e2`, `1a23d779`)
+  keep working until then. Once 6b enforces G9, a pin older than the boundary
+  becomes untrusted by design, which is why tasks 7-8 bump the consumers right
+  after 6b. G5 can only make a previously trusted ref untrusted, which is
+  fail-closed.
 - **Migration:** additive only. `agy-formal-review` stays required in mctl-gitops
   until a separate owner decision. mctl-telegram gets no required check from this
   proposal.
