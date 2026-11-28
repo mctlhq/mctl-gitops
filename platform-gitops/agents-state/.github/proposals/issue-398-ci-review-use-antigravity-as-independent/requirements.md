@@ -65,7 +65,7 @@ Outcome contract and trigger
 
 Publication and identity
 
-- WHEN the Agy publisher posts a review THE SYSTEM SHALL bind repository, PR, head, base, source run, attempt, model, digest and verdict. It SHALL re-read live head and base immediately before and after posting, and SHALL dismiss its own approval if either moved.
+- WHEN the Agy publisher posts a review THE SYSTEM SHALL bind repository, PR, head, base, source run, attempt, model, digest and verdict. It SHALL re-read the live verdict binding (head and `pr_diff_digest_v1`; base only under strict-base policy) immediately before and after posting, SHALL dismiss its own approval if that binding moved, and SHALL NOT complete the check as successful after any self-dismissal.
 - WHILE the PR author equals the reviewer App identity THE SYSTEM SHALL fail the check rather than self-approve.
 - THE SYSTEM SHALL NOT impersonate a human, request bypass permission, enable `GITHUB_TOKEN` approvals, or substitute an App review for a human approval that policy requires.
 - WHEN validating a reusable workflow reference (`review_trust.is_trusted_reusable_ref`) THE SYSTEM SHALL accept `@main` or an exact SHA only if that SHA is reachable from `mctlhq/.github` main AND, once boundary enforcement is switched on (tasks.md 6b), is at or after the owner-approved review-policy version boundary. An unreadable ancestry check SHALL always be treated as untrusted; with enforcement on, an unreadable boundary check or an unknown boundary SHALL be treated as untrusted too.

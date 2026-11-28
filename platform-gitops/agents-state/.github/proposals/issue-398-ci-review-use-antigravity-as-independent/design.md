@@ -229,9 +229,11 @@ asked for, and later tasks update it rather than restate it.
   blocking reviews and the owned check (its id and external
   id). Any change, any blocking review, or any failed read gives no success. The
   publisher's existing post-publish re-read and self-dismissal are extended: after
-  posting an approval it re-reads head, base AND blocking reviews, and dismisses its
-  just-posted approval in enforce mode when any moved or a `CHANGES_REQUESTED`
-  review appeared meanwhile (a failed re-read also dismisses); where the controller
+  posting an approval it re-reads the same verdict binding (base only under
+  strict-base policy) AND blocking reviews, and dismisses its just-posted approval
+  in enforce mode when the binding moved or a `CHANGES_REQUESTED` review appeared
+  meanwhile (a failed re-read also dismisses); after any self-dismissal it does
+  not complete the check as successful; where the controller
   already does a step, the task adds tests rather than code.
   Events, dispatches and verdicts that refer to a non-live binding, or replay a
   consumed run attempt, are ignored for completion. Without strict-base policy a
