@@ -23,7 +23,7 @@ reviewed. Each of them needs its own proposal and its own owner approval before 
   - DoD: each item has one owner, and #1190 owns only the vocabulary, the trace contract, the
     benchmark and the decision.
 - [ ] 3. Write `vocabulary.md`: entity, assertion and event fields, the assertion kinds, the
-  classification and trust domains, the supersede and tombstone rules, reversible merges and
+  classification and trust domains, the stable assertion key and immutable revision identity (including ambiguous-source handling and same-version conflicts), the supersede and tombstone rules, reversible merges and
   splits, and the DevLoop edge set. Depends on 1.
   - DoD: every field maps to an existing column where one exists, or is marked NEW (logical
     only).
@@ -31,7 +31,7 @@ reviewed. Each of them needs its own proposal and its own owner approval before 
   references a negative test id below. Depends on 3.
   - DoD: no control is left without a test id.
 - [ ] 5. Write `fixture-spec.md` and `queries.md`.
-  - Cover the generator seed, the S and L parameters, the three export formats, Q1 to Q11 and E1
+  - Cover the generator seed, the S and L parameters, the three export formats, Q1 to Q11 (including Q10a-c identity/conflict/retraction fixtures) and E1
     to E4, each with ground-truth semantics.
   - Add `fixture.lock.template` and `versions.lock.template` with empty digests, plus the
     `verify-lock` rule.
@@ -41,7 +41,7 @@ reviewed. Each of them needs its own proposal and its own owner approval before 
   - DoD: every check names its refusal test (H1 to H10).
 - [ ] 7. Write `benchmark-plan.md`.
   - Cover the metrics list, cold and warm methodology, at least 30 repeats with 5 warmups, cgroup
-    sources for RSS and CPU, the pinned offline tokenizer labelled "estimate", the hardware
+    sources for peak cgroup memory (not RSS) and CPU, the pinned offline tokenizer labelled "estimate", the hardware
     record, the bootstrap confidence intervals and a sensitivity sweep over 10^2 to 10^6 queries
     per day.
   - Include an empty results matrix in which every cell is UNKNOWN.
@@ -77,7 +77,7 @@ reviewed. Each of them needs its own proposal and its own owner approval before 
 - [ ] 14. Build candidate B: `research_projection` with an idempotent build, `WITH RECURSIVE ...
   CYCLE`, tenant predicates applied inside the recursion, and tombstone invalidation. Depends on
   11 and 12.
-  - DoD: Q1 to Q11 run. Any query that cannot be expressed is recorded as "AGE trigger".
+  - DoD: Q1 to Q11 run, including Q10a-c; distinct assertion keys and revisions survive, exact replay dedupes, conflicting revisions remain visible, and targeted retraction prevents stale resurrection. No source/predicate upsert. Any query that cannot be expressed is recorded as "AGE trigger".
 
 ## S2 (separate approval): RDF candidates
 
@@ -140,7 +140,7 @@ Negative benchmark tests (S1 to S3). Every candidate must pass:
   returned as a literal only (Q6).
 - [ ] N6. The negative causal control does not appear (Q3).
 - [ ] N7. Feedback cannot promote an inferred assertion or change its kind.
-- [ ] N8. Replay of duplicate or shuffled events gives identical projection digests (Q10).
+- [ ] N8. Replay of duplicate or shuffled events gives identical projection digests (Q10). Q10a-c: same source/predicate across subjects and multiple values retain all keys; same-key/version divergent digests return an explicit conflict; targeted correction/tombstone does not delete sibling facts or resurrect on stale replay; tenant lookalikes cannot collide. Verify identical ground truth in A/B and RDF assertion/revision IRIs; distinguish source lacking stable fact ID as ambiguous, never auto-merge.
 - [ ] N9. An invalid SHACL instance fails, a malformed shape errors, and an unsupported feature
   reports `unsupported` (E2, E3).
 - [ ] N10. A missing review and a conflicting approval digest are marked as such, not silently
