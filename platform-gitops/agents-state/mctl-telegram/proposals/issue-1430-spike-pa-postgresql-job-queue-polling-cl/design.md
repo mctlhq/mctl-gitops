@@ -168,9 +168,11 @@ A documentation-only spike. Three committed artifacts, plus nothing in code.
      Each alternative below is scored against every invariant.
    - The alternatives analysis (A-D, see below), with cost, tradeoffs and
      rollback.
-   - The decision record: provisional `KEEP_POSTGRES_POLLING`, with candidate
-     `OPTIMIZE_POSTGRES_CLAIM` items queued as follow-up issues to open only
-     if the targets fail. Status: AWAITING BENCHMARK GO.
+   - The decision record skeleton: no outcome selected. `KEEP_POSTGRES_POLLING`
+     is the baseline hypothesis; each pre-registered target names which
+     outcome its failure would point to (for example a lock-wait target
+     failing points to `OPTIMIZE_POSTGRES_CLAIM`). Status: AWAITING D3
+     EVIDENCE. The D4 decision is the owner's.
 2. `docs/plans/pa-queue-benchmark.md`, the plan, not run:
    - Isolation: a throwaway PostgreSQL that is never the shared CNPG cluster,
      a stub OpenAI-compatible model that returns a fixed reply, no connectors,
@@ -178,19 +180,71 @@ A documentation-only spike. Three committed artifacts, plus nothing in code.
    - Fixtures: synthetic principals (Alice/Bob/Carol/Dana plus generated
      synthetic ids at 20/100/1,000), conversations and queued jobs, built with
      the existing store APIs (`EnqueuePAJob`, `PAConversationOpen`).
-   - Scenario matrix: slots 1/5/10/20 x concurrency 1/2; principals
-     20/100/1,000; load idle, steady (Poisson) and synchronized burst
-     (N principals enqueue at t0); the active-job count is kept separate from
-     the enrolled count.
+   - Experiment model (terms used everywhere in the plan):
+     - `R` replicas, `C` = `AGENT_WORKER_CONCURRENCY` per replica, `S = R x C`
+       claim slots. Each `S` in 1/5/10/20 is run as replicas and as
+       concurrency where both exist (5 = 5x1 and 1x5; 10 = 10x1 and 2x5;
+       20 = 20x1 and 4x5), because replicas add HTTP clients and server load
+       while concurrency adds goroutines in one process.
+     - Enrolled principals `N` (20/100/1,000) are fixtures; active principals
+       `A` are those with a queued or claimed job in the window. `A` is set by
+       the arrival process, never equated with `N`.
+     - Arrival: idle (`lambda = 0`), steady Poisson at a `lambda` chosen so
+       utilisation `lambda x mean duration / S` is 0.3, 0.7 and 0.9, and a
+       synchronized burst (`A` principals enqueue at t0).
+     - Job duration: the stub model's latency, fixed at 2 s, 10 s and 30 s
+       plus one lognormal profile, so claim cost can be separated from run
+       time.
+     - Warm-up: the first 2 minutes of each run are discarded. Each cell runs
+       at least 5 repetitions, interleaved with other cells. A percentile is
+       reported only with enough samples in the cell: at least 200 for p95 and
+       1,000 for p99, else `insufficient`. Each value carries its spread
+       across repetitions.
+   - Workload profiles: PA-only; and PA plus a synthetic competing
+     managed-budget workload that drives the other advisory-lock paths
+     (managed agent claim, managed turn claim, PA writes) at a fixed rate, so
+     cross-path lock wait is measured rather than assumed.
    - Fault scenarios: worker kill mid-run (lease expiry), simultaneous claims,
      DB outage and restart, revocation during claim.
-   - Equal CPU/memory limits per cohort. Fixed budget: at most 4 h wall-clock
-     and $0 model spend. Owner GO is required, with the #1317/#1319/#1324
-     gates restated.
+   - Resource limits, the same for every cohort: worker 500m CPU / 256Mi (as
+     the preview today), server 1 CPU / 512Mi, isolated PostgreSQL 2 CPU /
+     2Gi; pool `DB_MAX_OPEN_CONNS` at the code default of 10. Fixed budget:
+     at most 4 h wall-clock for the whole matrix, a compute ceiling the
+     owner sets at the D3 GO (default: the stated limits for the stated
+     time, nothing else running), $0 model spend through the stub, and a
+     total cost ceiling recorded at GO. A cell that would exceed the budget
+     is dropped and reported as not run. Owner GO (D3) is required. #1317 is
+     completed; #1319 and #1324 still gate anything that touches the
+     preview, which the plan does not.
    - The harness lives where the existing `TEST_DATABASE_URL`-gated PG tests
      live. Writing it is a separate implementation issue, out of scope here.
-3. A dashboard specification and pre-registered targets, as sections in the
-   plan:
+3. A measurement contract, dashboard specification and pre-registered
+   targets, as sections in the plan:
+   - Latency intervals, kept separate:
+     - created-to-claim: `pa_jobs.created_at_ms` to the claim commit;
+     - runnable-to-claim: the latest of `created_at_ms`, `retry_at_ms` and
+       `held_until_ms` to the claim commit, so backoff and holds are not
+       counted as queue wait;
+     - claim-to-worker-start: the claim response to the worker starting
+       `Run`.
+     Which interval `mctl_pa_run_phase_seconds{phase="queue"}` measures today
+     is verified at the pin and stated; it is not assumed.
+   - Every metric states units, labels and missing-data semantics. Labels
+     are bounded (`outcome`, `profile`, `component`); no principal, job or
+     conversation id is a label. A missing sample is unknown, not zero, and a
+     panel shows it as no data.
+   - Fairness is an aggregate over the cohort: p95 and max of per-principal
+     runnable-to-claim divided by the median, and the count of principals
+     waiting longer than the target. It is computed in the benchmark
+     harness, not exported per principal.
+   - Coordination: stage latency spans and their `job_id` + `attempt`
+     correlation come from #1445, provider usage and cost from #1446; this
+     contract references them and adds only queue and claim metrics, which
+     #3004 consumes for its queue panels. No metric is defined twice.
+   - Process resource contract per component (server, worker, PostgreSQL):
+     CPU seconds, CPU throttling (cgroup throttled periods and time), Go GC
+     pause and cycles, heap and RSS, PostgreSQL backend CPU where available;
+     aligned with mctlhq/mctl-agents#1131.
    - Metrics: claims/s (empty and non-empty), HTTP and DB QPS, tx and
      lock-wait p50/p95/p99, claim response p50/p95/p99, runnable queue depth
      and oldest age, time-to-start, throughput, `DBStats` (WaitCount,
@@ -227,7 +281,13 @@ Options for the queue itself, which the report evaluates:
     lock, so idle polls take no advisory lock and the full pick stays under
     the lock (this preserves the global-budget ordering);
   - running `ExpirePAJobs` only when a claimed row with an expired lease
-    exists, or on a timer;
+    exists, or on a timer. Any such variant must keep the `expired`
+    transition, exactly-once notices via `RETURNING` and the `pa_usage`
+    reserved-to-held update; state its cleanup latency (an expired claimed
+    job blocks its principal through `idx_pa_jobs_running`, so the latency
+    is user-visible; target: expiry observed within 30 s of lease end); and
+    define failure and restart (catch-up on start, safe with several
+    replicas, no double notice). Without those it is rejected;
   - a partial index for the due-job pick.
 
   `SKIP LOCKED` is listed only with an analysis. Under the global lock, row
@@ -253,9 +313,11 @@ Options for the spike deliverable, rejected:
   `docs/reports` file follows the repo's spike convention
   (`docs/reports/assistant-runtime-boundary-spike.md`, `docs/reports/mcp-apps-spike.md`)
   and can be reviewed and pinned.
-- Pick a decision now from the derived arithmetic. Rejected: the issue forbids
-  inferring performance from theoretical request rates, so the decision stays
-  provisional.
+- Pick a decision now from the derived arithmetic, even a provisional one.
+  Rejected: the issue forbids inferring performance from theoretical request
+  rates. `KEEP_POSTGRES_POLLING` is the baseline hypothesis only.
+- Close #1430 with the docs PR. Rejected: D2 documentation, D3 evidence and
+  the D4 decision are separate owner steps; only D4 closes the issue.
 
 ## Platform impact
 
