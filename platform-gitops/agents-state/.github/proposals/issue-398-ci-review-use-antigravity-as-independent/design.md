@@ -228,7 +228,9 @@ asked for, and later tasks update it rather than restate it.
   `pr_diff_digest_v1`; base too only under a repository's strict-base policy),
   blocking reviews and the owned check (its id and external
   id). Any change, any blocking review, or any failed read gives no success. The
-  publisher's existing post-publish re-read and self-dismissal are extended: after
+  publisher's existing re-reads are extended. Before posting it re-reads the verdict
+  binding and blocking reviews and posts no approval when a `CHANGES_REQUESTED`
+  review is present, the binding moved or the read failed. After
   posting an approval it re-reads the same verdict binding (base only under
   strict-base policy) AND blocking reviews, and dismisses its just-posted approval
   in enforce mode when the binding moved or a `CHANGES_REQUESTED` review appeared
