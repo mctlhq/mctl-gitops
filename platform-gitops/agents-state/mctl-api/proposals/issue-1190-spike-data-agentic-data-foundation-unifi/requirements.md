@@ -128,7 +128,7 @@ benchmark slices have run, the recommendation is DEFER for any graph adoption.
   - PA verified preference from two sources;
   - an identity false match (same name or email);
   - consent revocation and deletion propagation;
-  - duplicate and out-of-order event replay.
+  - duplicate and out-of-order event replay, including simultaneous multi-valued assertions and conflicting facts from one source.
 - THE SYSTEM SHALL include RDF tests for an explicit OWL entailment subset and for SHACL
   conformance, covering:
   - invalid shapes;
@@ -171,6 +171,12 @@ benchmark slices have run, the recommendation is DEFER for any graph adoption.
 - IF the benchmark has not run THEN THE SYSTEM SHALL recommend DEFER for graph adoption. It SHALL
   also list the precise blockers and a reproduction plan.
 - THE SYSTEM SHALL NOT state any production SLO or token saving that was not measured.
+
+### Assertion identity and replay (R2 P1 amendment)
+- THE SYSTEM SHALL distinguish a stable logical assertion key from its immutable revision identity. The key SHALL include tenant/trust domain, authoritative source reference, subject, predicate and a stable source fact/edge ID or slot; it SHALL NOT be `(source_ref, predicate)`, a mutable object value, or an arrival timestamp.
+- IF one source emits multiple values for a predicate THEN THE SYSTEM SHALL retain each independently, including contradictions, with provenance. If no stable source fact ID/slot exists, record distinct content-addressed observations and report ambiguity; do not guess correction lineage or collapse values.
+- WHEN replaying versions THE SYSTEM SHALL deduplicate only an exact key/version/digest replay; retain and surface distinct digests at the same key/version as conflict, independent of arrival order. Corrections and tombstones SHALL address explicit assertion keys/revisions; stale versions SHALL NOT resurrect deleted facts. Preserve valid-time history subject to source retention and deletion rules.
+- THE SYSTEM SHALL test multiple subjects and objects with the same source/predicate, conflicting same-version revisions, targeted correction/retraction, duplicate/shuffled replay and tenant-scoped keys in A/B and RDF equivalents, with exact expected answers and deterministic hashes.
 
 ### Boundaries
 - THE SYSTEM SHALL keep PostgreSQL and the existing source APIs authoritative. Any projection or
