@@ -118,8 +118,8 @@ are separate, nullable observational fields; `ChatUsage` as budget input, `Price
   Relying on old servers' lenient decoding alone is not enough, because a usage field could push
   a legacy-size answer over the old body limit. A new server treats an absent field as "not
   reported".
-- Answer-size semantics are unchanged. Only when it advertised the capability, the server reads
-  the body with an outer transport limit of `maxReplyBody + paUsageReadHeadroom`, where
+- Answer-size semantics are unchanged. Every headroom-aware server replica reads every reply
+  and abandon body, whatever its own advertisement switch says, with an outer transport limit of `maxReplyBody + paUsageReadHeadroom`, where
   `paUsageReadHeadroom` is strictly larger than `paUsageMaxBytes` plus the JSON wrapper overhead
   (`,"usage":` and whitespace), so that a maximal accepted answer plus a maximal valid `usage`
   always fits, and an oversized `usage` can still be read far enough to be identified, skipped and
@@ -168,9 +168,12 @@ are separate, nullable observational fields; `ChatUsage` as budget input, `Price
   `jobs.Settle` output; the difference between `reported_cost_usd`, `estimated_cost_usd` and
   `cost_usd` (settled, incl. floor and full-reservation-on-unknown) is documented as
   "reported vs. accounted" rather than reconciled away.
-- Account deletion: the existing principal purge of `pa_usage` deletes `pa_usage_calls` by
-  `(job_id, attempt)` join first. Because the telemetry write is conditional on the `pa_usage`
-  row existing, a summary arriving after the purge writes nothing.
+- Account deletion: the principal purge deletes `pa_usage_calls` and `pa_usage` in one
+  transaction that first locks the principal's `pa_usage` rows (`SELECT ... FOR UPDATE` on
+  Postgres; SQLite serialises writers). `RecordPAUsage` writes `pa_usage` and its
+  `pa_usage_calls` rows in one transaction that takes the same row lock and re-checks that the
+  settled `pa_jobs` row still exists, so a summary racing the purge either commits before it (and
+  is purged) or finds the row gone and writes nothing; no orphan `pa_usage_calls` can remain.
 
 ### 5. Metrics (server, `internal/metrics/pa.go`)
 Emitted once per first persisted summary (so duplicates do not double count):
