@@ -1,6 +1,6 @@
 # Design: issue-1476-spike-ci-mctl-ci-performance-runner-opti
 
-Disposition: a research proposal. Approving it authorizes read-only evidence collection plus one controlled benchmark harness on a scratch branch. Changing `build.yml`, rulesets or runners requires a separate, independently reviewed implementation proposal.
+Disposition: a research proposal. Approving it authorizes read-only evidence collection and building (not dispatching) one controlled benchmark harness on a scratch branch. Dispatching that harness needs a separate authorization, given only after a runner-minute cap and a queue-regression tolerance are agreed with mctlhq/mctl-gitops#2993. Changing `build.yml`, rulesets, required contexts or runners requires a separate, independently reviewed implementation proposal.
 
 ## Current state
 
@@ -93,16 +93,26 @@ Queue figures are correlated with the #2993 saturation windows. Correlation is n
 
 ### Phase R2: controlled benchmark of the Linux critical path (S1)
 
-Candidates are benchmarked on a scratch branch with `workflow_dispatch`, synthetic inputs and no secrets, at least 10 repetitions each, against the current `test` job as the control. Ranked by expected value:
+Candidates are benchmarked on a scratch branch with `workflow_dispatch`, synthetic inputs and no secrets, against the current `test` job as the control. Benchmark protocol:
+
+- Control and candidate runs are interleaved, so each comparison happens under comparable runner conditions. Every sample records its run and job IDs, with execution and queue latency kept separate.
+- Ten repetitions per variant is the starting point. The sample grows while the variance makes p95 unreliable, and every percentile is reported with its uncertainty (for example a bootstrap interval). The target stays a reduction of at least 30% in `test` p95.
+- Before dispatch, a runner-minute cap and a queue-regression tolerance are agreed with #2993, and the benchmark gets its own authorization. Scheduling is coordinated with #2993 and #2931.
+- Capacity impact: each candidate is measured on org-wide runner minutes, queue delay, runner saturation and the failure/flake rate, not only on its own wall clock. A local speedup that pushes the shared queue past the agreed tolerance is rejected.
+- Coverage equivalence: the harness compares an exact test inventory, built from `go test -json` of the control and of the candidate for the Go test suites: package, test and subtest identity, pass/fail/skip status, build tags, the race-enabled package set, and the race, PostgreSQL no-skip, PA S1 and nested-module results. Workflow-level gates that are not `go test` output (CodeQL, govulncheck, product-updates) are compared separately by job and step outcome. An equal or larger test count is not evidence. Negative fixtures (a missing test, changed build tags, a skipped Postgres case, a missing shard) must each make the comparison fail.
+
+Ranked by expected value:
 
 1. **Package-sharded race test behind a stable aggregate `test` gate.** Shards run `go test -race`, and each shard has its own Postgres service and cache restore:
    - shard A: `internal/pa`
-   - shard B: `internal/db` + `internal/oauth` + the Postgres no-skip guard
+   - shard B: `internal/db` + `internal/oauth`
    - shard C: `cmd/server`
    - shard D: the remaining packages, computed as `go list ./...` minus A-C, so that a new package lands in D automatically
    - shard E: node handshake + PA S1 + both nested Glovo modules
 
-   A final job keeps the required name `test`. It `needs` all shards, runs with `if: always()`, and fails unless every shard's result is `success`. It also checks that the union of packages tested equals `go list ./...` (fail closed). Estimated gain, to be validated: `test` p95 from 27.2m to about 13-15m, bounded by `internal/pa` (591s on #1475) plus restore and compile. Runner minutes rise by roughly 4 restores plus Postgres start-ups per run, about 8-12 extra Linux minutes per run (estimate). This must be weighed with #2993 because it adds concurrent jobs to a saturated org.
+   Every shard that runs Postgres-backed tests carries its own no-skip guard in its race run. The per-shard floors come from the task 3 inventory and together cover at least today's `expected=14`.
+
+   A final job keeps the required name `test`. It `needs` all shards, runs with `if: always()`, and fails unless every shard's result is `success`: a missing, skipped, cancelled or failed shard fails it. It also checks that the union of packages tested equals `go list ./...` (fail closed). Estimated gain, to be validated: `test` p95 from 27.2m to about 13-15m, bounded by `internal/pa` (591s on #1475) plus restore and compile. Runner minutes rise by roughly 4 restores plus Postgres start-ups per run, about 8-12 extra Linux minutes per run (estimate). This must be weighed with #2993 because it adds concurrent jobs to a saturated org.
 2. **Cache hygiene.** Measured lever: the 4.2 GB restore takes 1.9m at p50.
    - Rebuild the go-race cache from empty on `main` instead of restore-then-save, to stop accumulation.
    - Optionally split `~/go/pkg/mod` from `~/.cache/go-build`.
@@ -126,7 +136,7 @@ Candidates are benchmarked on a scratch branch with `workflow_dispatch`, synthet
 
 ### Preliminary recommendation (to be confirmed by R1-R2 evidence and independent review)
 
-- Linux optimization: GO for the research benchmark, covering option 1 together with option 2. Implementation stays AMEND until the benchmark shows a p95 reduction of at least 30% and no fewer tests executed.
+- Linux optimization: GO for building the research benchmark, covering option 1 together with option 2; dispatching it needs the separate authorization above. Implementation stays AMEND until the benchmark shows a p95 reduction of at least 30% with its uncertainty, an exact coverage-equivalent test inventory, and a shared-queue impact within the tolerance agreed with #2993.
 - Stale-run scheduling: AMEND. Quantify first, then coordinate with #2993 and #2931.
 - Optional Intel runner: DEFER.
 - Selective component CI: DEFER. It saves minutes only; revisit if #2993 shows minutes, not latency, are the binding constraint.
@@ -140,10 +150,11 @@ Candidates are benchmarked on a scratch branch with `workflow_dispatch`, synthet
 
 ## Platform impact
 
-- This proposal changes no workflow, ruleset, runner or deployment. The benchmark runs on a scratch branch via `workflow_dispatch`, and costs about 10 repetitions × candidates × about 25-40 Linux minutes. That cost is visible to #2993 and must be scheduled outside saturation windows.
+- This proposal changes no workflow, ruleset, required context, runner or deployment, and cancels no live CI run. The benchmark runs on a scratch branch via `workflow_dispatch` only after its separate authorization. It costs at least 10 repetitions × variants × about 25-40 Linux minutes, more if variance forces a larger sample, and must stay within the runner-minute cap agreed with #2993 and outside saturation windows.
 - Risks, with mitigations:
-  - Benchmark noise from shared runner load: interleave control and candidate runs, report variance, and require at least 10 repetitions.
-  - A sharded gate that silently drops packages: add a union-of-packages assertion and negative fixtures.
+  - Benchmark noise from shared runner load: interleave control and candidate runs, report uncertainty per percentile, and grow the sample beyond 10 repetitions when p95 is unreliable.
+  - A sharded gate that silently drops packages or tests: a union-of-packages assertion, an exact test inventory comparison, and negative fixtures.
+  - A local speedup that degrades the shared queue: measure org-wide runner minutes, queue delay and saturation per candidate against the tolerance agreed with #2993.
   - Benchmark caches poisoning real caches: benchmark caches use a distinct key prefix (`bench-`) and are deleted after the run.
   - Secrets exposure: no `secrets.*` in the harness, `permissions: contents: read`.
 - Backward compatibility: any later implementation must keep the `test`, `docker` and `product-updates` context names and every guard step listed under Current state.

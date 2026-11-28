@@ -1,5 +1,14 @@
 # CI performance spike: required-check critical path, scheduling and runner options for mctl-telegram
 
+## Revision 2026-11-27
+
+This revision applies the review amendment register (https://github.com/mctlhq/mctl-telegram/issues/1476#issuecomment-7229398555). The research-only disposition is unchanged; this revision is not an approval and needs a fresh review and digest.
+
+- Coverage equivalence is proven by test identity (package, test and subtest, status, build tags, race-enabled set, mandatory gates), not by aggregate test count. Every Postgres-using shard must show no-skip in its race run.
+- Candidates are judged on PR latency together with org-wide runner minutes, queue delay, saturation and failure/flake rate.
+- Benchmarks interleave control and candidates, record sample IDs and execution and queue latency separately, and report uncertainty. Ten repetitions is a starting point, not a ceiling.
+- Dispatching the scratch benchmark needs a separate authorization and a runner-minute cap and queue-regression tolerance agreed with mctlhq/mctl-gitops#2993. Approving this proposal dispatches nothing.
+
 ## Context
 
 Issue mctlhq/mctl-telegram#1476 asks for a research-only spike. The goal is to shorten the time from PR HEAD until the required checks are green and the PR can be released, without weakening correctness, security or governance. The spike also asks for findings that the rest of the organization can reuse. Org-wide runner capacity is owned by mctlhq/mctl-gitops#2993, and merge-queue churn by mctlhq/mctl-gitops#2931; this spike complements both and does not compete with them. The 2026-11-26 refresh adds S3: component boundaries, plus selective (affected-component) CI for the Telegram MCP, PA agent worker, Glovo MCP and fake-provider worker images, all of which are built from this repository.
@@ -23,16 +32,22 @@ A read-only baseline taken for this proposal on 2026-11-27 measured the last 100
 - WHEN options are ranked THE SYSTEM SHALL give, for each option, the expected wall-clock change, the runner-minute change, cost, complexity, isolation and risk, and SHALL label every figure as either measured or estimated.
 - WHILE any candidate is being evaluated THE SYSTEM SHALL keep the required check context names (`test`, `docker`, `product-updates`, plus any others confirmed from settings) stable and reporting on every PR.
 - WHILE any candidate is being evaluated THE SYSTEM SHALL keep `-race`, the Postgres no-skip guard with its `expected=14` floor, the PA S1 closing gate, both nested Glovo modules under `-race`, govulncheck, CodeQL and the product-updates gate.
-- IF a sharded or selective design cannot determine that a required component was tested THEN THE SYSTEM SHALL fail the aggregate required check (fail closed). It SHALL NOT report the check as skipped, pending or green.
+- IF a sharded or selective design cannot determine that a required component was tested, or any shard is missing, skipped, cancelled or failed, THEN THE SYSTEM SHALL fail the aggregate required check (fail closed). It SHALL NOT report the check as skipped, pending or green.
+- WHEN a candidate's coverage is compared with the control THE SYSTEM SHALL prove equivalence by package and test/subtest identity, pass/fail/skip status, build tags, the race-enabled package set and the mandatory gates. It SHALL NOT accept an equal or greater aggregate test count as proof.
+- WHEN a sharded candidate runs Postgres-backed tests THE SYSTEM SHALL show, for every shard that runs them, that its race run skipped no Postgres case.
+- WHEN a candidate is evaluated THE SYSTEM SHALL measure PR latency together with org-wide runner minutes, queue delay, runner saturation and the failure/flake rate. IF a candidate's shared-queue regression exceeds the tolerance agreed with mctlhq/mctl-gitops#2993 THEN THE SYSTEM SHALL NOT recommend it, whatever its local speedup.
 - IF a changed path is unknown or is a shared dependency (`go.mod`, `go.sum`, `internal/auth`, `internal/audit`, `internal/metrics`, `internal/edgectx`, `internal/jsonstrict`, any `Dockerfile*`, `.github/**`, toolchain pins) THEN THE SYSTEM SHALL run the full build.
-- WHEN a benchmark is run THE SYSTEM SHALL run it only in a trusted sandbox (a fork-free branch or `workflow_dispatch` on a scratch branch), with synthetic inputs and no live secrets, repeated at least 10 times per variant, and SHALL report the variance.
+- WHEN a benchmark is run THE SYSTEM SHALL run it only in a trusted sandbox (a fork-free branch or `workflow_dispatch` on a scratch branch), with synthetic inputs and no live secrets. Control and candidate runs SHALL be interleaved under comparable runner conditions, with sample (run and job) IDs and execution and queue latency recorded separately.
+- WHEN a benchmark is sized THE SYSTEM SHALL start at 10 repetitions per variant and SHALL increase the sample size while the variance makes p95 unreliable. It SHALL report the uncertainty of every reported percentile.
+- IF a benchmark has no separate authorization, or no runner-minute cap and queue-regression tolerance agreed with mctlhq/mctl-gitops#2993, THEN THE SYSTEM SHALL NOT dispatch it.
 - WHEN a latency improvement is claimed THE SYSTEM SHALL compare it with the comparable baseline under controlled validation, and SHALL NOT claim it from estimates alone.
 - WHEN the spike concludes THE SYSTEM SHALL issue an explicit GO / AMEND / DEFER for (a) Linux test optimization, (b) stale-run scheduling, (c) the optional Intel Mac mini runner and (d) selective component CI, each linked to its #2993 counterpart.
 - THE SYSTEM SHALL target a reduction of at least 30% in p95 latency of the `test` required check versus the comparable baseline (p95 27.2m execution in this sample), or else present an evidence-based alternative.
 
 ## Out of scope
 
-- Any change to workflows, branch protection, rulesets or the merge queue, any runner registration, and any CI rerun or cancellation, merge or deployment. All of these need a separate implementation approval.
+- Any change to workflows, branch protection, rulesets, required contexts or the merge queue, any runner registration, and any live CI rerun or cancellation, merge or deployment. All of these need a separate implementation approval.
+- Dispatching the scratch benchmark. It needs its own authorization; this proposal dispatches none.
 - Connecting the Intel Mac mini, or any host, as a runner.
 - Extracting Glovo code into mctlhq/mctl-glovo, or creating any repository.
 - Org-wide runner capacity and paid-plan decisions, which are owned by mctlhq/mctl-gitops#2993.

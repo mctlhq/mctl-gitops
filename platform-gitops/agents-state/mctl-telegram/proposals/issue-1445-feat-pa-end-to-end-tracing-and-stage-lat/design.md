@@ -108,6 +108,26 @@ off.
   response gains `trace_parent`: the attempt span's context, derived from the
   stored trace id. A worker that ignores the field behaves exactly as it does
   today.
+- Identifiers. The trace id (16 random bytes) and the root span id of
+  `pa.job` (8 random bytes) are generated once at enqueue and stored in the
+  traceparent. `pa.job` is the root of the trace and has no parent; it is
+  created through a PA-scoped ID generator that returns the stored ids, and
+  its sampling follows the stored flags rather than the `AlwaysOff` root
+  sampler. Because the SDK consults the sampler before the ID generator for a
+  parentless span, this needs a PA-aware sampler wrapper around
+  `ParentBased(AlwaysOff)` that, for `pa.job` only, returns the decision carried
+  in the stored trace flags; every other parentless span keeps `AlwaysOff`. Attempt
+  span ids are derived, not stored: the first 8 bytes of
+  SHA-256(trace id || root span id || attempt number), and `pa.attempt` is
+  created through the same PA-scoped ID generator, which reads the derived
+  span id from the context the attempt-end code passes in. Any replica therefore
+  derives the same attempt span id for the same attempt, and retries are
+  siblings under `pa.job`. Rows from before the migration have no context
+  and produce no spans; their observations count as `missing`.
+- Worker trust boundary. The worker uses `trace_parent` only to parent its
+  own spans. Its HTTP clients for the model provider (via the AI gateway) and
+  for the server get no propagator, so no trace context leaves the platform
+  through the worker either.
 
 ### 2. Stage durations (metrics): extend, do not duplicate
 
@@ -116,7 +136,10 @@ off.
   (`sent`, `failed`, `refused`), observed in `deliverItem`. Update
   `PARunPhases` / `RunPhases()` and `TestPARunPhaseLabels`.
 - New `mctl_pa_run_unanswered_seconds{outcome}` with closed outcomes `failed`,
-  `cancelled`, `fenced` and `lease_expired`. It is fed by turning
+  `cancelled` and `lease_expired`. `fenced` is deliberately absent: a fenced
+  request belongs to a superseded attempt and is visible only as its refused
+  span; counting it here would double-count a job whose winning transition is
+  recorded separately. It is fed by turning
   `runTimer.drop(job)` into `runTimer.ended(job, outcome)`. The failure reason
   stays in `mctl_pa_job_failures_total{reason}` and is not repeated as a
   label.
@@ -133,6 +156,31 @@ off.
   other PA collectors are.
 - An absent stage records no observation. This matches the current `tool`
   phase rule and the rule for unknown creation time in `timing.go`.
+- Observation completeness. `runTimer` is in memory: it holds the claim and
+  turn boundaries only on the replica that saw them, and loses them on
+  restart. It is therefore not cross-replica coverage, and the design does
+  not claim that it is. A duration is observed only when both of its
+  boundaries were seen by the observing process or come from a durable field
+  (`created_at_ms`, `retry_at_ms`, the stored trace context, outbox row
+  fields). Otherwise the duration is not observed, and the run's terminal
+  observation is classified in a new counter
+  `mctl_pa_run_observations_total{completeness,reason}`:
+  - `completeness ∈ {complete, partial, missing}`;
+  - `reason ∈ {none, timer_missing, unknown_created_at, no_trace_context}`
+    (closed, pre-registered).
+  `timer_missing` covers both a restart and a claim made by another replica,
+  which a single process cannot tell apart. Missing is never rendered as
+  zero.
+- Dedup. The terminal observation (phase histograms, unanswered histogram,
+  completeness counter) is recorded only by the process whose conditional
+  terminal update on `pa_jobs` affected the row: finish, fail, cancel
+  (including `ReleaseCancel`) and lease expiry (`ExpirePAJobs` sets status
+  `expired`, which is terminal today). A release that returns the job to
+  `queued` (`ReleaseBackoff`, or a claim-failure backoff) is not terminal: it
+  ends only that `pa.attempt` and records no terminal observation and no
+  `pa.job` end, so the next attempt continues the same trace. A losing or fenced request records nothing terminal.
+  Duplicate webhook deliveries are already deduplicated by
+  `AcceptPAUpdate`, so they never reach enqueue.
 
 ### 3. Spans (default off)
 
@@ -146,13 +194,13 @@ off.
   stored sampled traceparent are recorded. Nothing else in mctl-telegram
   starts being traced, and `.github#55` keeps ownership of a global policy.
   The same `Setup` is called from `cmd/agent-worker`.
-- Span tree, one trace per job. Spans across the queue boundary are created
-  with explicit timestamps from durable fields
-  (`trace.WithTimestamp(created_at)`), so they are correct across replicas:
+- Span tree, one trace per job, rooted at `pa.job`. Spans across the queue
+  boundary are created with explicit timestamps
+  (`trace.WithTimestamp(...)`) taken from durable fields where they exist:
 
   ```
-  pa.update            (webhook; outcome)              server
-   └ pa.job            (created -> terminal; outcome)  server, ended at terminal
+  pa.job               (created -> terminal; outcome)  root, server
+      ├ pa.update      (webhook accept; outcome)       server
       ├ pa.queue       (created -> claimed)            server
       ├ pa.attempt     (attempt=N; claim -> release/reply; outcome)
       │   ├ pa.turn            (admission result)
@@ -164,20 +212,66 @@ off.
       └ pa.delivery    (outbox send; outcome; retry count)
   ```
 
-  Duplicate webhook deliveries produce only a `pa.update` span with
-  `outcome=duplicate`, linked to nothing. Retries produce sibling
-  `pa.attempt` spans in the same trace. Cancellation and lease or fencing
-  refusals (`StillRunning`, `stopRun`) end the open spans with that outcome
-  and add a span event; the error message is never recorded.
+  Duplicate webhook deliveries are deduplicated by `AcceptPAUpdate`, never
+  reach enqueue and produce no PA span; they stay counted in
+  `mctl_pa_updates_total{outcome="duplicate"}`. Retries produce sibling
+  `pa.attempt` spans in the same trace.
+  Cancellation and lease or fencing refusals (`StillRunning`, `stopRun`) end
+  the open spans with that outcome and add a span event; the error message is
+  never recorded.
+- Ownership and timestamps. Each span has one owner, which alone starts and
+  ends it, so no span is emitted twice:
+
+  | Span | Owner | Start | End |
+  |---|---|---|---|
+  | `pa.job` | winner of the terminal conditional update | `created_at_ms` (durable); if unreadable, the terminal transition time with the span marked `partial` | terminal transition time |
+  | `pa.update` | webhook handler | request receipt | accept commit |
+  | `pa.queue` | claiming process | `created_at_ms`, or `retry_at_ms` for attempt > 1; if unreadable, the claim commit time marked `partial` | claim commit |
+  | `pa.attempt` | process that ends the attempt (reply, release, failure, lease expiry) | claim time if held locally, else the end time; any fallback is marked `partial` (for example `ExpirePAJobs` on a replica with no local events) | attempt end |
+  | `pa.turn`, `pa.tool.dispatch`, `pa.mcp.call`, `pa.reply` | process handling that request | request receipt | response |
+  | `pa.worker.*` | worker | call start | call end |
+  | `pa.delivery` | outbox process that reaches a terminal send outcome | outbox row creation | terminal send outcome |
+
+  When `pa.attempt` is ended by a process that did not see the claim, the
+  span carries `mctl.pa.observation=partial` and starts at the end time (see the ownership table); its duration is not observed in any histogram. A
+  `pa.job` span is emitted only by the terminal winner, so a crash between
+  the terminal commit and the export loses the span (counted as an export
+  gap in the runbook) but never duplicates it.
 - Attributes come from a single allowlist builder, `internal/pa/trace.go`
   `runAttrs`. It accepts only typed values: `mctl.pa.job_id`,
   `mctl.pa.attempt`, `mctl.pa.outcome`, `mctl.pa.failure_reason`,
   `mctl.pa.phase`, `mctl.pa.tool.server`, `mctl.pa.tool.name` (pinned
-  catalog names only), `mctl.pa.result`, `mctl.pa.streaming`. There is no
+  catalog names only), `mctl.pa.result`, `mctl.pa.streaming`,
+  `mctl.pa.observation` (`complete|partial`). There is no
   string-typed free field. Principal, chat id, conversation id, update id,
   text, arguments, results, prompts and tokens are not representable. PA spans
   do not call `internal/mcp` `auditSpanAttributes`, which carries
   `mctl.user.id`.
+
+- Kill switch and Collector failure. `PA_TRACING_ENABLED=false` (or chart
+  `otel.enabled: false`, which removes the endpoint) is read at start-up and
+  takes effect on the next rollout; there is no in-process toggle. With the
+  switch off the provider is a no-op: no exporter goroutine, no network
+  connection, no spans. Correlation ids in the column and logs and the
+  metrics stay on, because they do not depend on tracing. With the switch on
+  and the Collector failing, the `BatchSpanProcessor` drops on overflow, the
+  exporter uses a short export timeout and no retry beyond it, and drops are
+  counted on `mctl_pa_trace_spans_dropped_total` (no labels). No tracing
+  call returns an error into a request handler.
+
+### Enablement preconditions (not merge preconditions)
+
+Merging the default-off code does not enable tracing. Before any
+environment sets `PA_TRACING_ENABLED=true`, the following must be confirmed
+and written into the runbook, and the enablement PR must cite them:
+- retention of PA traces in Tempo and of PA log lines carrying `trace_id` in
+  Loki for the target tenant;
+- RBAC and access isolation: who can query those traces and logs, and that
+  tenant users cannot;
+- deletion and expiry: `pa_jobs.trace_context` goes with the account delete
+  and the retention sweep, but exported spans and log lines carry `job_id`
+  and `trace_id` until their backend retention expires. The runbook states
+  that limit, and the owner accepts it or asks for a shorter retention.
 
 ### 4. Logs
 
@@ -204,9 +298,10 @@ off.
   every duration from the DB.** This gives exact cross-replica metrics. It was
   dropped for now because of the extra writes on the hot path, the new
   retention and deletion obligations (`pa_account.go` delete list), and
-  because the server runs one replica today. The durable trace context plus
-  explicit span timestamps already makes traces correct across replicas. It
-  stays an option if replicas increase.
+  because the server runs one replica today. Without it, cross-replica and
+  post-restart coverage is incomplete: the design marks and counts those
+  observations as partial instead of claiming them. The table stays an
+  option if replicas increase and the partial rate shows it is needed.
 - **One new combined histogram `mctl_pa_stage_seconds{stage,outcome}`
   replacing `mctl_pa_run_phase_seconds`.** It is cleaner, but it duplicates or
   breaks the existing series and any dashboards built on it, which the issue
@@ -237,7 +332,11 @@ off.
     values (`Alice` / `Bob` ids, message text), and no downstream
     propagation.
   - Exporter stalls the hot path. Mitigation: async batch processor, drop on
-    overflow, export timeout, and a test with a blackholed endpoint.
+    overflow, export timeout, a drop counter, and a test with a blackholed
+    endpoint.
+  - Incomplete coverage presented as complete. Mitigation: the completeness
+    counter, the `partial` span attribute, and no histogram observation
+    without both boundaries.
   - Semantic drift in auth or lease. Mitigation: timing and tracing hooks only
     observe. The existing runloop, connector and worker suites run with
     tracing on and off and must stay identical.
@@ -247,4 +346,27 @@ off.
     `PA_TRACING_ENABLED`).
   - Account deletion: `trace_context` lives on `pa_jobs`, which is already
     covered by the `pa_account.go` delete and the `pa_convo.go` retention
-    sweep. Exported traces follow Tempo retention (open question).
+    sweep. Exported traces and log lines follow backend retention, which is
+    an enablement precondition (above).
+
+## Verification tiers
+
+Tests are split in tasks.md into two tiers. The rule: anything that protects
+correctness, privacy and security, the unchanged run semantics or backward
+compatibility is required before merge, because merging default-off code
+must already be safe. Checks that need multi-process orchestration, fault
+matrices across restarts and replicas, or operational confirmation are
+required before the pilot GO, because no environment runs with tracing on
+until then.
+
+- Before merge: no untrusted inbound metadata and no downstream leakage;
+  allowlisted attributes and redaction; missing duration never zero and the
+  completeness classification; tracing failure, kill switch and Collector
+  failure leave authorization, job results and delivery unchanged;
+  default-off no-op; bounded labels; migration and mixed old/new
+  worker-server compatibility; single-process duplicate observation.
+- Before pilot GO: restart between enqueue and claim and after claim;
+  split-replica claim and reply; the retry, fencing and lease-expiry matrix
+  across processes; retention, RBAC and deletion confirmation (also the hard
+  enablement precondition); dashboards coordinated with
+  mctlhq/mctl-telegram#1446 and mctlhq/mctl-gitops#3004.
