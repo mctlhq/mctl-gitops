@@ -366,9 +366,10 @@ separate owner authorization. Release-please PRs get the same gate.
   `AGY_REVIEW_GATE_ENABLED` is unset. `agy_review_publish.py` runs live on
   mctl-gitops `merge_group`, so its G9 predicate ships inert (logged, not
   enforced) until task 6b, and today's consumer pins (`84f51e2`, `1a23d779`)
-  keep working until then. Once 6b enforces G9, a pin older than the boundary
-  becomes untrusted by design, which is why tasks 7-8 bump the consumers right
-  after 6b. G5 can only make a previously trusted ref untrusted, which is
+  keep working until then. Task 6b sets the boundary at the oldest live pin, so
+  enforcement starts without making a current pin untrusted and the bump PRs
+  of tasks 7-8 are reviewed by a trusted reviewer; task 8b then raises the
+  boundary to the hardening SHA, after which older revisions are untrusted. G5 can only make a previously trusted ref untrusted, which is
   fail-closed.
 - **Migration:** additive only. `agy-formal-review` stays required in mctl-gitops
   until a separate owner decision. mctl-telegram gets no required check from this
