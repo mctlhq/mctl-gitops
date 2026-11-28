@@ -122,10 +122,11 @@ A logical model, not a production schema.
   - `external_contact`: tenant-scoped, never an authority.
   - `knowledge_entity`: a doc page, metric definition or memory topic.
   - `work`: `wi_`, `we_`, `cs_`, `aar_`, `rr_`, decision, PR.
-- **Assertion** (attribute or edge) `{assertion_id, subject_id, predicate, object, tenant,
+- **Assertion** (attribute or edge) `{assertion_key, assertion_id, source_fact_id, subject_id, predicate, object, tenant, trust_domain,
   assertion_kind (observed|user_confirmed|inferred), source_ref, source_version, evidence_digest,
   observed_at, valid_from, valid_to, recorded_at, classification (public|internal|private|pii),
   confidence (only for inferred), schema_version, supersedes[]}`.
+- **Identity and version rules (R2 P1):** `assertion_key` is the canonical tuple `(tenant, trust_domain, source_ref, subject_id, predicate, source_fact_id)`; `source_fact_id` is a stable source-native fact/edge ID or a documented stable slot, not the current object or arrival time. `assertion_id` identifies an immutable revision, derived from the canonical key, source_version and canonical payload digest (including object, validity and supersedes). Use domain-separated canonical serialization and verify digest matches on replay. Distinct values/edges get distinct keys; identical predicate/source alone is never a dedupe key. If no stable ID exists, preserve content-addressed observations as distinct and flag ambiguous lineage; do not auto-merge or infer a correction. Source versions are ordered only within a key with a documented comparable source-version contract; incomparable versions or equal-version distinct digests surface as conflicts, not last-writer-wins. Exact key/version/digest replays are idempotent. Keep revision history and derive current/as-of results deterministically from explicit supersedes/tombstones and valid time, never arrival order. A targeted tombstone suppresses only its key/revision and stale replay cannot resurrect it; retention/forget physically removes subject data and derived records, preserving only lawful non-identifying replay fences where allowed.
 - **Rules:**
   - Corrections and deletions append a superseding or tombstone assertion. A physical delete then
     follows the source store's retention.
@@ -136,8 +137,7 @@ A logical model, not a production schema.
     store.
 - **Event:** reuse the `mctl.events/v1` envelope (`internal/events/envelope.go`, dedupe on
   `event_outbox.event_id`). The logical contract adds `source_version` and `observed_at` for
-  out-of-order handling: a projection applies the highest `source_version` per
-  `(source_ref, predicate)`.
+  out-of-order handling: retain immutable revisions per `assertion_key`, dedupe exact revision identity, and derive current/as-of state using the identity and version rules above. Equal-version divergent payloads are explicit conflicts.
 - **DevLoop edges:** `proposed_by`, `approved_by (aar_)`, `executed_as (we_/ex-)`,
   `sealed_context (cs_)`, `evidenced_by (ev-)`, `decided_by`, `reviewed_by (rr_)`,
   `owned_by (lifecycle)`, `resulted_in (PR/merge)`, `depends_on`, `blocks`. Operational,
@@ -150,9 +150,7 @@ A logical model, not a production schema.
   `reviewstore`, `lifecycle`) against the harness databases. It joins in memory and marks each
   link `present`, `missing` or `conflict`.
 - **B:** one schema `research_projection` in the harness database, with
-  `assertions(...)` and `edges(src, predicate, dst, tenant, valid_from, valid_to, source_ref,
-  source_version, kind)`. It is built idempotently from the fixture with
-  `ON CONFLICT (source_ref, predicate) DO UPDATE WHERE excluded.source_version > ...`. Traversal
+  `assertions(assertion_key, assertion_id, source_version, payload_digest, ...)` and an edge projection referencing immutable `assertion_id`. Store distinct revisions with unique `(assertion_key, source_version, payload_digest)` and exact replay `ON CONFLICT ... DO NOTHING` only after digest/payload verification. Derive current/as-of views with explicit conflict/supersession/tombstone semantics above; no destructive upsert keyed by source/predicate. RDF exports use assertion/revision IRIs (not bare triples alone) to preserve provenance and conflicts. Traversal
   uses `WITH RECURSIVE ... CYCLE dst SET is_cycle USING path` (PostgreSQL 14+). Tenant scope is a
   mandatory predicate inside every recursive step, not a filter applied afterwards.
 - **C-Fuseki:** Apache Jena Fuseki (Fuseki 2 line; Fuseki 1 is archived and excluded) with TDB2.
@@ -202,7 +200,7 @@ resolved and committed in S1 to S3. They are deliberately not guessed here.
     erroneous link is reversed with no authority change.
   - Q9 Revoke and delete: after revocation, a denial comes from the authority read, and zero
     residual rows, triples, inferred edges, index entries or cache entries remain.
-  - Q10 Duplicate and out-of-order replay that yields byte-identical projection digests.
+  - Q10 Duplicate and out-of-order replay that yields byte-identical projection digests. Q10a: one source/predicate, two subjects and multiple values for one subject, separate stable fact keys; preserve all. Q10b: same key/version, different payload digests, return conflict with both revisions. Q10c: correct/retract exactly one key, preserve sibling facts and valid-time history, reject stale resurrection; repeat with shuffled input, exact duplicates and cross-tenant lookalikes. RDF assertion IRIs must preserve the same ground truth.
   - Q11 Full DevLoop trace with an injected missing review and a conflicting approval digest.
 - **RDF-only tests:**
   - E1 OWL subset: `rdfs:subClassOf`, `rdfs:subPropertyOf`, `owl:inverseOf`,
@@ -218,7 +216,7 @@ resolved and committed in S1 to S3. They are deliberately not guessed here.
   - cold (after container restart and cache drop) and warm P50/P95 over at least 30 repeats,
     after 5 discarded warmups;
   - ingest and rebuild time;
-  - peak RSS (cgroup `memory.peak`) and CPU time (cgroup `cpu.stat`);
+  - peak cgroup memory (`memory.peak`, not RSS), CPU time (`cpu.stat`); if reporting process RSS, measure it separately and describe aggregation;
   - on-disk bytes;
   - setup steps and component count;
   - output tokens of the serialized answer with the pinned offline tokenizer, labelled
