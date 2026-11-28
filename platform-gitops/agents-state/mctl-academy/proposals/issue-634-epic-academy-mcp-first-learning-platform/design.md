@@ -1,8 +1,6 @@
-# Design: issue-634-epic-academy-mcp-first-learning-platform
+# Design: issue-634-epic-academy-mcp-first-learning-platform — W1a amendment
 
-Baseline: `mctlhq/mctl-academy` `main` @ `bcf8302c90f98476e90df1cf4a520554825f39ca`
-(package `0.1.101`). This is the W0 investigation output. Nothing here is approved for
-implementation.
+Baseline: mctlhq/mctl-academy main @ bcf8302c90f98476e90df1cf4a520554825f39ca (0.1.101), rechecked 2026-11-28. The evidence matrix below is the historical W0 discovery, not an implementation task list. Its proposed consequences are superseded by the normative W1a scope and deferred gates below. Fresh digest-bound human approval authorizes W1a only. All other stages require separate proposals and decisions; this PR does not approve anything.
 
 ## Current state
 
@@ -43,297 +41,66 @@ implementation.
 - `$MCTL_GITOPS_ROOT/services/admins/`: no MCTL MCP Portal/gateway service manifest is visible in this checkout (`argocd-mcp`, `coolify-mcp` and `projects-mcp` are separate `labs` services). Whether a portal exists elsewhere (another cluster/repo, #35/#44) **could not be observed** from here. This gap is recorded as an open question; it is not treated as absence.
 - Not called: service logs/pods (not needed for a design; no runtime claims are made).
 
-## Proposed solution
 
-### ADR-1: Architecture. Decision: Option A, an in-process MCP adapter on the existing Hono monolith; MCP Apps for MVP; A2UI deferred
+## ADR-1 — modular Hono, standards-first MCP, no new service
 
-**Context.** Learning logic is deterministic, small and already lives in one container.
-The risks are spoilers, IDOR, token misuse, divergent business logic, and weakening the
-evidence gate or the site's security headers.
+Choose the existing Hono/Bun application with a shared deterministic domain layer. Web remains an in-process consumer, not an MCP host. W1a delivers only the shared eligibility/progress foundation and local anonymous catalog tools. Future personal reads, practice and MCP Apps remain the target, not part of this PR or its implementation.
 
-**Decision criteria (weighted):** (1) one eligibility rule and one progress implementation,
-(2) per-user isolation and standards-compliant OAuth, (3) zero mandatory model calls,
-(4) no new service/DB/gateway, (5) host portability with text fallback, (6) incremental,
-flag-gated, reversible rollout, (7) engineering cost.
+| Option | Decision |
+|---|---|
+| A: in-process MCP adapter on existing app | Adopt W1a; reuses existing build, no new DB/service, zero mandatory model calls |
+| B: existing Cloudflare MCP Portal fronting Academy | Evaluate separately for external integration; no new gateway |
+| C: separate Academy service | Reject for now: duplicated auth/data path, operational cost without evidence |
+| D: headless tools only | W1a and headless fallback; MCP Apps follow at G3, A2UI at G3b only if justified |
+| Model-generated UI or first-party web as MCP host | Reject: unnecessary inference/round trip, trust and accessibility risks |
 
-**Decision.** Add an `academy` domain layer inside `server/` with two adapters:
-REST (existing routes, unchanged) and MCP (Streamable HTTP at `/mcp`). The domain layer is
-used in-process by both, so the web never makes an MCP round trip. Portable UI is delivered as
-MCP Apps resources built from Vue + `@mctlhq/ui`. A2UI is a later, optional, contract-only
-projection (W3b, own gate).
+Platform evidence rechecked: mctlhq/.github#35 is existing Cloudflare edge/Portal work; #44 is closed with Phase 0 GO and a live portal, but Tasks/MCP Apps/Gateway/DLP/Code Mode are follow-ups, and mctl-telegram#607 blocks broader pilot. Thus absence of a manifest in the Academy clone is not evidence of absence; neither #44 nor #35 proves Academy personal subject binding or UI passthrough. Reuse #376 host matrix, #396 composition, #393 canonical server authority, #416 Workspace, #426 governance, #430 Builder, #401 Grok diagnostics as dependencies, not executable tasks. No platform issue modification.
 
-**Consequences.** One process and one DB. The MCP code path shares the pod's memory and CPU.
-A host outage or MCP bug is isolated by a feature flag rather than a process boundary.
+## Normative W1a architecture
 
-### Component diagram (MVP slice: W1 + W2 practice + W3 quiz)
-
-```
-              +------------------- Bun container (labs/mctl-academy) --------------------+
- Browser ---> | Hono app                                                                  |
- (Vue SPA)    |  securityHeaders (unchanged)                                              |
-   |  cookie  |  /api/auth/*  better-auth  (GitHub; + OAuth AS endpoints, ADR-2)           |
-   +--------->|  /api/attempts, /api/votes, /api/account   (unchanged REST)                |
-              |  /api/practice-sessions/*   (W2, REST adapter, cookie + requireSameOrigin) |
- MCP host --->|  /.well-known/oauth-protected-resource      (W1)                          |
- (Claude,     |  /mcp   Streamable HTTP, bearer only, Origin check, flag ACADEMY_MCP      |
-  ChatGPT..)  |     |                                                                     |
-   bearer     |     v                                                                     |
-              |  server/academy/  (domain, pure + db ports)                               |
-              |    catalog.mjs   <- server/generated/eligible-bundle.json (+digest)        |
-              |    progress.mjs  <- shared/progress.mjs  (latestPerQuestion, stats)        |
-              |    practice.mjs  <- practice_sessions / practice_session_answers           |
-              |    grade         -> server/questions.mjs gradeAttempt (unchanged)          |
-              |    db.mjs recordUserAttempt / getUserAttempts (unchanged)                  |
-              |  ui resources: server/generated/ui/<view>.<semver>.html (Vite single-file) |
-              +---------------------------------------------------------------------------+
-                                  |  PostgreSQL (shared CNPG, existing DB)
+```text
+validated build-content-bundle output
+   |-- existing web bundle + course catalog + sitemap (unchanged)
+   +-- internal server/generated bundle + catalog + manifest/digest
+                         |
+                    strict public projection -> local /mcp
+shared pure progress functions -> existing Vue progressStore + Node/Bun fixture tests
 ```
 
-### W1: Shared eligible catalog and canonical progress read
+- Build: scripts/build-content-bundle.mjs:30-48,146-155 already constructs and validates both outputs. Emit copies of the exact serialized web bundle/catalog and a deterministic manifest with SHA-256 for each file; no second eligibility rule. Fixture output overrides (ACADEMY_BUNDLE_OUT, ACADEMY_CATALOG_OUT etc.) must use matching isolated server output location or explicit override, never write production repo artefacts from tests. Update existing build-output tests and generated artefact contract; preserve source exclusion and existing web bytes. Dockerfile:17-19,31-39 must copy generated outputs and shared module from build stage to an internal path outside client/dist; default-off startup must not depend on them.
+- Progress: client/src/services/progressStore.ts:60-69,680-753 pure functions only, extract into shared/progress.mjs plus declarations/types if needed; preserve exports and same-input tie behavior (later item on equal timestamps). No modification to storage/sync/guest/account logic or SQL; server fixture imports same module. Include shared path in Docker build/typecheck/lint configuration if needed. Do not claim canonical DB ties resolved: W1b must establish stable source ordering before exposing personal parity.
+- Catalog: server/academy/catalog.mjs loads validated internal copies only when flag on; validate schema and manifest hashes, fail closed on mismatch/missing. Never select from server/questions.mjs (all-status historical grader). Strict allowlist projection: course id, title, summary, available, published question count, vendor-neutral domain id/title/count and optional existing neutral mock configuration; no raw JSON spread, question IDs/text, sources, certification metadata, answer keys or personal fields. Validate counts against eligible bundle; unknown course -> typed not_found.
+- Transport: server/academy/mcp.mjs (or equivalent local module) and server/app.mjs mount only when ACADEMY_MCP=on, before SPA/static fallback. Two tools only: academy_catalog({}) and academy_course({courseId: string}), additionalProperties:false, bounded courseId, readOnlyHint=true, destructiveHint=false; annotations not authorization. Text and structuredContent carry the same allowlisted catalog projection. No tools for progress, recommendations, mistakes, start, submit; no resources/list/read entries or _meta.ui. SDK must return protocol-compliant errors, no hand-rolled JSON-RPC fallback.
+- Preflight: platform #44 prefers MCP 2026-07-28 stateless Streamable HTTP and avoids legacy SSE/DCR. Verify exact current protocol revision and an actually supported, pinned SDK version against official upstream MCP spec and SDK docs/release notes in implementation; record links/version and synthetic local initialize/list/call proof. If incompatible with Bun/Hono or stateless requirement, report NO-GO, do not improvise a protocol or quietly change scope. Dependency changes limited to a necessary pinned SDK and lockfile; no new paid service or inference.
+- Security: anonymous contract only; reject Authorization and Cookie rather than consume them or infer user; reject disallowed Origin, allow origin absent only for local non-browser clients under transport contract, no broad CORS, enforce body-size/rate bounds and path-only logging with apiErrorLog. Do not weaken global frame-ancestors 'none', X-Frame-Options DENY or existing same-origin checks. No PRM/AS endpoints in W1a. Existing flag-off /mcp behavior is measured before change (SPA fallback may differ by method); do not promise JSON 404 without proof. Flag-on used locally/synthetic only, external exposure requires G6/G7 plus separate owner decision.
+- Cost: deterministic zero Academy-side LLM calls, no outbound runtime calls. Existing build/CI and one approved implementation only. Record local image/memory delta against existing limits; stop if substantial increase or additional service needed. No live data, migrations, credentials, production change or deploy.
 
-1. **One artefact.** `scripts/build-content-bundle.mjs` additionally writes
-   `server/generated/eligible-bundle.json` and `eligible-bundle.digest`
-   (sha256 of the canonical JSON) **in the same run and from the same in-memory result**
-   as `client/src/content-bundle.json`. No second eligibility pass is added. The output contract check
-   (`build-content-bundle.mjs:146`) asserts both files are byte-identical in content.
-   The Dockerfile runner stage adds `COPY --from=builder /app/server/generated ./server/generated`.
-   Boot (`app.mjs:76-90`) loads it fatally when `ACADEMY_MCP` is on. The web bundle is unchanged.
-2. **Shared progress math.** Move `latestPerQuestion` and `calculateProgressStats`
-   (`progressStore.ts:60-69,680-753`) into `shared/progress.mjs` (plain ESM with JSDoc
-   types, importable by Vite and Bun). `progressStore.ts` re-exports it, so the web behaviour is
-   byte-identical (existing client tests are the guard). The server projection is
-   `getUserAttempts(userId)` -> `latestPerQuestion` -> `calculateProgressStats(courseQuestions)`.
-3. **Read tools** (all bounded; personal tools require a token):
+## Deferred architecture and security contracts (not executable)
 
-| Tool | Auth | Annotations | Output (bounded) |
-|------|------|-------------|------------------|
-| `academy_catalog` | public | readOnly, idempotent, openWorld=false | courses: id, title, summary, available, publishedQuestionCount, mock availability, disclaimer |
-| `academy_course` | public | readOnly, idempotent | one course: domains + objectives + counts; no questions |
-| `academy_get_progress` | token | readOnly, idempotent | `OverallProgress` per course (shape of `progressStore.ts:94-103`) |
-| `academy_dashboard` | token | readOnly | all courses' summary + `ui://academy/dashboard/1.0.0` |
-| `academy_review_mistakes` | token | readOnly | up to 20 question ids + stems + objective titles, no answers (the learner reopens them in practice to see feedback) |
-| `academy_recommend` | token | readOnly | deterministic next step, e.g. the lowest-coverage domain, with a reason string; no readiness claim |
+### W1b — personal progress and AS selection
 
-Example (`academy_get_progress`):
+Compare better-auth OAuth provider vs existing MCTL ZITADEL/Portal. Neither assumed accepted. Inspect #35/#44 evidence, current Portal routing/capability contract and Academy server/auth.mjs stable verified subject mapping; no email matching, no implicit account linking. Pin and verify actual MCP/AS/SDK versions, resource indicators (RFC 8707), PRM (RFC 9728), PKCE S256, client metadata/pre-registration and abuse controls; avoid deprecated DCR unless separately justified and reviewed. Record actual synthetic proof or NO-GO. Each request validates issuer, audience/resource, signature, expiry, scopes, grant active state and user/client binding; require revocation check on every use or equivalent immediately invalidated grant store, no short TTL alone. Refresh rotation and next-use revocation; deletion cascades/invalidation across systems. No cookie auth or token passthrough. Design and test anonymous/authenticated discovery and request separation (including wrong/expired token and unknown userId). Only then may personal tools academy_get_progress, academy_dashboard, academy_review_mistakes and academy_recommend return own data. No UI metadata before G3. Compare ordered canonical attempts with client projection and prove exact parity, including tied timestamps, retired questions and offline/guest behavior. PRIVACY.md/consent/retention review before issuing any grant.
 
-```json
-{
-  "name": "academy_get_progress",
-  "title": "My progress in a course",
-  "description": "Returns your practice progress for one course. Accuracy = correct/attempted; coverage = attempted/total; solved = correct/total. Not a prediction of any exam result.",
-  "inputSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": ["courseId"],
-    "properties": { "courseId": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" } }
-  },
-  "outputSchema": {
-    "type": "object",
-    "required": ["courseId", "contentDigest", "progress"],
-    "properties": {
-      "courseId": { "type": "string" },
-      "contentDigest": { "type": "string" },
-      "progress": { "$ref": "#/$defs/OverallProgress" }
-    }
-  },
-  "annotations": { "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false },
-  "_meta": { "ui": { "resourceUri": "ui://academy/progress/1.0.0" } }
-}
-```
+### W2 — server-owned sessions and learner authority
 
-There is deliberately no `userId` property, and `additionalProperties: false` rejects one.
+Proposed session is bound to owner, host client, course/mode, content digest, fixed question/option order, expiry, version and erasure generation. Existing server grader remains authoritative; no correct flags/explanation in any unanswered tool result or resource; historical grading survives quarantine. Pending retired questions skipped and never selected. No IDOR (foreign session indistinguishable from missing). Learner confirmation requires a trusted Academy-controlled authenticated user action, e.g. direct same-origin confirmation with CSRF protections; a host-controlled iframe, app visibility, arbitrary confirmation boolean, answered_via, or host elicitation alone is not proof. Before scored writes design server-issued single-use confirmation bound to actor/client/session/question/option/digest/version/erase generation/expiry/nonce and verified in write transaction. An untrusted host cannot manufacture the assertion; host-only/text-only paths stay read-only or redirect to direct Academy confirmation. Test forged origin/confirmation, malicious host direct call, wrong payload/user, expired/replayed proof and no mutation. W3 direct zero-model action is possible only if this trust mechanism is proven; otherwise no scored app write.
 
-**Error envelope** (tool result `isError: true`, `structuredContent.error`):
+Transaction proposal: lock or CAS the owner/session and generation; verify ownership/active generation and existing receipt before stale version check. Receipt keyed by owner/session/idempotency key binds canonical payload digest (question/option/content/version/generation and confirmation identity), stores original result. Exact replay of a committed request returns original result without consuming proof again; same key different payload conflicts. New request checks version, single-use proof, eligibility and first-answer uniqueness; insert receipt, answer/attempt and bump version atomically on one DB connection, with deterministic ordering and rollback on conflict. No second attempt per session question. Define offline stale policy: reject rather than silently replay changed answer; server time authoritative, no unbounded client timestamps. Clear history/account erasure serializes with submissions, invalidates sessions and receipts and advances owner generation (or deletes owner so old identities cannot be re-created by stale calls). No replay of erased results or resurrection by delayed requests. W2b web/backfill adoption requires separate design proving existing legacy/offline routes cannot resurrect cleared records; do not claim this is solved by W1a or by adding a unique constraint. Migration scratch up/down, privacy retention, concurrency and erasure tests mandatory.
 
-```json
-{ "error": { "code": "session_conflict", "message": "Session changed on another device.", "retryable": false,
-             "details": { "currentVersion": 7 } } }
-```
+### W3+ — portable UI, publication and future phases
 
-Closed code set: `unauthenticated` (HTTP 401 at transport), `insufficient_scope`,
-`unknown_course`, `course_unavailable`, `session_not_found` (also for another user's session),
-`session_expired`, `session_conflict`, `question_retired`, `unknown_option`,
-`already_answered`, `grading_unavailable` (maps `gradeAttempt` `unavailable` -> 503 today),
-`rate_limited`, `confirmation_required`.
+Immutable versioned ui://academy/<view>/<semver> resources served only after build and read/list/initialize conformance tests. Attach _meta.ui.resourceUri only when matching resource is available and validated; headless tools always complete without UI. No remote scripts or tokens, no global framing changes, no arbitrary generated markup. A2UI optional with pinned schema and allowlisted components only if #376 evidence warrants it. Reuse existing host matrix; record actual version/capability rather than assume Grok/ChatGPT/Claude/etc. supports it. W4 mock uses server clock/finalization and preserves weighted selection/shortfalls, W5 homepage preserves SEO/a11y, W6 host pilots require separate approval, W7 distribution/metrics aggregates only. Before any external host exposure review LEGAL.md, CONTENT-POLICY.md, SOURCES.md and license/redistribution rights field by field (including catalog; later question/explanation payloads), independence disclaimer, naming rules, privacy/consent and revocation where relevant. Existing web launch policy is not an external MCP publication approval. No marketplace or production rollout without separate owner GO.
 
-### W2: Server-owned practice sessions
+## Gates (no implied approval of deferred work)
 
-**Data model (additive migration `1756000000000_practice_sessions.mjs`):**
+| Gate | GO evidence | HOLD / stop |
+|---|---|---|
+| G1a (this proposal) | Independently reviewed amendment merged by authorized maintainer; fresh digest-bound human approval; W1a task list only | Old digest, scope drift or unresolved P0/P1/P2 |
+| W1a implementation PR | Pinned SDK proof, eligible parity, synthetic catalog/negative tests, old routes/evidence/security CI, independent review | No compliant SDK, leaks, broken flag-off, parity regression |
+| G1b | Separate proposal, AS/Portal identity proof and immediate revocation, privacy, isolation and canonical personal parity | No compliant AS or unsafe cross-user/token behavior |
+| G2 / G2b | Separate proposal, trusted confirmation, atomic receipt/erase fence/migration/concurrency proof; web adoption separately reviewed | Spoiler, forged write, replay/erase or guest/backfill regression |
+| G3 / G3b | Separate proposal; existing resource before advertisement, local host and headless fallback; A2UI only if evidence | Unavailable resource, weaker site CSP, untrusted write |
+| G4/G5 | Separate mock/homepage proposals and tests | Scope or SEO/learning regression |
+| G6/G7 | Separate external exposure approval, field-level legal/redistribution/privacy review, host matrix and measured limits | Real accounts, marketplace, production or publication without GO |
 
-```
-practice_sessions(
-  id uuid pk, user_id text not null references "user"(id) on delete cascade,
-  course_id text not null, mode text check (mode in ('remaining','mistakes','all')),
-  domain text null, content_digest text not null,
-  question_ids jsonb not null,          -- fixed order, eligible at creation
-  option_orders jsonb not null,         -- {questionId: ["c","a","d","b"]}, display only
-  cursor int not null default 0, version int not null default 0,
-  status text check (status in ('active','completed','abandoned')),
-  created_at timestamptz default now(), updated_at timestamptz, expires_at timestamptz not null)
-  index (user_id, course_id, status)
-practice_session_answers(
-  session_id uuid references practice_sessions(id) on delete cascade,
-  question_id text not null, option_id text not null,
-  attempt_id uuid null references attempts(id) on delete set null,
-  idempotency_key text not null, origin text check (origin in ('web','app','model_confirmed')),
-  created_at timestamptz default now(),
-  primary key (session_id, question_id),            -- first answer wins
-  unique (session_id, idempotency_key))
-```
-
-`attempts` is **not altered**. The first answer to a question in a session inserts one
-`attempts` row through the existing `recordUserAttempt`, inside the same transaction as the
-`practice_session_answers` insert and the `version` bump
-(`UPDATE ... WHERE id=$1 AND user_id=$2 AND version=$expected`). Re-answers in the same
-session return `already_answered` with the stored result and are not counted, which matches
-the web's first-answer scoring. A new session can re-attempt a question, giving a new latest
-attempt (existing semantics). `DELETE /api/attempts` ("Clear history") is extended to also delete the
-learner's practice sessions; account deletion cascades.
-
-**Tools:**
-
-- `academy_start_practice {courseId, mode, domain?, idempotencyKey}`: creates or returns the
-  learner's active session for (course, mode, domain), so starting twice does not fork. Not read-only, idempotent.
-- `academy_get_session {sessionId}`: current question **without** `correct`/`explanation`,
-  options in session order, `version`, progress-in-session, answered results so far.
-- `academy_submit_answer {sessionId, questionId, optionId, idempotencyKey, expectedVersion}`.
-  Result: `{correct, correctOptionId, explanation, nextQuestionId, version}`. Annotations:
-  `readOnlyHint:false, destructiveHint:false, idempotentHint:true` (idempotent by key).
-  `_meta.ui.visibility: ["app"]` where the host supports it, so the model cannot call it.
-  On model-visible fallback, the call without `learnerConfirmed: true` that came from an
-  elicitation/confirmation step returns `confirmation_required`; the answer is stored with
-  `origin = model_confirmed`, so a later decision can exclude such rows from stats.
-
-**Spoiler rule (enforced in one serializer):** `toPublicQuestion(q)` drops `correct` and
-`explanation`. It is the only function the MCP adapter may use for unanswered items. A unit
-test walks every tool's `structuredContent`, `content` text and `_meta` for the
-substrings `"correct"` / explanation text before submit.
-
-**Stale content:** each `get_session` and `submit_answer` checks pending question ids against
-the loaded eligible artefact. A missing id gives `question_retired` and the cursor advances.
-Historical answers stay graded (E6 policy).
-
-**Web adoption:** `usePracticeSession.ts` keeps its local queue for guests. For signed-in users,
-web adoption of server sessions (true cross-host resume) is a separate W2b GO decision.
-Until then, cross-host *progress* parity holds through attempts, and *session resume* works
-chat-to-chat only.
-
-### W3: Portable UI (MCP Apps)
-
-- Views: `catalog`, `progress`/`dashboard`, `quiz`. They are built by an extra Vite entry
-  (`client/mcp-apps/*.ts`, Vue + `@mctlhq/ui`) into single-file HTML with inlined, hashed
-  assets, written to `server/generated/ui/`. The resources are immutable: a new version gets a new URI
-  (`ui://academy/quiz/1.0.0`). mimeType `text/html;profile=mcp-app`; `_meta.ui.csp` declares
-  no remote origins (no stats.mctl.ai beacon inside hosts).
-- Flow: `initialize` (server advertises the MCP Apps extension) -> host `tools/call
-  academy_start_practice` -> host fetches `resources/read ui://academy/quiz/1.0.0` -> sandboxed
-  iframe -> `ui/initialize` handshake over postMessage -> view receives tool result -> learner
-  clicks option -> view issues `tools/call academy_submit_answer` through the host bridge
-  (zero model calls) -> deterministic feedback rendered.
-- The view never holds a token. Calls go through the host bridge. The view never needs the answer key.
-- Text fallback: every tool returns a readable `content[0].text` (stem, lettered options in
-  session order, instructions), so text-only hosts work.
-- The website stays native Vue, embedding nothing and framed by nothing. Shared code is the
-  `@mctlhq/ui` components plus `shared/progress.mjs`.
-
-**A2UI (deferred, W3b):** only if W6 shows a target host that renders A2UI but not MCP Apps.
-In that case: a server-built, deterministic A2UI message from the same view-model, an allowlisted
-component catalogue (Text, Card, List, Button, RadioGroup, ProgressBar), schema validation on
-emit, and no model-generated UI. The renderer is the host's. Academy ships no generic renderer.
-
-### ADR-2: Authorization
-
-Academy is an **OAuth 2.1 resource server** per the MCP authorization spec:
-`/.well-known/oauth-protected-resource` (RFC 9728) names `resource =
-https://academy.mctl.ai/mcp` and `authorization_servers`. Requirements on the AS: PKCE S256,
-resource indicators (RFC 8707) with audience = the resource, short-lived access tokens
-(<= 1 h) and rotating refresh tokens, a revocation endpoint, a consent screen naming the host
-client, scopes `academy:progress.read` and `academy:practice.write`, and client onboarding
-(pre-registered and/or dynamic registration or client metadata documents, depending on the
-spec revision pinned at W1).
-
-| Option | Pros | Cons |
-|--------|------|------|
-| 2a better-auth OAuth provider/MCP plugin (preferred, pending spike) | `sub` = Academy `user.id` natively; grants live in Academy DB and cascade on delete; consent UI in Academy; no cross-system mapping | Plugin maturity/spec coverage must be proven at the pinned version; Academy becomes an AS |
-| 2b MCTL ZITADEL as AS (#35/#44) | Platform-standard identity, MFA, central revocation | ZITADEL not configured in `labs`; GitHub-only learners have no ZITADEL subject, so a mapping table is needed, along with a cross-system erase |
-| 2c MCTL MCP Portal fronting Academy (Option B) | One connector for all MCTL tools | Portal existence/`ui://` passthrough/per-user isolation not observable from this repo; risk of token passthrough |
-
-Invariants regardless of option: validate `iss`, `aud`/resource, `exp` and the signature (JWKS via
-`jose`) or introspect; reject cookie-authenticated `/mcp` calls; never forward the token;
-actor = `(user.id, client_id)` and record `client_id` on sessions for revocation-scoped audit;
-GitHub tokens (`account` table, encrypted) are never exposed to or derived from MCP grants.
-
-### Threat model (STRIDE-oriented, MVP surface)
-
-| Threat | Mitigation | Test |
-|--------|-----------|------|
-| IDOR (read/write B's data) | user from token only; every query `WHERE user_id = $token_user`; `session_not_found` for foreign ids | T5, T6 |
-| Token audience confusion / passthrough | strict `aud`/resource check; no upstream forwarding | T3 |
-| Consent bypass / stale grant after revoke | revocation checked on refresh and introspection or short TTL; deletion cascades grants | T7, T8 |
-| CSRF/origin on `/mcp` | bearer only, cookies ignored, Origin allowlist (hosts' origins or none), no CORS credentials | T9 |
-| DNS rebinding | Origin validation per MCP transport spec; bind via ingress host only | T9 |
-| Malicious host/iframe | UI holds no token or answer key; resource CSP no remote origins; site keeps `frame-ancestors 'none'` | T14 |
-| Prompt injection via content | question text is DATA in `content` text; tool descriptions static; no tool executes content; model-initiated submit needs confirmation | T12 |
-| Answer spoilers | single redacting serializer; recursive payload scan test | T10 |
-| Replay / duplicate submit | `(session_id, idempotency_key)` unique; first-answer PK; `expectedVersion` CAS | T11 |
-| Stale/retired questions | digest pinned; eligibility re-check per call; `question_retired` | T13 |
-| PII leakage in logs | `apiErrorLog` path-only reused; no JSON-RPC param logging; no telemetry in UI resources | T15 |
-| Abuse / cost | rate limiting per token; bounded payload sizes; no Academy-side inference | T16 |
-
-### Cost model
-
-- Academy-side inference: **zero** in every option (no LLM in grading, recommendation or UI).
-  Host-side model tokens are paid by the learner's host subscription. Direct UI actions on
-  MCP Apps hosts cost zero model calls; text-fallback turns cost host tokens.
-- Resources: in-process adapter plus about 1 MB artefact and UI HTML. Estimated additional memory is under 50 Mi
-  (to be measured in W1), within the current 256Mi request / 512Mi limit. The DB adds two small tables.
-- Engineering (relative): W1 M, W2 M-L, W3 M, W3b (A2UI) M, W4 L, W5 M, W6 S-M per host.
-
-### GO/NO-GO gates (each needs separate owner approval)
-
-| Gate | GO when | NO-GO / stop |
-|------|---------|--------------|
-| G1 (W1) | AS spike proves 2a or 2b meets ADR-2 invariants at pinned versions; artefact parity test green; privacy text drafted | No compliant AS; parity requires duplicating eligibility |
-| G2 (W2) | G1 shipped flag-off; migration reviewed; spoiler/IDOR/replay tests green | Any spoiler leak or cross-user read in tests |
-| G2b (web adopts server sessions) | W2 canary stable, no duplicate-attempt increase | Guest/offline regression |
-| G3 (W3) | Local conformance host (MCP Inspector or a reference MCP Apps host) renders quiz with zero model calls | UI requires remote script or a weaker site CSP |
-| G3b (A2UI) | A verified target host needs it (W6 evidence) | MCP Apps coverage sufficient |
-| G4 (Mock) | W2 stable; server clock/finalization design reviewed | Scope pressure; defer |
-| G5 (homepage) | Prototype on synthetic fixture passes SEO/a11y tests | Any indexability regression |
-| G6 (host pilot) | Separate approval for real accounts; host matrix recorded per client version | Unverified capability claims |
-| G7 (distribution) | Privacy review done | Marketplace submission without approval |
-
-## Alternatives
-
-- **B: MCTL MCP Portal/gateway in front of Academy.** Attractive for one-connector UX,
-  but nothing in this repo or the visible gitops checkout shows a portal that preserves
-  `ui://` resources, the app-to-server bridge, per-user audience-bound tokens and no
-  passthrough. A second gateway is forbidden. Kept as a *later* option: Academy's standard `/mcp` and
-  PRM endpoint stay compatible with being federated by a portal, so Option A does not block B.
-- **C: Separate Academy MCP service.** It gives process isolation, but it needs a new service,
-  image and DB access path, plus duplicated grading/eligibility or an internal API with its own
-  auth. There is no scale or isolation evidence that justifies it, and it is not authorized. Dropped.
-- **D: Static MCP tools only, no MCP Apps or A2UI.** It is the cheapest and fully portable, but it fails
-  the "portable MCTL UI reference implementation" goal and makes every answer a model turn,
-  which costs host tokens and allows silent AI answering. Adopted partially: the text fallback
-  is exactly D, and A2UI is deferred.
-- **LLM-generated UI.** Rejected because it is non-deterministic, would execute model markup, and depends on inference.
-- **First-party web as an MCP host (thin own host).** Rejected for MVP. It adds an HTTP/JSON-RPC
-  hop and token handling to the web for no learner benefit. The in-process domain layer gives the same
-  contract guarantee without it.
-
-## Platform impact
-
-- **Migrations:** one additive migration (two tables with FKs and indexes), plus the AS tables if
-  2a is chosen (plugin-owned, additive). No ALTER or DROP on `attempts`. `down` drops only the new tables.
-  The attempt history and the erase contract are preserved (CLAUDE.md "Attempt immutability").
-- **Backward compatibility:** REST endpoints, web bundle, routes, SEO and security headers
-  stay unchanged. The `progressStore.ts` re-export keeps the client API identical. With `ACADEMY_MCP`
-  off, `/mcp` and `/.well-known/oauth-protected-resource` fall through to the existing 404.
-- **Config:** `ACADEMY_MCP=on|off` (colon-free env). The resource URL and AS issuer contain `:`,
-  so they go into Vault via `secret_env_vars` (CLAUDE.md "Deployment"). Deploy is MCP-only.
-- **Resources:** see Cost model. The single-replica rate limiter (E19) is a known constraint.
-- **Risks:** AS plugin immaturity (mitigated by the G1 spike and the 2b fallback); host spec churn (pin
-  the SDK and MCP Apps extension versions, immutable UI URIs); spoiler regressions (one serializer and a
-  scan test); duplicate attempts from retries (idempotency); privacy (PRIVACY.md update
-  before any grant); README drift (counts from the artefact only).
+Rollback W1a: code-only revert of the Academy implementation PR, no DB change. Flag stays unset/off in all deployed environments; no deployment or rollback operation authorized by this proposal. No changes to GitOps service configuration or .status.yaml.
