@@ -233,8 +233,7 @@ off.
   | `pa.delivery` | outbox process that reaches a terminal send outcome | outbox row creation | terminal send outcome |
 
   When `pa.attempt` is ended by a process that did not see the claim, the
-  span carries `mctl.pa.observation=partial` and starts at the earliest
-  locally seen event; its duration is not observed in any histogram. A
+  span carries `mctl.pa.observation=partial` and starts at the end time (see the ownership table); its duration is not observed in any histogram. A
   `pa.job` span is emitted only by the terminal winner, so a crash between
   the terminal commit and the export loses the span (counted as an export
   gap in the runbook) but never duplicates it.

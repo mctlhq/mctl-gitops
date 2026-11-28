@@ -74,7 +74,7 @@ are separate, nullable observational fields; `ChatUsage` as budget input, `Price
 - Model match: `exact` when the sanitized strings are equal; `verified_alias` only when the
   pair appears in `AGENT_MODEL_ALIASES` (trusted deployment configuration, parsed and sanitized
   at start-up, invalid entries refuse start-up); `mismatch` for any other returned string;
-  `unknown` when the provider returned none or it sanitized to `invalid`. A provider can never
+  `unknown` when the provider returned none, or when either side sanitized to `invalid` (a configured `AGENT_MODEL` that sanitizes to `invalid` also refuses start-up, so the two can never match as `exact`). A provider can never
   promote itself to `verified_alias`.
 
 ### 2. Per-call and per-run records (worker, new `internal/agentworker/pausage.go`)
