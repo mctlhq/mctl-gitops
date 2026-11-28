@@ -136,7 +136,10 @@ off.
   (`sent`, `failed`, `refused`), observed in `deliverItem`. Update
   `PARunPhases` / `RunPhases()` and `TestPARunPhaseLabels`.
 - New `mctl_pa_run_unanswered_seconds{outcome}` with closed outcomes `failed`,
-  `cancelled`, `fenced` and `lease_expired`. It is fed by turning
+  `cancelled` and `lease_expired`. `fenced` is deliberately absent: a fenced
+  request belongs to a superseded attempt and is visible only as its refused
+  span; counting it here would double-count a job whose winning transition is
+  recorded separately. It is fed by turning
   `runTimer.drop(job)` into `runTimer.ended(job, outcome)`. The failure reason
   stays in `mctl_pa_job_failures_total{reason}` and is not repeated as a
   label.
@@ -221,10 +224,10 @@ off.
 
   | Span | Owner | Start | End |
   |---|---|---|---|
-  | `pa.job` | winner of the terminal conditional update | `created_at_ms` (durable) | terminal transition time |
+  | `pa.job` | winner of the terminal conditional update | `created_at_ms` (durable); if unreadable, the terminal transition time with the span marked `partial` | terminal transition time |
   | `pa.update` | webhook handler | request receipt | accept commit |
-  | `pa.queue` | claiming process | `created_at_ms`, or `retry_at_ms` for attempt > 1 | claim commit |
-  | `pa.attempt` | process that ends the attempt (reply, release, failure, lease expiry) | claim time if held locally, else marked partial | attempt end |
+  | `pa.queue` | claiming process | `created_at_ms`, or `retry_at_ms` for attempt > 1; if unreadable, the claim commit time marked `partial` | claim commit |
+  | `pa.attempt` | process that ends the attempt (reply, release, failure, lease expiry) | claim time if held locally, else the end time; any fallback is marked `partial` (for example `ExpirePAJobs` on a replica with no local events) | attempt end |
   | `pa.turn`, `pa.tool.dispatch`, `pa.mcp.call`, `pa.reply` | process handling that request | request receipt | response |
   | `pa.worker.*` | worker | call start | call end |
   | `pa.delivery` | outbox process that reaches a terminal send outcome | outbox row creation | terminal send outcome |

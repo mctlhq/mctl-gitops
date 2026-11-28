@@ -171,8 +171,7 @@ are separate, nullable observational fields; `ChatUsage` as budget input, `Price
 - Account deletion: the principal purge deletes `pa_usage_calls` and `pa_usage` in one
   transaction that first locks the principal's `pa_usage` rows (`SELECT ... FOR UPDATE` on
   Postgres; SQLite serialises writers). `RecordPAUsage` writes `pa_usage` and its
-  `pa_usage_calls` rows in one transaction that takes the same row lock and re-checks that the
-  settled `pa_jobs` row still exists, so a summary racing the purge either commits before it (and
+  `pa_usage_calls` rows in one transaction that takes the same row lock and re-checks the locked settled `pa_usage` row for that `(job_id, attempt)` (the same row the fencing check uses), so a summary racing the purge either commits before it (and
   is purged) or finds the row gone and writes nothing; no orphan `pa_usage_calls` can remain.
 
 ### 5. Metrics (server, `internal/metrics/pa.go`)
