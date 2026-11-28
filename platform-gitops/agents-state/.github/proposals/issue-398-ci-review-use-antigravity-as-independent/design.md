@@ -224,18 +224,20 @@ asked for, and later tasks update it rather than restate it.
   path. Any path that cannot be shown to meet this runs as dry run only.
 - **G10 gate completion, races and staleness:** before the controller writes a
   successful `independent-review`/`independent-review-shadow` check, and before
-  the publisher finishes its check, re-read the live head, base,
-  `pr_diff_digest_v1`, blocking reviews and the owned check (its id and external
+  the publisher finishes its check, re-read the live verdict binding (head and
+  `pr_diff_digest_v1`; base too only under a repository's strict-base policy),
+  blocking reviews and the owned check (its id and external
   id). Any change, any blocking review, or any failed read gives no success. The
   publisher's existing post-publish re-read and self-dismissal are extended: after
   posting an approval it re-reads head, base AND blocking reviews, and dismisses its
   just-posted approval in enforce mode when any moved or a `CHANGES_REQUESTED`
   review appeared meanwhile (a failed re-read also dismisses); where the controller
   already does a step, the task adds tests rather than code.
-  Events, dispatches and verdicts that refer to a non-live head, base or digest,
-  or replay a consumed run attempt, are ignored for completion. A `success`
-  already written for an unchanged head and digest is not rewritten when only
-  base moves (the external id excludes base by design); readiness against the
+  Events, dispatches and verdicts that refer to a non-live binding, or replay a
+  consumed run attempt, are ignored for completion. Without strict-base policy a
+  base move alone is not a binding change: a verdict for the live head and digest
+  still completes the check, and a `success` already written is not rewritten
+  when only base moves (the external id excludes base by design); readiness against the
   new base is enforced by the merge queue in mctl-gitops, which reruns
   required checks on the queue commit, and by required-up-to-date branches
   where a repository uses them. Concurrent Claude
