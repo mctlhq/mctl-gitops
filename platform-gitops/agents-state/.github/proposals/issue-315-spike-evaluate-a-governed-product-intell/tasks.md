@@ -86,6 +86,14 @@
 - [ ] TS4. `product_updates` or `maintenance/security` consent without a separately authorized research purpose must not yield survey eligibility. Simulate unsubscribe between prepare and send, no callback-data capture and free-text injection; all fail closed.
 - [ ] TS5. Full decision record distinguishes historical sample, current verified metrics, post-release outcomes, provider/collection coverage, nonresponse bias and survey invite vs submitted/completed. No launch GO is derived from a proposed card.
 
+## Public market-signal research amendment (2026-11-28)
+
+- [ ] M0. Freeze matched query/window/language/subreddit plan, verify public source permissions and available access. Baseline public web/Tavily; optional free LurkAPI <=15 calls only with authorized access; no purchases. Record source-specific call ledger and NOT_TESTED when inaccessible.
+- [ ] M1. Compare unique relevant threads, dedup, metadata completeness, precision, repeatability, latency, actual costs and incremental actionable findings on matched inputs. Do not infer volume from ranked results.
+- [ ] M2. Produce reviewed signal briefs with evidence/uncertainty, canonical issue links, hypotheses and validation plan; #1517 and #435 consume results; no automatic issue intake or publication.
+- [ ] M3. Negative fixtures: unavailable API vs empty corpus, duplicate posts, missing dates/comments, unsupported demand claims, untrusted instructions, private/identifying data and unapproved spend/outreach. Fail closed.
+- [ ] M4. Revalidate existing metric and consent prerequisites, preserve independent review and four outcomes; document supported recovery for Completed Temporal #315 with proposed status. No status edit, direct implementer or reuse of stale grant; new exact-scope owner approval required.
+
 ## Rollback
 
 All changes are documentation, design artifacts and one `proposed` SpikeDefinition, and nothing is deployed. To roll back, revert the PR; that removes `docs/spikes/product-intelligence-loop.md`, `docs/spikes/product-intelligence-loop/`, `roadmap/spikes/product-intelligence-loop.yaml` and the `AGENTS.md` bullet. No runtime state, credential or flag needs reverting.
