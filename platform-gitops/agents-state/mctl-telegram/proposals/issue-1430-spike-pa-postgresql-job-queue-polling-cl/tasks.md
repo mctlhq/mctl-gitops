@@ -41,20 +41,37 @@ values, replicas or concurrency, and do not run any benchmark or load test.
   with the #1317/#1319/#1324 gates. Include the `EXPLAIN (ANALYZE, BUFFERS)`
   queries to run on synthetic data. DoD: an operator could execute it without
   further design. It states "not run; requires GO".
-- [ ] 5. (depends on 4) Add the dashboard specification and pre-registered
-  pass/fail targets (20-person and 100-person pilots) to the plan. DoD: every
-  metric from the issue's deliverables has a source and an exists/new marker.
+  Also in the plan: the experiment model from design.md (`R`, `C`, `S`,
+  `lambda`, utilisation levels, job duration profiles, enrolled `N` versus
+  active `A`, 2-minute warm-up, at least 5 repetitions, minimum samples per
+  percentile with `insufficient` below it); the two workload profiles
+  (PA-only, PA plus competing managed-budget paths); and the stated resource
+  limits, compute ceiling and total cost ceiling. #1317 is recorded as
+  completed; #1319 and #1324 stay in force.
+- [ ] 5. (depends on 4) Add the measurement contract, dashboard
+  specification and pre-registered pass/fail targets (20-person and
+  100-person pilots) to the plan: the three latency intervals
+  (created-to-claim, runnable-to-claim, claim-to-worker-start), units,
+  bounded labels, missing-data semantics, aggregate fairness, the process
+  resource contract (CPU, throttling, GC, heap/RSS per component), and a
+  reference table to the #1445/#1446 metrics it reuses. DoD: every metric
+  from the issue's deliverables has a source and an exists/new marker; no
+  metric duplicates one from #1445 or #1446; the interval measured by
+  `mctl_pa_run_phase_seconds{phase="queue"}` is verified at the pin.
   The targets include zero duplicate-claim, cross-principal and
   ledger-mismatch violations. They are marked "frozen at GO".
-- [ ] 6. (depends on 3, 5) Write the decision record section in the report:
-  provisional `KEEP_POSTGRES_POLLING`, plus the list of
-  `OPTIMIZE_POSTGRES_CLAIM` follow-ups and their triggers (which target
-  failing would open which issue), plus the owner GO/NO-GO checklist. DoD:
-  status reads "PROVISIONAL - AWAITING BENCHMARK GO". The record states that
-  this is not a Phase 1 launch blocker.
+- [ ] 6. (depends on 3, 5) Write the decision record skeleton in the report:
+  no outcome selected; `KEEP_POSTGRES_POLLING` as the baseline hypothesis;
+  for each target, which outcome its failure would point to; the
+  `ExpirePAJobs` preservation conditions (status, notices, usage
+  reconciliation, cleanup latency, failure/restart) that any off-claim-path
+  variant must meet; the owner checklists for the D3 GO and the D4 decision.
+  DoD: status reads "AWAITING D3 EVIDENCE". The record states that this is
+  not a Phase 1 launch blocker.
 - [ ] 7. (depends on 2-6) Open a docs-only PR against `mctlhq/mctl-telegram`
   with the commit `docs: add PA job-queue scaling spike report and benchmark
-  plan (#1430)`. DoD: CI is green and the PR body restates the HOLD.
+  plan (#1430)`. DoD: CI is green, the PR body restates the HOLD and uses
+  `Refs #1430` (no closing keyword); #1430 stays open for D3 and D4.
 
 ## Tests
 
@@ -67,8 +84,12 @@ values, replicas or concurrency, and do not run any benchmark or load test.
   report exists at the pinned SHA (`git grep` each symbol).
 - [ ] T4. Fixture hygiene: the plan contains no real Telegram id, name or
   handle. Any numeric id is checked with `git grep <id>` per CLAUDE.md.
-- [ ] T5. Consistency: the derived-rate table matches slots / 2 s, and the
-  decision record's provisional outcome matches the report summary.
+- [ ] T5. Consistency: the derived-rate table matches slots / 2 s, and
+  neither the report summary nor the decision record selects an outcome.
+- [ ] T6. Contract review: every metric in the measurement contract has
+  units, bounded labels and a missing-data rule; none is also defined in the
+  #1445 or #1446 proposals; every scenario cell states `R`, `C`, `lambda`,
+  duration profile, workload profile and its minimum sample count.
 
 ## Rollback
 
